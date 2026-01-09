@@ -39,7 +39,15 @@ function App() {
   });
 
   const toggleGroup = (id) => {
-    setExpandedGroups((prev) => ({ ...prev, [id]: !prev[id] }));
+    setExpandedGroups((prev) => {
+      const isCurrentlyExpanded = prev[id];
+      if (isCurrentlyExpanded) {
+        return { ...prev, [id]: false };
+      } else {
+        const allCollapsed = Object.keys(prev).reduce((acc, key) => ({ ...acc, [key]: false }), {});
+        return { ...allCollapsed, [id]: true };
+      }
+    });
   };
 
   const handleSubmit = (asset) => {

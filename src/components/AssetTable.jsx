@@ -10,10 +10,10 @@ import { ArrowDownZA, ArrowUpAZ, Download, Pencil, SlidersHorizontal } from "luc
 import clsx from "clsx";
 
 const decisionColors = {
-  "Залишити": "bg-emerald-500/20 text-emerald-300 border border-emerald-400/40",
-  "Списати": "bg-rose-500/20 text-rose-300 border border-rose-400/40",
-  "Продати": "bg-amber-500/20 text-amber-300 border border-amber-400/40",
-  "Перемістити": "bg-sky-500/20 text-sky-300 border border-sky-400/40",
+  "Залишити": "bg-gradient-to-r from-emerald-600 to-emerald-700 text-white border-2 border-emerald-500 font-bold shadow-lg shadow-emerald-500/40",
+  "Списати": "bg-gradient-to-r from-rose-600 to-rose-700 text-white border-2 border-rose-500 font-bold shadow-lg shadow-rose-500/40",
+  "Продати": "bg-gradient-to-r from-amber-600 to-amber-700 text-white border-2 border-amber-500 font-bold shadow-lg shadow-amber-500/40",
+  "Перемістити": "bg-gradient-to-r from-sky-600 to-sky-700 text-white border-2 border-sky-500 font-bold shadow-lg shadow-sky-500/40",
 };
 
 const columnHelper = createColumnHelper();
@@ -34,34 +34,34 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport }) {
       columnHelper.accessor("invNumber", {
         header: "Інв. номер",
         cell: (info) => (
-          <div className="font-semibold text-indigo-300">{info.getValue()}</div>
+          <div className="font-bold text-indigo-400 text-base">{info.getValue()}</div>
         ),
       }),
       columnHelper.accessor("name", {
         header: "Назва активу",
         cell: (info) => (
           <div>
-            <div className="font-medium text-slate-50">{info.getValue()}</div>
-            <div className="text-xs text-slate-400">{info.row.original.brand}</div>
+            <div className="font-bold text-white text-base">{info.getValue()}</div>
+            <div className="text-sm text-slate-300 font-semibold">{info.row.original.brand}</div>
           </div>
         ),
       }),
       columnHelper.accessor("category", {
         header: "Категорія",
         cell: (info) => (
-          <div className="text-sm text-slate-200">{info.getValue()}</div>
+          <div className="text-sm text-white font-semibold">{info.getValue()}</div>
         ),
       }),
       columnHelper.accessor("businessUnit", {
         header: "Локація",
         cell: (info) => (
-          <div className="text-sm text-slate-200">{info.getValue()}</div>
+          <div className="text-sm text-white font-semibold">{info.getValue()}</div>
         ),
       }),
       columnHelper.accessor("status", {
         header: "Статус",
         cell: (info) => (
-          <span className="inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-200">{info.getValue()}</span>
+          <span className="inline-flex items-center gap-1 rounded-lg px-4 py-2 text-sm font-bold bg-indigo-700 border-2 border-indigo-500 text-white shadow-lg shadow-indigo-500/30">{info.getValue()}</span>
         ),
       }),
       columnHelper.accessor("decision", {
@@ -84,9 +84,9 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport }) {
           <button
             type="button"
             onClick={() => onEdit(info.row.original)}
-            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600/20 border border-indigo-500/40 px-3 py-1.5 text-xs font-semibold text-indigo-300 hover:bg-indigo-600/30 hover:border-indigo-400/60 transition"
+            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 px-4 py-2 text-sm font-bold text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-lg shadow-indigo-500/40 hover:shadow-indigo-400/60"
           >
-            <Pencil size={14} /> Редагувати
+            <Pencil size={16} /> Редагувати
           </button>
         ),
       }),
@@ -116,8 +116,8 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport }) {
           <p className="text-sm text-slate-300">Швидкі фільтри та експорт</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={onExport} className="btn btn-primary">
-            <Download size={16} /> Експорт CSV
+          <button type="button" onClick={onExport} className="inline-flex items-center gap-2 px-5 py-3 rounded-lg font-bold text-sm bg-slate-700 border-2 border-slate-600 text-white hover:bg-slate-600 hover:border-slate-500 transition-all duration-200 shadow-lg shadow-slate-700/50 hover:shadow-slate-600/60">
+            <Download size={18} /> Експорт CSV
           </button>
         </div>
       </div>
@@ -155,15 +155,15 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport }) {
         />
       </div>
 
-      <div className="mt-4 overflow-x-auto rounded-lg border border-slate-700">
+      <div className="mt-4 overflow-x-auto rounded-lg border-2 border-indigo-700">
         <table className="min-w-full text-sm">
-          <thead className="bg-slate-700/50 text-left text-xs uppercase text-slate-300">
+          <thead className="bg-gradient-to-r from-indigo-900/80 to-indigo-800/80 border-b-2 border-indigo-500">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
                   <th
                     key={header.id}
-                    className="px-3 py-2 font-semibold"
+                    className="px-4 py-4 font-bold text-white uppercase tracking-wide cursor-pointer hover:bg-indigo-700/60 transition-colors"
                     onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
                   >
                     <div className="flex items-center gap-1">
@@ -177,9 +177,9 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport }) {
           </thead>
           <tbody>
             {table.getRowModel().rows.map((row) => (
-              <tr key={row.id} className="border-b border-slate-700 last:border-0 hover:bg-slate-700/30">
+              <tr key={row.id} className="border-b border-slate-700/50 last:border-0 hover:bg-indigo-900/30 transition-colors">
                 {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="px-3 py-3 align-top text-slate-100">
+                  <td key={cell.id} className="px-4 py-4 align-top text-white font-semibold">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}
@@ -197,18 +197,18 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport }) {
 
 function FilterSelect({ label, value, options, onChange }) {
   return (
-    <label className="flex flex-col gap-2 text-sm">
-      <span className="inline-flex items-center gap-2 text-slate-200 font-semibold text-indigo-300">
-        <SlidersHorizontal size={14} /> {label}
+    <label className="flex flex-col gap-2.5 text-sm">
+      <span className="inline-flex items-center gap-2 text-white font-bold uppercase tracking-wide">
+        <SlidersHorizontal size={16} /> {label}
       </span>
       <select
-        className="w-full rounded-xl border border-indigo-500/40 bg-gradient-to-br from-slate-800/80 to-slate-900/90 px-4 py-3 text-sm text-slate-50 shadow-lg focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/50 focus:outline-none transition appearance-none cursor-pointer hover:border-indigo-400/60 [&>option]:bg-slate-800 [&>option]:text-slate-50 [&>option]:py-2"
+        className="w-full px-4 py-3.5 bg-slate-800 border-2 border-indigo-600 rounded-lg text-white font-semibold focus:outline-none focus:ring-4 focus:ring-indigo-500/50 focus:border-indigo-400 transition-all duration-200 hover:border-indigo-500 shadow-lg shadow-indigo-600/20 appearance-none cursor-pointer [&>option]:bg-slate-800 [&>option]:text-white [&>option]:py-3 [&>option]:font-semibold"
         value={value}
         onChange={(e) => onChange(e.target.value || "")}
       >
-        <option value="" className="bg-slate-800 text-slate-50">Усі</option>
+        <option value="" className="bg-slate-800 text-white">Усі</option>
         {options.map((opt) => (
-          <option key={opt} value={opt} className="bg-slate-800 text-slate-50">
+          <option key={opt} value={opt} className="bg-slate-800 text-white">
             {opt}
           </option>
         ))}

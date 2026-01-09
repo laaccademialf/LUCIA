@@ -121,10 +121,10 @@ export function AssetForm({ selectedAsset, onSubmit }) {
             type="button"
             onClick={() => setActiveTab(tab.id)}
             className={clsx(
-              "rounded-lg border px-3 py-2.5 text-sm font-semibold transition",
+              "rounded-lg px-4 py-3.5 text-sm font-bold transition-all duration-200 border-2",
               activeTab === tab.id
-                ? "border-indigo-400 bg-gradient-to-br from-indigo-600/90 to-indigo-700 text-white shadow-lg shadow-indigo-500/30"
-                : "border-indigo-500/30 bg-slate-800/50 text-indigo-200 hover:border-indigo-400/60 hover:bg-slate-700/50"
+                ? "bg-gradient-to-r from-indigo-600 to-indigo-700 text-white shadow-xl shadow-indigo-500/50 border-indigo-400 scale-105"
+                : "bg-slate-800/50 text-slate-300 border-slate-700 hover:text-white hover:bg-slate-700 hover:border-slate-600 hover:shadow-lg"
             )}
           >
             {tab.label}
@@ -228,12 +228,12 @@ export function AssetForm({ selectedAsset, onSubmit }) {
           </FieldGrid>
         )}
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-700 pt-4">
-          <div className="text-sm text-rose-400">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t-2 border-indigo-700 pt-4">
+          <div className="text-sm font-bold text-rose-400">
             {Object.keys(errors).length > 0 && "Заповніть обовʼязкові поля"}
           </div>
-          <button type="submit" className="btn btn-primary">
-            {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Зберегти актив
+          <button type="submit" className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg font-bold text-base bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-xl shadow-indigo-500/50 hover:shadow-indigo-400/70">
+            {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} Зберегти актив
           </button>
         </div>
       </form>
@@ -245,27 +245,27 @@ function FieldGrid({ children }) {
   return <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">{children}</div>;
 }
 
-const baseInput = "w-full rounded-xl border border-indigo-500/40 bg-gradient-to-br from-slate-800/80 to-slate-900/90 px-4 py-3 text-sm text-slate-50 shadow-lg focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/50 focus:outline-none transition placeholder:text-slate-500 hover:border-indigo-400/60";
+const baseInput = "w-full rounded-lg border-2 border-indigo-600 bg-slate-800 px-4 py-3.5 text-sm text-white font-semibold shadow-lg shadow-indigo-600/20 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-500/50 focus:outline-none transition-all duration-200 placeholder:text-slate-400 hover:border-indigo-500";
 
 const Input = ({ label, disabled, type = "text", ...rest }) => (
-  <label className="flex flex-col gap-2 text-sm text-slate-200">
-    <span className="font-semibold text-indigo-300">{label}</span>
+  <label className="flex flex-col gap-2.5 text-sm">
+    <span className="font-bold text-white">{label}</span>
     <input 
       type={type}
       disabled={disabled} 
-      className={clsx(baseInput, disabled && "bg-slate-700/30 text-slate-500 cursor-not-allowed border-slate-600/30")} 
+      className={clsx(baseInput, disabled && "bg-slate-700/50 text-slate-400 cursor-not-allowed border-slate-600")} 
       {...rest} 
     />
   </label>
 );
 
 const Select = ({ label, options = [], ...rest }) => (
-  <label className="flex flex-col gap-2 text-sm text-slate-200">
-    <span className="font-semibold text-indigo-300">{label}</span>
-    <select className={clsx(baseInput, "appearance-none cursor-pointer pr-8 bg-right bg-no-repeat [&>option]:bg-slate-800 [&>option]:text-slate-50 [&>option]:py-2")} {...rest}>
-      <option value="" className="bg-slate-800 text-slate-50">Обери опцію...</option>
+  <label className="flex flex-col gap-2.5 text-sm">
+    <span className="font-bold text-white">{label}</span>
+    <select className={clsx(baseInput, "appearance-none cursor-pointer pr-8 bg-right bg-no-repeat [&>option]:bg-slate-800 [&>option]:text-white [&>option]:py-3 [&>option]:font-semibold")} {...rest}>
+      <option value="" className="bg-slate-800 text-white">Обери опцію...</option>
       {options.map((opt) => (
-        <option key={opt} value={opt} className="bg-slate-800 text-slate-50">
+        <option key={opt} value={opt} className="bg-slate-800 text-white">
           {opt}
         </option>
       ))}
@@ -274,8 +274,8 @@ const Select = ({ label, options = [], ...rest }) => (
 );
 
 const Textarea = ({ label, rows = 3, ...rest }) => (
-  <label className="flex flex-col gap-2 text-sm text-slate-200">
-    <span className="font-semibold text-indigo-300">{label}</span>
-    <textarea rows={rows} className={`${baseInput} resize-none`} {...rest} />
+  <label className="flex flex-col gap-2.5 text-sm">
+    <span className="font-bold text-white">{label}</span>
+    <textarea rows={rows} className={`${baseInput} resize-none min-h-[100px]`} {...rest} />
   </label>
 );
