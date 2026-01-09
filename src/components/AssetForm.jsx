@@ -102,14 +102,14 @@ export function AssetForm({ selectedAsset, onSubmit }) {
   const isMove = watch("decision") === "Перемістити";
 
   return (
-    <div className="card p-5 bg-slate-800/60 border-slate-700 text-slate-50">
+    <div className="card p-5 bg-slate-800/60 border-slate-700 text-slate-50 shadow-xl">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-xs uppercase tracking-wide text-slate-400">Форма</p>
+          <p className="text-xs uppercase tracking-wide text-indigo-400 font-semibold">Форма</p>
           <h2 className="text-xl font-semibold text-slate-50">Додати / редагувати актив</h2>
           <p className="text-sm text-slate-300">8 блоків замість довгого скролу</p>
         </div>
-        <div className="inline-flex items-center gap-2 text-sm text-slate-300">
+        <div className="inline-flex items-center gap-2 text-sm text-slate-400">
           <ClipboardCheck size={16} /> Обовʼязкові: назва, інв. номер, локація, залишкова, рішення
         </div>
       </div>
@@ -121,10 +121,10 @@ export function AssetForm({ selectedAsset, onSubmit }) {
             type="button"
             onClick={() => setActiveTab(tab.id)}
             className={clsx(
-              "rounded-lg border px-3 py-2 text-sm font-medium transition",
+              "rounded-lg border px-3 py-2.5 text-sm font-semibold transition",
               activeTab === tab.id
-                ? "border-indigo-400 bg-indigo-500/20 text-indigo-300"
-                : "border-slate-600 bg-slate-800 text-slate-200 hover:border-slate-500"
+                ? "border-indigo-400 bg-gradient-to-br from-indigo-600/90 to-indigo-700 text-white shadow-lg shadow-indigo-500/30"
+                : "border-indigo-500/30 bg-slate-800/50 text-indigo-200 hover:border-indigo-400/60 hover:bg-slate-700/50"
             )}
           >
             {tab.label}
@@ -245,22 +245,27 @@ function FieldGrid({ children }) {
   return <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">{children}</div>;
 }
 
-const baseInput = "rounded-xl border border-slate-600 bg-gradient-to-br from-slate-800 to-slate-900 px-4 py-2.5 text-sm text-slate-50 shadow-md focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/30 focus:outline-none transition placeholder:text-slate-400";
+const baseInput = "w-full rounded-xl border border-indigo-500/40 bg-gradient-to-br from-slate-800/80 to-slate-900/90 px-4 py-3 text-sm text-slate-50 shadow-lg focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/50 focus:outline-none transition placeholder:text-slate-500 hover:border-indigo-400/60";
 
-const Input = ({ label, disabled, ...rest }) => (
+const Input = ({ label, disabled, type = "text", ...rest }) => (
   <label className="flex flex-col gap-2 text-sm text-slate-200">
-    <span className="font-medium">{label}</span>
-    <input disabled={disabled} className={clsx(baseInput, disabled && "bg-slate-700/40 text-slate-400 cursor-not-allowed")} {...rest} />
+    <span className="font-semibold text-indigo-300">{label}</span>
+    <input 
+      type={type}
+      disabled={disabled} 
+      className={clsx(baseInput, disabled && "bg-slate-700/30 text-slate-500 cursor-not-allowed border-slate-600/30")} 
+      {...rest} 
+    />
   </label>
 );
 
 const Select = ({ label, options = [], ...rest }) => (
   <label className="flex flex-col gap-2 text-sm text-slate-200">
-    <span className="font-medium">{label}</span>
-    <select className={clsx(baseInput, "appearance-none cursor-pointer")} {...rest}>
-      <option value="">Оберіть опцію...</option>
+    <span className="font-semibold text-indigo-300">{label}</span>
+    <select className={clsx(baseInput, "appearance-none cursor-pointer pr-8 bg-right bg-no-repeat [&>option]:bg-slate-800 [&>option]:text-slate-50 [&>option]:py-2")} {...rest}>
+      <option value="" className="bg-slate-800 text-slate-50">Обери опцію...</option>
       {options.map((opt) => (
-        <option key={opt} value={opt}>
+        <option key={opt} value={opt} className="bg-slate-800 text-slate-50">
           {opt}
         </option>
       ))}
@@ -270,7 +275,7 @@ const Select = ({ label, options = [], ...rest }) => (
 
 const Textarea = ({ label, rows = 3, ...rest }) => (
   <label className="flex flex-col gap-2 text-sm text-slate-200">
-    <span className="font-medium">{label}</span>
+    <span className="font-semibold text-indigo-300">{label}</span>
     <textarea rows={rows} className={`${baseInput} resize-none`} {...rest} />
   </label>
 );

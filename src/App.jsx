@@ -200,7 +200,7 @@ function App() {
               <button
                 type="button"
                 onClick={() => setSelected(null)}
-                className="btn btn-secondary justify-center"
+                className="btn btn-primary w-full justify-center"
               >
                 <Plus size={18} /> Новий актив
               </button>

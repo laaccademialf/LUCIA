@@ -10,10 +10,10 @@ import { ArrowDownZA, ArrowUpAZ, Download, Pencil, SlidersHorizontal } from "luc
 import clsx from "clsx";
 
 const decisionColors = {
-  "Залишити": "bg-emerald-100 text-emerald-700",
-  "Списати": "bg-rose-100 text-rose-700",
-  "Продати": "bg-amber-100 text-amber-800",
-  "Перемістити": "bg-sky-100 text-sky-700",
+  "Залишити": "bg-emerald-500/20 text-emerald-300 border border-emerald-400/40",
+  "Списати": "bg-rose-500/20 text-rose-300 border border-rose-400/40",
+  "Продати": "bg-amber-500/20 text-amber-300 border border-amber-400/40",
+  "Перемістити": "bg-sky-500/20 text-sky-300 border border-sky-400/40",
 };
 
 const columnHelper = createColumnHelper();
@@ -34,34 +34,34 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport }) {
       columnHelper.accessor("invNumber", {
         header: "Інв. номер",
         cell: (info) => (
-          <div className="font-semibold text-slate-900">{info.getValue()}</div>
+          <div className="font-semibold text-indigo-300">{info.getValue()}</div>
         ),
       }),
       columnHelper.accessor("name", {
         header: "Назва активу",
         cell: (info) => (
           <div>
-            <div className="font-medium text-slate-900">{info.getValue()}</div>
-            <div className="text-xs text-slate-500">{info.row.original.brand}</div>
+            <div className="font-medium text-slate-50">{info.getValue()}</div>
+            <div className="text-xs text-slate-400">{info.row.original.brand}</div>
           </div>
         ),
       }),
       columnHelper.accessor("category", {
         header: "Категорія",
         cell: (info) => (
-          <div className="text-sm text-slate-700">{info.getValue()}</div>
+          <div className="text-sm text-slate-200">{info.getValue()}</div>
         ),
       }),
       columnHelper.accessor("businessUnit", {
         header: "Локація",
         cell: (info) => (
-          <div className="text-sm text-slate-700">{info.getValue()}</div>
+          <div className="text-sm text-slate-200">{info.getValue()}</div>
         ),
       }),
       columnHelper.accessor("status", {
         header: "Статус",
         cell: (info) => (
-          <span className="badge bg-slate-100 text-slate-700">{info.getValue()}</span>
+          <span className="inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold bg-slate-700/40 border border-slate-600/40 text-slate-200">{info.getValue()}</span>
         ),
       }),
       columnHelper.accessor("decision", {
@@ -84,9 +84,9 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport }) {
           <button
             type="button"
             onClick={() => onEdit(info.row.original)}
-            className="btn btn-secondary px-3 py-1"
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600/20 border border-indigo-500/40 px-3 py-1.5 text-xs font-semibold text-indigo-300 hover:bg-indigo-600/30 hover:border-indigo-400/60 transition"
           >
-            <Pencil size={16} /> Редагувати
+            <Pencil size={14} /> Редагувати
           </button>
         ),
       }),
@@ -108,15 +108,15 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport }) {
   };
 
   return (
-    <div className="card p-5 bg-slate-800/60 border-slate-700 text-slate-50">
+    <div className="card p-5 bg-slate-800/60 border-slate-700 text-slate-50 shadow-xl">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-xs uppercase tracking-wide text-slate-400">Дашборд</p>
+          <p className="text-xs uppercase tracking-wide text-indigo-400 font-semibold">Дашборд</p>
           <h2 className="text-xl font-semibold text-slate-50">Облік активів</h2>
           <p className="text-sm text-slate-300">Швидкі фільтри та експорт</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={onExport} className="btn btn-secondary">
+          <button type="button" onClick={onExport} className="btn btn-primary">
             <Download size={16} /> Експорт CSV
           </button>
         </div>
@@ -198,17 +198,17 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport }) {
 function FilterSelect({ label, value, options, onChange }) {
   return (
     <label className="flex flex-col gap-2 text-sm">
-      <span className="inline-flex items-center gap-2 text-slate-200 font-medium">
+      <span className="inline-flex items-center gap-2 text-slate-200 font-semibold text-indigo-300">
         <SlidersHorizontal size={14} /> {label}
       </span>
       <select
-        className="rounded-xl border border-slate-600 bg-gradient-to-br from-slate-800 to-slate-900 px-4 py-2.5 text-sm text-slate-50 shadow-md focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/30 focus:outline-none transition appearance-none cursor-pointer"
+        className="w-full rounded-xl border border-indigo-500/40 bg-gradient-to-br from-slate-800/80 to-slate-900/90 px-4 py-3 text-sm text-slate-50 shadow-lg focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/50 focus:outline-none transition appearance-none cursor-pointer hover:border-indigo-400/60 [&>option]:bg-slate-800 [&>option]:text-slate-50 [&>option]:py-2"
         value={value}
         onChange={(e) => onChange(e.target.value || "")}
       >
-        <option value="">Усі</option>
+        <option value="" className="bg-slate-800 text-slate-50">Усі</option>
         {options.map((opt) => (
-          <option key={opt} value={opt}>
+          <option key={opt} value={opt} className="bg-slate-800 text-slate-50">
             {opt}
           </option>
         ))}
