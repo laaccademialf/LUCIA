@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Box,
   ChevronDown,
@@ -37,6 +37,61 @@ function App() {
     team: false,
     maintenance: false,
   });
+  const [topTab, setTopTab] = useState("test1");
+  const [restaurantForm, setRestaurantForm] = useState({
+    regNumber: "",
+    name: "",
+    address: "",
+    seatsTotal: "",
+    seatsSummer: "",
+    seatsWinter: "",
+    hasTerrace: false,
+    areaTotal: "",
+    areaSummer: "",
+    areaWinter: "",
+    country: "",
+    region: "",
+    city: "",
+    street: "",
+    postalCode: "",
+    notes: "",
+  });
+  const [schedule, setSchedule] = useState({
+    mon: { from: "", to: "" },
+    tue: { from: "", to: "" },
+    wed: { from: "", to: "" },
+    thu: { from: "", to: "" },
+    fri: { from: "", to: "" },
+    sat: { from: "", to: "" },
+    sun: { from: "", to: "" },
+  });
+
+  const topTabs = useMemo(() => {
+    if (activeNav === "settings-restaurant") {
+      return [
+        { id: "main", label: "Головні" },
+        { id: "schedule", label: "Графік роботи" },
+      ];
+    }
+    if (activeNav.startsWith("inventory-")) {
+      return [
+        { id: "test1", label: "Додати" },
+        { id: "test2", label: "Редагувати" },
+        { id: "test3", label: "Тест 3" },
+      ];
+    }
+    return [
+      { id: "test1", label: "Тест 1" },
+      { id: "test2", label: "Тест 2" },
+      { id: "test3", label: "Тест 3" },
+    ];
+  }, [activeNav]);
+
+  useEffect(() => {
+    if (topTabs.length > 0) {
+      setTopTab(topTabs[0].id);
+    }
+  }, [activeNav, topTabs]);
 
   const toggleGroup = (id) => {
     setExpandedGroups((prev) => {
@@ -191,31 +246,216 @@ function App() {
   ];
 
   const renderContent = () => {
-    if (activeNav === "inventory-assets" || activeNav.startsWith("reports-assets")) {
+    const baseInput = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400 disabled:border-gray-200 disabled:cursor-not-allowed";
+
+    const renderAddressFields = () => (
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Країна</label>
+          <input className={baseInput} value={restaurantForm.country} onChange={(e) => setRestaurantForm((p) => ({ ...p, country: e.target.value }))} />
+        </div>
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Область</label>
+          <input className={baseInput} value={restaurantForm.region} onChange={(e) => setRestaurantForm((p) => ({ ...p, region: e.target.value }))} />
+        </div>
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Місто / Село</label>
+          <input className={baseInput} value={restaurantForm.city} onChange={(e) => setRestaurantForm((p) => ({ ...p, city: e.target.value }))} />
+        </div>
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Вулиця</label>
+          <input className={baseInput} value={restaurantForm.street} onChange={(e) => setRestaurantForm((p) => ({ ...p, street: e.target.value }))} />
+        </div>
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Поштовий індекс</label>
+          <input className={baseInput} value={restaurantForm.postalCode} onChange={(e) => setRestaurantForm((p) => ({ ...p, postalCode: e.target.value }))} />
+        </div>
+      </div>
+    );
+
+    const renderSeatingFields = () => (
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="hasTerrace"
+            className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            checked={restaurantForm.hasTerrace}
+            onChange={(e) => setRestaurantForm((p) => ({ ...p, hasTerrace: e.target.checked }))}
+          />
+          <label htmlFor="hasTerrace" className="text-sm font-semibold text-slate-800">Розділяти літо / зима</label>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Посадкові місця (всього)</label>
+            <input
+              className={baseInput}
+              value={restaurantForm.seatsTotal}
+              onChange={(e) => setRestaurantForm((p) => ({ ...p, seatsTotal: e.target.value }))}
+              disabled={restaurantForm.hasTerrace}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Посадкові місця (літо)</label>
+            <input
+              className={baseInput}
+              value={restaurantForm.seatsSummer}
+              onChange={(e) => setRestaurantForm((p) => ({ ...p, seatsSummer: e.target.value }))}
+              disabled={!restaurantForm.hasTerrace}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Посадкові місця (зима)</label>
+            <input
+              className={baseInput}
+              value={restaurantForm.seatsWinter}
+              onChange={(e) => setRestaurantForm((p) => ({ ...p, seatsWinter: e.target.value }))}
+              disabled={!restaurantForm.hasTerrace}
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Площа, м² (всього)</label>
+            <input
+              className={baseInput}
+              value={restaurantForm.areaTotal}
+              onChange={(e) => setRestaurantForm((p) => ({ ...p, areaTotal: e.target.value }))}
+              disabled={restaurantForm.hasTerrace}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Площа, м² (літо)</label>
+            <input
+              className={baseInput}
+              value={restaurantForm.areaSummer}
+              onChange={(e) => setRestaurantForm((p) => ({ ...p, areaSummer: e.target.value }))}
+              disabled={!restaurantForm.hasTerrace}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Площа, м² (зима)</label>
+            <input
+              className={baseInput}
+              value={restaurantForm.areaWinter}
+              onChange={(e) => setRestaurantForm((p) => ({ ...p, areaWinter: e.target.value }))}
+              disabled={!restaurantForm.hasTerrace}
+            />
+          </div>
+        </div>
+      </div>
+    );
+
+    const renderSchedule = () => {
+      const days = [
+        { key: "mon", label: "Пн" },
+        { key: "tue", label: "Вт" },
+        { key: "wed", label: "Ср" },
+        { key: "thu", label: "Чт" },
+        { key: "fri", label: "Пт" },
+        { key: "sat", label: "Сб" },
+        { key: "sun", label: "Нд" },
+      ];
       return (
-        <>
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <div className="lg:col-span-2">
-              <AssetTable
-                data={assets}
-                onEdit={setSelected}
-                filters={filters}
-                setFilters={setFilters}
-                onExport={handleExport}
+        <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
+          <h2 className="text-xl font-semibold text-slate-900 mb-4">Графік роботи</h2>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+            {days.map((d) => (
+              <div key={d.key} className="rounded-lg border border-slate-200 p-3 bg-slate-50">
+                <p className="text-sm font-semibold text-slate-800 mb-2">{d.label}</p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="time"
+                    className={baseInput}
+                    value={schedule[d.key].from}
+                    onChange={(e) => setSchedule((p) => ({ ...p, [d.key]: { ...p[d.key], from: e.target.value } }))}
+                  />
+                  <span className="text-xs text-slate-500">до</span>
+                  <input
+                    type="time"
+                    className={baseInput}
+                    value={schedule[d.key].to}
+                    onChange={(e) => setSchedule((p) => ({ ...p, [d.key]: { ...p[d.key], to: e.target.value } }))}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    };
+
+    if (activeNav === "settings-restaurant") {
+      if (topTab === "main") {
+        return (
+          <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl space-y-6">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900">Головні дані ресторану</h2>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div>
+                <label className="text-sm font-semibold text-slate-800">Обліковий номер</label>
+                <input className={baseInput} value={restaurantForm.regNumber} onChange={(e) => setRestaurantForm((p) => ({ ...p, regNumber: e.target.value }))} />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-800">Назва</label>
+                <input className={baseInput} value={restaurantForm.name} onChange={(e) => setRestaurantForm((p) => ({ ...p, name: e.target.value }))} />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-sm font-semibold text-slate-700">Адреса</p>
+              {renderAddressFields()}
+            </div>
+            {renderSeatingFields()}
+
+            <div>
+              <label className="text-sm font-semibold text-slate-800">Нотатки</label>
+              <textarea
+                className={`${baseInput} min-h-[100px]`}
+                value={restaurantForm.notes}
+                onChange={(e) => setRestaurantForm((p) => ({ ...p, notes: e.target.value }))}
               />
             </div>
-            <div className="lg:col-span-1 flex flex-col gap-4">
+
+            <div className="flex justify-end">
               <button
                 type="button"
-                onClick={() => setSelected(null)}
-                className="btn btn-primary w-full justify-center"
+                className="px-5 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow"
               >
-                <Plus size={18} /> Новий актив
+                Зберегти
               </button>
-              <AssetForm selectedAsset={selected} onSubmit={handleSubmit} />
             </div>
           </div>
-        </>
+        );
+      }
+
+      if (topTab === "schedule") {
+        return renderSchedule();
+      }
+    }
+
+    if (activeNav === "inventory-assets" || activeNav.startsWith("reports-assets")) {
+      if (topTab === "test1") {
+        return (
+          <div className="grid grid-cols-1">
+            <AssetForm selectedAsset={null} onSubmit={handleSubmit} />
+          </div>
+        );
+      }
+
+      return (
+        <div className="grid grid-cols-1">
+          <AssetTable
+            data={assets}
+            onEdit={setSelected}
+            filters={filters}
+            setFilters={setFilters}
+            onExport={handleExport}
+            headerTitle="Редагування"
+            headerSubtitle="Експорт / Імпорт"
+          />
+        </div>
       );
     }
 
@@ -292,7 +532,32 @@ function App() {
 
         {/* Main Content */}
         <main className="flex-1 ml-72 overflow-auto transition-all duration-300">
-          <div className="mx-auto max-w-7xl px-4 py-8 lg:px-6">
+          {topTabs.length > 0 && (
+            <div className="sticky top-0 z-30 bg-slate-900/95 border-b border-slate-800 shadow-lg shadow-slate-900/40">
+              <div className="w-full px-0 lg:px-0 h-10 flex gap-0 overflow-x-auto items-stretch justify-start">
+                {topTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => {
+                      setTopTab(tab.id);
+                      setSelected(null);
+                    }}
+                    className={clsx(
+                      "flex-none px-3 py-2 rounded-none text-sm font-semibold border border-slate-700 transition text-center first:rounded-none last:rounded-r-lg",
+                      topTab === tab.id
+                        ? "bg-indigo-600 text-white border-indigo-400 shadow-lg shadow-indigo-500/40"
+                        : "bg-slate-800 text-slate-200 border-slate-700 hover:border-indigo-400 hover:text-white hover:bg-slate-700"
+                    )}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="mx-auto max-w-screen-2xl px-6 py-8 lg:px-8">
             <div className="mt-4">
               {renderContent()}
             </div>
