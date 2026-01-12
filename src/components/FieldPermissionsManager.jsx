@@ -87,18 +87,28 @@ export function FieldPermissionsManager() {
       const workRoles = await getWorkRoles();
       setRoles(workRoles);
 
-      // Ініціалізуємо дозволи для кожної ролі та поля
-      const permissions = {};
-      workRoles.forEach(role => {
-        permissions[role.id] = {};
-        Object.values(ASSET_FIELDS).forEach(tab => {
-          tab.fields.forEach(field => {
-            permissions[role.id][field.id] = true; // За замовчуванням всі можуть редагувати
+      // Спробуємо завантажити збережені дозволи з localStorage
+      const savedPermissions = localStorage.getItem("fieldPermissions");
+      
+      if (savedPermissions) {
+        // Якщо є збережені дозволи - використовуємо їх
+        setFieldPermissions(JSON.parse(savedPermissions));
+        console.log("✅ Завантажено збережені дозволи з localStorage");
+      } else {
+        // Ініціалізуємо дозволи для кожної ролі та поля
+        const permissions = {};
+        workRoles.forEach(role => {
+          permissions[role.id] = {};
+          Object.values(ASSET_FIELDS).forEach(tab => {
+            tab.fields.forEach(field => {
+              permissions[role.id][field.id] = true; // За замовчуванням всі можуть редагувати
+            });
           });
         });
-      });
+        setFieldPermissions(permissions);
+        console.log("📋 Ініціалізовано дозволи за замовчуванням");
+      }
 
-      setFieldPermissions(permissions);
       setLoading(false);
     } catch (error) {
       console.error("Помилка завантаження ролей:", error);

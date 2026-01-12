@@ -4,6 +4,7 @@ import { CheckCircle2, ClipboardCheck, Loader2, Save, Camera, Upload, X, Chevron
 import clsx from "clsx";
 import { useAssetFields } from "../hooks/useAssetFields";
 import { useRestaurants } from "../hooks/useRestaurants";
+import { useFieldPermissions } from "../hooks/useFieldPermissions";
 
 const tabs = [
   { id: "identification", label: "Ідентифікація", requiredFields: ["invNumber", "name"] },
@@ -72,6 +73,9 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   // Завантаження ресторанів для локації (якщо не передали через пропси)
   const { restaurants: fetchedRestaurants, loading: restaurantsLoading } = useRestaurants();
   const restaurants = restaurantsProp || fetchedRestaurants;
+  
+  // Завантаження прав редагування полів на основі робочої ролі
+  const { canEdit } = useFieldPermissions(currentUser?.workRole);
   
   const {
     register,
@@ -315,9 +319,17 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
               <Input 
                 label={<>Інвентарний номер {requiredMark}</>} 
                 {...register("invNumber", { required: true })}
-                disabled={selectedAsset !== undefined && selectedAsset !== null}
+                disabled={
+                  // Disabled якщо редагуємо існуючий актив АБО якщо немає права редагувати
+                  (selectedAsset !== undefined && selectedAsset !== null) || 
+                  !canEdit("invNumber")
+                }
               />
-              <Input label={<>Назва активу {requiredMark}</>} {...register("name", { required: true })} />
+              <Input 
+                label={<>Назва активу {requiredMark}</>} 
+                {...register("name", { required: true })}
+                disabled={!canEdit("name")}
+              />
               <Select
                 label="Категорія"
                 {...register("category")}
