@@ -60,10 +60,18 @@ export const UsersTable = ({ currentUser }) => {
       return;
     }
 
+    const newRole = currentRole === "admin" ? "user" : "admin";
+    const confirmMessage = newRole === "admin" 
+      ? "Ви впевнені що хочете надати права адміністратора цьому користувачу?"
+      : "Ви впевнені що хочете забрати права адміністратора у цього користувача?";
+    
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
     try {
       setUpdatingUserId(userId);
       setError("");
-      const newRole = currentRole === "admin" ? "user" : "admin";
       await updateUserRole(userId, newRole);
       
       setUsers((prev) =>
@@ -170,6 +178,20 @@ export const UsersTable = ({ currentUser }) => {
         </div>
       )}
 
+      {/* Інформаційна підказка про ролі */}
+      <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <div className="flex items-start gap-3">
+          <Shield size={20} className="text-blue-600 mt-0.5" />
+          <div className="text-sm text-blue-800">
+            <p className="font-semibold mb-1">Управління правами адміністратора</p>
+            <p className="text-blue-700">
+              Натисніть на роль користувача щоб змінити її. <strong>Адміністратори</strong> мають повний доступ до всіх функцій системи,
+              включаючи управління користувачами, ресторанами та налаштуваннями. Будьте обережні надаючи права адміністратора.
+            </p>
+          </div>
+        </div>
+      </div>
+
       {users.length === 0 ? (
         <div className="text-center py-12 text-slate-500">
           <Users size={48} className="mx-auto mb-3 opacity-50" />
@@ -250,10 +272,11 @@ export const UsersTable = ({ currentUser }) => {
                       <button
                         onClick={() => handleRoleToggle(user.id, user.role)}
                         disabled={isCurrentUser || isUpdating}
+                        title={isCurrentUser ? "Ви не можете змінити власну роль" : "Натисніть щоб змінити роль"}
                         className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold transition ${
                           user.role === "admin"
-                            ? "bg-amber-100 text-amber-800 hover:bg-amber-200"
-                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                            ? "bg-amber-100 text-amber-800 hover:bg-amber-200 border border-amber-300"
+                            : "bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300"
                         } ${
                           isCurrentUser || isUpdating
                             ? "opacity-50 cursor-not-allowed"
@@ -267,7 +290,17 @@ export const UsersTable = ({ currentUser }) => {
                           </>
                         ) : (
                           <>
-                            {user.role === "admin" ? "Адміністратор" : "Користувач"}
+                            {user.role === "admin" ? (
+                              <>
+                                <Shield size={12} />
+                                Адміністратор
+                              </>
+                            ) : (
+                              <>
+                                <User size={12} />
+                                Користувач
+                              </>
+                            )}
                           </>
                         )}
                       </button>

@@ -69,7 +69,8 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
         adminPassword,
         formData.restaurant,
         formData.position,
-        formData.workRole
+        formData.workRole,
+        formData.role
       );
       
       setSuccess(`Користувач ${formData.displayName} успішно створений!`);
@@ -238,19 +239,19 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
 
         <div>
           <label className="block text-sm font-semibold text-slate-800 mb-2">
-            Системна роль
+            Системна роль *
           </label>
           <select
             value={formData.role}
             onChange={(e) => setFormData((prev) => ({ ...prev, role: e.target.value }))}
             className={baseInput}
-            disabled
           >
             <option value="user">Користувач</option>
             <option value="admin">Адміністратор</option>
           </select>
           <p className="text-xs text-slate-500 mt-1">
-            За замовчуванням створюються користувачі. Роль можна змінити у розділі "Редагувати"
+            <strong>Адміністратори</strong> мають повний доступ до всіх функцій системи. 
+            Роль також можна змінити пізніше у розділі "Редагувати"
           </p>
         </div>
 

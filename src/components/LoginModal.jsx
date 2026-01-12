@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { loginUser } from "../firebase/auth";
+import { useAuth } from "../hooks/useAuth";
 
 export const LoginModal = ({ onClose, onSwitchToRegister }) => {
+  const { isAuthenticated } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -39,12 +41,14 @@ export const LoginModal = ({ onClose, onSwitchToRegister }) => {
       <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-2xl font-bold text-slate-900">Вхід</h2>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 transition"
-          >
-            <X size={24} />
-          </button>
+          {isAuthenticated && (
+            <button
+              onClick={onClose}
+              className="text-slate-400 hover:text-slate-600 transition"
+            >
+              <X size={24} />
+            </button>
+          )}
         </div>
 
         {error && (

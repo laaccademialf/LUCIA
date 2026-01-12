@@ -104,6 +104,27 @@ function App() {
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [showAuthWarning, setShowAuthWarning] = useState(false);
 
+  // Автоматично показувати вікно входу для неавторизованих користувачів
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) {
+      setShowLoginModal(true);
+    }
+  }, [authLoading, isAuthenticated]);
+
+  // Автоматично показувати вікно входу для неавторизованих користувачів
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) {
+      setShowLoginModal(true);
+    }
+  }, [authLoading, isAuthenticated]);
+
+  // Автоматично показувати вікно входу для неавторизованих користувачів
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) {
+      setShowLoginModal(true);
+    }
+  }, [authLoading, isAuthenticated]);
+
   // Firebase hooks
   const {
     restaurants: firebaseRestaurants,
@@ -1172,7 +1193,40 @@ function App() {
           </div>
         </div>
       )}
-      <div className="flex h-screen gap-0">
+      
+      {/* Блокування доступу для неавторизованих користувачів */}
+      {!authLoading && !isAuthenticated ? (
+        <div className="fixed inset-0 bg-slate-900 flex items-center justify-center z-40">
+          <div className="max-w-md w-full mx-4">
+            <div className="bg-slate-800 rounded-lg p-8 shadow-2xl border border-slate-700">
+              <div className="text-center mb-6">
+                <p className="text-4xl font-bold text-indigo-400 mb-2">LUCI</p>
+                <p className="text-xs uppercase tracking-wider text-slate-400">
+                  La Famiglia Unified Control & Intelligence
+                </p>
+              </div>
+              <div className="space-y-4">
+                <p className="text-slate-300 text-center">
+                  Для доступу до системи необхідно авторизуватися
+                </p>
+                <button
+                  onClick={() => setShowLoginModal(true)}
+                  className="w-full px-6 py-3 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition text-lg font-semibold"
+                >
+                  Увійти
+                </button>
+                <button
+                  onClick={() => setShowRegisterModal(true)}
+                  className="w-full px-6 py-3 rounded-lg bg-slate-700 text-slate-300 hover:bg-slate-600 transition text-lg font-medium"
+                >
+                  Зареєструватися
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex h-screen gap-0">
         {/* Top Header Bar */}
         <div className="fixed top-0 left-72 right-0 h-14 bg-slate-900/95 border-b border-slate-700 z-30 flex items-center justify-end px-6">
           {isAuthenticated ? (
@@ -1316,6 +1370,7 @@ function App() {
           </div>
         </main>
       </div>
+      )}
 
       {/* Auth Modals */}
       {showLoginModal && (

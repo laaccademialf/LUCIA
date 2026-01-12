@@ -55,9 +55,10 @@ export const registerUser = async (email, password, displayName) => {
  * @param {string} restaurant - ID ресторану
  * @param {string} position - Посада
  * @param {string} workRole - Робоча роль
+ * @param {string} role - Системна роль (user або admin)
  * @returns {Promise<Object>} Дані створеного користувача
  */
-export const createUserByAdmin = async (email, password, displayName, currentUser, currentPassword, restaurant, position, workRole) => {
+export const createUserByAdmin = async (email, password, displayName, currentUser, currentPassword, restaurant, position, workRole, role = "user") => {
   try {
     // Зберігаємо дані поточного користувача
     const adminEmail = currentUser.email;
@@ -73,7 +74,7 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
     await setDoc(doc(db, "users", newUser.uid), {
       email: newUser.email,
       displayName: displayName,
-      role: "user",
+      role: role || "user",
       restaurant: restaurant || "",
       position: position || "",
       workRole: workRole || "",
@@ -91,7 +92,7 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
       uid: newUser.uid,
       email: newUser.email,
       displayName: displayName,
-      role: "user",
+      role: role || "user",
       restaurant: restaurant || "",
       position: position || "",
       workRole: workRole || "",
