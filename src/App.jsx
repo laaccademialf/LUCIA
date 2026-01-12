@@ -27,6 +27,7 @@ import { RolePermissionsManager } from "./components/RolePermissionsManager";
 import { FieldPermissionsManager } from "./components/FieldPermissionsManager";
 import { AssetFieldsManager } from "./components/AssetFieldsManager";
 import { MaterialResponsibilityManager } from "./components/MaterialResponsibilityManager";
+import { FinancialAssetsReport } from "./components/FinancialAssetsReport";
 import { mockAssets } from "./data/mockAssets";
 import { useRestaurants } from "./hooks/useRestaurants";
 import { useAssets } from "./hooks/useAssets";
@@ -1490,6 +1491,15 @@ function App() {
 
     if (activeNav === "inventory-assets" || activeNav.startsWith("reports-assets")) {
       if (topTab === "test1") {
+        // Якщо це розділ звітів - показуємо фінансовий звіт
+        if (activeNav.startsWith("reports-assets")) {
+          return (
+            <div className="grid grid-cols-1">
+              <FinancialAssetsReport assets={assets} restaurants={restaurants} responsibilityCenters={businessUnits} />
+            </div>
+          );
+        }
+        // Якщо це розділ облікування активів - показуємо форму додавання
         return (
           <div className="grid grid-cols-1">
             <AssetForm selectedAsset={null} onSubmit={handleSubmit} currentUser={user} restaurants={restaurants} assets={assets} />
