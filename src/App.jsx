@@ -177,6 +177,7 @@ function App() {
     loading: assetsLoading,
     addAsset: addAssetToFirebase,
     updateAsset: updateAssetInFirebase,
+    deleteAsset: deleteAssetFromFirebase,
   } = useAssets();
 
   const {
@@ -535,6 +536,21 @@ function App() {
     } catch (error) {
       console.error("Помилка збереження активу:", error);
       alert("Помилка збереження активу. Перевірте консоль.");
+    }
+  };
+
+  const handleDeleteAsset = async (assetId) => {
+    try {
+      const { success, error } = await deleteAssetFromFirebase(assetId);
+      if (success) {
+        setSelected(null);
+        alert("Актив успішно видалений!");
+      } else {
+        alert("Помилка видалення активу: " + error);
+      }
+    } catch (error) {
+      console.error("Помилка видалення активу:", error);
+      alert("Помилка видалення активу. Перевірте консоль.");
     }
   };
 
@@ -1503,6 +1519,47 @@ function App() {
         return (
           <div className="grid grid-cols-1">
             <AssetForm selectedAsset={null} onSubmit={handleSubmit} currentUser={user} restaurants={restaurants} assets={assets} />
+          </div>
+        );
+      }
+
+      if (topTab === "test2") {
+        // Якщо вибрано актив для редагування - показуємо форму
+        if (selected) {
+          return (
+            <div className="grid grid-cols-1">
+              <AssetForm selectedAsset={selected} onSubmit={handleSubmit} currentUser={user} restaurants={restaurants} assets={assets} />
+            </div>
+          );
+        }
+        
+        // Інакше показуємо таблицю активів з кнопками редагування
+        return (
+          <div className="grid grid-cols-1">
+            {(() => {
+              // Фільтруємо активи на основі ролі користувача
+              let assetsToShow = assets;
+              if (user?.role !== 'admin' && user?.restaurant) {
+                // Керуючий бачить тільки активи свого ресторану
+                const userRestaurantName = restaurants.find(r => r.id === user.restaurant)?.name;
+                assetsToShow = assets.filter(a => a.locationName === userRestaurantName);
+              }
+              
+              return (
+                <AssetTable
+                  data={assetsToShow}
+                  onEdit={setSelected}
+                  onDelete={user?.role === 'admin' ? handleDeleteAsset : null}
+                  filters={filters}
+                  setFilters={setFilters}
+                  onExport={handleExport}
+                  headerTitle="Редагування активів"
+                  headerSubtitle="Вибери актив для редагування"
+                  hideLocationFilter={user?.role !== 'admin'}
+                  isAdminOnly={user?.role === 'admin'}
+                />
+              );
+            })()}
           </div>
         );
       }

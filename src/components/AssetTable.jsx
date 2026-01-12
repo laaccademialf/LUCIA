@@ -6,7 +6,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { ArrowDownZA, ArrowUpAZ, Download, Pencil, SlidersHorizontal } from "lucide-react";
+import { ArrowDownZA, ArrowUpAZ, Download, Pencil, Trash2, SlidersHorizontal } from "lucide-react";
 import clsx from "clsx";
 
 // High-contrast badges on light backgrounds for readability
@@ -19,7 +19,7 @@ const decisionColors = {
 
 const columnHelper = createColumnHelper();
 
-export function AssetTable({ data, onEdit, filters, setFilters, onExport, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false }) {
+export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false }) {
   const filteredData = useMemo(() => {
     return data.filter((item) => {
       const byCategory = filters.category ? item.category === filters.category : true;
@@ -82,17 +82,32 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport, header
         id: "actions",
         header: "Дії",
         cell: (info) => (
-          <button
-            type="button"
-            onClick={() => onEdit(info.row.original)}
-            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 px-4 py-2 text-sm font-bold text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-lg shadow-indigo-500/40 hover:shadow-indigo-400/60"
-          >
-            <Pencil size={16} /> Редагувати
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onEdit(info.row.original)}
+              className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 px-4 py-2 text-sm font-bold text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-lg shadow-indigo-500/40 hover:shadow-indigo-400/60"
+            >
+              <Pencil size={16} /> Редагувати
+            </button>
+            {isAdminOnly && onDelete && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`Ви впевнені що хочете видалити актив "${info.row.original.name}"?`)) {
+                    onDelete(info.row.original.id);
+                  }
+                }}
+                className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-red-600 to-red-700 border-2 border-red-500 px-4 py-2 text-sm font-bold text-white hover:from-red-500 hover:to-red-600 hover:border-red-400 transition-all duration-200 shadow-lg shadow-red-500/40 hover:shadow-red-400/60"
+              >
+                <Trash2 size={16} /> Видалити
+              </button>
+            )}
+          </div>
         ),
       }),
     ],
-    [onEdit]
+    [onEdit, onDelete, isAdminOnly]
   );
 
   const table = useReactTable({
