@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 import { loginUser } from "../firebase/auth";
 import { useAuth } from "../hooks/useAuth";
 
-export const LoginModal = ({ onClose, onSwitchToRegister }) => {
+export const LoginModal = ({ onClose, onSwitchToRegister, onLoginSuccess }) => {
   const { isAuthenticated } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -17,6 +17,12 @@ export const LoginModal = ({ onClose, onSwitchToRegister }) => {
 
     try {
       await loginUser(email, password);
+      
+      // Перенаправлення на дашборд після успішного входу
+      if (onLoginSuccess) {
+        onLoginSuccess();
+      }
+      
       onClose();
     } catch (error) {
       console.error("Помилка входу:", error);

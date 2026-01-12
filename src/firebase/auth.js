@@ -201,6 +201,9 @@ export const subscribeToAuthChanges = (callback) => {
             email: user.email,
             displayName: user.displayName || userData.displayName || "",
             role: userData.role || "user",
+            restaurant: userData.restaurant || "",
+            position: userData.position || "",
+            workRole: userData.workRole || "",
           });
         } catch (error) {
           console.error("Помилка отримання даних користувача:", error);
@@ -209,6 +212,9 @@ export const subscribeToAuthChanges = (callback) => {
             email: user.email,
             displayName: user.displayName || "",
             role: "user",
+            restaurant: "",
+            position: "",
+            workRole: "",
           });
         }
       } else {

@@ -151,7 +151,10 @@ function App() {
     decision: "",
     location: "",
   });
-  const [activeNav, setActiveNav] = useState("inventory-assets");
+  const [activeNav, setActiveNav] = useState(() => {
+    // Відновлення збереженої сторінки з localStorage
+    return localStorage.getItem('lucia_activeNav') || "dashboard-overview";
+  });
   const [expandedGroups, setExpandedGroups] = useState({
     dashboard: false,
     settings: false,
@@ -162,7 +165,10 @@ function App() {
     team: false,
     maintenance: false,
   });
-  const [topTab, setTopTab] = useState("test1");
+  const [topTab, setTopTab] = useState(() => {
+    // Відновлення збереженої вкладки з localStorage
+    return localStorage.getItem('lucia_topTab') || "test1";
+  });
   const [selectedRestaurant, setSelectedRestaurant] = useState(null);
   const [restaurantFilter, setRestaurantFilter] = useState("");
   const [restaurantForm, setRestaurantForm] = useState({
@@ -195,13 +201,30 @@ function App() {
 
   // Sync Firebase data with local state
   useEffect(() => {
-    if (!restaurantsLoading && firebaseRestaurants.length > 0) {
-      setRestaurants(firebaseRestaurants);
-    } else if (!restaurantsLoading && firebaseRestaurants.length === 0) {
-      // Якщо база порожня, використовуємо початкові дані
-      setRestaurants(initialRestaurants);
+    if (!restaurantsLoading) {
+      console.log("🔍 Фільтрація ресторанів:");
+      console.log("- user:", user);
+      console.log("- user.role:", user?.role);
+      console.log("- user.restaurant:", user?.restaurant);
+      console.log("- firebaseRestaurants:", firebaseRestaurants);
+      
+      // Фільтрація ресторанів на основі ролі користувача
+      if (user?.role === 'admin') {
+        // Адмін бачить всі ресторани
+        console.log("✅ Адмін - показуємо всі ресторани");
+        setRestaurants(firebaseRestaurants);
+      } else if (user?.restaurant) {
+        // Керуючий бачить тільки свій ресторан
+        console.log("👤 Керуючий - показуємо тільки свій ресторан");
+        const userRestaurant = firebaseRestaurants.filter(r => r.id === user.restaurant);
+        setRestaurants(userRestaurant);
+      } else {
+        // Якщо немає прив'язки - показуємо порожній список
+        console.log("⚠️ Немає ролі або ресторану - порожній список");
+        setRestaurants([]);
+      }
     }
-  }, [firebaseRestaurants, restaurantsLoading]);
+  }, [firebaseRestaurants, restaurantsLoading, user]);
 
   useEffect(() => {
     if (!assetsLoading && firebaseAssets.length > 0) {
@@ -211,6 +234,36 @@ function App() {
       setAssets(mockAssets);
     }
   }, [firebaseAssets, assetsLoading]);
+
+  // Автоматично заповнюємо форму даними ресторану керуючого
+  useEffect(() => {
+    if (!restaurantsLoading && user?.role !== 'admin' && user?.restaurant && firebaseRestaurants.length > 0) {
+      const userRestaurant = firebaseRestaurants.find(r => r.id === user.restaurant);
+      if (userRestaurant) {
+        setRestaurantForm({
+          regNumber: userRestaurant.regNumber || "",
+          name: userRestaurant.name || "",
+          address: userRestaurant.address || "",
+          seatsTotal: userRestaurant.seatsTotal || "",
+          seatsSummer: userRestaurant.seatsSummer || "",
+          seatsWinter: userRestaurant.seatsWinter || "",
+          hasTerrace: userRestaurant.hasTerrace || false,
+          areaTotal: userRestaurant.areaTotal || "",
+          areaSummer: userRestaurant.areaSummer || "",
+          areaWinter: userRestaurant.areaWinter || "",
+          country: userRestaurant.country || "",
+          region: userRestaurant.region || "",
+          city: userRestaurant.city || "",
+          street: userRestaurant.street || "",
+          postalCode: userRestaurant.postalCode || "",
+          notes: userRestaurant.notes || "",
+        });
+        if (userRestaurant.schedule) {
+          setSchedule(userRestaurant.schedule);
+        }
+      }
+    }
+  }, [restaurantsLoading, user, firebaseRestaurants]);
 
   const topTabs = useMemo(() => {
     if (activeNav === "settings-restaurant") {
@@ -712,12 +765,27 @@ function App() {
         };
 
         const handleDeleteRestaurant = async (id) => {
-          if (confirm("Ви впевнені, що хочете видалити цей ресторан?")) {
-            try {
-              await deleteRestaurantFromFirebase(id);
-            } catch (error) {
-              console.error("Помилка видалення ресторану:", error);
-              alert("Помилка видалення ресторану. Перевірте консоль.");
+          if (!confirm("Ви впевнені, що хочете видалити цей ресторан?")) {
+            return;
+          }
+          
+          try {
+            console.log("Видалення ресторану з ID:", id);
+            console.log("Поточний користувач:", user);
+            console.log("Роль користувача:", user?.role);
+            
+            await deleteRestaurantFromFirebase(id);
+            console.log("Ресторан успішно видалено");
+            alert("✅ Ресторан успішно видалено!");
+          } catch (error) {
+            console.error("Помилка видалення ресторану:", error);
+            console.error("Код помилки:", error.code);
+            console.error("Повідомлення:", error.message);
+            
+            if (error.code === "permission-denied") {
+              alert("❌ Відмовлено в доступі!\n\nТільки адміністратори можуть видаляти ресторани.\nВаша роль: " + (user?.role || "невідомо"));
+            } else {
+              alert(`❌ Помилка видалення ресторану: ${error.message}`);
             }
           }
         };
@@ -965,63 +1033,67 @@ function App() {
         return (
           <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold text-slate-900">Управління проєктами</h2>
-              <div className="flex items-center gap-2">
-                <input
-                  type="file"
-                  accept=".xlsx,.xls"
-                  ref={(input) => (window.restaurantImportInput = input)}
-                  style={{ display: "none" }}
-                  onChange={async (e) => {
-                    const file = e.target.files[0];
-                    if (file) {
-                      try {
-                        const importedRestaurants = await importRestaurantsFromExcel(file);
-                        for (const restaurant of importedRestaurants) {
-                          await addRestaurantToFirebase(restaurant);
+              <h2 className="text-xl font-semibold text-slate-900">
+                {user?.role === 'admin' ? 'Управління проєктами' : 'Мій ресторан'}
+              </h2>
+              {user?.role === 'admin' && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    ref={(input) => (window.restaurantImportInput = input)}
+                    style={{ display: "none" }}
+                    onChange={async (e) => {
+                      const file = e.target.files[0];
+                      if (file) {
+                        try {
+                          const importedRestaurants = await importRestaurantsFromExcel(file);
+                          for (const restaurant of importedRestaurants) {
+                            await addRestaurantToFirebase(restaurant);
+                          }
+                          alert(`Успішно імпортовано ${importedRestaurants.length} ресторанів`);
+                        } catch (error) {
+                          console.error("Помилка імпорту:", error);
+                          alert("Помилка імпорту файлу. Перевірте формат файлу.");
                         }
-                        alert(`Успішно імпортовано ${importedRestaurants.length} ресторанів`);
-                      } catch (error) {
-                        console.error("Помилка імпорту:", error);
-                        alert("Помилка імпорту файлу. Перевірте формат файлу.");
+                        e.target.value = "";
                       }
-                      e.target.value = "";
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => downloadRestaurantTemplate()}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-600 text-white font-semibold hover:bg-slate-500 shadow text-sm"
-                >
-                  <FileDown size={16} />
-                  Шаблон
-                </button>
-                <button
-                  type="button"
-                  onClick={() => window.restaurantImportInput?.click()}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-500 shadow text-sm"
-                >
-                  <Upload size={16} />
-                  Імпорт
-                </button>
-                <button
-                  type="button"
-                  onClick={() => exportRestaurantsToExcel(restaurants)}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 shadow text-sm"
-                >
-                  <Download size={16} />
-                  Експорт
-                </button>
-                <button
-                  type="button"
-                  onClick={handleAddRestaurant}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow"
-                >
-                  <Plus size={18} />
-                  Додати ресторан
-                </button>
-              </div>
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => downloadRestaurantTemplate()}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-600 text-white font-semibold hover:bg-slate-500 shadow text-sm"
+                  >
+                    <FileDown size={16} />
+                    Шаблон
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => window.restaurantImportInput?.click()}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-500 shadow text-sm"
+                  >
+                    <Upload size={16} />
+                    Імпорт
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => exportRestaurantsToExcel(restaurants)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 shadow text-sm"
+                  >
+                    <Download size={16} />
+                    Експорт
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddRestaurant}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow"
+                  >
+                    <Plus size={18} />
+                    Додати ресторан
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="overflow-x-auto">
@@ -1071,22 +1143,27 @@ function App() {
                           : restaurant.areaTotal}
                       </td>
                       <td className="py-3 px-4 text-sm text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleEditRestaurant(restaurant)}
-                            className="px-3 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 font-medium text-xs"
-                          >
-                            Редагувати
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteRestaurant(restaurant.id)}
-                            className="px-3 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200 font-medium text-xs"
-                          >
-                            Видалити
-                          </button>
-                        </div>
+                        {user?.role === 'admin' && (
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleEditRestaurant(restaurant)}
+                              className="px-3 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 font-medium text-xs"
+                            >
+                              Редагувати
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteRestaurant(restaurant.id)}
+                              className="px-3 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200 font-medium text-xs"
+                            >
+                              Видалити
+                            </button>
+                          </div>
+                        )}
+                        {user?.role !== 'admin' && (
+                          <span className="text-xs text-slate-500">Тільки перегляд</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1315,7 +1392,7 @@ function App() {
                           type="button"
                           onClick={() => {
                             setActiveNav(item.id);
-
+                            localStorage.setItem('lucia_activeNav', item.id);
                           }}
                           className={clsx(
                             "mx-2 flex items-start gap-2 rounded-lg px-3 py-2 text-sm font-medium transition whitespace-nowrap",
@@ -1347,6 +1424,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setTopTab(tab.id);
+                      localStorage.setItem('lucia_topTab', tab.id);
                       setSelected(null);
                     }}
                     className={clsx(
@@ -1379,6 +1457,11 @@ function App() {
           onSwitchToRegister={() => {
             setShowLoginModal(false);
             setShowRegisterModal(true);
+          }}
+          onLoginSuccess={() => {
+            // Перенаправлення на дашборд після успішного входу
+            setActiveNav("dashboard-overview");
+            localStorage.setItem('lucia_activeNav', "dashboard-overview");
           }}
         />
       )}
