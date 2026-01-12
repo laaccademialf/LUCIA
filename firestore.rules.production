@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Функція перевірки автентифікації
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Функція перевірки ролі адміністратора
+    function isAdmin() {
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    // Правила для користувачів
+    match /users/{userId} {
+      // Читати можуть всі автентифіковані користувачі
+      allow read: if isAuthenticated();
+      
+      // Створювати/оновлювати може тільки сам користувач або адмін
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      
+      // Видаляти може тільки адмін
+      allow delete: if isAdmin();
+    }
+    
+    // Правила для ресторанів
+    match /restaurants/{restaurantId} {
+      // Читати можуть всі автентифіковані
+      allow read: if isAuthenticated();
+      
+      // Писати можуть тільки адміністратори
+      allow write: if isAdmin();
+    }
+    
+    // Правила для активів (основних засобів)
+    match /assets/{assetId} {
+      // Читати можуть всі автентифіковані
+      allow read: if isAuthenticated();
+      
+      // Писати можуть всі автентифіковані (можна змінити на тільки адмінів)
+      allow write: if isAuthenticated();
+    }
+  }
+}

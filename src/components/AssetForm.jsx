@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
-import { CheckCircle2, ClipboardCheck, Loader2, Save } from "lucide-react";
+import { CheckCircle2, ClipboardCheck, Loader2, Save, Camera, Upload, X, ChevronRight, ChevronLeft } from "lucide-react";
 import clsx from "clsx";
+import { useAssetFields } from "../hooks/useAssetFields";
+import { useRestaurants } from "../hooks/useRestaurants";
 
 const tabs = [
-  { id: "identification", label: "Ідентифікація" },
-  { id: "location", label: "Локація" },
-  { id: "status", label: "Статус" },
-  { id: "dates", label: "Дати" },
-  { id: "depreciation", label: "Знос" },
-  { id: "value", label: "Вартість" },
-  { id: "decision", label: "Рішення" },
-  { id: "audit", label: "Аудит" },
+  { id: "identification", label: "Ідентифікація", requiredFields: ["invNumber", "name"] },
+  { id: "location", label: "Локація", requiredFields: ["businessUnit", "locationName"] },
+  { id: "status", label: "Статус", requiredFields: [] },
+  { id: "dates", label: "Дати", requiredFields: [] },
+  { id: "depreciation", label: "Знос", requiredFields: [] },
+  { id: "value", label: "Вартість", requiredFields: ["residualValue"] },
+  { id: "decision", label: "Рішення", requiredFields: ["decision"] },
+  { id: "audit", label: "Аудит", requiredFields: [] },
 ];
 
 const defaultAsset = {
@@ -22,6 +24,7 @@ const defaultAsset = {
   type: "ОС",
   serialNumber: "",
   brand: "",
+  photos: [],
   businessUnit: "",
   locationName: "",
   zone: "",
@@ -51,22 +54,44 @@ const defaultAsset = {
 
 export function AssetForm({ selectedAsset, onSubmit }) {
   const [activeTab, setActiveTab] = useState("identification");
+  const [completedTabs, setCompletedTabs] = useState([]);
+  const [photos, setPhotos] = useState([]);
+  
+  // Завантаження типових полів з Firebase
+  const {
+    categories,
+    subcategories,
+    accountingTypes,
+    businessUnits,
+    statuses,
+    conditions,
+    decisions,
+    loading: fieldsLoading,
+  } = useAssetFields();
+  
+  // Завантаження ресторанів для локації
+  const { restaurants, loading: restaurantsLoading } = useRestaurants();
+  
   const {
     register,
     handleSubmit,
     setValue,
     watch,
     reset,
+    trigger,
     formState: { errors, isSubmitting },
   } = useForm({
     defaultValues: defaultAsset,
+    mode: "onChange",
   });
 
   useEffect(() => {
     if (selectedAsset) {
       reset({ ...defaultAsset, ...selectedAsset });
+      setPhotos(selectedAsset.photos || []);
     } else {
       reset(defaultAsset);
+      setPhotos([]);
     }
   }, [selectedAsset, reset]);
 
@@ -80,9 +105,82 @@ export function AssetForm({ selectedAsset, onSubmit }) {
     setValue("totalWear", avg);
   }, [physicalWear, moralWear, setValue]);
 
+  // Перевірка чи можна перейти до вкладки
+  const canAccessTab = (tabId) => {
+    const tabIndex = tabs.findIndex((t) => t.id === tabId);
+    if (tabIndex === 0) return true; // Перша вкладка завжди доступна
+    
+    // Перевіряємо чи всі попередні вкладки завершені
+    for (let i = 0; i < tabIndex; i++) {
+      if (!completedTabs.includes(tabs[i].id)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  // Валідація поточної вкладки
+  const validateCurrentTab = async () => {
+    const currentTabData = tabs.find((t) => t.id === activeTab);
+    if (!currentTabData || currentTabData.requiredFields.length === 0) {
+      return true;
+    }
+
+    const isValid = await trigger(currentTabData.requiredFields);
+    return isValid;
+  };
+
+  // Перехід до наступної вкладки
+  const handleNext = async () => {
+    const isValid = await validateCurrentTab();
+    
+    if (isValid) {
+      // Позначаємо поточну вкладку як завершену
+      if (!completedTabs.includes(activeTab)) {
+        setCompletedTabs([...completedTabs, activeTab]);
+      }
+
+      // Переходимо до наступної
+      const currentIndex = tabs.findIndex((t) => t.id === activeTab);
+      if (currentIndex < tabs.length - 1) {
+        setActiveTab(tabs[currentIndex + 1].id);
+      }
+    }
+  };
+
+  // Перехід до попередньої вкладки
+  const handlePrev = () => {
+    const currentIndex = tabs.findIndex((t) => t.id === activeTab);
+    if (currentIndex > 0) {
+      setActiveTab(tabs[currentIndex - 1].id);
+    }
+  };
+
+  // Обробка фото
+  const handlePhotoUpload = (e) => {
+    const files = Array.from(e.target.files);
+    
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        setPhotos((prev) => [...prev, { url: event.target.result, name: file.name }]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleCameraCapture = (e) => {
+    handlePhotoUpload(e);
+  };
+
+  const removePhoto = (index) => {
+    setPhotos((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const onSubmitForm = (values) => {
     const payload = {
       ...values,
+      photos: photos,
       physicalWear: Number(values.physicalWear) || 0,
       moralWear: Number(values.moralWear) || 0,
       totalWear: Number(values.totalWear) || 0,
@@ -95,56 +193,152 @@ export function AssetForm({ selectedAsset, onSubmit }) {
     };
     onSubmit(payload);
     setActiveTab("identification");
+    setCompletedTabs([]);
+    setPhotos([]);
   };
 
   const requiredMark = <span className="text-rose-500">*</span>;
 
   const isMove = watch("decision") === "Перемістити";
+  const currentTabIndex = tabs.findIndex((t) => t.id === activeTab);
+  const isFirstTab = currentTabIndex === 0;
+  const isLastTab = currentTabIndex === tabs.length - 1;
 
   return (
     <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">Додати актив</h2>
+          <p className="text-sm text-slate-500 mt-1">
+            Крок {currentTabIndex + 1} з {tabs.length} • Заповнюйте поля послідовно
+          </p>
         </div>
         <div className="inline-flex items-center gap-2 text-sm text-slate-600">
-          <ClipboardCheck size={16} /> Обовʼязкові: назва, інв. номер, локація, залишкова, рішення
+          <ClipboardCheck size={16} /> {completedTabs.length} / {tabs.length} завершено
         </div>
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setActiveTab(tab.id)}
-            className={clsx(
-              "rounded-lg px-4 py-3.5 text-sm font-bold transition-all duration-200 border-2",
-              activeTab === tab.id
-                ? "bg-indigo-600 text-white shadow-xl shadow-indigo-500/40 border-indigo-500 scale-105"
-                : "bg-white text-slate-800 border-slate-300 hover:text-indigo-700 hover:border-indigo-400 hover:shadow-lg"
-            )}
-          >
-            {tab.label}
-          </button>
-        ))}
+        {tabs.map((tab, index) => {
+          const isCompleted = completedTabs.includes(tab.id);
+          const isActive = activeTab === tab.id;
+          const canAccess = canAccessTab(tab.id);
+
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => canAccess && setActiveTab(tab.id)}
+              disabled={!canAccess}
+              className={clsx(
+                "rounded-lg px-4 py-3.5 text-sm font-bold transition-all duration-200 border-2 relative",
+                isActive
+                  ? "bg-indigo-600 text-white shadow-xl shadow-indigo-500/40 border-indigo-500 scale-105"
+                  : isCompleted
+                  ? "bg-green-50 text-green-800 border-green-400 hover:bg-green-100"
+                  : canAccess
+                  ? "bg-white text-slate-800 border-slate-300 hover:text-indigo-700 hover:border-indigo-400 hover:shadow-lg"
+                  : "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-50"
+              )}
+            >
+              {isCompleted && (
+                <CheckCircle2 className="absolute -top-2 -right-2 text-green-600 bg-white rounded-full" size={20} />
+              )}
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
 
       <form className="mt-6 flex flex-col gap-6" onSubmit={handleSubmit(onSubmitForm)}>
         {activeTab === "identification" && (
-          <FieldGrid>
-            <Input label={<>Інвентарний номер {requiredMark}</>} {...register("invNumber", { required: true })} />
-            <Input label={<>Назва активу {requiredMark}</>} {...register("name", { required: true })} />
-            <Select
-              label="Категорія"
-              {...register("category")}
-              options={["Кухня", "Бар", "IT", "Меблі", "Транспорт"]}
-            />
-            <Input label="Підкатегорія" {...register("subCategory")}/>
-            <Select label="Тип обліку" {...register("type")} options={["ОС", "МШП"]} />
-            <Input label="Серійний номер" {...register("serialNumber")}/>
-            <Input label="Виробник / бренд" {...register("brand")}/>
-          </FieldGrid>
+          <div className="space-y-6">
+            <FieldGrid>
+              <Input label={<>Інвентарний номер {requiredMark}</>} {...register("invNumber", { required: true })} />
+              <Input label={<>Назва активу {requiredMark}</>} {...register("name", { required: true })} />
+              <Select
+                label="Категорія"
+                {...register("category")}
+                options={categories.length > 0 ? categories : ["Кухня", "Бар", "IT", "Меблі", "Транспорт"]}
+              />
+              <Select
+                label="Підкатегорія"
+                {...register("subCategory")}
+                options={subcategories.length > 0 ? subcategories : []}
+              />
+              <Select
+                label="Тип обліку"
+                {...register("type")}
+                options={accountingTypes.length > 0 ? accountingTypes : ["ОС", "МШП"]}
+              />
+              <Input label="Серійний номер" {...register("serialNumber")}/>
+              <Input label="Виробник / бренд" {...register("brand")}/>
+            </FieldGrid>
+
+            {/* Блок завантаження фото */}
+            <div className="border-t-2 border-slate-200 pt-6">
+              <h3 className="text-lg font-semibold text-slate-800 mb-4">Фотографії активу</h3>
+              
+              <div className="flex flex-wrap gap-3 mb-4">
+                {/* Кнопка завантаження з файлу */}
+                <label className="flex items-center gap-2 px-4 py-3 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 cursor-pointer transition shadow">
+                  <Upload size={18} />
+                  Завантажити фото
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={handlePhotoUpload}
+                  />
+                </label>
+
+                {/* Кнопка камери (для мобільних) */}
+                <label className="flex items-center gap-2 px-4 py-3 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-500 cursor-pointer transition shadow">
+                  <Camera size={18} />
+                  Зробити фото
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={handleCameraCapture}
+                  />
+                </label>
+              </div>
+
+              {/* Превʼю фотографій */}
+              {photos.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                  {photos.map((photo, index) => (
+                    <div key={index} className="relative group">
+                      <img
+                        src={photo.url}
+                        alt={`Фото ${index + 1}`}
+                        className="w-full h-32 object-cover rounded-lg border-2 border-slate-300 shadow"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removePhoto(index)}
+                        className="absolute -top-2 -right-2 p-1 rounded-full bg-red-600 text-white hover:bg-red-700 opacity-0 group-hover:opacity-100 transition shadow-lg"
+                      >
+                        <X size={16} />
+                      </button>
+                      <p className="text-xs text-slate-600 mt-1 truncate">{photo.name}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {photos.length === 0 && (
+                <div className="text-center py-8 border-2 border-dashed border-slate-300 rounded-lg bg-slate-50">
+                  <Camera size={48} className="mx-auto mb-2 text-slate-400" />
+                  <p className="text-slate-600">Немає завантажених фото</p>
+                  <p className="text-sm text-slate-500">Завантажте фото активу для ідентифікації</p>
+                </div>
+              )}
+            </div>
+          </div>
         )}
 
         {activeTab === "location" && (
@@ -152,9 +346,13 @@ export function AssetForm({ selectedAsset, onSubmit }) {
             <Select
               label={<>Бізнес-напрям {requiredMark}</>}
               {...register("businessUnit", { required: true })}
-              options={["Ресторан", "Кав’ярня", "Кейтеринг", "Офіс", "Склад"]}
+              options={businessUnits.length > 0 ? businessUnits : ["Ресторан", "Кав'ярня", "Кейтеринг", "Офіс", "Склад"]}
             />
-            <Input label="Назва локації" {...register("locationName", { required: true })} />
+            <Select
+              label={<>Назва локації (Ресторан) {requiredMark}</>}
+              {...register("locationName", { required: true })}
+              options={restaurants.map((r) => r.name)}
+            />
             <Input label="Зона розміщення" {...register("zone")}/>
             <Input label="Центр відповідальності" {...register("respCenter")}/>
             <Input label="Матеріально відповідальна особа" {...register("respPerson")}/>
@@ -163,8 +361,16 @@ export function AssetForm({ selectedAsset, onSubmit }) {
 
         {activeTab === "status" && (
           <FieldGrid>
-            <Select label="Статус активу" {...register("status")} options={["В експлуатації", "Не використовується", "Законсервований"]} />
-            <Select label="Фактичний стан" {...register("condition")} options={["Новий", "Добрий", "Задовільний", "Критичний"]} />
+            <Select
+              label="Статус активу"
+              {...register("status")}
+              options={statuses.length > 0 ? statuses : ["В експлуатації", "Не використовується", "Законсервований"]}
+            />
+            <Select
+              label="Фактичний стан"
+              {...register("condition")}
+              options={conditions.length > 0 ? conditions : ["Новий", "Добрий", "Задовільний", "Критичний"]}
+            />
             <Select label="Працездатність" {...register("functionality")} options={["Працює", "Частково", "Не працює"]} />
             <Select label="Моральна актуальність" {...register("relevance")} options={["Актуальний", "Частково застарілий", "Застарілий"]} />
             <Textarea label="Коментар по стану" {...register("comment")} rows={3} />
@@ -212,7 +418,7 @@ export function AssetForm({ selectedAsset, onSubmit }) {
             <Select
               label={<>Рішення {requiredMark}</>}
               {...register("decision", { required: true })}
-              options={["Залишити", "Списати", "Продати", "Перемістити"]}
+              options={decisions.length > 0 ? decisions : ["Залишити", "Списати", "Продати", "Перемістити"]}
             />
             <Select label="Причина" {...register("reason")} options={["Знос", "Надлишок", "Непридатність"]} />
             {isMove && <Input label="Нова локація" {...register("newLocation")}/>}            
@@ -226,13 +432,47 @@ export function AssetForm({ selectedAsset, onSubmit }) {
           </FieldGrid>
         )}
 
+        {/* Навігаційні кнопки */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t-2 border-indigo-700 pt-4">
-          <div className="text-sm font-bold text-rose-400">
-            {Object.keys(errors).length > 0 && "Заповніть обовʼязкові поля"}
+          <div className="flex items-center gap-3">
+            {!isFirstTab && (
+              <button
+                type="button"
+                onClick={handlePrev}
+                className="inline-flex items-center gap-2 px-5 py-3 rounded-lg font-bold text-base bg-slate-200 text-slate-700 hover:bg-slate-300 transition-all duration-200 shadow"
+              >
+                <ChevronLeft size={18} />
+                Назад
+              </button>
+            )}
+            
+            {!isLastTab && (
+              <button
+                type="button"
+                onClick={handleNext}
+                className="inline-flex items-center gap-2 px-5 py-3 rounded-lg font-bold text-base bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow-xl shadow-indigo-500/50"
+              >
+                Далі
+                <ChevronRight size={18} />
+              </button>
+            )}
           </div>
-          <button type="submit" className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg font-bold text-base bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-xl shadow-indigo-500/50 hover:shadow-indigo-400/70">
-            {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} Зберегти актив
-          </button>
+
+          <div className="flex items-center gap-3">
+            <div className="text-sm font-bold text-rose-400">
+              {Object.keys(errors).length > 0 && "Заповніть обовʼязкові поля"}
+            </div>
+            
+            {isLastTab && (
+              <button 
+                type="submit" 
+                className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg font-bold text-base bg-gradient-to-r from-green-600 to-green-700 border-2 border-green-500 text-white hover:from-green-500 hover:to-green-600 hover:border-green-400 transition-all duration-200 shadow-xl shadow-green-500/50 hover:shadow-green-400/70"
+              >
+                {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} 
+                Зберегти актив
+              </button>
+            )}
+          </div>
         </div>
       </form>
     </div>

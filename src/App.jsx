@@ -1,24 +1,128 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import {
   Box,
   ChevronDown,
   ClipboardList,
   FileText,
   LayoutDashboard,
+  LogOut,
   Package,
   Plus,
   Settings as SettingsIcon,
   ShieldCheck,
+  User as UserIcon,
   Users,
   Wrench,
+  Download,
+  Upload,
+  FileDown,
 } from "lucide-react";
 import clsx from "clsx";
 import { AssetTable } from "./components/AssetTable";
 import { AssetForm } from "./components/AssetForm";
+import { AddUserForm } from "./components/AddUserForm";
+import { UsersTable } from "./components/UsersTable";
+import { RolesPositionsManager } from "./components/RolesPositionsManager";
+import { RolePermissionsManager } from "./components/RolePermissionsManager";
+import { AssetFieldsManager } from "./components/AssetFieldsManager";
 import { mockAssets } from "./data/mockAssets";
+import { useRestaurants } from "./hooks/useRestaurants";
+import { useAssets } from "./hooks/useAssets";
+import { useAuth } from "./hooks/useAuth";
+import { LoginModal } from "./components/LoginModal";
+import { RegisterModal } from "./components/RegisterModal";
+import { AuthSetupWarning } from "./components/AuthSetupWarning";
+import { logoutUser } from "./firebase/auth";
+import {
+  exportRestaurantsToExcel,
+  importRestaurantsFromExcel,
+  downloadRestaurantTemplate,
+} from "./utils/excelHelpers";
+
+// Початкові дані для ресторанів (якщо база порожня)
+const initialRestaurants = [
+  {
+    regNumber: "001",
+    name: "Ресторан А",
+    address: "Вул. Хрещатик, 1",
+    seatsTotal: "50",
+    seatsSummer: "",
+    seatsWinter: "",
+    hasTerrace: false,
+    areaTotal: "100",
+    areaSummer: "",
+    areaWinter: "",
+    country: "Україна",
+    region: "Київська",
+    city: "Київ",
+    street: "Хрещатик, 1",
+    postalCode: "01001",
+    notes: "",
+    schedule: {
+      mon: { from: "09:00", to: "22:00" },
+      tue: { from: "09:00", to: "22:00" },
+      wed: { from: "09:00", to: "22:00" },
+      thu: { from: "09:00", to: "22:00" },
+      fri: { from: "09:00", to: "22:00" },
+      sat: { from: "10:00", to: "23:00" },
+      sun: { from: "10:00", to: "23:00" },
+    },
+  },
+  {
+    regNumber: "002",
+    name: "Ресторан Б",
+    address: "Вул. Шевченка, 5",
+    seatsTotal: "80",
+    seatsSummer: "",
+    seatsWinter: "",
+    hasTerrace: false,
+    areaTotal: "150",
+    areaSummer: "",
+    areaWinter: "",
+    country: "Україна",
+    region: "Львівська",
+    city: "Львів",
+    street: "Шевченка, 5",
+    postalCode: "79000",
+    notes: "",
+    schedule: {
+      mon: { from: "08:00", to: "21:00" },
+      tue: { from: "08:00", to: "21:00" },
+      wed: { from: "08:00", to: "21:00" },
+      thu: { from: "08:00", to: "21:00" },
+      fri: { from: "08:00", to: "21:00" },
+      sat: { from: "09:00", to: "22:00" },
+      sun: { from: "09:00", to: "22:00" },
+    },
+  },
+];
 
 function App() {
-  const [assets, setAssets] = useState(mockAssets);
+  // Authentication
+  const { user, loading: authLoading, isAuthenticated } = useAuth();
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [showAuthWarning, setShowAuthWarning] = useState(false);
+
+  // Firebase hooks
+  const {
+    restaurants: firebaseRestaurants,
+    loading: restaurantsLoading,
+    addRestaurant: addRestaurantToFirebase,
+    updateRestaurant: updateRestaurantInFirebase,
+    deleteRestaurant: deleteRestaurantFromFirebase,
+  } = useRestaurants();
+
+  const {
+    assets: firebaseAssets,
+    loading: assetsLoading,
+    addAsset: addAssetToFirebase,
+    updateAsset: updateAssetInFirebase,
+  } = useAssets();
+
+  // Local state
+  const [assets, setAssets] = useState([]);
+  const [restaurants, setRestaurants] = useState([]);
   const [selected, setSelected] = useState(null);
   const [filters, setFilters] = useState({
     category: "",
@@ -38,6 +142,8 @@ function App() {
     maintenance: false,
   });
   const [topTab, setTopTab] = useState("test1");
+  const [selectedRestaurant, setSelectedRestaurant] = useState(null);
+  const [restaurantFilter, setRestaurantFilter] = useState("");
   const [restaurantForm, setRestaurantForm] = useState({
     regNumber: "",
     name: "",
@@ -66,18 +172,50 @@ function App() {
     sun: { from: "", to: "" },
   });
 
+  // Sync Firebase data with local state
+  useEffect(() => {
+    if (!restaurantsLoading && firebaseRestaurants.length > 0) {
+      setRestaurants(firebaseRestaurants);
+    } else if (!restaurantsLoading && firebaseRestaurants.length === 0) {
+      // Якщо база порожня, використовуємо початкові дані
+      setRestaurants(initialRestaurants);
+    }
+  }, [firebaseRestaurants, restaurantsLoading]);
+
+  useEffect(() => {
+    if (!assetsLoading && firebaseAssets.length > 0) {
+      setAssets(firebaseAssets);
+    } else if (!assetsLoading && firebaseAssets.length === 0) {
+      // Якщо база порожня, використовуємо mockAssets
+      setAssets(mockAssets);
+    }
+  }, [firebaseAssets, assetsLoading]);
+
   const topTabs = useMemo(() => {
     if (activeNav === "settings-restaurant") {
       return [
         { id: "main", label: "Головні" },
         { id: "schedule", label: "Графік роботи" },
+        { id: "projects", label: "Управління проєктами" },
+      ];
+    }
+    if (activeNav === "settings-accounts") {
+      return [
+        { id: "add", label: "Додати" },
+        { id: "edit", label: "Редагувати" },
+      ];
+    }
+    if (activeNav === "settings-permissions") {
+      return [
+        { id: "roles", label: "Ролі та Посади" },
+        { id: "permissions", label: "Доступи ролей" },
       ];
     }
     if (activeNav.startsWith("inventory-")) {
       return [
         { id: "test1", label: "Додати" },
         { id: "test2", label: "Редагувати" },
-        { id: "test3", label: "Тест 3" },
+        { id: "test3", label: "Типові поля" },
       ];
     }
     return [
@@ -105,16 +243,21 @@ function App() {
     });
   };
 
-  const handleSubmit = (asset) => {
-    setAssets((prev) => {
-      const exists = prev.find((a) => a.invNumber === asset.invNumber);
+  const handleSubmit = async (asset) => {
+    try {
+      const exists = assets.find((a) => a.invNumber === asset.invNumber);
       if (exists) {
-        return prev.map((a) => (a.invNumber === asset.invNumber ? { ...exists, ...asset } : a));
+        // Оновлення існуючого активу
+        await updateAssetInFirebase(exists.id, asset);
+      } else {
+        // Додавання нового активу
+        await addAssetToFirebase(asset);
       }
-      const newAsset = { ...asset, id: crypto.randomUUID() };
-      return [newAsset, ...prev];
-    });
-    setSelected(null);
+      setSelected(null);
+    } catch (error) {
+      console.error("Помилка збереження активу:", error);
+      alert("Помилка збереження активу. Перевірте консоль.");
+    }
   };
 
   const handleExport = () => {
@@ -356,9 +499,38 @@ function App() {
         { key: "sat", label: "Сб" },
         { key: "sun", label: "Нд" },
       ];
+
+      // Фільтруємо ресторани або показуємо всі
+      const currentSchedule = restaurantFilter
+        ? restaurants.find((r) => r.id === parseInt(restaurantFilter))?.schedule || schedule
+        : schedule;
+
+      const currentRestaurantName = restaurantFilter
+        ? restaurants.find((r) => r.id === parseInt(restaurantFilter))?.name || ""
+        : "";
+
       return (
         <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
-          <h2 className="text-xl font-semibold text-slate-900 mb-4">Графік роботи</h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold text-slate-900">
+              Графік роботи{currentRestaurantName ? ` - ${currentRestaurantName}` : ""}
+            </h2>
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-semibold text-slate-700">Ресторан:</label>
+              <select
+                className={`${baseInput} w-64`}
+                value={restaurantFilter}
+                onChange={(e) => setRestaurantFilter(e.target.value)}
+              >
+                <option value="">Всі ресторани</option>
+                {restaurants.map((restaurant) => (
+                  <option key={restaurant.id} value={restaurant.id}>
+                    {restaurant.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
             {days.map((d) => (
               <div key={d.key} className="rounded-lg border border-slate-200 p-3 bg-slate-50">
@@ -367,15 +539,63 @@ function App() {
                   <input
                     type="time"
                     className={baseInput}
-                    value={schedule[d.key].from}
-                    onChange={(e) => setSchedule((p) => ({ ...p, [d.key]: { ...p[d.key], from: e.target.value } }))}
+                    value={currentSchedule[d.key].from}
+                    onChange={async (e) => {
+                      if (restaurantFilter) {
+                        const restId = restaurantFilter;
+                        const restaurant = restaurants.find((r) => r.id === restId);
+                        if (restaurant) {
+                          const updatedSchedule = {
+                            ...restaurant.schedule,
+                            [d.key]: { ...restaurant.schedule[d.key], from: e.target.value },
+                          };
+                          try {
+                            await updateRestaurantInFirebase(restId, {
+                              ...restaurant,
+                              schedule: updatedSchedule,
+                            });
+                          } catch (error) {
+                            console.error("Помилка оновлення графіка:", error);
+                          }
+                        }
+                      } else {
+                        setSchedule((p) => ({
+                          ...p,
+                          [d.key]: { ...p[d.key], from: e.target.value },
+                        }));
+                      }
+                    }}
                   />
                   <span className="text-xs text-slate-500">до</span>
                   <input
                     type="time"
                     className={baseInput}
-                    value={schedule[d.key].to}
-                    onChange={(e) => setSchedule((p) => ({ ...p, [d.key]: { ...p[d.key], to: e.target.value } }))}
+                    value={currentSchedule[d.key].to}
+                    onChange={async (e) => {
+                      if (restaurantFilter) {
+                        const restId = restaurantFilter;
+                        const restaurant = restaurants.find((r) => r.id === restId);
+                        if (restaurant) {
+                          const updatedSchedule = {
+                            ...restaurant.schedule,
+                            [d.key]: { ...restaurant.schedule[d.key], to: e.target.value },
+                          };
+                          try {
+                            await updateRestaurantInFirebase(restId, {
+                              ...restaurant,
+                              schedule: updatedSchedule,
+                            });
+                          } catch (error) {
+                            console.error("Помилка оновлення графіка:", error);
+                          }
+                        }
+                      } else {
+                        setSchedule((p) => ({
+                          ...p,
+                          [d.key]: { ...p[d.key], to: e.target.value },
+                        }));
+                      }
+                    }}
                   />
                 </div>
               </div>
@@ -433,6 +653,469 @@ function App() {
       if (topTab === "schedule") {
         return renderSchedule();
       }
+
+      if (topTab === "projects") {
+        const handleAddRestaurant = () => {
+          setSelectedRestaurant({
+            id: null,
+            regNumber: "",
+            name: "",
+            address: "",
+            seatsTotal: "",
+            seatsSummer: "",
+            seatsWinter: "",
+            hasTerrace: false,
+            areaTotal: "",
+            areaSummer: "",
+            areaWinter: "",
+            country: "",
+            region: "",
+            city: "",
+            street: "",
+            postalCode: "",
+            notes: "",
+            schedule: {
+              mon: { from: "", to: "" },
+              tue: { from: "", to: "" },
+              wed: { from: "", to: "" },
+              thu: { from: "", to: "" },
+              fri: { from: "", to: "" },
+              sat: { from: "", to: "" },
+              sun: { from: "", to: "" },
+            },
+          });
+        };
+
+        const handleEditRestaurant = (restaurant) => {
+          setSelectedRestaurant({ ...restaurant });
+        };
+
+        const handleDeleteRestaurant = async (id) => {
+          if (confirm("Ви впевнені, що хочете видалити цей ресторан?")) {
+            try {
+              await deleteRestaurantFromFirebase(id);
+            } catch (error) {
+              console.error("Помилка видалення ресторану:", error);
+              alert("Помилка видалення ресторану. Перевірте консоль.");
+            }
+          }
+        };
+
+        const handleSaveRestaurant = async () => {
+          try {
+            if (selectedRestaurant.id) {
+              // Оновлення існуючого
+              await updateRestaurantInFirebase(selectedRestaurant.id, selectedRestaurant);
+            } else {
+              // Додавання нового
+              await addRestaurantToFirebase(selectedRestaurant);
+            }
+            setSelectedRestaurant(null);
+          } catch (error) {
+            console.error("Помилка збереження ресторану:", error);
+            alert("Помилка збереження ресторану. Перевірте консоль.");
+          }
+        };
+
+        const handleCancelEdit = () => {
+          setSelectedRestaurant(null);
+        };
+
+        if (selectedRestaurant) {
+          // Форма редагування/додавання
+          return (
+            <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl space-y-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-semibold text-slate-900">
+                  {selectedRestaurant.id ? "Редагування ресторану" : "Додавання ресторану"}
+                </h2>
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="px-4 py-2 rounded-lg bg-gray-200 text-gray-700 font-semibold hover:bg-gray-300"
+                >
+                  Скасувати
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <div>
+                  <label className="text-sm font-semibold text-slate-800">Обліковий номер</label>
+                  <input
+                    className={baseInput}
+                    value={selectedRestaurant.regNumber}
+                    onChange={(e) =>
+                      setSelectedRestaurant((p) => ({ ...p, regNumber: e.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-slate-800">Назва</label>
+                  <input
+                    className={baseInput}
+                    value={selectedRestaurant.name}
+                    onChange={(e) =>
+                      setSelectedRestaurant((p) => ({ ...p, name: e.target.value }))
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-sm font-semibold text-slate-700">Адреса</p>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Країна</label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.country}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, country: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Область</label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.region}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, region: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Місто / Село</label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.city}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, city: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Вулиця</label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.street}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, street: e.target.value }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Поштовий індекс</label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.postalCode}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, postalCode: e.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="editHasTerrace"
+                    className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    checked={selectedRestaurant.hasTerrace}
+                    onChange={(e) =>
+                      setSelectedRestaurant((p) => ({ ...p, hasTerrace: e.target.checked }))
+                    }
+                  />
+                  <label htmlFor="editHasTerrace" className="text-sm font-semibold text-slate-800">
+                    Розділяти літо / зима
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">
+                      Посадкові місця (всього)
+                    </label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.seatsTotal}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, seatsTotal: e.target.value }))
+                      }
+                      disabled={selectedRestaurant.hasTerrace}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">
+                      Посадкові місця (літо)
+                    </label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.seatsSummer}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, seatsSummer: e.target.value }))
+                      }
+                      disabled={!selectedRestaurant.hasTerrace}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">
+                      Посадкові місця (зима)
+                    </label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.seatsWinter}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, seatsWinter: e.target.value }))
+                      }
+                      disabled={!selectedRestaurant.hasTerrace}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Площа, м² (всього)</label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.areaTotal}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, areaTotal: e.target.value }))
+                      }
+                      disabled={selectedRestaurant.hasTerrace}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Площа, м² (літо)</label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.areaSummer}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, areaSummer: e.target.value }))
+                      }
+                      disabled={!selectedRestaurant.hasTerrace}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Площа, м² (зима)</label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.areaWinter}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, areaWinter: e.target.value }))
+                      }
+                      disabled={!selectedRestaurant.hasTerrace}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-semibold text-slate-800">Нотатки</label>
+                <textarea
+                  className={`${baseInput} min-h-[100px]`}
+                  value={selectedRestaurant.notes}
+                  onChange={(e) =>
+                    setSelectedRestaurant((p) => ({ ...p, notes: e.target.value }))
+                  }
+                />
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="px-5 py-2 rounded-lg bg-gray-200 text-gray-700 font-semibold hover:bg-gray-300 shadow"
+                >
+                  Скасувати
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveRestaurant}
+                  className="px-5 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow"
+                >
+                  Зберегти
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        // Список ресторанів
+        return (
+          <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold text-slate-900">Управління проєктами</h2>
+              <div className="flex items-center gap-2">
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  ref={(input) => (window.restaurantImportInput = input)}
+                  style={{ display: "none" }}
+                  onChange={async (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                      try {
+                        const importedRestaurants = await importRestaurantsFromExcel(file);
+                        for (const restaurant of importedRestaurants) {
+                          await addRestaurantToFirebase(restaurant);
+                        }
+                        alert(`Успішно імпортовано ${importedRestaurants.length} ресторанів`);
+                      } catch (error) {
+                        console.error("Помилка імпорту:", error);
+                        alert("Помилка імпорту файлу. Перевірте формат файлу.");
+                      }
+                      e.target.value = "";
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => downloadRestaurantTemplate()}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-600 text-white font-semibold hover:bg-slate-500 shadow text-sm"
+                >
+                  <FileDown size={16} />
+                  Шаблон
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.restaurantImportInput?.click()}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-500 shadow text-sm"
+                >
+                  <Upload size={16} />
+                  Імпорт
+                </button>
+                <button
+                  type="button"
+                  onClick={() => exportRestaurantsToExcel(restaurants)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 shadow text-sm"
+                >
+                  <Download size={16} />
+                  Експорт
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddRestaurant}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow"
+                >
+                  <Plus size={18} />
+                  Додати ресторан
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-slate-200">
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                      Обліковий №
+                    </th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                      Назва
+                    </th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                      Адреса
+                    </th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                      Посадкові місця
+                    </th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                      Площа, м²
+                    </th>
+                    <th className="text-right py-3 px-4 text-sm font-semibold text-slate-700">
+                      Дії
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {restaurants.map((restaurant) => (
+                    <tr key={restaurant.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="py-3 px-4 text-sm text-slate-800">
+                        {restaurant.regNumber}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-slate-800 font-medium">
+                        {restaurant.name}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-slate-600">
+                        {restaurant.street}, {restaurant.city}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-slate-600">
+                        {restaurant.hasTerrace
+                          ? `Літо: ${restaurant.seatsSummer}, Зима: ${restaurant.seatsWinter}`
+                          : restaurant.seatsTotal}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-slate-600">
+                        {restaurant.hasTerrace
+                          ? `Літо: ${restaurant.areaSummer}, Зима: ${restaurant.areaWinter}`
+                          : restaurant.areaTotal}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleEditRestaurant(restaurant)}
+                            className="px-3 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 font-medium text-xs"
+                          >
+                            Редагувати
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRestaurant(restaurant.id)}
+                            className="px-3 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200 font-medium text-xs"
+                          >
+                            Видалити
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {restaurants.length === 0 && (
+                <div className="text-center py-8 text-slate-500">
+                  Немає ресторанів. Натисніть "Додати ресторан" щоб створити новий.
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+    }
+
+    if (activeNav === "settings-accounts") {
+      if (topTab === "add") {
+        return (
+          <div className="grid grid-cols-1">
+            <AddUserForm currentUser={user} onSuccess={() => setTopTab("edit")} />
+          </div>
+        );
+      }
+
+      if (topTab === "edit") {
+        return (
+          <div className="grid grid-cols-1">
+            <UsersTable currentUser={user} />
+          </div>
+        );
+      }
+    }
+
+    if (activeNav === "settings-permissions") {
+      if (topTab === "roles") {
+        return (
+          <div className="grid grid-cols-1">
+            <RolesPositionsManager />
+          </div>
+        );
+      }
+      if (topTab === "permissions") {
+        return (
+          <div className="grid grid-cols-1">
+            <RolePermissionsManager />
+          </div>
+        );
+      }
     }
 
     if (activeNav === "inventory-assets" || activeNav.startsWith("reports-assets")) {
@@ -440,6 +1123,14 @@ function App() {
         return (
           <div className="grid grid-cols-1">
             <AssetForm selectedAsset={null} onSubmit={handleSubmit} />
+          </div>
+        );
+      }
+
+      if (topTab === "test3") {
+        return (
+          <div className="grid grid-cols-1">
+            <AssetFieldsManager />
           </div>
         );
       }
@@ -471,7 +1162,68 @@ function App() {
 
   return (
     <div className="app-shell min-h-screen bg-slate-900 text-slate-50">
+      {authLoading && (
+        <div className="fixed inset-0 bg-slate-900 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 shadow-xl">
+            <div className="flex items-center gap-3">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+              <p className="text-slate-900 font-semibold">Завантаження...</p>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex h-screen gap-0">
+        {/* Top Header Bar */}
+        <div className="fixed top-0 left-72 right-0 h-14 bg-slate-900/95 border-b border-slate-700 z-30 flex items-center justify-end px-6">
+          {isAuthenticated ? (
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2 text-sm text-slate-300">
+                <UserIcon size={16} />
+                <span>{user?.displayName || user?.email}</span>
+                {user?.role === "admin" && (
+                  <span className="px-2 py-1 rounded bg-indigo-600 text-white text-xs font-semibold">
+                    Admin
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await logoutUser();
+                  } catch (error) {
+                    console.error("Помилка виходу:", error);
+                  }
+                }}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition text-sm font-medium"
+              >
+                <LogOut size={16} />
+                Вийти
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  setShowLoginModal(true);
+                  setShowAuthWarning(false);
+                }}
+                className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition text-sm font-medium"
+              >
+                Увійти
+              </button>
+              <button
+                onClick={() => {
+                  setShowRegisterModal(true);
+                  setShowAuthWarning(false);
+                }}
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition text-sm font-semibold"
+              >
+                Реєстрація
+              </button>
+            </div>
+          )}
+        </div>
+
         {/* Sidebar */}
         <aside className="fixed left-0 top-0 h-screen w-72 overflow-y-auto border-r border-slate-700 bg-slate-900/95 shadow-lg z-40">
           <div className="p-4">
@@ -531,7 +1283,7 @@ function App() {
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 ml-72 overflow-auto transition-all duration-300">
+        <main className="flex-1 ml-72 mt-14 overflow-auto transition-all duration-300">
           {topTabs.length > 0 && (
             <div className="sticky top-0 z-30 bg-slate-900/95 border-b border-slate-800 shadow-lg shadow-slate-900/40">
               <div className="w-full px-0 lg:px-0 h-10 flex gap-0 overflow-x-auto items-stretch justify-start">
@@ -564,6 +1316,27 @@ function App() {
           </div>
         </main>
       </div>
+
+      {/* Auth Modals */}
+      {showLoginModal && (
+        <LoginModal
+          onClose={() => setShowLoginModal(false)}
+          onSwitchToRegister={() => {
+            setShowLoginModal(false);
+            setShowRegisterModal(true);
+          }}
+        />
+      )}
+
+      {showRegisterModal && (
+        <RegisterModal
+          onClose={() => setShowRegisterModal(false)}
+          onSwitchToLogin={() => {
+            setShowRegisterModal(false);
+            setShowLoginModal(true);
+          }}
+        />
+      )}
     </div>
   );
 }
