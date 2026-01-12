@@ -30,6 +30,8 @@ export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
         setError("Пароль занадто слабкий. Мінімум 6 символів");
       } else if (error.code === "auth/invalid-email") {
         setError("Невірний формат email");
+      } else if (error.code && error.code.includes("api-key")) {
+        setError("⚠️ Невалідний API ключ Firebase!\n\nФайл .env налаштований, але сервер не перезапущений.\n\n🔄 Перезапустіть dev сервер:\n• Ctrl+C в терміналі\n• npm run dev\n\nабо запустіть:\n./restart-dev.sh");
       } else {
         setError(`Помилка реєстрації: ${error.message || "Спробуйте ще раз"}\n\nКод помилки: ${error.code || "невідомо"}`);
       }

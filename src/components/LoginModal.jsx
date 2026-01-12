@@ -28,8 +28,10 @@ export const LoginModal = ({ onClose, onSwitchToRegister }) => {
         setError("Користувача не знайдено");
       } else if (error.code === "auth/wrong-password") {
         setError("Невірний пароль");
+      } else if (error.code && error.code.includes("api-key")) {
+        setError("⚠️ Невалідний API ключ!\n\nПерезапустіть dev сервер:\n• Ctrl+C в терміналі\n• npm run dev");
       } else {
-        setError("Помилка входу. Спробуйте ще раз.");
+        setError(`Помилка входу: ${error.message || "Спробуйте ще раз"}`);
       }
     } finally {
       setLoading(false);
@@ -52,7 +54,7 @@ export const LoginModal = ({ onClose, onSwitchToRegister }) => {
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm">
+          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm whitespace-pre-line">
             {error}
           </div>
         )}
