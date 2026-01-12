@@ -24,16 +24,19 @@ import { AddUserForm } from "./components/AddUserForm";
 import { UsersTable } from "./components/UsersTable";
 import { RolesPositionsManager } from "./components/RolesPositionsManager";
 import { RolePermissionsManager } from "./components/RolePermissionsManager";
+import { FieldPermissionsManager } from "./components/FieldPermissionsManager";
 import { AssetFieldsManager } from "./components/AssetFieldsManager";
 import { mockAssets } from "./data/mockAssets";
 import { useRestaurants } from "./hooks/useRestaurants";
 import { useAssets } from "./hooks/useAssets";
+import { useAssetFields } from "./hooks/useAssetFields";
 import { useAuth } from "./hooks/useAuth";
 import { LoginModal } from "./components/LoginModal";
 import { RegisterModal } from "./components/RegisterModal";
 import { AuthSetupWarning } from "./components/AuthSetupWarning";
 import { logoutUser } from "./firebase/auth";
 import { getRolePermissions } from "./firebase/permissions";
+import { getRestaurant } from "./firebase/firestore";
 import {
   exportRestaurantsToExcel,
   importRestaurantsFromExcel,
@@ -113,12 +116,15 @@ function App() {
         try {
           const rolePerms = await getRolePermissions(user.workRole);
           setUserPermissions(rolePerms.permissions || {});
-          console.log("Права користувача завантажені:", rolePerms.permissions);
+          console.log("📋 Права користувача завантажені:");
+          console.log("- Роль:", user.workRole);
+          console.log("- Права:", rolePerms.permissions);
         } catch (error) {
           console.error("Помилка завантаження прав:", error);
           setUserPermissions({});
         }
       } else {
+        console.log("⚠️ У користувача немає workRole");
         setUserPermissions({});
       }
     };
@@ -162,6 +168,10 @@ function App() {
     addAsset: addAssetToFirebase,
     updateAsset: updateAssetInFirebase,
   } = useAssets();
+
+  const {
+    businessUnits,
+  } = useAssetFields();
 
   // Local state
   const [assets, setAssets] = useState([]);
@@ -298,11 +308,30 @@ function App() {
         { id: "projects", label: "Управління проєктами" },
       ];
       
-      if (isAdmin) return allTabs;
+      if (isAdmin) {
+        console.log("👑 Адмін - всі вкладки доступні");
+        return allTabs;
+      }
       
-      // Фільтруємо вкладки на основі прав
-      const availableTabs = userPermissions["settings-restaurant"] || [];
-      return allTabs.filter(tab => availableTabs.includes(tab.id));
+      // Перевіряємо права на цей розділ
+      const sectionPermissions = userPermissions["settings-restaurant"];
+      console.log("🔍 Права на settings-restaurant:", sectionPermissions);
+      
+      if (!sectionPermissions || sectionPermissions === false) {
+        console.log("❌ Немає прав на settings-restaurant");
+        return [];
+      }
+      
+      // Якщо права є масив - фільтруємо вкладки
+      if (Array.isArray(sectionPermissions)) {
+        const filteredTabs = allTabs.filter(tab => sectionPermissions.includes(tab.id));
+        console.log("✅ Доступні вкладки:", filteredTabs.map(t => t.id));
+        return filteredTabs;
+      }
+      
+      // Якщо права не масив (наприклад true) - показуємо всі вкладки
+      console.log("✅ Повний доступ до всіх вкладок");
+      return allTabs;
     }
     if (activeNav === "settings-accounts") {
       return [
@@ -321,6 +350,7 @@ function App() {
         { id: "test1", label: "Додати" },
         { id: "test2", label: "Редагувати" },
         { id: "test3", label: "Типові поля" },
+        { id: "test4", label: "Права редагування" },
       ];
     }
     return [
@@ -501,11 +531,22 @@ function App() {
       return allNavItems;
     }
 
+    // Якщо немає прав взагалі (не завантажилися або користувач без workRole) - показуємо все
+    if (!user?.workRole || Object.keys(userPermissions).length === 0) {
+      console.log("⚠️ Немає прав або workRole, показуємо все");
+      return allNavItems;
+    }
+
+    console.log("🔍 Фільтруємо навігацію на основі прав:", userPermissions);
+
     // Фільтруємо навігацію на основі прав користувача
     return allNavItems.map(group => {
       const filteredChildren = group.children.filter(child => {
         // Перевіряємо чи є доступ до цього пункту меню
-        return userPermissions[child.id] !== undefined;
+        // Права можуть бути як boolean (true/false) так і масив вкладок
+        const hasAccess = userPermissions[child.id] !== undefined && userPermissions[child.id] !== false;
+        console.log(`- ${child.id}: ${hasAccess ? '✅' : '❌'}`, userPermissions[child.id]);
+        return hasAccess;
       });
 
       return {
@@ -513,7 +554,7 @@ function App() {
         children: filteredChildren,
       };
     }).filter(group => group.children.length > 0); // Приховуємо порожні групи
-  }, [user?.role, userPermissions]);
+  }, [user?.role, user?.workRole, userPermissions]);
 
   const renderContent = () => {
     const baseInput = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400 disabled:border-gray-200 disabled:cursor-not-allowed";
@@ -787,6 +828,7 @@ function App() {
             id: null,
             regNumber: "",
             name: "",
+            businessUnit: "",
             address: "",
             seatsTotal: "",
             seatsSummer: "",
@@ -813,8 +855,20 @@ function App() {
           });
         };
 
-        const handleEditRestaurant = (restaurant) => {
-          setSelectedRestaurant({ ...restaurant });
+        const handleEditRestaurant = async (restaurant) => {
+          try {
+            // Завантажуємо ПОВНІ дані ресторану з Firestore, щоб мати всі поля
+            const fullRestaurant = await getRestaurant(restaurant.id);
+            if (fullRestaurant) {
+              setSelectedRestaurant(fullRestaurant);
+            } else {
+              console.error("Не вдалося завантажити дані ресторану");
+              alert("Помилка завантаження даних ресторану");
+            }
+          } catch (error) {
+            console.error("Помилка завантаження ресторану для редагування:", error);
+            alert("Помилка завантаження даних ресторану");
+          }
         };
 
         const handleDeleteRestaurant = async (id) => {
@@ -900,6 +954,23 @@ function App() {
                       setSelectedRestaurant((p) => ({ ...p, name: e.target.value }))
                     }
                   />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-slate-800">Бізнес-напрям</label>
+                  <select
+                    className={baseInput}
+                    value={selectedRestaurant.businessUnit || ""}
+                    onChange={(e) =>
+                      setSelectedRestaurant((p) => ({ ...p, businessUnit: e.target.value }))
+                    }
+                  >
+                    <option value="">Оберіть бізнес-напрям</option>
+                    {businessUnits.map((bu) => (
+                      <option key={bu} value={bu}>
+                        {bu}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -1160,6 +1231,9 @@ function App() {
                       Назва
                     </th>
                     <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                      Бізнес-напрям
+                    </th>
+                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
                       Адреса
                     </th>
                     <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
@@ -1181,6 +1255,9 @@ function App() {
                       </td>
                       <td className="py-3 px-4 text-sm text-slate-800 font-medium">
                         {restaurant.name}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-slate-600">
+                        {restaurant.businessUnit || "-"}
                       </td>
                       <td className="py-3 px-4 text-sm text-slate-600">
                         {restaurant.street}, {restaurant.city}
@@ -1273,7 +1350,7 @@ function App() {
       if (topTab === "test1") {
         return (
           <div className="grid grid-cols-1">
-            <AssetForm selectedAsset={null} onSubmit={handleSubmit} />
+            <AssetForm selectedAsset={null} onSubmit={handleSubmit} currentUser={user} restaurants={restaurants} assets={assets} />
           </div>
         );
       }
@@ -1286,17 +1363,38 @@ function App() {
         );
       }
 
+      if (topTab === "test4") {
+        return (
+          <div className="grid grid-cols-1">
+            <FieldPermissionsManager />
+          </div>
+        );
+      }
+
       return (
         <div className="grid grid-cols-1">
-          <AssetTable
-            data={assets}
-            onEdit={setSelected}
-            filters={filters}
-            setFilters={setFilters}
-            onExport={handleExport}
-            headerTitle="Редагування"
-            headerSubtitle="Експорт / Імпорт"
-          />
+          {(() => {
+            // Фільтруємо активи на основі ролі користувача
+            let assetsToShow = assets;
+            if (user?.role !== 'admin' && user?.restaurant) {
+              // Керуючий бачить тільки активи свого ресторану
+              const userRestaurantName = restaurants.find(r => r.id === user.restaurant)?.name;
+              assetsToShow = assets.filter(a => a.locationName === userRestaurantName);
+            }
+            
+            return (
+              <AssetTable
+                data={assetsToShow}
+                onEdit={setSelected}
+                filters={filters}
+                setFilters={setFilters}
+                onExport={handleExport}
+                headerTitle="Редагування"
+                headerSubtitle="Експорт / Імпорт"
+                hideLocationFilter={user?.role !== 'admin'}
+              />
+            );
+          })()}
         </div>
       );
     }

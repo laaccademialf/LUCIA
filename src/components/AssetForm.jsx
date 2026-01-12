@@ -52,7 +52,7 @@ const defaultAsset = {
   auditors: "",
 };
 
-export function AssetForm({ selectedAsset, onSubmit }) {
+export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: restaurantsProp, assets: assetsProp = [] }) {
   const [activeTab, setActiveTab] = useState("identification");
   const [completedTabs, setCompletedTabs] = useState([]);
   const [photos, setPhotos] = useState([]);
@@ -69,8 +69,9 @@ export function AssetForm({ selectedAsset, onSubmit }) {
     loading: fieldsLoading,
   } = useAssetFields();
   
-  // Завантаження ресторанів для локації
-  const { restaurants, loading: restaurantsLoading } = useRestaurants();
+  // Завантаження ресторанів для локації (якщо не передали через пропси)
+  const { restaurants: fetchedRestaurants, loading: restaurantsLoading } = useRestaurants();
+  const restaurants = restaurantsProp || fetchedRestaurants;
   
   const {
     register,
@@ -90,10 +91,67 @@ export function AssetForm({ selectedAsset, onSubmit }) {
       reset({ ...defaultAsset, ...selectedAsset });
       setPhotos(selectedAsset.photos || []);
     } else {
-      reset(defaultAsset);
+      // При створенні нового активу підставляємо ресторан користувача
+      const userRestaurant = currentUser?.restaurant
+        ? restaurants.find(r => r.id === currentUser.restaurant)
+        : null;
+      
+      reset({
+        ...defaultAsset,
+        locationName: userRestaurant?.name || "",
+      });
       setPhotos([]);
     }
-  }, [selectedAsset, reset]);
+  }, [selectedAsset, reset, currentUser, restaurants]);
+
+  // Функція для генерації інвентарного номеру
+  const generateInvNumber = (locationName, allAssets) => {
+    // Знаходимо ресторан по назві локації
+    const restaurant = restaurants.find(r => r.name === locationName);
+    if (!restaurant) return "";
+
+    // Беремо перші 3 символи облікового номеру
+    const prefix = restaurant.regNumber.substring(0, 3);
+
+    // Знаходимо всі активи цього ресторану
+    const restaurantAssets = allAssets.filter(a => a.locationName === locationName);
+
+    // Знаходимо максимальний 6-значний суфікс
+    let maxNumber = 0;
+    restaurantAssets.forEach(asset => {
+      if (asset.invNumber && asset.invNumber.startsWith(prefix)) {
+        const suffix = parseInt(asset.invNumber.substring(prefix.length), 10);
+        if (!isNaN(suffix) && suffix > maxNumber) {
+          maxNumber = suffix;
+        }
+      }
+    });
+
+    // Генеруємо новий номер
+    const nextNumber = maxNumber + 1;
+    return prefix + String(nextNumber).padStart(6, "0");
+  };
+
+  useEffect(() => {
+    if (selectedAsset) {
+      return; // Не генеруємо номер для редагування існуючого активу
+    }
+
+    const locationName = watch("locationName");
+    if (locationName) {
+      // Генеруємо інвентарний номер
+      const newInvNumber = generateInvNumber(locationName, assetsProp);
+      if (newInvNumber) {
+        setValue("invNumber", newInvNumber);
+      }
+      
+      // Автозаповнюємо бізнес-напрям з ресторану
+      const restaurant = restaurants.find(r => r.name === locationName);
+      if (restaurant && restaurant.businessUnit) {
+        setValue("businessUnit", restaurant.businessUnit);
+      }
+    }
+  }, [watch("locationName"), restaurants, setValue, assetsProp]);
 
   const physicalWear = watch("physicalWear");
   const moralWear = watch("moralWear");
@@ -254,7 +312,11 @@ export function AssetForm({ selectedAsset, onSubmit }) {
         {activeTab === "identification" && (
           <div className="space-y-6">
             <FieldGrid>
-              <Input label={<>Інвентарний номер {requiredMark}</>} {...register("invNumber", { required: true })} />
+              <Input 
+                label={<>Інвентарний номер {requiredMark}</>} 
+                {...register("invNumber", { required: true })}
+                disabled={selectedAsset !== undefined && selectedAsset !== null}
+              />
               <Input label={<>Назва активу {requiredMark}</>} {...register("name", { required: true })} />
               <Select
                 label="Категорія"
@@ -379,7 +441,7 @@ export function AssetForm({ selectedAsset, onSubmit }) {
 
         {activeTab === "dates" && (
           <FieldGrid>
-            <Input type="number" label="Рік придбання" {...register("purchaseYear")}/>
+            <Input type="date" label="Дата придбання" {...register("purchaseYear")}/>
             <Input type="date" label="Дата введення в експлуатацію" {...register("commissionDate")}/>
             <Input type="number" label="Нормативний строк, років" {...register("normativeTerm")}/>
           </FieldGrid>

@@ -26,6 +26,8 @@ async function listUsers() {
       console.log(`Role: ${data.role}`);
       console.log(`DisplayName: ${data.displayName}`);
       console.log(`Restaurant: ${data.restaurant || "не призначено"}`);
+      console.log(`Position: ${data.position || "не призначено"}`);
+      console.log(`WorkRole: ${data.workRole || "не призначено"}`);
       console.log("---");
     });
     

@@ -19,7 +19,7 @@ const decisionColors = {
 
 const columnHelper = createColumnHelper();
 
-export function AssetTable({ data, onEdit, filters, setFilters, onExport, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт" }) {
+export function AssetTable({ data, onEdit, filters, setFilters, onExport, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false }) {
   const filteredData = useMemo(() => {
     return data.filter((item) => {
       const byCategory = filters.category ? item.category === filters.category : true;
@@ -123,18 +123,20 @@ export function AssetTable({ data, onEdit, filters, setFilters, onExport, header
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
-        <FilterSelect
-          label="Локація"
-          value={filters.location}
-          options={[
-            "Ресторан",
-            "Кав’ярня",
-            "Кейтеринг",
-            "Офіс",
-            "Склад",
-          ]}
-          onChange={(val) => setFilters((f) => ({ ...f, location: val }))}
-        />
+        {!hideLocationFilter && (
+          <FilterSelect
+            label="Локація"
+            value={filters.location}
+            options={[
+              "Ресторан",
+              "Кав'ярня",
+              "Кейтеринг",
+              "Офіс",
+              "Склад",
+            ]}
+            onChange={(val) => setFilters((f) => ({ ...f, location: val }))}
+          />
+        )}
         <FilterSelect
           label="Категорія"
           value={filters.category}
