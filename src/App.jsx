@@ -8,6 +8,7 @@ import {
   FileText,
   LayoutDashboard,
   LogOut,
+  Menu,
   Package,
   Plus,
   Settings as SettingsIcon,
@@ -1679,22 +1680,20 @@ function App() {
         <div className="flex h-screen gap-0">
         {/* Top Header Bar */}
         <div className={clsx(
-          "fixed top-0 right-0 h-14 bg-slate-900/95 border-b border-slate-700 z-30 flex items-center justify-between px-6\",
-          isMobile ? \"left-0\" : \"left-72\"
+          "fixed top-0 right-0 h-14 bg-slate-900/95 border-b border-slate-700 z-30 flex items-center justify-between px-4 sm:px-6",
+          isMobile ? "left-0" : "left-72"
         )}>
           {isAuthenticated ? (
             <>
               {/* Гамбургер-меню на мобільному */}
               {isMobile && (
                 <button
-                  type=\"button\"
+                  type="button"
                   onClick={() => setSidebarOpen(!sidebarOpen)}
-                  className=\"p-2 hover:bg-slate-700 rounded transition\"
-                  title=\"Відкрити меню\"
+                  className="p-1 hover:bg-slate-700 rounded transition"
+                  title="Відкрити меню"
                 >
-                  <svg className=\"w-6 h-6 text-slate-300\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">
-                    <path strokeLinecap=\"round\" strokeLinejoin=\"round\" strokeWidth={2} d=\"M4 6h16M4 12h16M4 18h16\" />
-                  </svg>
+                  <Menu size={22} className="text-slate-300" />
                 </button>
               )}
               {/* Плашки ліворуч */}

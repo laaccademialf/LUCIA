@@ -82,13 +82,13 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         id: "actions",
         header: "Дії",
         cell: (info) => (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
             <button
               type="button"
               onClick={() => onEdit(info.row.original)}
-              className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 px-4 py-2 text-sm font-bold text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-lg shadow-indigo-500/40 hover:shadow-indigo-400/60"
+              className="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 px-2 sm:px-4 py-1 sm:py-2 text-xs sm:text-sm font-bold text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-lg shadow-indigo-500/40 hover:shadow-indigo-400/60 whitespace-nowrap"
             >
-              <Pencil size={16} /> Редагувати
+              <Pencil size={14} /> <span className="hidden sm:inline">Редагувати</span><span className="sm:hidden">Ред.</span>
             </button>
             {isAdminOnly && onDelete && (
               <button
@@ -98,9 +98,9 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
                     onDelete(info.row.original.id);
                   }
                 }}
-                className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-red-600 to-red-700 border-2 border-red-500 px-4 py-2 text-sm font-bold text-white hover:from-red-500 hover:to-red-600 hover:border-red-400 transition-all duration-200 shadow-lg shadow-red-500/40 hover:shadow-red-400/60"
+                className="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-red-600 to-red-700 border-2 border-red-500 px-2 sm:px-4 py-1 sm:py-2 text-xs sm:text-sm font-bold text-white hover:from-red-500 hover:to-red-600 hover:border-red-400 transition-all duration-200 shadow-lg shadow-red-500/40 hover:shadow-red-400/60 whitespace-nowrap"
               >
-                <Trash2 size={16} /> Видалити
+                <Trash2 size={14} /> <span className="hidden sm:inline">Видалити</span><span className="sm:hidden">Вид.</span>
               </button>
             )}
           </div>
@@ -124,20 +124,20 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
   };
 
   return (
-    <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
+    <div className="card p-4 sm:p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-slate-900">{headerTitle}</h2>
-          <p className="text-sm text-slate-600">{headerSubtitle}</p>
+          <h2 className="text-lg sm:text-xl font-semibold text-slate-900">{headerTitle}</h2>
+          <p className="text-xs sm:text-sm text-slate-600">{headerSubtitle}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={onExport} className="inline-flex items-center gap-2 px-5 py-3 rounded-lg font-semibold text-sm bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow-md">
-            <Download size={18} /> Експорт CSV
+          <button type="button" onClick={onExport} className="inline-flex items-center gap-2 px-3 sm:px-5 py-2 sm:py-3 rounded-lg font-semibold text-xs sm:text-sm bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow-md whitespace-nowrap">
+            <Download size={16} className="sm:size-18" /> <span className="hidden sm:inline">Експорт CSV</span><span className="sm:hidden">Експ.</span>
           </button>
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+      <div className="mt-4 grid grid-cols-1 gap-2 sm:gap-3 md:grid-cols-4">
         {!hideLocationFilter && (
           <FilterSelect
             label="Локація"
@@ -172,8 +172,8 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         />
       </div>
 
-      <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white">
-        <table className="min-w-full text-sm">
+      <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white -mx-4 sm:-mx-0">
+        <div className="inline-block min-w-full sm:min-w-0">
           <thead className="bg-slate-50 border-b border-slate-200">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
@@ -204,6 +204,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
             ))}
           </tbody>
         </table>
+        </div>
         {filteredData.length === 0 && (
           <div className="py-6 text-center text-sm text-slate-400">Немає записів за вибраними фільтрами</div>
         )}
@@ -214,12 +215,12 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
 
 function FilterSelect({ label, value, options, onChange }) {
   return (
-    <label className="flex flex-col gap-2 text-sm">
-      <span className="inline-flex items-center gap-2 text-gray-900 font-semibold uppercase tracking-wide">
-        <SlidersHorizontal size={16} /> {label}
+    <label className="flex flex-col gap-1 text-xs sm:text-sm">
+      <span className="inline-flex items-center gap-1 sm:gap-2 text-gray-900 font-semibold uppercase tracking-wide">
+        <SlidersHorizontal size={14} className="sm:size-4" /> <span className="hidden sm:inline">{label}</span><span className="sm:hidden">{label.slice(0, 3)}</span>
       </span>
       <select
-        className="w-full px-4 py-3 bg-white border border-gray-300 rounded-lg text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-150 appearance-none cursor-pointer [&>option]:bg-white [&>option]:text-gray-900"
+        className="w-full px-2 sm:px-4 py-2 sm:py-3 bg-white border border-gray-300 rounded-lg text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-150 appearance-none cursor-pointer text-xs sm:text-base [&>option]:bg-white [&>option]:text-gray-900"
         value={value}
         onChange={(e) => onChange(e.target.value || "")}
       >
