@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import {
   Box,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ClipboardList,
   FileText,
   LayoutDashboard,
@@ -142,19 +144,18 @@ function App() {
     loadPermissions();
   }, [user?.workRole]);
 
-  // Автоматично показувати вікно входу для неавторизованих користувачів
+  // Обробка зміни розміру вікна для мобільної адаптації
   useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
-      setShowLoginModal(true);
-    }
-  }, [authLoading, isAuthenticated]);
-
-  // Автоматично показувати вікно входу для неавторизованих користувачів
-  useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
-      setShowLoginModal(true);
-    }
-  }, [authLoading, isAuthenticated]);
+    const handleResize = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (mobile === false) {
+        setSidebarOpen(false);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Автоматично показувати вікно входу для неавторизованих користувачів
   useEffect(() => {
@@ -205,6 +206,9 @@ function App() {
     // Відновлення збереженої сторінки з localStorage
     return localStorage.getItem('lucia_activeNav') || "dashboard-overview";
   });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [expandedGroups, setExpandedGroups] = useState({
     dashboard: false,
     settings: false,
@@ -1314,13 +1318,13 @@ function App() {
 
         // Список ресторанів
         return (
-          <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold text-slate-900">
+          <div className="card p-4 sm:p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 mb-4">
+              <h2 className="text-lg sm:text-xl font-semibold text-slate-900">
                 {user?.role === 'admin' ? 'Управління проєктами' : 'Мій ресторан'}
               </h2>
               {user?.role === 'admin' && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <input
                     type="file"
                     accept=".xlsx,.xls"
@@ -1346,34 +1350,35 @@ function App() {
                   <button
                     type="button"
                     onClick={() => downloadRestaurantTemplate()}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-600 text-white font-semibold hover:bg-slate-500 shadow text-sm"
+                    className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-slate-600 text-white font-semibold hover:bg-slate-500 shadow text-xs sm:text-sm"
                   >
                     <FileDown size={16} />
-                    Шаблон
+                    <span className="hidden sm:inline">Шаблон</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => window.restaurantImportInput?.click()}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-500 shadow text-sm"
+                    className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-500 shadow text-xs sm:text-sm"
                   >
                     <Upload size={16} />
-                    Імпорт
+                    <span className="hidden sm:inline">Імпорт</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => exportRestaurantsToExcel(restaurants)}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 shadow text-sm"
+                    className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 shadow text-xs sm:text-sm"
                   >
                     <Download size={16} />
-                    Експорт
+                    <span className="hidden sm:inline">Експорт</span>
                   </button>
                   <button
                     type="button"
                     onClick={handleAddRestaurant}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow"
+                    className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow text-xs sm:text-sm"
                   >
                     <Plus size={18} />
-                    Додати ресторан
+                    <span className="hidden sm:inline">Додати ресторан</span>
+                    <span className="sm:hidden">+</span>
                   </button>
                 </div>
               )}
@@ -1383,25 +1388,25 @@ function App() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-slate-200">
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                    <th className="text-left py-3 px-2 sm:px-4 text-xs sm:text-sm font-semibold text-slate-700">
                       Обліковий №
                     </th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                    <th className="text-left py-3 px-2 sm:px-4 text-xs sm:text-sm font-semibold text-slate-700">
                       Назва
                     </th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                    <th className="hidden sm:table-cell text-left py-3 px-4 text-sm font-semibold text-slate-700">
                       Бізнес-напрям
                     </th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                    <th className="hidden md:table-cell text-left py-3 px-4 text-sm font-semibold text-slate-700">
                       Адреса
                     </th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                    <th className="hidden lg:table-cell text-left py-3 px-4 text-sm font-semibold text-slate-700">
                       Посадкові місця
                     </th>
-                    <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">
+                    <th className="hidden lg:table-cell text-left py-3 px-4 text-sm font-semibold text-slate-700">
                       Площа, м²
                     </th>
-                    <th className="text-right py-3 px-4 text-sm font-semibold text-slate-700">
+                    <th className="text-right py-3 px-2 sm:px-4 text-xs sm:text-sm font-semibold text-slate-700">
                       Дії
                     </th>
                   </tr>
@@ -1409,44 +1414,44 @@ function App() {
                 <tbody>
                   {restaurants.map((restaurant) => (
                     <tr key={restaurant.id} className="border-b border-slate-100 hover:bg-slate-50">
-                      <td className="py-3 px-4 text-sm text-slate-800">
+                      <td className="py-3 px-2 sm:px-4 text-xs sm:text-sm text-slate-800 font-medium">
                         {restaurant.regNumber}
                       </td>
-                      <td className="py-3 px-4 text-sm text-slate-800 font-medium">
+                      <td className="py-3 px-2 sm:px-4 text-xs sm:text-sm text-slate-800 font-medium">
                         {restaurant.name}
                       </td>
-                      <td className="py-3 px-4 text-sm text-slate-600">
+                      <td className="hidden sm:table-cell py-3 px-4 text-sm text-slate-600">
                         {restaurant.businessUnit || "-"}
                       </td>
-                      <td className="py-3 px-4 text-sm text-slate-600">
+                      <td className="hidden md:table-cell py-3 px-4 text-sm text-slate-600">
                         {restaurant.street}, {restaurant.city}
                       </td>
-                      <td className="py-3 px-4 text-sm text-slate-600">
+                      <td className="hidden lg:table-cell py-3 px-4 text-sm text-slate-600">
                         {restaurant.hasTerrace
                           ? `Літо: ${restaurant.seatsSummer}, Зима: ${restaurant.seatsWinter}`
                           : restaurant.seatsTotal}
                       </td>
-                      <td className="py-3 px-4 text-sm text-slate-600">
+                      <td className="hidden lg:table-cell py-3 px-4 text-sm text-slate-600">
                         {restaurant.hasTerrace
                           ? `Літо: ${restaurant.areaSummer}, Зима: ${restaurant.areaWinter}`
                           : restaurant.areaTotal}
                       </td>
-                      <td className="py-3 px-4 text-sm text-right">
+                      <td className="py-3 px-2 sm:px-4 text-sm text-right">
                         {user?.role === 'admin' && (
-                          <div className="flex items-center justify-end gap-2">
+                          <div className="flex items-center justify-end gap-1">
                             <button
                               type="button"
                               onClick={() => handleEditRestaurant(restaurant)}
-                              className="px-3 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 font-medium text-xs"
+                              className="px-2 py-1 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 font-medium text-xs"
                             >
-                              Редагувати
+                              Ред.
                             </button>
                             <button
                               type="button"
                               onClick={() => handleDeleteRestaurant(restaurant.id)}
-                              className="px-3 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200 font-medium text-xs"
+                              className="px-2 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200 font-medium text-xs"
                             >
-                              Видалити
+                              Вид.
                             </button>
                           </div>
                         )}
@@ -1641,28 +1646,28 @@ function App() {
       
       {/* Блокування доступу для неавторизованих користувачів */}
       {!authLoading && !isAuthenticated ? (
-        <div className="fixed inset-0 bg-slate-900 flex items-center justify-center z-40">
-          <div className="max-w-md w-full mx-4">
-            <div className="bg-slate-800 rounded-lg p-8 shadow-2xl border border-slate-700">
+        <div className="fixed inset-0 bg-slate-900 flex items-center justify-center z-40 p-4">
+          <div className="max-w-md w-full">
+            <div className="bg-slate-800 rounded-lg p-6 sm:p-8 shadow-2xl border border-slate-700">
               <div className="text-center mb-6">
-                <p className="text-4xl font-bold text-indigo-400 mb-2">LUCI</p>
+                <p className="text-3xl sm:text-4xl font-bold text-indigo-400 mb-2">LUCI</p>
                 <p className="text-xs uppercase tracking-wider text-slate-400">
                   La Famiglia Unified Control & Intelligence
                 </p>
               </div>
               <div className="space-y-4">
-                <p className="text-slate-300 text-center">
+                <p className="text-slate-300 text-center text-sm sm:text-base">
                   Для доступу до системи необхідно авторизуватися
                 </p>
                 <button
                   onClick={() => setShowLoginModal(true)}
-                  className="w-full px-6 py-3 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition text-lg font-semibold"
+                  className="w-full px-6 py-3 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition text-base sm:text-lg font-semibold"
                 >
                   Увійти
                 </button>
                 <button
                   onClick={() => setShowRegisterModal(true)}
-                  className="w-full px-6 py-3 rounded-lg bg-slate-700 text-slate-300 hover:bg-slate-600 transition text-lg font-medium"
+                  className="w-full px-6 py-3 rounded-lg bg-slate-700 text-slate-300 hover:bg-slate-600 transition text-base sm:text-lg font-medium"
                 >
                   Зареєструватися
                 </button>
@@ -1673,15 +1678,37 @@ function App() {
       ) : (
         <div className="flex h-screen gap-0">
         {/* Top Header Bar */}
-        <div className="fixed top-0 left-72 right-0 h-14 bg-slate-900/95 border-b border-slate-700 z-30 flex items-center justify-between px-6">
+        <div className={clsx(
+          "fixed top-0 right-0 h-14 bg-slate-900/95 border-b border-slate-700 z-30 flex items-center justify-between px-6\",
+          isMobile ? \"left-0\" : \"left-72\"
+        )}>
           {isAuthenticated ? (
             <>
+              {/* Гамбургер-меню на мобільному */}
+              {isMobile && (
+                <button
+                  type=\"button\"
+                  onClick={() => setSidebarOpen(!sidebarOpen)}
+                  className=\"p-2 hover:bg-slate-700 rounded transition\"
+                  title=\"Відкрити меню\"
+                >
+                  <svg className=\"w-6 h-6 text-slate-300\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">
+                    <path strokeLinecap=\"round\" strokeLinejoin=\"round\" strokeWidth={2} d=\"M4 6h16M4 12h16M4 18h16\" />
+                  </svg>
+                </button>
+              )}
               {/* Плашки ліворуч */}
-              <div className="flex items-center gap-3">
+              <div className={clsx(
+                \"flex items-center gap-3\",
+                isMobile ? \"flex-1 justify-center md:justify-start ml-2\" : \"\"
+              )}>
                 {/* Назва ресторану для всіх */}
                 {user?.restaurant && (
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-900/30 border border-emerald-700/50 text-emerald-300">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className={clsx(
+                    \"flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-900/30 border border-emerald-700/50 text-emerald-300\",
+                    isMobile ? \"text-xs hidden sm:flex\" : \"\"
+                  )}>
+                    <svg className=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                     </svg>
                     <span className="text-sm font-semibold">
@@ -1704,10 +1731,10 @@ function App() {
               </div>
               
               {/* Користувач та вихід - праворуч */}
-              <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2 text-sm text-slate-300">
+              <div className="flex items-center gap-2 sm:gap-4">
+                <div className="hidden sm:flex items-center gap-2 text-sm text-slate-300">
                   <UserIcon size={16} />
-                  <span>{user?.displayName || user?.email}</span>
+                  <span className="max-w-xs truncate">{user?.displayName || user?.email}</span>
                   {user?.role === "admin" && (
                     <span className="px-2 py-1 rounded bg-indigo-600 text-white text-xs font-semibold">
                       Admin
@@ -1722,21 +1749,21 @@ function App() {
                       console.error("Помилка виходу:", error);
                     }
                   }}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition text-sm font-medium"
+                  className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition text-xs sm:text-sm font-medium"
                 >
                   <LogOut size={16} />
-                  Вийти
+                  <span className="hidden sm:inline">Вийти</span>
                 </button>
               </div>
             </>
           ) : (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <button
                 onClick={() => {
                   setShowLoginModal(true);
                   setShowAuthWarning(false);
                 }}
-                className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition text-sm font-medium"
+                className="px-2 sm:px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition text-xs sm:text-sm font-medium"
               >
                 Увійти
               </button>
@@ -1745,7 +1772,7 @@ function App() {
                   setShowRegisterModal(true);
                   setShowAuthWarning(false);
                 }}
-                className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition text-sm font-semibold"
+                className="px-2 sm:px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition text-xs sm:text-sm font-semibold"
               >
                 Реєстрація
               </button>
@@ -1754,14 +1781,48 @@ function App() {
         </div>
 
         {/* Sidebar */}
-        <aside className="fixed left-0 top-0 h-screen w-72 overflow-y-auto border-r border-slate-700 bg-slate-900/95 shadow-lg z-40">
-          <div className="p-4">
-            <div className="mb-6 mt-2">
-              <p className="text-3xl font-bold text-indigo-400">LUCI</p>
-              <p className="text-xs uppercase tracking-wider text-slate-400 mt-1">
-                La Famiglia Unified Control &amp; Intelligence
-              </p>
-            </div>
+        <aside className={clsx(
+          "fixed left-0 top-0 h-screen overflow-y-auto border-r border-slate-700 bg-slate-900/95 shadow-lg transition-all duration-300",
+          isMobile ? (
+            sidebarOpen ? "w-72 z-50" : "-left-72 w-72 z-50"
+          ) : (
+            sidebarCollapsed ? "w-20 z-40" : "w-72 z-40"
+          )
+        )}>
+          <div className="p-4 relative">
+            {isMobile ? (
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(false)}
+                className="absolute right-2 top-4 p-1 hover:bg-slate-700 rounded transition"
+                title="Закрити меню"
+              >
+                <ChevronLeft size={18} className="text-slate-300" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                className="absolute right-2 top-4 p-1 hover:bg-slate-700 rounded transition"
+                title={sidebarCollapsed ? "Розгорнути панель" : "Згорнути панель"}
+              >
+                {sidebarCollapsed ? (
+                  <ChevronRight size={18} className="text-slate-300" />
+                ) : (
+                  <ChevronLeft size={18} className="text-slate-300" />
+                )}
+              </button>
+            )}
+            </button>
+            {!sidebarCollapsed && (
+              <div className="mb-6 mt-2">
+                <p className="text-3xl font-bold text-indigo-400">LUCI</p>
+                <p className="text-xs uppercase tracking-wider text-slate-400 mt-1">
+                  La Famiglia Unified Control &amp; Intelligence
+                </p>
+              </div>
+            )}
+            {!sidebarCollapsed && (
             <nav className="flex flex-col gap-2">
               {navItems.map((group) => (
                 <div key={group.id} className="rounded-xl bg-slate-800/50 border border-slate-700 overflow-hidden">
@@ -1791,6 +1852,7 @@ function App() {
                           onClick={() => {
                             setActiveNav(item.id);
                             localStorage.setItem('lucia_activeNav', item.id);
+                            if (isMobile) setSidebarOpen(false);
                           }}
                           className={clsx(
                             "mx-2 flex items-start gap-2 rounded-lg px-3 py-2 text-sm font-medium transition whitespace-nowrap",
@@ -1808,13 +1870,17 @@ function App() {
                 </div>
               ))}
             </nav>
+            )}
           </div>
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 ml-72 mt-14 overflow-auto transition-all duration-300">
+        <main className={clsx(
+          "flex-1 mt-14 overflow-auto transition-all duration-300\",
+          isMobile ? \"ml-0\" : (sidebarCollapsed ? \"ml-20\" : \"ml-72\")
+        )}>
           {topTabs.length > 0 && (
-            <div className="sticky top-0 z-30 bg-slate-900/95 border-b border-slate-800 shadow-lg shadow-slate-900/40">
+            <div className="sticky top-0 z-30 bg-slate-900/95 border-b border-slate-800 shadow-lg shadow-slate-900/40\">
               <div className="w-full px-0 lg:px-0 h-10 flex gap-0 overflow-x-auto items-stretch justify-start">
                 {topTabs.map((tab) => (
                   <button
@@ -1826,7 +1892,7 @@ function App() {
                       setSelected(null);
                     }}
                     className={clsx(
-                      "flex-none px-3 py-2 rounded-none text-sm font-semibold border border-slate-700 transition text-center first:rounded-none last:rounded-r-lg",
+                      "flex-none px-2 sm:px-3 py-2 rounded-none text-xs sm:text-sm font-semibold border border-slate-700 transition text-center first:rounded-none last:rounded-r-lg whitespace-nowrap",
                       topTab === tab.id
                         ? "bg-indigo-600 text-white border-indigo-400 shadow-lg shadow-indigo-500/40"
                         : "bg-slate-800 text-slate-200 border-slate-700 hover:border-indigo-400 hover:text-white hover:bg-slate-700"
@@ -1839,7 +1905,7 @@ function App() {
             </div>
           )}
 
-          <div className="mx-auto max-w-screen-2xl px-6 py-8 lg:px-8">
+          <div className="mx-auto max-w-screen-2xl px-3 py-4 sm:px-6 sm:py-8 lg:px-8">
             <div className="mt-4">
               {renderContent()}
             </div>
