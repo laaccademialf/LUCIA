@@ -33,6 +33,7 @@ import { LoginModal } from "./components/LoginModal";
 import { RegisterModal } from "./components/RegisterModal";
 import { AuthSetupWarning } from "./components/AuthSetupWarning";
 import { logoutUser } from "./firebase/auth";
+import { getRolePermissions } from "./firebase/permissions";
 import {
   exportRestaurantsToExcel,
   importRestaurantsFromExcel,
@@ -103,6 +104,27 @@ function App() {
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [showAuthWarning, setShowAuthWarning] = useState(false);
+  const [userPermissions, setUserPermissions] = useState({});
+
+  // Завантаження прав доступу для робочої ролі користувача
+  useEffect(() => {
+    const loadPermissions = async () => {
+      if (user?.workRole) {
+        try {
+          const rolePerms = await getRolePermissions(user.workRole);
+          setUserPermissions(rolePerms.permissions || {});
+          console.log("Права користувача завантажені:", rolePerms.permissions);
+        } catch (error) {
+          console.error("Помилка завантаження прав:", error);
+          setUserPermissions({});
+        }
+      } else {
+        setUserPermissions({});
+      }
+    };
+    
+    loadPermissions();
+  }, [user?.workRole]);
 
   // Автоматично показувати вікно входу для неавторизованих користувачів
   useEffect(() => {
@@ -266,12 +288,21 @@ function App() {
   }, [restaurantsLoading, user, firebaseRestaurants]);
 
   const topTabs = useMemo(() => {
+    // Адміни бачать все
+    const isAdmin = user?.role === 'admin';
+    
     if (activeNav === "settings-restaurant") {
-      return [
+      const allTabs = [
         { id: "main", label: "Головні" },
         { id: "schedule", label: "Графік роботи" },
         { id: "projects", label: "Управління проєктами" },
       ];
+      
+      if (isAdmin) return allTabs;
+      
+      // Фільтруємо вкладки на основі прав
+      const availableTabs = userPermissions["settings-restaurant"] || [];
+      return allTabs.filter(tab => availableTabs.includes(tab.id));
     }
     if (activeNav === "settings-accounts") {
       return [
@@ -297,7 +328,7 @@ function App() {
       { id: "test2", label: "Тест 2" },
       { id: "test3", label: "Тест 3" },
     ];
-  }, [activeNav]);
+  }, [activeNav, user?.role, userPermissions]);
 
   useEffect(() => {
     if (topTabs.length > 0) {
@@ -388,79 +419,101 @@ function App() {
     return { total, toWriteOff, toMove };
   }, [assets]);
 
-  const navItems = [
-    {
-      id: "dashboard",
-      label: "Дашборд",
-      icon: LayoutDashboard,
-      children: [
-        { id: "dashboard-ops", label: "Операційний огляд" },
-      ],
-    },
-    {
-      id: "settings",
-      label: "Налаштування",
-      icon: SettingsIcon,
-      children: [
-        { id: "settings-restaurant", label: "Дані ресторану" },
-        { id: "settings-accounts", label: "Облікові записи" },
-        { id: "settings-permissions", label: "Права доступу" },
-      ],
-    },
-    {
-      id: "operations",
-      label: "Операції",
-      icon: ClipboardList,
-      children: [
-        { id: "ops-checklists", label: "Чек-листи" },
-        { id: "ops-haccp", label: "HACCP журнали" },
-        { id: "ops-maintenance", label: "Сервісні заявки" },
-      ],
-    },
-    {
-      id: "inventory",
-      label: "Облік",
-      icon: Package,
-      children: [
-        { id: "inventory-products", label: "Продукти" },
-        { id: "inventory-utilities", label: "Утиліти" },
-        { id: "inventory-assets", label: "Основні засоби" },
-      ],
-    },
-    {
-      id: "reports",
-      label: "Звіти",
-      icon: FileText,
-      children: [
-        { id: "reports-products", label: "Інвентаризація продуктів" },
-        { id: "reports-assets", label: "Основні засоби" },
-      ],
-    },
-    {
-      id: "security",
-      label: "Безпека",
-      icon: ShieldCheck,
-      children: [
-        { id: "security-audit", label: "Аудит дій" },
-      ],
-    },
-    {
-      id: "team",
-      label: "Команда",
-      icon: Users,
-      children: [
-        { id: "team-roles", label: "Ролі та доступи" },
-      ],
-    },
-    {
-      id: "maintenance",
-      label: "Сервіс",
-      icon: Wrench,
-      children: [
-        { id: "maintenance-plan", label: "Планові роботи" },
-      ],
-    },
-  ];
+  const navItems = useMemo(() => {
+    const isAdmin = user?.role === 'admin';
+    
+    const allNavItems = [
+      {
+        id: "dashboard",
+        label: "Дашборд",
+        icon: LayoutDashboard,
+        children: [
+          { id: "dashboard-ops", label: "Операційний огляд" },
+        ],
+      },
+      {
+        id: "settings",
+        label: "Налаштування",
+        icon: SettingsIcon,
+        children: [
+          { id: "settings-restaurant", label: "Дані ресторану" },
+          { id: "settings-accounts", label: "Облікові записи" },
+          { id: "settings-permissions", label: "Права доступу" },
+        ],
+      },
+      {
+        id: "operations",
+        label: "Операції",
+        icon: ClipboardList,
+        children: [
+          { id: "ops-checklists", label: "Чек-листи" },
+          { id: "ops-haccp", label: "HACCP журнали" },
+          { id: "ops-maintenance", label: "Сервісні заявки" },
+        ],
+      },
+      {
+        id: "inventory",
+        label: "Облік",
+        icon: Package,
+        children: [
+          { id: "inventory-products", label: "Продукти" },
+          { id: "inventory-utilities", label: "Утиліти" },
+          { id: "inventory-assets", label: "Основні засоби" },
+        ],
+      },
+      {
+        id: "reports",
+        label: "Звіти",
+        icon: FileText,
+        children: [
+          { id: "reports-products", label: "Інвентаризація продуктів" },
+          { id: "reports-assets", label: "Основні засоби" },
+        ],
+      },
+      {
+        id: "security",
+        label: "Безпека",
+        icon: ShieldCheck,
+        children: [
+          { id: "security-audit", label: "Аудит дій" },
+        ],
+      },
+      {
+        id: "team",
+        label: "Команда",
+        icon: Users,
+        children: [
+          { id: "team-roles", label: "Ролі та доступи" },
+        ],
+      },
+      {
+        id: "maintenance",
+        label: "Сервіс",
+        icon: Wrench,
+        children: [
+          { id: "maintenance-plan", label: "Планові роботи" },
+        ],
+      },
+    ];
+
+    // Адміни бачать все
+    if (isAdmin) {
+      return allNavItems;
+    }
+
+    // Фільтруємо навігацію на основі прав користувача
+    return allNavItems.map(group => {
+      const filteredChildren = group.children.filter(child => {
+        // Перевіряємо чи є доступ до цього пункту меню
+        return userPermissions[child.id] !== undefined;
+      });
+
+      return {
+        ...group,
+        children: filteredChildren,
+      };
+    }).filter(group => group.children.length > 0); // Приховуємо порожні групи
+  }, [user?.role, userPermissions]);
 
   const renderContent = () => {
     const baseInput = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400 disabled:border-gray-200 disabled:cursor-not-allowed";
