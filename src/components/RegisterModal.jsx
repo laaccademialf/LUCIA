@@ -19,8 +19,11 @@ export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
       onClose();
     } catch (error) {
       console.error("Помилка реєстрації:", error);
+      console.error("Код помилки:", error.code);
+      console.error("Повідомлення:", error.message);
+      
       if (error.code === "auth/operation-not-allowed") {
-        setError("⚠️ Authentication не активовано у Firebase Console. Будь ласка, активуйте Email/Password провайдер.");
+        setError("⚠️ Email/Password authentication не активовано у Firebase Console.\n\nЩоб активувати:\n1. Відкрийте Firebase Console\n2. Authentication → Sign-in method\n3. Увімкніть Email/Password");
       } else if (error.code === "auth/email-already-in-use") {
         setError("Цей email вже використовується");
       } else if (error.code === "auth/weak-password") {
@@ -28,7 +31,7 @@ export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
       } else if (error.code === "auth/invalid-email") {
         setError("Невірний формат email");
       } else {
-        setError("Помилка реєстрації. Спробуйте ще раз.");
+        setError(`Помилка реєстрації: ${error.message || "Спробуйте ще раз"}\n\nКод помилки: ${error.code || "невідомо"}`);
       }
     } finally {
       setLoading(false);
@@ -49,7 +52,7 @@ export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm">
+          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm whitespace-pre-line">
             {error}
           </div>
         )}
