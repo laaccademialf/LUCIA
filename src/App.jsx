@@ -1632,6 +1632,96 @@ function App() {
     );
   };
 
+  const mobileMenuButton = isMobile ? (
+    <button type="button" onClick={() => setSidebarOpen(false)} className="absolute right-2 top-4 p-1 hover:bg-slate-700 rounded transition">
+      <ChevronLeft size={18} className="text-slate-300" />
+    </button>
+  ) : null;
+
+  const desktopCollapseButton = !isMobile ? (
+    <button type="button" onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className="absolute right-2 top-4 p-1 hover:bg-slate-700 rounded transition">
+      {sidebarCollapsed ? <ChevronRight size={18} className="text-slate-300" /> : <ChevronLeft size={18} className="text-slate-300" />}
+    </button>
+  ) : null;
+
+  const sidebarHeader = !sidebarCollapsed ? (
+    <div className="mb-6 mt-2">
+      <p className="text-3xl font-bold text-indigo-400">LUCI</p>
+      <p style={{fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.1em", color: "#cbd5e1"}}>La Famiglia Unified Control &amp; Intelligence</p>
+    </div>
+  ) : null;
+
+  const SidebarNav = () => (
+    <nav style={{display: "flex", flexDirection: "column", gap: "0.5rem"}}>
+      {navItems.map(group => (
+        <div key={group.id} style={{borderRadius: "0.75rem", backgroundColor: "rgba(71, 85, 105, 0.3)", border: "1px solid #475569", overflow: "hidden"}}>
+          <button type="button" onClick={() => toggleGroup(group.id)} style={{width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", padding: "0.5rem 0.75rem", fontSize: "0.75rem", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.05em", color: "#cbd5e1", backgroundColor: "transparent", border: "none", cursor: "pointer"}}>
+            <div style={{display: "flex", alignItems: "center", gap: "0.5rem"}}>
+              <group.icon size={16} /> {group.label}
+            </div>
+            <ChevronDown size={14} style={{transition: "transform 150ms", transform: expandedGroups[group.id] ? "rotate(0deg)" : "rotate(-90deg)"}} />
+          </button>
+          {expandedGroups[group.id] && (
+            <div style={{display: "flex", flexDirection: "column", gap: "0.25rem", paddingBottom: "0.5rem"}}>
+              {group.children.map(item => (
+                <button key={item.id} type="button" onClick={() => {setActiveNav(item.id); localStorage.setItem('lucia_activeNav', item.id); if (isMobile) setSidebarOpen(false);}} style={{margin: "0 0.5rem", display: "flex", alignItems: "flex-start", gap: "0.5rem", borderRadius: "0.5rem", padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: "500", transition: "all 150ms", whiteSpace: "nowrap", backgroundColor: activeNav === item.id ? "#4f46e5" : "transparent", color: activeNav === item.id ? "white" : "#e2e8f0", border: "none", cursor: "pointer"}}>
+                  <span style={{display: "inline-block", height: "0.5rem", width: "0.5rem", borderRadius: "9999px", backgroundColor: "#818cf8", marginTop: "0.25rem", flexShrink: 0}} />
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </nav>
+  );
+
+  const sidebarElement = (
+    <aside style={{position: "fixed", left: 0, top: 0, height: "100vh", overflowY: "auto", borderRight: "1px solid #334155", backgroundColor: "rgba(15, 23, 42, 0.95)", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)", transition: "all 300ms", zIndex: isMobile ? 50 : 40, width: "288px", transform: isMobile && !sidebarOpen ? "translateX(-100%)" : "translateX(0)", ...(sidebarCollapsed && !isMobile && {width: "80px"})}}>
+      <div style={{padding: "1rem", position: "relative"}}>
+        {mobileMenuButton}
+        {desktopCollapseButton}
+        {sidebarHeader}
+        {!sidebarCollapsed && !isMobile && SidebarNav()}
+      </div>
+    </aside>
+  );
+
+  const topTabsElement = topTabs.length > 0 ? (
+    <div className="sticky top-0 z-30 bg-slate-900/95 border-b border-slate-800 shadow-lg" style={{boxShadow: "0 4px 6px -1px rgba(15, 23, 42, 0.4)"}}>
+      <div className="w-full px-0 lg:px-0 h-10 flex gap-0 overflow-x-auto items-stretch justify-start">
+        {topTabs.map(tab => (
+          <button key={tab.id} type="button" onClick={() => {setTopTab(tab.id); localStorage.setItem('lucia_topTab', tab.id); setSelected(null);}} style={{padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: "600", border: "1px solid #475569", transition: "all 150ms", textAlign: "center", whiteSpace: "nowrap", borderRadius: "0", flexShrink: 0, backgroundColor: topTab === tab.id ? "#4f46e5" : "#1e293b", color: topTab === tab.id ? "white" : "#e2e8f0", borderColor: topTab === tab.id ? "#818cf8" : "#475569"}}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  ) : null;
+
+  const handleSwitchToRegister = () => {
+    setShowLoginModal(false);
+    setShowRegisterModal(true);
+  };
+
+  const handleSwitchToLogin = () => {
+    setShowRegisterModal(false);
+    setShowLoginModal(true);
+  };
+
+  const handleLoginSuccess = () => {
+    setActiveNav("dashboard-overview");
+    localStorage.setItem('lucia_activeNav', "dashboard-overview");
+  };
+
+  const loginModalElement = showLoginModal ? (
+    <LoginModal onClose={() => setShowLoginModal(false)} onSwitchToRegister={handleSwitchToRegister} onLoginSuccess={handleLoginSuccess} />
+  ) : null;
+
+  const registerModalElement = showRegisterModal ? (
+    <RegisterModal onClose={() => setShowRegisterModal(false)} onSwitchToLogin={handleSwitchToLogin} />
+  ) : null;
+
   return (
     <div className="app-shell min-h-screen bg-slate-900 text-slate-50">
       {authLoading && (
@@ -1697,17 +1787,11 @@ function App() {
                 </button>
               )}
               {/* Плашки ліворуч */}
-              <div className={clsx(
-                \"flex items-center gap-3\",
-                isMobile ? \"flex-1 justify-center md:justify-start ml-2\" : \"\"
-              )}>
+              <div className={clsx("flex items-center gap-3", isMobile ? "flex-1 justify-center md:justify-start ml-2" : "")}>
                 {/* Назва ресторану для всіх */}
                 {user?.restaurant && (
-                  <div className={clsx(
-                    \"flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-900/30 border border-emerald-700/50 text-emerald-300\",
-                    isMobile ? \"text-xs hidden sm:flex\" : \"\"
-                  )}>
-                    <svg className=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\">
+                  <div className={clsx("flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-900/30 border border-emerald-700/50 text-emerald-300", isMobile ? "text-xs hidden sm:flex" : "")}>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                     </svg>
                     <span className="text-sm font-semibold">
@@ -1780,129 +1864,11 @@ function App() {
         </div>
 
         {/* Sidebar */}
-        <aside className={clsx(
-          "fixed left-0 top-0 h-screen overflow-y-auto border-r border-slate-700 bg-slate-900/95 shadow-lg transition-all duration-300",
-          isMobile ? (
-            sidebarOpen ? "w-72 z-50" : "-left-72 w-72 z-50"
-          ) : (
-            sidebarCollapsed ? "w-20 z-40" : "w-72 z-40"
-          )
-        )}>
-          <div className="p-4 relative">
-            {isMobile ? (
-              <button
-                type="button"
-                onClick={() => setSidebarOpen(false)}
-                className="absolute right-2 top-4 p-1 hover:bg-slate-700 rounded transition"
-                title="Закрити меню"
-              >
-                <ChevronLeft size={18} className="text-slate-300" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                className="absolute right-2 top-4 p-1 hover:bg-slate-700 rounded transition"
-                title={sidebarCollapsed ? "Розгорнути панель" : "Згорнути панель"}
-              >
-                {sidebarCollapsed ? (
-                  <ChevronRight size={18} className="text-slate-300" />
-                ) : (
-                  <ChevronLeft size={18} className="text-slate-300" />
-                )}
-              </button>
-            )}
-            </button>
-            {!sidebarCollapsed && (
-              <div className="mb-6 mt-2">
-                <p className="text-3xl font-bold text-indigo-400">LUCI</p>
-                <p className="text-xs uppercase tracking-wider text-slate-400 mt-1">
-                  La Famiglia Unified Control &amp; Intelligence
-                </p>
-              </div>
-            )}
-            {!sidebarCollapsed && (
-            <nav className="flex flex-col gap-2">
-              {navItems.map((group) => (
-                <div key={group.id} className="rounded-xl bg-slate-800/50 border border-slate-700 overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => toggleGroup(group.id)}
-                    className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-700/50 transition"
-                  >
-                    <div className="flex items-center gap-2">
-                      <group.icon size={16} /> {group.label}
-                    </div>
-                    <ChevronDown
-                      size={14}
-                      className={clsx(
-                        "transition-transform",
-                        expandedGroups[group.id] ? "rotate-0" : "-rotate-90"
-                      )}
-                    />
-                  </button>
-
-                  {expandedGroups[group.id] && (
-                    <div className="flex flex-col gap-1 pb-2">
-                      {group.children.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => {
-                            setActiveNav(item.id);
-                            localStorage.setItem('lucia_activeNav', item.id);
-                            if (isMobile) setSidebarOpen(false);
-                          }}
-                          className={clsx(
-                            "mx-2 flex items-start gap-2 rounded-lg px-3 py-2 text-sm font-medium transition whitespace-nowrap",
-                            activeNav === item.id
-                              ? "bg-indigo-600 text-white shadow"
-                              : "text-slate-200 hover:bg-slate-700/60"
-                          )}
-                        >
-                          <span className="inline-block h-2 w-2 rounded-full bg-indigo-400 mt-1 shrink-0" />
-                          {item.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </nav>
-            )}
-          </div>
-        </aside>
+        {sidebarElement}
 
         {/* Main Content */}
-        <main className={clsx(
-          "flex-1 mt-14 overflow-auto transition-all duration-300\",
-          isMobile ? \"ml-0\" : (sidebarCollapsed ? \"ml-20\" : \"ml-72\")
-        )}>
-          {topTabs.length > 0 && (
-            <div className="sticky top-0 z-30 bg-slate-900/95 border-b border-slate-800 shadow-lg shadow-slate-900/40\">
-              <div className="w-full px-0 lg:px-0 h-10 flex gap-0 overflow-x-auto items-stretch justify-start">
-                {topTabs.map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => {
-                      setTopTab(tab.id);
-                      localStorage.setItem('lucia_topTab', tab.id);
-                      setSelected(null);
-                    }}
-                    className={clsx(
-                      "flex-none px-2 sm:px-3 py-2 rounded-none text-xs sm:text-sm font-semibold border border-slate-700 transition text-center first:rounded-none last:rounded-r-lg whitespace-nowrap",
-                      topTab === tab.id
-                        ? "bg-indigo-600 text-white border-indigo-400 shadow-lg shadow-indigo-500/40"
-                        : "bg-slate-800 text-slate-200 border-slate-700 hover:border-indigo-400 hover:text-white hover:bg-slate-700"
-                    )}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+        <main className={clsx("flex-1 mt-14 overflow-auto transition-all duration-300", isMobile ? "ml-0" : sidebarCollapsed ? "ml-20" : "ml-72")}>
+          {topTabsElement}
 
           <div className="mx-auto max-w-screen-2xl px-3 py-4 sm:px-6 sm:py-8 lg:px-8">
             <div className="mt-4">
@@ -1914,30 +1880,8 @@ function App() {
       )}
 
       {/* Auth Modals */}
-      {showLoginModal && (
-        <LoginModal
-          onClose={() => setShowLoginModal(false)}
-          onSwitchToRegister={() => {
-            setShowLoginModal(false);
-            setShowRegisterModal(true);
-          }}
-          onLoginSuccess={() => {
-            // Перенаправлення на дашборд після успішного входу
-            setActiveNav("dashboard-overview");
-            localStorage.setItem('lucia_activeNav', "dashboard-overview");
-          }}
-        />
-      )}
-
-      {showRegisterModal && (
-        <RegisterModal
-          onClose={() => setShowRegisterModal(false)}
-          onSwitchToLogin={() => {
-            setShowRegisterModal(false);
-            setShowLoginModal(true);
-          }}
-        />
-      )}
+      {loginModalElement}
+      {registerModalElement}
     </div>
   );
 }
