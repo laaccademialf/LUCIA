@@ -22,6 +22,18 @@ import {
   getDecisions,
   addDecision,
   deleteDecision,
+  getPlacementZones,
+  addPlacementZone,
+  deletePlacementZone,
+  getFunctionalities,
+  addFunctionality,
+  deleteFunctionality,
+  getRelevances,
+  addRelevance,
+  deleteRelevance,
+  getReasons,
+  addReason,
+  deleteReason,
 } from "../firebase/assetFields";
 
 const FieldSection = ({ title, items, onAdd, onDelete, color = "blue", placeholder }) => {
@@ -175,6 +187,10 @@ export const AssetFieldsManager = () => {
   const [statuses, setStatuses] = useState([]);
   const [conditions, setConditions] = useState([]);
   const [decisions, setDecisions] = useState([]);
+  const [placementZones, setPlacementZones] = useState([]);
+  const [functionalities, setFunctionalities] = useState([]);
+  const [relevances, setRelevances] = useState([]);
+  const [reasons, setReasons] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -195,6 +211,10 @@ export const AssetFieldsManager = () => {
         statusesData,
         conditionsData,
         decisionsData,
+        placementZonesData,
+        functionalitiesData,
+        relevancesData,
+        reasonsData,
       ] = await Promise.all([
         getCategories(),
         getSubcategories(),
@@ -203,6 +223,10 @@ export const AssetFieldsManager = () => {
         getStatuses(),
         getConditions(),
         getDecisions(),
+        getPlacementZones(),
+        getFunctionalities(),
+        getRelevances(),
+        getReasons(),
       ]);
 
       setCategories(categoriesData);
@@ -212,6 +236,10 @@ export const AssetFieldsManager = () => {
       setStatuses(statusesData);
       setConditions(conditionsData);
       setDecisions(decisionsData);
+      setPlacementZones(placementZonesData);
+      setFunctionalities(functionalitiesData);
+      setRelevances(relevancesData);
+      setReasons(reasonsData);
     } catch (error) {
       console.error("Помилка завантаження полів:", error);
       setError("Не вдалося завантажити дані");
@@ -288,6 +316,46 @@ export const AssetFieldsManager = () => {
   const handleDeleteDecision = async (id) => {
     await deleteDecision(id);
     setDecisions(decisions.filter((item) => item.id !== id));
+  };
+
+  const handleAddPlacementZone = async (name) => {
+    const newItem = await addPlacementZone(name);
+    setPlacementZones([...placementZones, newItem]);
+  };
+
+  const handleDeletePlacementZone = async (id) => {
+    await deletePlacementZone(id);
+    setPlacementZones(placementZones.filter((item) => item.id !== id));
+  };
+
+  const handleAddFunctionality = async (name) => {
+    const newItem = await addFunctionality(name);
+    setFunctionalities([...functionalities, newItem]);
+  };
+
+  const handleDeleteFunctionality = async (id) => {
+    await deleteFunctionality(id);
+    setFunctionalities(functionalities.filter((item) => item.id !== id));
+  };
+
+  const handleAddRelevance = async (name) => {
+    const newItem = await addRelevance(name);
+    setRelevances([...relevances, newItem]);
+  };
+
+  const handleDeleteRelevance = async (id) => {
+    await deleteRelevance(id);
+    setRelevances(relevances.filter((item) => item.id !== id));
+  };
+
+  const handleAddReason = async (name) => {
+    const newItem = await addReason(name);
+    setReasons([...reasons, newItem]);
+  };
+
+  const handleDeleteReason = async (id) => {
+    await deleteReason(id);
+    setReasons(reasons.filter((item) => item.id !== id));
   };
 
   if (loading) {
@@ -375,12 +443,49 @@ export const AssetFieldsManager = () => {
           color="red"
           placeholder="Наприклад: Залишити"
         />
+
+        <FieldSection
+          title="Зони розміщення"
+          items={placementZones}
+          onAdd={handleAddPlacementZone}
+          onDelete={handleDeletePlacementZone}
+          color="blue"
+          placeholder="Наприклад: Зал"
+        />
+
+        <FieldSection
+          title="Працездатність"
+          items={functionalities}
+          onAdd={handleAddFunctionality}
+          onDelete={handleDeleteFunctionality}
+          color="green"
+          placeholder="Наприклад: Працює"
+        />
+
+        <FieldSection
+          title="Моральна актуальність"
+          items={relevances}
+          onAdd={handleAddRelevance}
+          onDelete={handleDeleteRelevance}
+          color="purple"
+          placeholder="Наприклад: Актуальний"
+        />
+
+        <FieldSection
+          title="Причини"
+          items={reasons}
+          onAdd={handleAddReason}
+          onDelete={handleDeleteReason}
+          color="red"
+          placeholder="Наприклад: Знос"
+        />
       </div>
 
       <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
         <p className="text-sm text-blue-800">
           <strong>Примітка:</strong> Локація автоматично використовує список ресторанів. 
           Додавайте та редагуйте ресторани в розділі "Налаштування → Дані ресторану".
+          Матеріальну відповідальність налаштовуйте у вкладці "Матеріальна відповідальність".
         </p>
       </div>
     </div>

@@ -7,6 +7,12 @@ import {
   getStatuses,
   getConditions,
   getDecisions,
+  getPlacementZones,
+  getResponsibilityCenters,
+  getResponsiblePersons,
+  getFunctionalities,
+  getRelevances,
+  getReasons,
 } from "../firebase/assetFields";
 
 export const useAssetFields = () => {
@@ -17,6 +23,12 @@ export const useAssetFields = () => {
   const [statuses, setStatuses] = useState([]);
   const [conditions, setConditions] = useState([]);
   const [decisions, setDecisions] = useState([]);
+  const [placementZones, setPlacementZones] = useState([]);
+  const [responsibilityCenters, setResponsibilityCenters] = useState([]);
+  const [responsiblePersons, setResponsiblePersons] = useState([]);
+  const [functionalities, setFunctionalities] = useState([]);
+  const [relevances, setRelevances] = useState([]);
+  const [reasons, setReasons] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -30,6 +42,12 @@ export const useAssetFields = () => {
           statusesData,
           conditionsData,
           decisionsData,
+          placementZonesData,
+          responsibilityCentersData,
+          responsiblePersonsData,
+          functionalitiesData,
+          relevancesData,
+          reasonsData,
         ] = await Promise.all([
           getCategories(),
           getSubcategories(),
@@ -38,6 +56,12 @@ export const useAssetFields = () => {
           getStatuses(),
           getConditions(),
           getDecisions(),
+          getPlacementZones(),
+          getResponsibilityCenters(),
+          getResponsiblePersons(),
+          getFunctionalities(),
+          getRelevances(),
+          getReasons(),
         ]);
 
         setCategories(categoriesData.map((item) => item.name));
@@ -47,6 +71,12 @@ export const useAssetFields = () => {
         setStatuses(statusesData.map((item) => item.name));
         setConditions(conditionsData.map((item) => item.name));
         setDecisions(decisionsData.map((item) => item.name));
+        setPlacementZones(placementZonesData.map((item) => item.name));
+        setResponsibilityCenters(responsibilityCentersData);
+        setResponsiblePersons(responsiblePersonsData);
+        setFunctionalities(functionalitiesData.map((item) => item.name));
+        setRelevances(relevancesData.map((item) => item.name));
+        setReasons(reasonsData.map((item) => item.name));
       } catch (error) {
         console.error("Помилка завантаження полів:", error);
       } finally {
@@ -65,6 +95,12 @@ export const useAssetFields = () => {
     statuses,
     conditions,
     decisions,
+    placementZones,
+    responsibilityCenters,
+    responsiblePersons,
+    functionalities,
+    relevances,
+    reasons,
     loading,
   };
 };

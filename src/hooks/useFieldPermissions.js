@@ -10,33 +10,63 @@ export const useFieldPermissions = (workRoleId) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!workRoleId) {
-      setFieldPermissions({});
-      setLoading(false);
-      return;
-    }
+    const loadPermissions = async () => {
+      if (!workRoleId) {
+        console.log("⚠️ Немає workRoleId");
+        setFieldPermissions({});
+        setLoading(false);
+        return;
+      }
 
-    // Завантажуємо дозволи з localStorage
-    const savedPermissions = localStorage.getItem("fieldPermissions");
-    
-    if (savedPermissions) {
-      try {
-        const allPermissions = JSON.parse(savedPermissions);
-        const rolePermissions = allPermissions[workRoleId] || {};
-        
-        console.log("🔐 Дозволи для ролі:", workRoleId, rolePermissions);
-        setFieldPermissions(rolePermissions);
-      } catch (error) {
-        console.error("Помилка парсингу дозволів:", error);
+      // Завантажуємо дозволи з localStorage
+      const savedPermissions = localStorage.getItem("fieldPermissions");
+      
+      if (savedPermissions) {
+        try {
+          const allPermissions = JSON.parse(savedPermissions);
+          console.log("📦 Всі збережені дозволи:", allPermissions);
+          console.log("🔍 Шукаємо дозволи для workRole:", workRoleId);
+          
+          // Спочатку пробуємо знайти по ID
+          let rolePermissions = allPermissions[workRoleId];
+          
+          if (!rolePermissions) {
+            // Якщо workRoleId - це назва ролі, завантажуємо список ролей та шукаємо ID
+            console.log("🔄 workRole схоже на назву, шукаємо відповідний ID...");
+            
+            try {
+              const { getWorkRoles } = await import("../firebase/rolesPositions");
+              const roles = await getWorkRoles();
+              const matchingRole = roles.find(r => r.name === workRoleId);
+              
+              if (matchingRole) {
+                console.log("✅ Знайдено роль по назві:", matchingRole.name, "ID:", matchingRole.id);
+                rolePermissions = allPermissions[matchingRole.id] || {};
+              } else {
+                console.log("⚠️ Роль не знайдена в базі");
+                rolePermissions = {};
+              }
+            } catch (error) {
+              console.error("Помилка завантаження ролей:", error);
+              rolePermissions = {};
+            }
+          }
+          
+          console.log("🔐 Дозволи для ролі:", workRoleId, rolePermissions);
+          setFieldPermissions(rolePermissions);
+        } catch (error) {
+          console.error("Помилка парсингу дозволів:", error);
+          setFieldPermissions({});
+        }
+      } else {
+        console.log("⚠️ Немає збережених дозволів в localStorage");
         setFieldPermissions({});
       }
-    } else {
-      // Якщо немає збережених дозволів - всі поля доступні
-      console.log("⚠️ Немає збережених дозволів, всі поля доступні");
-      setFieldPermissions({});
-    }
+      
+      setLoading(false);
+    };
     
-    setLoading(false);
+    loadPermissions();
   }, [workRoleId]);
 
   /**
@@ -45,13 +75,17 @@ export const useFieldPermissions = (workRoleId) => {
    * @returns {boolean} - true якщо може редагувати, false якщо тільки читання
    */
   const canEdit = (fieldId) => {
-    // Якщо немає дозволів взагалі - дозволяємо редагувати
+    // Якщо немає дозволів взагалі - забороняємо редагування (захисний підхід)
     if (Object.keys(fieldPermissions).length === 0) {
-      return true;
+      console.log(`⚠️ canEdit(${fieldId}): true (немає налаштованих дозволів, дозволяємо за замовчуванням)`);
+      return true; // За замовчуванням дозволяємо, поки не налаштовані права
     }
     
-    // Перевіряємо конкретний дозвіл
-    return fieldPermissions[fieldId] !== false;
+    // Перевіряємо конкретний дозвіл - якщо поле є і воно true, то дозволяємо
+    // Якщо поле є і воно false або undefined - забороняємо
+    const allowed = fieldPermissions[fieldId] === true;
+    console.log(`🔒 canEdit(${fieldId}): ${allowed} (значення в permissions: ${fieldPermissions[fieldId]})`);
+    return allowed;
   };
 
   return {

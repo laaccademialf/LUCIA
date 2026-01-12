@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { CheckCircle2, ClipboardCheck, Loader2, Save, Camera, Upload, X, ChevronRight, ChevronLeft } from "lucide-react";
 import clsx from "clsx";
 import { useAssetFields } from "../hooks/useAssetFields";
 import { useRestaurants } from "../hooks/useRestaurants";
 import { useFieldPermissions } from "../hooks/useFieldPermissions";
+import CurrencyInput from "./CurrencyInput";
+import MultiSelect from "./MultiSelect";
+import AssetNameAutocomplete from "./AssetNameAutocomplete";
 
 const tabs = [
   { id: "identification", label: "Ідентифікація", requiredFields: ["invNumber", "name"] },
@@ -67,6 +70,12 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     statuses,
     conditions,
     decisions,
+    placementZones,
+    responsibilityCenters,
+    responsiblePersons,
+    functionalities,
+    relevances,
+    reasons,
     loading: fieldsLoading,
   } = useAssetFields();
   
@@ -84,11 +93,28 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     watch,
     reset,
     trigger,
+    control,
     formState: { errors, isSubmitting },
   } = useForm({
     defaultValues: defaultAsset,
     mode: "onChange",
   });
+
+  // Спостерігаємо за вибраним центром відповідальності
+  const selectedRespCenter = watch("respCenter");
+
+  // Фільтруємо МВО по вибраному центру
+  const filteredResponsiblePersons = useMemo(() => {
+    if (!selectedRespCenter || !responsibilityCenters.length || !responsiblePersons.length) {
+      return [];
+    }
+    const centerObj = responsibilityCenters.find(c => c.name === selectedRespCenter);
+    if (!centerObj) return [];
+    
+    return responsiblePersons
+      .filter(p => p.centerId === centerObj.id)
+      .map(p => p.name);
+  }, [selectedRespCenter, responsibilityCenters, responsiblePersons]);
 
   useEffect(() => {
     if (selectedAsset) {
@@ -325,10 +351,26 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                   !canEdit("invNumber")
                 }
               />
-              <Input 
-                label={<>Назва активу {requiredMark}</>} 
-                {...register("name", { required: true })}
-                disabled={!canEdit("name")}
+              <Controller
+                name="name"
+                control={control}
+                rules={{ required: true }}
+                render={({ field }) => (
+                  <AssetNameAutocomplete
+                    label={<>Назва активу {requiredMark}</>}
+                    {...field}
+                    assets={assetsProp}
+                    disabled={!canEdit("name")}
+                    error={errors.name}
+                    onSelectAsset={(assetTemplate) => {
+                      // Автозаповнення полів з обраного активу
+                      if (assetTemplate.category) setValue("category", assetTemplate.category);
+                      if (assetTemplate.subCategory) setValue("subCategory", assetTemplate.subCategory);
+                      if (assetTemplate.type) setValue("type", assetTemplate.type);
+                      if (assetTemplate.brand) setValue("brand", assetTemplate.brand);
+                    }}
+                  />
+                )}
               />
               <Select
                 label="Категорія"
@@ -427,9 +469,28 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
               {...register("locationName", { required: true })}
               options={restaurants.map((r) => r.name)}
             />
-            <Input label="Зона розміщення" {...register("zone")}/>
-            <Input label="Центр відповідальності" {...register("respCenter")}/>
-            <Input label="Матеріально відповідальна особа" {...register("respPerson")}/>
+            <Select
+              label="Зона розміщення"
+              {...register("zone")}
+              options={placementZones.length > 0 ? placementZones : ["Зал", "Кухня", "Бар", "Склад", "Адміністрація"]}
+            />
+            <Select
+              label="Центр відповідальності"
+              {...register("respCenter")}
+              options={responsibilityCenters.length > 0 ? responsibilityCenters.map(c => c.name) : ["Відділ ІТ", "Бухгалтерія", "HR", "Маркетинг"]}
+            />
+            <Controller
+              name="respPerson"
+              control={control}
+              render={({ field }) => (
+                <MultiSelect
+                  label="Матеріально відповідальна особа"
+                  {...field}
+                  options={filteredResponsiblePersons}
+                  disabled={!selectedRespCenter}
+                />
+              )}
+            />
           </FieldGrid>
         )}
 
@@ -445,8 +506,16 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
               {...register("condition")}
               options={conditions.length > 0 ? conditions : ["Новий", "Добрий", "Задовільний", "Критичний"]}
             />
-            <Select label="Працездатність" {...register("functionality")} options={["Працює", "Частково", "Не працює"]} />
-            <Select label="Моральна актуальність" {...register("relevance")} options={["Актуальний", "Частково застарілий", "Застарілий"]} />
+            <Select
+              label="Працездатність"
+              {...register("functionality")}
+              options={functionalities.length > 0 ? functionalities : ["Працює", "Частково", "Не працює"]}
+            />
+            <Select
+              label="Моральна актуальність"
+              {...register("relevance")}
+              options={relevances.length > 0 ? relevances : ["Актуальний", "Частково застарілий", "Застарілий"]}
+            />
             <Textarea label="Коментар по стану" {...register("comment")} rows={3} />
           </FieldGrid>
         )}
@@ -476,13 +545,38 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
 
         {activeTab === "value" && (
           <FieldGrid>
-            <Input type="number" label="Первісна вартість" {...register("initialCost")}/>
-            <Input type="number" label="Ринкова вартість нового" {...register("marketValueNew")}/>
-            <Input type="number" label="Оціночна вартість б/в" {...register("marketValueUsed")}/>
-            <Input
-              type="number"
-              label={<>Управлінська залишкова вартість {requiredMark}</>}
-              {...register("residualValue", { required: true })}
+            <Controller
+              name="initialCost"
+              control={control}
+              render={({ field }) => (
+                <CurrencyInput label="Первісна вартість" {...field} />
+              )}
+            />
+            <Controller
+              name="marketValueNew"
+              control={control}
+              render={({ field }) => (
+                <CurrencyInput label="Ринкова вартість нового" {...field} />
+              )}
+            />
+            <Controller
+              name="marketValueUsed"
+              control={control}
+              render={({ field }) => (
+                <CurrencyInput label="Оціночна вартість б/в" {...field} />
+              )}
+            />
+            <Controller
+              name="residualValue"
+              control={control}
+              rules={{ required: true }}
+              render={({ field }) => (
+                <CurrencyInput
+                  label={<>Управлінська залишкова вартість {requiredMark}</>}
+                  {...field}
+                  error={errors.residualValue}
+                />
+              )}
             />
           </FieldGrid>
         )}
@@ -494,7 +588,11 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
               {...register("decision", { required: true })}
               options={decisions.length > 0 ? decisions : ["Залишити", "Списати", "Продати", "Перемістити"]}
             />
-            <Select label="Причина" {...register("reason")} options={["Знос", "Надлишок", "Непридатність"]} />
+            <Select
+              label="Причина"
+              {...register("reason")}
+              options={reasons.length > 0 ? reasons : ["Знос", "Надлишок", "Непридатність"]}
+            />
             {isMove && <Input label="Нова локація" {...register("newLocation")}/>}            
           </FieldGrid>
         )}

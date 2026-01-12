@@ -3,66 +3,7 @@ import { Shield, Save, AlertCircle, Check } from "lucide-react";
 import { getWorkRoles } from "../firebase/rolesPositions";
 import { getRolePermissions, saveRolePermissions } from "../firebase/permissions";
 
-// Структура меню з усіма підрозділами та вкладками
-const menuStructure = [
-  {
-    id: "dashboard",
-    label: "Дашборд",
-    children: [{ id: "dashboard-ops", label: "Операційний огляд" }],
-  },
-  {
-    id: "settings",
-    label: "Налаштування",
-    children: [
-      { id: "settings-restaurant", label: "Дані ресторану", tabs: ["main", "schedule", "projects"] },
-      { id: "settings-accounts", label: "Облікові записи", tabs: ["add", "edit"] },
-      { id: "settings-permissions", label: "Права доступу", tabs: ["roles", "permissions"] },
-    ],
-  },
-  {
-    id: "operations",
-    label: "Операції",
-    children: [
-      { id: "ops-checklists", label: "Чек-листи" },
-      { id: "ops-haccp", label: "HACCP журнали" },
-      { id: "ops-maintenance", label: "Сервісні заявки" },
-    ],
-  },
-  {
-    id: "inventory",
-    label: "Облік",
-    children: [
-      { id: "inventory-products", label: "Продукти", tabs: ["test1", "test2", "test3"] },
-      { id: "inventory-utilities", label: "Утиліти", tabs: ["test1", "test2", "test3"] },
-      { id: "inventory-assets", label: "Основні засоби", tabs: ["test1", "test2", "test3"] },
-    ],
-  },
-  {
-    id: "reports",
-    label: "Звіти",
-    children: [
-      { id: "reports-products", label: "Інвентаризація продуктів" },
-      { id: "reports-assets", label: "Основні засоби" },
-    ],
-  },
-  {
-    id: "security",
-    label: "Безпека",
-    children: [{ id: "security-audit", label: "Аудит дій" }],
-  },
-  {
-    id: "team",
-    label: "Команда",
-    children: [{ id: "team-roles", label: "Ролі та доступи" }],
-  },
-  {
-    id: "maintenance",
-    label: "Сервіс",
-    children: [{ id: "maintenance-plan", label: "Планові роботи" }],
-  },
-];
-
-export const RolePermissionsManager = () => {
+export const RolePermissionsManager = ({ menuStructure = [] }) => {
   const [roles, setRoles] = useState([]);
   const [selectedRole, setSelectedRole] = useState(null);
   const [permissions, setPermissions] = useState({});
@@ -136,7 +77,21 @@ export const RolePermissionsManager = () => {
       setError("");
       setSuccess("");
       
-      await saveRolePermissions(selectedRole.id, selectedRole.name, permissions);
+      // Нормалізуємо права: якщо це пустий масив - перетворюємо на true (повний доступ)
+      const normalizedPermissions = {};
+      Object.entries(permissions).forEach(([key, value]) => {
+        if (Array.isArray(value)) {
+          // Якщо це масив і він не пустий - залишаємо як є
+          normalizedPermissions[key] = value.length > 0 ? value : true;
+        } else {
+          // Іншим чином залишаємо як є
+          normalizedPermissions[key] = value;
+        }
+      });
+      
+      console.log("💾 Збереження нормалізованих прав:", normalizedPermissions);
+      
+      await saveRolePermissions(selectedRole.id, selectedRole.name, normalizedPermissions);
       
       setSuccess(`Доступи для ролі "${selectedRole.name}" успішно збережено!`);
     } catch (error) {
@@ -235,17 +190,33 @@ export const RolePermissionsManager = () => {
                           {child.tabs && permissions[child.id] !== undefined && (
                             <div className="mt-3 ml-6 space-y-2">
                               <p className="text-xs font-semibold text-slate-600 mb-2">Доступні вкладки:</p>
-                              {child.tabs.map((tab) => (
-                                <label key={tab} className="flex items-center gap-2 cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    checked={permissions[child.id]?.includes(tab)}
-                                    onChange={() => toggleTab(child.id, tab)}
-                                    className="w-4 h-4 text-green-600 rounded focus:ring-2 focus:ring-green-500"
-                                  />
-                                  <span className="text-sm text-slate-700">{tab}</span>
-                                </label>
-                              ))}
+                              {child.tabLabels ? (
+                                // Якщо є tabLabels - показуємо назви
+                                child.tabLabels.map((tab) => (
+                                  <label key={tab.id} className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={permissions[child.id]?.includes(tab.id)}
+                                      onChange={() => toggleTab(child.id, tab.id)}
+                                      className="w-4 h-4 text-green-600 rounded focus:ring-2 focus:ring-green-500"
+                                    />
+                                    <span className="text-sm text-slate-700">{tab.label}</span>
+                                  </label>
+                                ))
+                              ) : (
+                                // Якщо tabLabels немає - показуємо просто ID
+                                child.tabs.map((tab) => (
+                                  <label key={tab} className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={permissions[child.id]?.includes(tab)}
+                                      onChange={() => toggleTab(child.id, tab)}
+                                      className="w-4 h-4 text-green-600 rounded focus:ring-2 focus:ring-green-500"
+                                    />
+                                    <span className="text-sm text-slate-700">{tab}</span>
+                                  </label>
+                                ))
+                              )}
                             </div>
                           )}
                         </div>

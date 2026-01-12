@@ -246,3 +246,208 @@ export const deleteDecision = async (id) => {
     throw error;
   }
 };
+
+// ==================== ЗОНИ РОЗМІЩЕННЯ ====================
+export const getPlacementZones = async () => {
+  try {
+    const q = query(collection(db, "assetPlacementZones"), orderBy("name"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error("Помилка отримання зон розміщення:", error);
+    throw error;
+  }
+};
+
+export const addPlacementZone = async (name) => {
+  try {
+    const docRef = await addDoc(collection(db, "assetPlacementZones"), {
+      name,
+      createdAt: new Date().toISOString(),
+    });
+    return { id: docRef.id, name };
+  } catch (error) {
+    console.error("Помилка додавання зони розміщення:", error);
+    throw error;
+  }
+};
+
+export const deletePlacementZone = async (id) => {
+  try {
+    await deleteDoc(doc(db, "assetPlacementZones", id));
+  } catch (error) {
+    console.error("Помилка видалення зони розміщення:", error);
+    throw error;
+  }
+};
+
+// ==================== ЦЕНТРИ ВІДПОВІДАЛЬНОСТІ ====================
+export const getResponsibilityCenters = async () => {
+  try {
+    const q = query(collection(db, "assetResponsibilityCenters"), orderBy("name"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error("Помилка отримання центрів відповідальності:", error);
+    throw error;
+  }
+};
+
+export const addResponsibilityCenter = async (name) => {
+  try {
+    const docRef = await addDoc(collection(db, "assetResponsibilityCenters"), {
+      name,
+      createdAt: new Date().toISOString(),
+    });
+    return { id: docRef.id, name };
+  } catch (error) {
+    console.error("Помилка додавання центру відповідальності:", error);
+    throw error;
+  }
+};
+
+export const deleteResponsibilityCenter = async (id) => {
+  try {
+    await deleteDoc(doc(db, "assetResponsibilityCenters", id));
+  } catch (error) {
+    console.error("Помилка видалення центру відповідальності:", error);
+    throw error;
+  }
+};
+
+// ==================== МАТЕРІАЛЬНО ВІДПОВІДАЛЬНІ ОСОБИ ====================
+export const getResponsiblePersons = async () => {
+  try {
+    const q = query(collection(db, "assetResponsiblePersons"), orderBy("name"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error("Помилка отримання матеріально відповідальних осіб:", error);
+    throw error;
+  }
+};
+
+export const addResponsiblePerson = async (name, centerId) => {
+  try {
+    const docRef = await addDoc(collection(db, "assetResponsiblePersons"), {
+      name,
+      centerId,
+      createdAt: new Date().toISOString(),
+    });
+    return { id: docRef.id, name, centerId };
+  } catch (error) {
+    console.error("Помилка додавання матеріально відповідальної особи:", error);
+    throw error;
+  }
+};
+
+export const deleteResponsiblePerson = async (id) => {
+  try {
+    await deleteDoc(doc(db, "assetResponsiblePersons", id));
+  } catch (error) {
+    console.error("Помилка видалення матеріально відповідальної особи:", error);
+    throw error;
+  }
+};
+
+// ==================== ПРАЦЕЗДАТНІСТЬ ====================
+export const getFunctionalities = async () => {
+  try {
+    const q = query(collection(db, "assetFunctionalities"), orderBy("name"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error("Помилка отримання працездатностей:", error);
+    throw error;
+  }
+};
+
+export const addFunctionality = async (name) => {
+  try {
+    const docRef = await addDoc(collection(db, "assetFunctionalities"), {
+      name,
+      createdAt: new Date().toISOString(),
+    });
+    return { id: docRef.id, name };
+  } catch (error) {
+    console.error("Помилка додавання працездатності:", error);
+    throw error;
+  }
+};
+
+export const deleteFunctionality = async (id) => {
+  try {
+    await deleteDoc(doc(db, "assetFunctionalities", id));
+  } catch (error) {
+    console.error("Помилка видалення працездатності:", error);
+    throw error;
+  }
+};
+
+// ==================== МОРАЛЬНА АКТУАЛЬНІСТЬ ====================
+export const getRelevances = async () => {
+  try {
+    const q = query(collection(db, "assetRelevances"), orderBy("name"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error("Помилка отримання моральних актуальностей:", error);
+    throw error;
+  }
+};
+
+export const addRelevance = async (name) => {
+  try {
+    const docRef = await addDoc(collection(db, "assetRelevances"), {
+      name,
+      createdAt: new Date().toISOString(),
+    });
+    return { id: docRef.id, name };
+  } catch (error) {
+    console.error("Помилка додавання моральної актуальності:", error);
+    throw error;
+  }
+};
+
+export const deleteRelevance = async (id) => {
+  try {
+    await deleteDoc(doc(db, "assetRelevances", id));
+  } catch (error) {
+    console.error("Помилка видалення моральної актуальності:", error);
+    throw error;
+  }
+};
+
+// ==================== ПРИЧИНИ ====================
+export const getReasons = async () => {
+  try {
+    const q = query(collection(db, "assetReasons"), orderBy("name"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error("Помилка отримання причин:", error);
+    throw error;
+  }
+};
+
+export const addReason = async (name) => {
+  try {
+    const docRef = await addDoc(collection(db, "assetReasons"), {
+      name,
+      createdAt: new Date().toISOString(),
+    });
+    return { id: docRef.id, name };
+  } catch (error) {
+    console.error("Помилка додавання причини:", error);
+    throw error;
+  }
+};
+
+export const deleteReason = async (id) => {
+  try {
+    await deleteDoc(doc(db, "assetReasons", id));
+  } catch (error) {
+    console.error("Помилка видалення причини:", error);
+    throw error;
+  }
+};

@@ -26,6 +26,7 @@ import { RolesPositionsManager } from "./components/RolesPositionsManager";
 import { RolePermissionsManager } from "./components/RolePermissionsManager";
 import { FieldPermissionsManager } from "./components/FieldPermissionsManager";
 import { AssetFieldsManager } from "./components/AssetFieldsManager";
+import { MaterialResponsibilityManager } from "./components/MaterialResponsibilityManager";
 import { mockAssets } from "./data/mockAssets";
 import { useRestaurants } from "./hooks/useRestaurants";
 import { useAssets } from "./hooks/useAssets";
@@ -119,6 +120,14 @@ function App() {
           console.log("📋 Права користувача завантажені:");
           console.log("- Роль:", user.workRole);
           console.log("- Права:", rolePerms.permissions);
+          console.log("- Деталі прав:");
+          Object.entries(rolePerms.permissions || {}).forEach(([key, value]) => {
+            if (Array.isArray(value)) {
+              console.log(`  ${key}: [${value.join(", ")}]`);
+            } else {
+              console.log(`  ${key}: ${value}`);
+            }
+          });
         } catch (error) {
           console.error("Помилка завантаження прав:", error);
           setUserPermissions({});
@@ -171,6 +180,13 @@ function App() {
 
   const {
     businessUnits,
+    categories,
+    subcategories,
+    accountingTypes,
+    statuses,
+    conditions,
+    decisions,
+    placementZones,
   } = useAssetFields();
 
   // Local state
@@ -301,64 +317,190 @@ function App() {
     // Адміни бачать все
     const isAdmin = user?.role === 'admin';
     
-    if (activeNav === "settings-restaurant") {
-      const allTabs = [
-        { id: "main", label: "Головні" },
-        { id: "schedule", label: "Графік роботи" },
-        { id: "projects", label: "Управління проєктами" },
-      ];
-      
+    // Універсальна функція фільтрації вкладок
+    const filterTabsByPermissions = (navId, allTabs) => {
       if (isAdmin) {
-        console.log("👑 Адмін - всі вкладки доступні");
+        console.log(`👑 Адмін - всі вкладки для ${navId} доступні`);
         return allTabs;
       }
       
       // Перевіряємо права на цей розділ
-      const sectionPermissions = userPermissions["settings-restaurant"];
-      console.log("🔍 Права на settings-restaurant:", sectionPermissions);
+      const sectionPermissions = userPermissions[navId];
+      console.log(`🔍 Права на ${navId}:`, sectionPermissions);
       
       if (!sectionPermissions || sectionPermissions === false) {
-        console.log("❌ Немає прав на settings-restaurant");
+        console.log(`❌ Немає прав на ${navId}`);
         return [];
       }
       
       // Якщо права є масив - фільтруємо вкладки
       if (Array.isArray(sectionPermissions)) {
         const filteredTabs = allTabs.filter(tab => sectionPermissions.includes(tab.id));
-        console.log("✅ Доступні вкладки:", filteredTabs.map(t => t.id));
+        console.log(`✅ Доступні вкладки для ${navId}:`, filteredTabs.map(t => t.id));
         return filteredTabs;
       }
       
       // Якщо права не масив (наприклад true) - показуємо всі вкладки
-      console.log("✅ Повний доступ до всіх вкладок");
+      console.log(`✅ Повний доступ до всіх вкладок ${navId}`);
       return allTabs;
+    };
+    
+    if (activeNav === "settings-restaurant") {
+      const allTabs = [
+        { id: "main", label: "Головні" },
+        { id: "schedule", label: "Графік роботи" },
+        { id: "projects", label: "Управління проєктами" },
+      ];
+      return filterTabsByPermissions("settings-restaurant", allTabs);
     }
+    
     if (activeNav === "settings-accounts") {
-      return [
+      const allTabs = [
         { id: "add", label: "Додати" },
         { id: "edit", label: "Редагувати" },
       ];
+      return filterTabsByPermissions("settings-accounts", allTabs);
     }
+    
     if (activeNav === "settings-permissions") {
-      return [
+      const allTabs = [
         { id: "roles", label: "Ролі та Посади" },
         { id: "permissions", label: "Доступи ролей" },
       ];
+      return filterTabsByPermissions("settings-permissions", allTabs);
     }
+    
     if (activeNav.startsWith("inventory-")) {
-      return [
+      const allTabs = [
         { id: "test1", label: "Додати" },
         { id: "test2", label: "Редагувати" },
         { id: "test3", label: "Типові поля" },
         { id: "test4", label: "Права редагування" },
+        { id: "responsibility", label: "Матеріальна відповідальність" },
       ];
+      return filterTabsByPermissions(activeNav, allTabs);
     }
+    
     return [
       { id: "test1", label: "Тест 1" },
       { id: "test2", label: "Тест 2" },
       { id: "test3", label: "Тест 3" },
     ];
   }, [activeNav, user?.role, userPermissions]);
+
+  // Генеруємо структуру меню для RolePermissionsManager на основі реальної навігації
+  const menuStructureForPermissions = useMemo(() => {
+    // Допоміжна функція для отримання вкладок для конкретного розділу
+    const getTabsForSection = (navId) => {
+      if (navId === "settings-restaurant") {
+        return [
+          { id: "main", label: "Головні" },
+          { id: "schedule", label: "Графік роботи" },
+          { id: "projects", label: "Управління проєктами" },
+        ];
+      }
+      if (navId === "settings-accounts") {
+        return [
+          { id: "add", label: "Додати" },
+          { id: "edit", label: "Редагувати" },
+        ];
+      }
+      if (navId === "settings-permissions") {
+        return [
+          { id: "roles", label: "Ролі та Посади" },
+          { id: "permissions", label: "Доступи ролей" },
+        ];
+      }
+      if (navId.startsWith("inventory-")) {
+        return [
+          { id: "test1", label: "Додати" },
+          { id: "test2", label: "Редагувати" },
+          { id: "test3", label: "Типові поля" },
+          { id: "test4", label: "Права редагування" },
+          { id: "responsibility", label: "Матеріальна відповідальність" },
+        ];
+      }
+      return [];
+    };
+
+    // Базова структура навігації (без фільтрації прав)
+    const baseNavItems = [
+      {
+        id: "dashboard",
+        label: "Дашборд",
+        children: [
+          { id: "dashboard-ops", label: "Операційний огляд" },
+        ],
+      },
+      {
+        id: "settings",
+        label: "Налаштування",
+        children: [
+          { id: "settings-restaurant", label: "Дані ресторану" },
+          { id: "settings-accounts", label: "Облікові записи" },
+          { id: "settings-permissions", label: "Права доступу" },
+        ],
+      },
+      {
+        id: "operations",
+        label: "Операції",
+        children: [
+          { id: "ops-checklists", label: "Чек-листи" },
+          { id: "ops-haccp", label: "HACCP журнали" },
+          { id: "ops-maintenance", label: "Сервісні заявки" },
+        ],
+      },
+      {
+        id: "inventory",
+        label: "Облік",
+        children: [
+          { id: "inventory-products", label: "Продукти" },
+          { id: "inventory-utilities", label: "Утиліти" },
+          { id: "inventory-assets", label: "Основні засоби" },
+        ],
+      },
+      {
+        id: "reports",
+        label: "Звіти",
+        children: [
+          { id: "reports-products", label: "Інвентаризація продуктів" },
+          { id: "reports-assets", label: "Основні засоби" },
+        ],
+      },
+      {
+        id: "security",
+        label: "Безпека",
+        children: [
+          { id: "security-audit", label: "Аудит дій" },
+        ],
+      },
+      {
+        id: "team",
+        label: "Команда",
+        children: [
+          { id: "team-roles", label: "Ролі та доступи" },
+        ],
+      },
+      {
+        id: "maintenance",
+        label: "Сервіс",
+        children: [
+          { id: "maintenance-plan", label: "Планові роботи" },
+        ],
+      },
+    ];
+
+    // Додаємо вкладки до кожного пункту меню
+    return baseNavItems.map(section => ({
+      ...section,
+      children: section.children.map(child => {
+        const tabs = getTabsForSection(child.id);
+        return tabs.length > 0 
+          ? { ...child, tabs: tabs.map(t => t.id), tabLabels: tabs }
+          : child;
+      })
+    }));
+  }, []);
 
   useEffect(() => {
     if (topTabs.length > 0) {
@@ -1340,7 +1482,7 @@ function App() {
       if (topTab === "permissions") {
         return (
           <div className="grid grid-cols-1">
-            <RolePermissionsManager />
+            <RolePermissionsManager menuStructure={menuStructureForPermissions} />
           </div>
         );
       }
@@ -1367,6 +1509,14 @@ function App() {
         return (
           <div className="grid grid-cols-1">
             <FieldPermissionsManager />
+          </div>
+        );
+      }
+
+      if (topTab === "responsibility") {
+        return (
+          <div className="grid grid-cols-1">
+            <MaterialResponsibilityManager />
           </div>
         );
       }
@@ -1456,32 +1606,62 @@ function App() {
       ) : (
         <div className="flex h-screen gap-0">
         {/* Top Header Bar */}
-        <div className="fixed top-0 left-72 right-0 h-14 bg-slate-900/95 border-b border-slate-700 z-30 flex items-center justify-end px-6">
+        <div className="fixed top-0 left-72 right-0 h-14 bg-slate-900/95 border-b border-slate-700 z-30 flex items-center justify-between px-6">
           {isAuthenticated ? (
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 text-sm text-slate-300">
-                <UserIcon size={16} />
-                <span>{user?.displayName || user?.email}</span>
-                {user?.role === "admin" && (
-                  <span className="px-2 py-1 rounded bg-indigo-600 text-white text-xs font-semibold">
-                    Admin
-                  </span>
+            <>
+              {/* Плашки ліворуч */}
+              <div className="flex items-center gap-3">
+                {/* Назва ресторану для всіх */}
+                {user?.restaurant && (
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-900/30 border border-emerald-700/50 text-emerald-300">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                    </svg>
+                    <span className="text-sm font-semibold">
+                      {restaurants.find(r => r.id === user.restaurant)?.name || 'Невідомий ресторан'}
+                    </span>
+                  </div>
+                )}
+                
+                {/* Робоча роль */}
+                {user?.workRole && (
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-900/30 border border-indigo-700/50 text-indigo-300">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                    <span className="text-sm font-semibold">
+                      {user.workRole}
+                    </span>
+                  </div>
                 )}
               </div>
-              <button
-                onClick={async () => {
-                  try {
-                    await logoutUser();
-                  } catch (error) {
-                    console.error("Помилка виходу:", error);
-                  }
-                }}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition text-sm font-medium"
-              >
-                <LogOut size={16} />
-                Вийти
-              </button>
-            </div>
+              
+              {/* Користувач та вихід - праворуч */}
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 text-sm text-slate-300">
+                  <UserIcon size={16} />
+                  <span>{user?.displayName || user?.email}</span>
+                  {user?.role === "admin" && (
+                    <span className="px-2 py-1 rounded bg-indigo-600 text-white text-xs font-semibold">
+                      Admin
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={async () => {
+                    try {
+                      await logoutUser();
+                    } catch (error) {
+                      console.error("Помилка виходу:", error);
+                    }
+                  }}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition text-sm font-medium"
+                >
+                  <LogOut size={16} />
+                  Вийти
+                </button>
+              </div>
+            </>
           ) : (
             <div className="flex items-center gap-3">
               <button

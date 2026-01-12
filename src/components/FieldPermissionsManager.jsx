@@ -130,6 +130,10 @@ export function FieldPermissionsManager() {
   const handleSave = async () => {
     setSaving(true);
     try {
+      // Логування для debugging
+      console.log("💾 Зберігаємо дозволи:", fieldPermissions);
+      console.log("📋 Ролі:", roles);
+      
       // Тут буде логіка збереження в Firestore
       // На даний момент просто зберігаємо в localStorage як приклад
       localStorage.setItem("fieldPermissions", JSON.stringify(fieldPermissions));
