@@ -14,6 +14,21 @@ export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
     setError("");
     setLoading(true);
 
+    // Перевірка чи змінні завантажені
+    const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+    console.log("API Key check:", apiKey ? "✅ Loaded" : "❌ Missing");
+    console.log("Environment:", import.meta.env.MODE);
+    
+    if (!apiKey || apiKey === "YOUR_API_KEY") {
+      setError("⚠️ Firebase змінні НЕ завантажені!\n\n" + 
+        (import.meta.env.PROD 
+          ? "🌐 Ви на Production (Vercel):\n\n1. Vercel Dashboard → Settings → Environment Variables\n2. Додайте всі VITE_FIREBASE_* змінні\n3. Deployments → Redeploy\n\n4. Firebase Console → Authentication → Settings → Authorized domains\n5. Додайте домен: " + window.location.hostname
+          : "💻 Ви локально:\n\n1. Перезапустіть: Ctrl+C → npm run dev\n2. або ./restart-dev.sh"
+        ));
+      setLoading(false);
+      return;
+    }
+
     try {
       await registerUser(email, password, displayName);
       onClose();
@@ -31,7 +46,13 @@ export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
       } else if (error.code === "auth/invalid-email") {
         setError("Невірний формат email");
       } else if (error.code && error.code.includes("api-key")) {
-        setError("⚠️ Невалідний API ключ Firebase!\n\nФайл .env налаштований, але сервер не перезапущений.\n\n🔄 Перезапустіть dev сервер:\n• Ctrl+C в терміналі\n• npm run dev\n\nабо запустіть:\n./restart-dev.sh");
+        setError("⚠️ Невалідний API ключ Firebase!\n\n" +
+          (import.meta.env.PROD
+            ? "На Vercel:\n1. Settings → Environment Variables\n2. Додайте VITE_FIREBASE_API_KEY\n3. Redeploy\n\n4. Firebase → Authorized domains\n5. Додайте: " + window.location.hostname
+            : "Локально:\n1. Ctrl+C → npm run dev\n2. або ./restart-dev.sh"
+          ));
+      } else if (error.code === "auth/unauthorized-domain" || error.message?.includes("domain")) {
+        setError("⚠️ Домен не авторизовано в Firebase!\n\n1. Firebase Console:\nhttps://console.firebase.google.com/project/luci-f1285/authentication/settings\n\n2. Authorized domains → Add domain\n3. Додайте: " + window.location.hostname);
       } else {
         setError(`Помилка реєстрації: ${error.message || "Спробуйте ще раз"}\n\nКод помилки: ${error.code || "невідомо"}`);
       }
