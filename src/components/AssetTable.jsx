@@ -1,4 +1,6 @@
 import { useMemo, useState, useRef } from "react";
+import QRCodeImport from "react-qr-code";
+const QRCode = QRCodeImport?.default || QRCodeImport;
 import {
   createColumnHelper,
   flexRender,
@@ -106,6 +108,16 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
       header: def.header,
       cell: (info) => {
         // Спеціальні стилі для деяких колонок
+        if (def.key === "invNumber") {
+          return (
+            <div className="flex items-center gap-2">
+              <div className="bg-white p-1 rounded border border-slate-200">
+                {QRCode && <QRCode value={info.getValue() || ''} size={32} level="L" />}
+              </div>
+              <div className="font-semibold text-slate-800">{info.getValue()}</div>
+            </div>
+          );
+        }
         if (def.key === "status") {
           return <span className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">{info.getValue()}</span>;
         }
