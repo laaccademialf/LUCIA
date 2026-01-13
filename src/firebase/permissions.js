@@ -62,3 +62,51 @@ export const saveRolePermissions = async (roleId, roleName, permissions) => {
     throw error;
   }
 };
+
+// === Field-level permissions (per role) ===
+
+export const getFieldPermissions = async (roleIdOrName) => {
+  try {
+    const docRef = doc(db, "fieldPermissions", roleIdOrName);
+    const docSnap = await getDoc(docRef);
+
+    if (docSnap.exists()) {
+      return { id: docSnap.id, ...docSnap.data() };
+    }
+
+    // fallback: search by roleName
+    const querySnapshot = await getDocs(collection(db, "fieldPermissions"));
+    const byName = querySnapshot.docs.find((d) => d.data().roleName === roleIdOrName);
+    if (byName) {
+      return { id: byName.id, ...byName.data() };
+    }
+
+    return null;
+  } catch (error) {
+    console.error("Помилка завантаження fieldPermissions:", error);
+    throw error;
+  }
+};
+
+export const getAllFieldPermissions = async () => {
+  try {
+    const querySnapshot = await getDocs(collection(db, "fieldPermissions"));
+    return querySnapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+  } catch (error) {
+    console.error("Помилка завантаження усіх fieldPermissions:", error);
+    throw error;
+  }
+};
+
+export const saveFieldPermissions = async (roleId, roleName, permissions) => {
+  try {
+    await setDoc(doc(db, "fieldPermissions", roleId), {
+      roleName,
+      permissions,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка збереження fieldPermissions:", error);
+    throw error;
+  }
+};

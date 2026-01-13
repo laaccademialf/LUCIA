@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Save, AlertCircle, Check } from "lucide-react";
 import { getWorkRoles } from "../firebase/rolesPositions";
+import { getAllFieldPermissions, saveFieldPermissions } from "../firebase/permissions";
 
 // Всі поля в формі активу сгруповані за табами
 const ASSET_FIELDS = {
@@ -87,27 +88,36 @@ export function FieldPermissionsManager() {
       const workRoles = await getWorkRoles();
       setRoles(workRoles);
 
-      // Спробуємо завантажити збережені дозволи з localStorage
-      const savedPermissions = localStorage.getItem("fieldPermissions");
-      
-      if (savedPermissions) {
-        // Якщо є збережені дозволи - використовуємо їх
-        setFieldPermissions(JSON.parse(savedPermissions));
-        console.log("✅ Завантажено збережені дозволи з localStorage");
-      } else {
-        // Ініціалізуємо дозволи для кожної ролі та поля
-        const permissions = {};
-        workRoles.forEach(role => {
+      const allFieldPerms = await getAllFieldPermissions();
+
+      // Побудуємо map для швидкого доступу
+      const permsByRoleId = allFieldPerms.reduce((acc, item) => {
+        acc[item.id] = item.permissions || {};
+        return acc;
+      }, {});
+      const permsByRoleName = allFieldPerms.reduce((acc, item) => {
+        if (item.roleName) acc[item.roleName] = item.permissions || {};
+        return acc;
+      }, {});
+
+      // Ініціалізуємо дозволи для кожної ролі (якщо немає у БД — всі true за замовчуванням)
+      const permissions = {};
+      workRoles.forEach(role => {
+        const existing = permsByRoleId[role.id] || permsByRoleName[role.name];
+        if (existing) {
+          permissions[role.id] = existing;
+        } else {
           permissions[role.id] = {};
           Object.values(ASSET_FIELDS).forEach(tab => {
             tab.fields.forEach(field => {
-              permissions[role.id][field.id] = true; // За замовчуванням всі можуть редагувати
+              permissions[role.id][field.id] = true;
             });
           });
-        });
-        setFieldPermissions(permissions);
-        console.log("📋 Ініціалізовано дозволи за замовчуванням");
-      }
+        }
+      });
+
+      setFieldPermissions(permissions);
+      console.log("✅ Завантажено fieldPermissions з Firestore");
 
       setLoading(false);
     } catch (error) {
@@ -130,13 +140,11 @@ export function FieldPermissionsManager() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      // Логування для debugging
-      console.log("💾 Зберігаємо дозволи:", fieldPermissions);
-      console.log("📋 Ролі:", roles);
-      
-      // Тут буде логіка збереження в Firestore
-      // На даний момент просто зберігаємо в localStorage як приклад
-      localStorage.setItem("fieldPermissions", JSON.stringify(fieldPermissions));
+      console.log("💾 Зберігаємо дозволи у Firestore:", fieldPermissions);
+      for (const role of roles) {
+        const rolePerms = fieldPermissions[role.id] || {};
+        await saveFieldPermissions(role.id, role.name, rolePerms);
+      }
       
       setMessage({ type: "success", text: "✅ Дозволи успішно збережені!" });
       setTimeout(() => setMessage(null), 3000);

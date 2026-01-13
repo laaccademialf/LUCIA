@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { getFieldPermissions } from "../firebase/permissions";
 
 /**
  * Хук для завантаження прав редагування полів на основі робочої ролі користувача
@@ -18,51 +19,21 @@ export const useFieldPermissions = (workRoleId) => {
         return;
       }
 
-      // Завантажуємо дозволи з localStorage
-      const savedPermissions = localStorage.getItem("fieldPermissions");
-      
-      if (savedPermissions) {
-        try {
-          const allPermissions = JSON.parse(savedPermissions);
-          console.log("📦 Всі збережені дозволи:", allPermissions);
-          console.log("🔍 Шукаємо дозволи для workRole:", workRoleId);
-          
-          // Спочатку пробуємо знайти по ID
-          let rolePermissions = allPermissions[workRoleId];
-          
-          if (!rolePermissions) {
-            // Якщо workRoleId - це назва ролі, завантажуємо список ролей та шукаємо ID
-            console.log("🔄 workRole схоже на назву, шукаємо відповідний ID...");
-            
-            try {
-              const { getWorkRoles } = await import("../firebase/rolesPositions");
-              const roles = await getWorkRoles();
-              const matchingRole = roles.find(r => r.name === workRoleId);
-              
-              if (matchingRole) {
-                console.log("✅ Знайдено роль по назві:", matchingRole.name, "ID:", matchingRole.id);
-                rolePermissions = allPermissions[matchingRole.id] || {};
-              } else {
-                console.log("⚠️ Роль не знайдена в базі");
-                rolePermissions = {};
-              }
-            } catch (error) {
-              console.error("Помилка завантаження ролей:", error);
-              rolePermissions = {};
-            }
-          }
-          
-          console.log("🔐 Дозволи для ролі:", workRoleId, rolePermissions);
-          setFieldPermissions(rolePermissions);
-        } catch (error) {
-          console.error("Помилка парсингу дозволів:", error);
+      try {
+        const doc = await getFieldPermissions(workRoleId);
+
+        if (doc && doc.permissions) {
+          console.log("🔐 Дозволи для ролі:", workRoleId, doc.permissions);
+          setFieldPermissions(doc.permissions);
+        } else {
+          console.log("⚠️ Дозволи для ролі не знайдені у Firestore, дозволяємо за замовчуванням");
           setFieldPermissions({});
         }
-      } else {
-        console.log("⚠️ Немає збережених дозволів в localStorage");
+      } catch (error) {
+        console.error("Помилка завантаження дозволів:", error);
         setFieldPermissions({});
       }
-      
+
       setLoading(false);
     };
     
