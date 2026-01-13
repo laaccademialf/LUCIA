@@ -13,6 +13,7 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
   const [success, setSuccess] = useState("");
 
   useEffect(() => {
+    console.log("🔧 RolePermissionsManager mounted, menuStructure:", menuStructure);
     loadRoles();
   }, []);
 
@@ -57,14 +58,18 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
   const toggleTab = (menuId, tabId) => {
     setPermissions((prev) => {
       const newPerms = { ...prev };
-      const tabs = newPerms[menuId] || [];
-      
+      const current = newPerms[menuId];
+      const baseTabs = Array.isArray(current) ? current : [];
+
+      // Якщо був повний доступ (true), стартуємо з порожнього списку, щоб увімкнути вибір вкладок
+      const tabs = current === true ? [] : baseTabs;
+
       if (tabs.includes(tabId)) {
         newPerms[menuId] = tabs.filter((t) => t !== tabId);
       } else {
         newPerms[menuId] = [...tabs, tabId];
       }
-      
+
       return newPerms;
     });
   };
@@ -168,64 +173,76 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
                 Налаштування доступів для ролі: <span className="text-indigo-600">{selectedRole.name}</span>
               </h3>
 
-              <div className="space-y-4">
-                {menuStructure.map((section) => (
+              {menuStructure.length === 0 ? (
+                <div className="p-4 bg-yellow-100 border border-yellow-400 text-yellow-800 rounded-lg">
+                  ⚠️ Структура меню не завантажена. menuStructure.length = {menuStructure.length}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {menuStructure.map((section) => (
                   <div key={section.id} className="border border-slate-200 rounded-lg p-4 bg-slate-50">
                     <h4 className="font-bold text-slate-800 mb-3">{section.label}</h4>
                     
                     <div className="space-y-2 ml-4">
-                      {section.children.map((child) => (
-                        <div key={child.id} className="bg-white rounded-lg p-3 border border-slate-200">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={permissions[child.id] !== undefined}
-                              onChange={() => toggleMenuItem(child.id)}
-                              className="w-4 h-4 text-indigo-600 rounded focus:ring-2 focus:ring-indigo-500"
-                            />
-                            <span className="font-semibold text-slate-800">{child.label}</span>
-                          </label>
+                      {section.children.map((child) => {
+                        const menuValue = permissions[child.id];
+                        const hasMenu = menuValue !== undefined;
+                        const isFullAccess = menuValue === true;
+                        const tabsValue = Array.isArray(menuValue) ? menuValue : [];
 
-                          {/* Вкладки */}
-                          {child.tabs && permissions[child.id] !== undefined && (
-                            <div className="mt-3 ml-6 space-y-2">
-                              <p className="text-xs font-semibold text-slate-600 mb-2">Доступні вкладки:</p>
-                              {child.tabLabels ? (
-                                // Якщо є tabLabels - показуємо назви
-                                child.tabLabels.map((tab) => (
-                                  <label key={tab.id} className="flex items-center gap-2 cursor-pointer">
-                                    <input
-                                      type="checkbox"
-                                      checked={permissions[child.id]?.includes(tab.id)}
-                                      onChange={() => toggleTab(child.id, tab.id)}
-                                      className="w-4 h-4 text-green-600 rounded focus:ring-2 focus:ring-green-500"
-                                    />
-                                    <span className="text-sm text-slate-700">{tab.label}</span>
-                                  </label>
-                                ))
-                              ) : (
-                                // Якщо tabLabels немає - показуємо просто ID
-                                child.tabs.map((tab) => (
-                                  <label key={tab} className="flex items-center gap-2 cursor-pointer">
-                                    <input
-                                      type="checkbox"
-                                      checked={permissions[child.id]?.includes(tab)}
-                                      onChange={() => toggleTab(child.id, tab)}
-                                      className="w-4 h-4 text-green-600 rounded focus:ring-2 focus:ring-green-500"
-                                    />
-                                    <span className="text-sm text-slate-700">{tab}</span>
-                                  </label>
-                                ))
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                        return (
+                          <div key={child.id} className="bg-white rounded-lg p-3 border border-slate-200">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={hasMenu}
+                                onChange={() => toggleMenuItem(child.id)}
+                                className="w-4 h-4 text-indigo-600 rounded focus:ring-2 focus:ring-indigo-500"
+                              />
+                              <span className="font-semibold text-slate-800">{child.label}</span>
+                            </label>
+
+                            {/* Вкладки */}
+                            {child.tabs && hasMenu && (
+                              <div className="mt-3 ml-6 space-y-2">
+                                <p className="text-xs font-semibold text-slate-600 mb-2">Доступні вкладки:</p>
+                                {child.tabLabels ? (
+                                  // Якщо є tabLabels - показуємо назви
+                                  child.tabLabels.map((tab) => (
+                                    <label key={tab.id} className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={isFullAccess || tabsValue.includes(tab.id)}
+                                        onChange={() => toggleTab(child.id, tab.id)}
+                                        className="w-4 h-4 text-green-600 rounded focus:ring-2 focus:ring-green-500"
+                                      />
+                                      <span className="text-sm text-slate-700">{tab.label}</span>
+                                    </label>
+                                  ))
+                                ) : (
+                                  // Якщо tabLabels немає - показуємо просто ID
+                                  child.tabs.map((tab) => (
+                                    <label key={tab} className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={isFullAccess || tabsValue.includes(tab)}
+                                        onChange={() => toggleTab(child.id, tab)}
+                                        className="w-4 h-4 text-green-600 rounded focus:ring-2 focus:ring-green-500"
+                                      />
+                                      <span className="text-sm text-slate-700">{tab}</span>
+                                    </label>
+                                  ))
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
-              </div>
-
+                </div>
+              )}
               {/* Кнопка збереження */}
               <div className="flex justify-end mt-6 pt-4 border-t border-slate-200">
                 <button

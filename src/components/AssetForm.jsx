@@ -84,7 +84,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   const restaurants = restaurantsProp || fetchedRestaurants;
   
   // Завантаження прав редагування полів на основі робочої ролі
-  const { canEdit } = useFieldPermissions(currentUser?.workRole);
+  const { canEdit, loading: fieldPermsLoading } = useFieldPermissions(currentUser?.workRole);
   
   const {
     register,
@@ -346,8 +346,9 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                 label={<>Інвентарний номер {requiredMark}</>} 
                 {...register("invNumber", { required: true })}
                 disabled={
-                  // Disabled якщо редагуємо існуючий актив АБО якщо немає права редагувати
+                  // Disabled якщо редагуємо існуючий актив АБО якщо немає права редагувати, або права ще вантажаться
                   (selectedAsset !== undefined && selectedAsset !== null) || 
+                  fieldPermsLoading ||
                   !canEdit("invNumber")
                 }
               />
