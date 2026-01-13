@@ -174,6 +174,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
 
       <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white -mx-4 sm:-mx-0">
         <div className="inline-block min-w-full sm:min-w-0">
+        <table className="min-w-full">
           <thead className="bg-slate-50 border-b border-slate-200">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
@@ -214,10 +215,15 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
 }
 
 function FilterSelect({ label, value, options, onChange }) {
+  const displayLabel = label || '';
+  const mobileLabel = label ? label.slice(0, 3) : '';
+  
   return (
     <label className="flex flex-col gap-1 text-xs sm:text-sm">
       <span className="inline-flex items-center gap-1 sm:gap-2 text-gray-900 font-semibold uppercase tracking-wide">
-        <SlidersHorizontal size={14} className="sm:size-4" /> <span className="hidden sm:inline">{label}</span><span className="sm:hidden">{label?.slice(0, 3) || label}</span>
+        <SlidersHorizontal size={14} className="sm:size-4" />
+        <span className="hidden sm:inline">{displayLabel}</span>
+        <span className="sm:hidden">{mobileLabel}</span>
       </span>
       <select
         className="w-full px-2 sm:px-4 py-2 sm:py-3 bg-white border border-gray-300 rounded-lg text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-150 appearance-none cursor-pointer text-xs sm:text-base [&>option]:bg-white [&>option]:text-gray-900"
