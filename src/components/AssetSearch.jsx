@@ -133,6 +133,11 @@ export default function AssetSearch({ assets }) {
             {renderAssetInfo(found)}
           </div>
         )}
+        {!found && error && (
+          <div className="card p-6 bg-white border border-rose-200 text-rose-700 shadow-xl w-full flex items-center justify-center min-h-[120px]">
+            <span className="font-semibold">{error}</span>
+          </div>
+        )}
       </div>
     </div>
   );
