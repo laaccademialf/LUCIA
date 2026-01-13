@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState, useRef } from "react";
 import {
   createColumnHelper,
   flexRender,
@@ -7,6 +7,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { ArrowDownZA, ArrowUpAZ, Download, Pencil, Trash2, SlidersHorizontal } from "lucide-react";
+import ColumnVisibilityDropdown from "./ColumnVisibilityDropdown";
 import clsx from "clsx";
 
 // High-contrast badges on light backgrounds for readability
@@ -20,6 +21,45 @@ const decisionColors = {
 const columnHelper = createColumnHelper();
 
 export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false }) {
+  // Стан для видимих колонок
+  // Додаємо всі можливі поля з mockAssets
+  const allFieldDefs = [
+    { key: "invNumber", header: "Інв. номер" },
+    { key: "name", header: "Назва активу" },
+    { key: "category", header: "Категорія" },
+    { key: "subCategory", header: "Підкатегорія" },
+    { key: "type", header: "Тип" },
+    { key: "serialNumber", header: "Серійний номер" },
+    { key: "brand", header: "Бренд" },
+    { key: "businessUnit", header: "Локація" },
+    { key: "locationName", header: "Локація (детально)" },
+    { key: "zone", header: "Зона" },
+    { key: "respCenter", header: "Відповідальний підрозділ" },
+    { key: "respPerson", header: "Відповідальна особа" },
+    { key: "status", header: "Статус" },
+    { key: "condition", header: "Стан" },
+    { key: "functionality", header: "Функціональність" },
+    { key: "relevance", header: "Актуальність" },
+    { key: "comment", header: "Коментар" },
+    { key: "purchaseYear", header: "Рік придбання" },
+    { key: "commissionDate", header: "Дата введення" },
+    { key: "normativeTerm", header: "Нормативний строк" },
+    { key: "physicalWear", header: "Фізичний знос" },
+    { key: "moralWear", header: "Моральний знос" },
+    { key: "totalWear", header: "Загальний знос" },
+    { key: "initialCost", header: "Початкова вартість" },
+    { key: "marketValueNew", header: "Ринкова вартість (нова)" },
+    { key: "marketValueUsed", header: "Ринкова вартість (бу)" },
+    { key: "residualValue", header: "Залишкова вартість" },
+    { key: "decision", header: "Рішення" },
+    { key: "reason", header: "Причина" },
+    { key: "newLocation", header: "Нова локація" },
+    { key: "auditDate", header: "Дата аудиту" },
+    { key: "auditors", header: "Аудитори" },
+    { key: "actions", header: "Дії" },
+  ];
+  const defaultVisible = ["invNumber", "name", "category", "businessUnit", "status", "decision", "actions"];
+  const [visibleColumns, setVisibleColumns] = useState(defaultVisible);
   const filteredData = useMemo(() => {
     return data.filter((item) => {
       const byCategory = filters.category ? item.category === filters.category : true;
@@ -30,57 +70,12 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     });
   }, [data, filters]);
 
-  const columns = useMemo(
-    () => [
-      columnHelper.accessor("invNumber", {
-        header: "Інв. номер",
-        cell: (info) => (
-          <div className="font-semibold text-slate-800">{info.getValue()}</div>
-        ),
-      }),
-      columnHelper.accessor("name", {
-        header: "Назва активу",
-        cell: (info) => (
-          <div>
-            <div className="font-semibold text-slate-900">{info.getValue()}</div>
-            <div className="text-sm text-slate-600 font-medium">{info.row.original.brand}</div>
-          </div>
-        ),
-      }),
-      columnHelper.accessor("category", {
-        header: "Категорія",
-        cell: (info) => (
-          <div className="text-sm text-slate-800 font-medium">{info.getValue()}</div>
-        ),
-      }),
-      columnHelper.accessor("businessUnit", {
-        header: "Локація",
-        cell: (info) => (
-          <div className="text-sm text-slate-800 font-medium">{info.getValue()}</div>
-        ),
-      }),
-      columnHelper.accessor("status", {
-        header: "Статус",
-        cell: (info) => (
-          <span className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">{info.getValue()}</span>
-        ),
-      }),
-      columnHelper.accessor("decision", {
-        header: "Рішення",
-        cell: (info) => (
-          <span
-            className={clsx(
-              "badge",
-              decisionColors[info.getValue()] || "bg-slate-100 text-slate-700"
-            )}
-          >
-            {info.getValue()}
-          </span>
-        ),
-      }),
-      columnHelper.display({
+  // Динамічно будуємо всі колонки для таблиці
+  const allColumns = allFieldDefs.map((def) => {
+    if (def.key === "actions") {
+      return columnHelper.display({
         id: "actions",
-        header: "Дії",
+        header: def.header,
         cell: (info) => (
           <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
             <button
@@ -105,10 +100,29 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
             )}
           </div>
         ),
-      }),
-    ],
-    [onEdit, onDelete, isAdminOnly]
-  );
+      });
+    }
+    return columnHelper.accessor(def.key, {
+      header: def.header,
+      cell: (info) => {
+        // Спеціальні стилі для деяких колонок
+        if (def.key === "status") {
+          return <span className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">{info.getValue()}</span>;
+        }
+        if (def.key === "decision") {
+          return <span className={clsx("badge", decisionColors[info.getValue()] || "bg-slate-100 text-slate-700")}>{info.getValue()}</span>;
+        }
+        if (def.key === "initialCost" || def.key === "marketValueNew" || def.key === "marketValueUsed" || def.key === "residualValue") {
+          return info.getValue() ? info.getValue().toLocaleString("uk-UA") + " ₴" : "";
+        }
+        return <span>{info.getValue() ?? ""}</span>;
+      },
+    });
+  });
+
+  const columns = useMemo(() => {
+    return allColumns.filter((col) => visibleColumns.includes(col.id || col.accessorKey));
+  }, [visibleColumns, onEdit, onDelete, isAdminOnly, allColumns]);
 
   const table = useReactTable({
     data: filteredData,
@@ -131,8 +145,13 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
           <p className="text-xs sm:text-sm text-slate-600">{headerSubtitle}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={onExport} className="inline-flex items-center gap-2 px-3 sm:px-5 py-2 sm:py-3 rounded-lg font-semibold text-xs sm:text-sm bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow-md whitespace-nowrap">
-            <Download size={16} className="sm:size-18" /> <span className="hidden sm:inline">Експорт CSV</span><span className="sm:hidden">Експ.</span>
+          <ColumnVisibilityDropdown
+            columns={allFieldDefs}
+            visibleColumns={visibleColumns}
+            setVisibleColumns={setVisibleColumns}
+          />
+          <button type="button" onClick={onExport} className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow whitespace-nowrap">
+            <Download size={14} /> <span className="hidden sm:inline">Експорт CSV</span><span className="sm:hidden">Експ.</span>
           </button>
         </div>
       </div>
