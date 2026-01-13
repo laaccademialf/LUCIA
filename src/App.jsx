@@ -1696,7 +1696,7 @@ function App() {
           {mobileMenuButton}
           {desktopCollapseButton}
           {sidebarHeader}
-          {!sidebarCollapsed && !isMobile && SidebarNav()}
+          {(isMobile || !sidebarCollapsed) && SidebarNav()}
         </div>
       </aside>
     </>
