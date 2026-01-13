@@ -10,19 +10,20 @@ export default function AssetSearch({ assets }) {
   const [error, setError] = useState("");
   const [showScanner, setShowScanner] = useState(false);
 
-  const handleSearch = () => {
+  const handleSearch = (customInput) => {
     setError("");
-    setFound(null);
-    if (!input.trim()) {
+    const value = typeof customInput === 'string' ? customInput : input;
+    if (!value.trim()) {
       setError("Введіть інвентарний номер або QR-код");
       return;
     }
     const asset = assets.find(
-      (a) => a.invNumber === input.trim() || a.qrCode === input.trim()
+      (a) => a.invNumber === value.trim() || a.qrCode === value.trim()
     );
     if (asset) {
       setFound(asset);
     } else {
+      setFound(null);
       setError("Актив не знайдено");
     }
   };
@@ -110,9 +111,10 @@ export default function AssetSearch({ assets }) {
             <div className="mt-2">
               <QRScanner
                 onResult={(code) => {
+                  if (!code) return;
                   setInput(code);
                   setTimeout(() => {
-                    handleSearch();
+                    handleSearch(code);
                     setShowScanner(false);
                   }, 100);
                 }}
