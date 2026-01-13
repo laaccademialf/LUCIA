@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { AssetTable } from "./components/AssetTable";
+import AssetSearch from "./components/AssetSearch";
 import { AssetForm } from "./components/AssetForm";
 import { AddUserForm } from "./components/AddUserForm";
 import { UsersTable } from "./components/UsersTable";
@@ -378,7 +379,9 @@ function App() {
     }
     
     if (activeNav.startsWith("inventory-")) {
+      // Додаємо вкладку "Пошук" перед "Додати"
       const allTabs = [
+        { id: "search", label: "Пошук" },
         { id: "test1", label: "Додати" },
         { id: "test2", label: "Редагувати" },
         { id: "test3", label: "Типові поля" },
@@ -420,6 +423,7 @@ function App() {
       }
       if (navId.startsWith("inventory-")) {
         return [
+          { id: "search", label: "Пошук" },
           { id: "test1", label: "Додати" },
           { id: "test2", label: "Редагувати" },
           { id: "test3", label: "Типові поля" },
@@ -1512,6 +1516,14 @@ function App() {
     }
 
     if (activeNav === "inventory-assets" || activeNav.startsWith("reports-assets")) {
+      if (topTab === "search") {
+        return (
+          <div className="grid grid-cols-1">
+            <AssetSearch assets={assets} />
+          </div>
+        );
+      }
+
       if (topTab === "test1") {
         // Якщо це розділ звітів - показуємо фінансовий звіт
         if (activeNav.startsWith("reports-assets")) {
