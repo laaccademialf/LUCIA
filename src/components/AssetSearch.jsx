@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import QRScanner from "./QRScanner";
 
 // Можна замінити на @zxing/browser або html5-qrcode для сканування QR-кодів
 // Для початку реалізуємо простий інтерфейс з ручним вводом і місцем для сканера
@@ -7,6 +8,7 @@ export default function AssetSearch({ assets }) {
   const [input, setInput] = useState("");
   const [found, setFound] = useState(null);
   const [error, setError] = useState("");
+  const [showScanner, setShowScanner] = useState(false);
 
   const handleSearch = () => {
     setError("");
@@ -77,7 +79,7 @@ export default function AssetSearch({ assets }) {
   return (
     <div className="flex flex-col md:flex-row gap-8 w-full justify-center">
       {/* Ліва колонка — пошук */}
-      <div className="card p-6 bg-white border border-slate-200 text-slate-900 shadow-xl w-full max-w-xs md:max-w-sm">
+      <div className="card p-6 bg-white border border-slate-200 text-slate-900 shadow-xl w-full" style={{ maxWidth: 340, minWidth: 280 }}>
         <h2 className="text-xl font-semibold mb-4">Пошук активу</h2>
         <div className="flex flex-col gap-3 mb-4">
           <input
@@ -86,12 +88,33 @@ export default function AssetSearch({ assets }) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
           />
-          <button
-            className="bg-indigo-600 text-white rounded px-4 py-2 font-semibold hover:bg-indigo-500"
-            onClick={handleSearch}
-          >
-            Знайти
-          </button>
+          <div className="flex gap-2">
+            <button
+              className="bg-indigo-600 text-white rounded px-4 py-2 font-semibold hover:bg-indigo-500"
+              onClick={handleSearch}
+            >
+              Знайти
+            </button>
+            <button
+              className="bg-slate-200 text-slate-800 rounded px-4 py-2 font-semibold hover:bg-slate-300"
+              type="button"
+              onClick={() => setShowScanner((v) => !v)}
+            >
+              {showScanner ? "Сховати камеру" : "Сканувати QR"}
+            </button>
+          </div>
+          {showScanner && (
+            <div className="mt-2">
+              <QRScanner
+                onResult={(code) => {
+                  setInput(code);
+                  setShowScanner(false);
+                  setTimeout(handleSearch, 100); // авто-пошук після скану
+                }}
+                onError={(err) => setError("Помилка сканування: " + err.message)}
+              />
+            </div>
+          )}
         </div>
         {error && <div className="text-red-600 mb-2">{error}</div>}
       </div>
