@@ -1,6 +1,7 @@
 // Простий QR-сканер на базі @zxing/browser
 import React, { useRef, useEffect } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
+import { NotFoundException } from "@zxing/library";
 
 export default function QRScanner({ onResult, onError }) {
   const videoRef = useRef(null);
@@ -8,18 +9,19 @@ export default function QRScanner({ onResult, onError }) {
 
   useEffect(() => {
     codeReader.current = new BrowserMultiFormatReader();
-    let isMounted = true;
-    codeReader.current
-      .decodeFromVideoDevice(null, videoRef.current, (result, err) => {
-        if (!isMounted) return;
-        if (result) {
-          onResult(result.getText());
-        } else if (err && !(err instanceof NotFoundException)) {
-          onError && onError(err);
-        }
-      });
+    let stopped = false;
+    codeReader.current.decodeFromVideoDevice(null, videoRef.current, (result, err) => {
+      if (stopped) return;
+      if (result) {
+        stopped = true;
+        onResult(result.getText());
+        codeReader.current.reset();
+      } else if (err && !(err instanceof NotFoundException)) {
+        onError && onError(err);
+      }
+    });
     return () => {
-      isMounted = false;
+      stopped = true;
       codeReader.current.reset();
     };
   }, [onResult, onError]);
