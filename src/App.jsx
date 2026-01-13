@@ -1677,14 +1677,29 @@ function App() {
   );
 
   const sidebarElement = (
-    <aside style={{position: "fixed", left: 0, top: 0, height: "100vh", overflowY: "auto", borderRight: "1px solid #334155", backgroundColor: "rgba(15, 23, 42, 0.95)", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)", transition: "all 300ms", zIndex: isMobile ? 50 : 40, width: "288px", transform: isMobile && !sidebarOpen ? "translateX(-100%)" : "translateX(0)", ...(sidebarCollapsed && !isMobile && {width: "80px"})}}>
-      <div style={{padding: "1rem", position: "relative"}}>
-        {mobileMenuButton}
-        {desktopCollapseButton}
-        {sidebarHeader}
-        {!sidebarCollapsed && !isMobile && SidebarNav()}
-      </div>
-    </aside>
+    <>
+      {/* Backdrop для мобільного меню */}
+      {isMobile && sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(30,41,59,0.5)",
+            zIndex: 49,
+            transition: "background 300ms"
+          }}
+        />
+      )}
+      <aside style={{position: "fixed", left: 0, top: 0, height: "100vh", overflowY: "auto", borderRight: "1px solid #334155", backgroundColor: "rgba(15, 23, 42, 0.95)", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)", transition: "all 300ms", zIndex: isMobile ? 50 : 40, width: "288px", transform: isMobile && !sidebarOpen ? "translateX(-100%)" : "translateX(0)", ...(sidebarCollapsed && !isMobile && {width: "80px"})}}>
+        <div style={{padding: "1rem", position: "relative"}}>
+          {mobileMenuButton}
+          {desktopCollapseButton}
+          {sidebarHeader}
+          {!sidebarCollapsed && !isMobile && SidebarNav()}
+        </div>
+      </aside>
+    </>
   );
 
   const topTabsElement = topTabs.length > 0 ? (
