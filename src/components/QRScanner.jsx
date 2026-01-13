@@ -10,19 +10,26 @@ export default function QRScanner({ onResult, onError }) {
   useEffect(() => {
     codeReader.current = new BrowserMultiFormatReader();
     let stopped = false;
+    let resetOnce = false;
     codeReader.current.decodeFromVideoDevice(null, videoRef.current, (result, err) => {
       if (stopped) return;
       if (result) {
         stopped = true;
         onResult(result.getText());
-        codeReader.current.reset();
+        if (!resetOnce) {
+          codeReader.current.reset();
+          resetOnce = true;
+        }
       } else if (err && !(err instanceof NotFoundException)) {
         onError && onError(err);
       }
     });
     return () => {
       stopped = true;
-      codeReader.current.reset();
+      if (!resetOnce) {
+        codeReader.current.reset();
+        resetOnce = true;
+      }
     };
   }, [onResult, onError]);
 

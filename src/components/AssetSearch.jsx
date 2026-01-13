@@ -98,7 +98,10 @@ export default function AssetSearch({ assets }) {
             <button
               className="bg-slate-200 text-slate-800 rounded px-4 py-2 font-semibold hover:bg-slate-300"
               type="button"
-              onClick={() => setShowScanner((v) => !v)}
+              onClick={() => {
+                setError("");
+                setShowScanner((v) => !v);
+              }}
             >
               {showScanner ? "Сховати камеру" : "Сканувати QR"}
             </button>
@@ -108,8 +111,10 @@ export default function AssetSearch({ assets }) {
               <QRScanner
                 onResult={(code) => {
                   setInput(code);
-                  setShowScanner(false);
-                  setTimeout(handleSearch, 100); // авто-пошук після скану
+                  setTimeout(() => {
+                    handleSearch();
+                    setShowScanner(false);
+                  }, 100);
                 }}
                 onError={(err) => setError("Помилка сканування: " + err.message)}
               />
