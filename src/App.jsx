@@ -1338,7 +1338,7 @@ function App() {
       if (topTab === "permissions") {
         return (
           <div className="grid grid-cols-1">
-            <RolePermissionsManager menuStructure={menuStructureForPermissions} />
+            <RolePermissionsManager menuStructure={menuStructure} />
           </div>
         );
       }
