@@ -1,3 +1,32 @@
+/**
+ * Оновити посаду
+ */
+export const updatePosition = async (positionId, positionData) => {
+  try {
+    await updateDoc(doc(db, "positions", positionId), {
+      ...positionData,
+      parentId: positionData.parentId || null,
+    });
+  } catch (error) {
+    console.error("Помилка оновлення посади:", error);
+    throw error;
+  }
+};
+
+/**
+ * Оновити роль
+ */
+export const updateWorkRole = async (roleId, roleData) => {
+  try {
+    await updateDoc(doc(db, "workRoles", roleId), {
+      ...roleData,
+      parentId: roleData.parentId || null,
+    });
+  } catch (error) {
+    console.error("Помилка оновлення ролі:", error);
+    throw error;
+  }
+};
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from "firebase/firestore";
 import { db } from "./config";
 
@@ -24,6 +53,7 @@ export const addPosition = async (positionData) => {
   try {
     const docRef = await addDoc(collection(db, "positions"), {
       ...positionData,
+      parentId: positionData.parentId || null,
       createdAt: new Date().toISOString(),
     });
     return docRef.id;
@@ -68,6 +98,7 @@ export const addWorkRole = async (roleData) => {
   try {
     const docRef = await addDoc(collection(db, "workRoles"), {
       ...roleData,
+      parentId: roleData.parentId || null,
       createdAt: new Date().toISOString(),
     });
     return docRef.id;

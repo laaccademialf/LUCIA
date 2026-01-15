@@ -1,10 +1,71 @@
-import { useState, useEffect } from "react";
+// ...existing code...
+import React, { useState, useEffect } from "react";
 import { UserPlus, Lock } from "lucide-react";
 import { createUserByAdmin } from "../firebase/auth";
 import { getRestaurants } from "../firebase/firestore";
 import { getPositions, getWorkRoles } from "../firebase/rolesPositions";
+import { useAuth } from "../hooks/useAuth";
 
 export const AddUserForm = ({ onSuccess, currentUser }) => {
+  const { user } = useAuth();
+  // Визначаємо, чи користувач керуючий (по workRole)
+  const isManager = user && user.workRole === "Керуючий";
+
+  // Стан для ресторанів, посад, ролей — оголошуємо лише один раз!
+  const [restaurants, setRestaurants] = useState([]);
+  const [positions, setPositions] = useState([]);
+  const [workRoles, setWorkRoles] = useState([]);
+
+  // Функція для збору всіх дочірніх id (нижчих по ієрархії)
+  function getAllDescendantIds(rootId, items) {
+    // Повертає всі id нащадків rootId (рекурсія по parentId, порівняння ==)
+    const descendants = [];
+    function findChildren(parentId) {
+      items.forEach(item => {
+        if (item.parentId == parentId) {
+          descendants.push(item.id);
+          findChildren(item.id);
+        }
+      });
+    }
+    findChildren(rootId);
+    return descendants;
+  }
+
+  // Обчислення managerRole, managerEditableRoleIds, managerEditablePositionIds лише коли workRoles/positions завантажені
+  // Використовуємо useMemo, щоб не було звернення до workRoles до ініціалізації
+  // id "Керуючий" для посад (positions)
+  const managerPosition = React.useMemo(() => {
+    if (!isManager || positions.length === 0) return null;
+    return positions.find(p => p.name === "Керуючий");
+  }, [isManager, positions]);
+
+  const managerPositionId = managerPosition ? managerPosition.id : null;
+
+  // id "Керуючий" для ролей (workRoles)
+  const managerRole = React.useMemo(() => {
+    if (!isManager || workRoles.length === 0) return null;
+    return workRoles.find(r => r.name === "Керуючий");
+  }, [isManager, workRoles]);
+  const managerRoleId = managerRole ? managerRole.id : null;
+
+  // Дочірні ролі (workRoles)
+  const managerEditableRoleIds = React.useMemo(() => {
+    if (!isManager || !managerRoleId || workRoles.length === 0) return [];
+    return getAllDescendantIds(managerRoleId, workRoles).filter(id => id !== managerRoleId);
+  }, [isManager, managerRoleId, workRoles]);
+
+  // Дочірні посади (positions) — шукаємо від id "Керуючий" у positions
+  const managerEditablePositionIds = React.useMemo(() => {
+    if (!isManager || !managerPositionId || positions.length === 0) return [];
+    const descendants = getAllDescendantIds(managerPositionId, positions).filter(id => id !== managerPositionId);
+    if (descendants.length === 0) {
+      const managerPosition = positions.find(p => p.name === "Менеджер");
+      return managerPosition ? [managerPosition.id] : [];
+    }
+    return descendants;
+  }, [isManager, managerPositionId, positions]);
+
   const [formData, setFormData] = useState({
     displayName: "",
     email: "",
@@ -14,9 +75,6 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
     position: "",
     workRole: "",
   });
-  const [restaurants, setRestaurants] = useState([]);
-  const [positions, setPositions] = useState([]);
-  const [workRoles, setWorkRoles] = useState([]);
   const [adminPassword, setAdminPassword] = useState("");
   const [showPasswordPrompt, setShowPasswordPrompt] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -26,6 +84,13 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Якщо керуючий — встановлюємо ресторан за замовчуванням (його ресторан)
+  useEffect(() => {
+    if (isManager && user && user.restaurant && formData.restaurant !== user.restaurant) {
+      setFormData((prev) => ({ ...prev, restaurant: user.restaurant }));
+    }
+  }, [isManager, user, formData.restaurant]);
 
   const loadData = async () => {
     try {
@@ -113,6 +178,8 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
 
   return (
     <div className="card p-6 bg-white border border-slate-200 shadow-xl max-w-2xl">
+      {/* DEBUG: user */}
+      {/* DEBUG-блок видалено */}
       <div className="flex items-center gap-3 mb-6">
         <UserPlus className="text-indigo-600" size={24} />
         <h2 className="text-xl font-semibold text-slate-900">Додати нового користувача</h2>
@@ -184,13 +251,22 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
             onChange={(e) => setFormData((prev) => ({ ...prev, restaurant: e.target.value }))}
             required
             className={baseInput}
+            disabled={isManager}
           >
-            <option value="">Оберіть ресторан</option>
-            {restaurants.map((restaurant) => (
-              <option key={restaurant.id} value={restaurant.id}>
-                {restaurant.name}
-              </option>
-            ))}
+            {isManager ? (
+              restaurants
+                .filter(r => r.id === user.restaurant)
+                .map((restaurant) => (
+                  <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
+                ))
+            ) : (
+              <>
+                <option value="">Оберіть ресторан</option>
+                {restaurants.map((restaurant) => (
+                  <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
+                ))}
+              </>
+            )}
           </select>
         </div>
 
@@ -203,14 +279,24 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
             onChange={(e) => setFormData((prev) => ({ ...prev, position: e.target.value }))}
             required
             className={baseInput}
+            disabled={isManager && managerEditablePositionIds.length === 0}
           >
             <option value="">Оберіть посаду</option>
-            {positions.map((position) => (
-              <option key={position.id} value={position.name}>
-                {position.name}
-              </option>
+            {(isManager
+              ? positions.filter(p => managerEditablePositionIds.includes(p.id))
+              : positions
+            ).map((position) => (
+              <option key={position.id} value={position.name}>{position.name}</option>
             ))}
           </select>
+          {isManager && managerEditablePositionIds.length === 0 && (
+            <p className="text-xs text-red-500 mt-1">Немає доступних посад для призначення. Додайте нову посаду нижче по ієрархії.</p>
+          )}
+
+          {/* Якщо є лише одна доступна посада — встановлюємо її автоматично */}
+          {isManager && managerEditablePositionIds.length === 1 && !formData.position && (
+            setFormData((prev) => ({ ...prev, position: positions.find(p => p.id === managerEditablePositionIds[0])?.name || "" }))
+          )}
           <p className="text-xs text-slate-500 mt-1">
             Якщо немає потрібної посади, додайте її в розділі "Ролі та доступи"
           </p>
@@ -224,12 +310,14 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
             value={formData.workRole}
             onChange={(e) => setFormData((prev) => ({ ...prev, workRole: e.target.value }))}
             className={baseInput}
+            disabled={isManager && managerEditableRoleIds.length === 0}
           >
             <option value="">Оберіть роль (необов'язково)</option>
-            {workRoles.map((role) => (
-              <option key={role.id} value={role.name}>
-                {role.name}
-              </option>
+            {(isManager
+              ? workRoles.filter(r => managerEditableRoleIds.includes(r.id))
+              : workRoles
+            ).map((role) => (
+              <option key={role.id} value={role.name}>{role.name}</option>
             ))}
           </select>
           <p className="text-xs text-slate-500 mt-1">
@@ -245,9 +333,10 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
             value={formData.role}
             onChange={(e) => setFormData((prev) => ({ ...prev, role: e.target.value }))}
             className={baseInput}
+            disabled={isManager}
           >
             <option value="user">Користувач</option>
-            <option value="admin">Адміністратор</option>
+            {!isManager && <option value="admin">Адміністратор</option>}
           </select>
           <p className="text-xs text-slate-500 mt-1">
             <strong>Адміністратори</strong> мають повний доступ до всіх функцій системи. 

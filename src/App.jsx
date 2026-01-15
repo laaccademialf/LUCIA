@@ -191,7 +191,7 @@ function App() {
   });
   const [activeNav, setActiveNav] = useState(() => {
     // Відновлення збереженої сторінки з localStorage
-    return localStorage.getItem('lucia_activeNav') || "settings-restaurant";
+    return localStorage.getItem('lucia_activeNav') || "reports-assets";
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -324,8 +324,18 @@ function App() {
     return [];
   };
 
-  // Вкладки для поточного activeNav — тільки з menuStructure (Firestore)
-  const topTabs = useMemo(() => getTabsForSection(activeNav), [activeNav, menuStructure]);
+  // Вкладки для поточного activeNav — з menuStructure, але фільтруються згідно з userPermissions
+  const topTabs = useMemo(() => {
+    const allTabs = getTabsForSection(activeNav);
+    if (!user || user.role === 'admin') return allTabs;
+    const allowed = userPermissions[activeNav];
+    if (allowed === true) return allTabs;
+    if (Array.isArray(allowed)) {
+      return allTabs.filter(tab => allowed.includes(tab.id));
+    }
+    // Якщо доступу немає — не показувати вкладки
+    return [];
+  }, [activeNav, menuStructure, user, userPermissions]);
 
   const menuStructureForPermissions = useMemo(() => {
 
@@ -1186,7 +1196,7 @@ function App() {
                     onClick={() => downloadRestaurantTemplate()}
                     className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-slate-600 text-white font-semibold hover:bg-slate-500 shadow text-xs sm:text-sm"
                   >
-                    <FileDown size={16} />
+                    <LucideIcons.FileDown size={16} />
                     <span className="hidden sm:inline">Шаблон</span>
                   </button>
                   <button
@@ -1194,7 +1204,7 @@ function App() {
                     onClick={() => window.restaurantImportInput?.click()}
                     className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-500 shadow text-xs sm:text-sm"
                   >
-                    <Upload size={16} />
+                    <LucideIcons.Upload size={16} />
                     <span className="hidden sm:inline">Імпорт</span>
                   </button>
                   <button
@@ -1202,7 +1212,7 @@ function App() {
                     onClick={() => exportRestaurantsToExcel(restaurants)}
                     className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 shadow text-xs sm:text-sm"
                   >
-                    <Download size={16} />
+                    <LucideIcons.Download size={16} />
                     <span className="hidden sm:inline">Експорт</span>
                   </button>
                   <button
@@ -1210,7 +1220,7 @@ function App() {
                     onClick={handleAddRestaurant}
                     className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow text-xs sm:text-sm"
                   >
-                    <Plus size={18} />
+                    <LucideIcons.Plus size={18} />
                     <span className="hidden sm:inline">Додати ресторан</span>
                     <span className="sm:hidden">+</span>
                   </button>

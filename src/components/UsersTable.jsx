@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
+import { useAuth } from "../hooks/useAuth";
 import { Users, Shield, User, Trash2, AlertCircle, Edit2, X, Save } from "lucide-react";
 import { getUsers, updateUserRole, deleteUser, updateUser } from "../firebase/users";
 import { getRestaurants } from "../firebase/firestore";
 import { getPositions, getWorkRoles } from "../firebase/rolesPositions";
 
 export const UsersTable = ({ currentUser }) => {
+  const { user: authUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [restaurants, setRestaurants] = useState([]);
   const [positions, setPositions] = useState([]);
@@ -163,12 +165,19 @@ export const UsersTable = ({ currentUser }) => {
     );
   }
 
+  // Визначаємо, чи керуючий
+  const isManager = authUser && authUser.workRole === "Керуючий";
+  // Якщо керуючий — фільтруємо користувачів лише по своєму ресторану
+  const visibleUsers = isManager && authUser?.restaurant
+    ? users.filter(u => u.restaurant === authUser.restaurant)
+    : users;
+
   return (
     <div className="card p-6 bg-white border border-slate-200 shadow-xl">
       <div className="flex items-center gap-3 mb-6">
         <Users className="text-indigo-600" size={24} />
         <h2 className="text-xl font-semibold text-slate-900">Управління користувачами</h2>
-        <span className="ml-auto text-sm text-slate-500">{users.length} користувачів</span>
+        <span className="ml-auto text-sm text-slate-500">{visibleUsers.length} користувачів</span>
       </div>
 
       {error && (
@@ -192,7 +201,7 @@ export const UsersTable = ({ currentUser }) => {
         </div>
       </div>
 
-      {users.length === 0 ? (
+      {visibleUsers.length === 0 ? (
         <div className="text-center py-12 text-slate-500">
           <Users size={48} className="mx-auto mb-3 opacity-50" />
           <p>Немає користувачів</p>
@@ -229,7 +238,7 @@ export const UsersTable = ({ currentUser }) => {
               </tr>
             </thead>
             <tbody>
-              {users.map((user) => {
+              {visibleUsers.map((user) => {
                 const isCurrentUser = currentUser?.uid === user.id;
                 const isUpdating = updatingUserId === user.id;
                 const isDeleting = deletingUserId === user.id;

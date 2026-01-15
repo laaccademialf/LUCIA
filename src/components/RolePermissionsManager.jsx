@@ -1,9 +1,26 @@
 import { useState, useEffect } from "react";
-import { Shield, Save, AlertCircle, Check } from "lucide-react";
+import { Shield, Save, AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { getWorkRoles } from "../firebase/rolesPositions";
 import { getRolePermissions, saveRolePermissions } from "../firebase/permissions";
 
 export const RolePermissionsManager = ({ menuStructure = [] }) => {
+  // Стан згортання секцій
+  // За замовчуванням усі секції згорнуті
+  const [collapsedSections, setCollapsedSections] = useState(() => {
+    const initial = {};
+    menuStructure.forEach(section => { initial[section.id] = true; });
+    return initial;
+  });
+    // Перемикач згортання секції
+    // Акордеон: при розгортанні однієї секції інші згортаються
+    const toggleSectionCollapse = (sectionId) => {
+      setCollapsedSections((prev) => {
+        const next = {};
+        Object.keys(prev).forEach(id => { next[id] = true; });
+        next[sectionId] = !prev[sectionId];
+        return next;
+      });
+    };
   const [roles, setRoles] = useState([]);
   const [selectedRole, setSelectedRole] = useState(null);
   const [permissions, setPermissions] = useState({});
@@ -180,11 +197,18 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
               ) : (
                 <div className="space-y-4">
                   {menuStructure.map((section) => (
-                  <div key={section.id} className="border border-slate-200 rounded-lg p-4 bg-slate-50">
-                    <h4 className="font-bold text-slate-800 mb-3">{section.label}</h4>
-                    
-                    <div className="space-y-2 ml-4">
-                      {section.children.map((child) => {
+                    <div key={section.id} className="border border-slate-200 rounded-lg bg-slate-50">
+                      <div className="flex items-center gap-2 p-4 cursor-pointer select-none" onClick={() => toggleSectionCollapse(section.id)}>
+                        {collapsedSections[section.id] ? (
+                          <ChevronRight size={18} className="text-slate-500" />
+                        ) : (
+                          <ChevronDown size={18} className="text-slate-500" />
+                        )}
+                        <h4 className="font-bold text-slate-800">{section.label}</h4>
+                      </div>
+                      {!collapsedSections[section.id] && (
+                        <div className="space-y-2 ml-4 pb-4">
+                          {section.children.map((child) => {
                         const menuValue = permissions[child.id];
                         const hasMenu = menuValue !== undefined;
                         const isFullAccess = menuValue === true;
@@ -238,9 +262,10 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
                           </div>
                         );
                       })}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  ))}
                 </div>
               )}
               {/* Кнопка збереження */}
