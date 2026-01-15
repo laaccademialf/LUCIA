@@ -1,25 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from "react";
-import {
-  Box,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ClipboardList,
-  FileText,
-  LayoutDashboard,
-  LogOut,
-  Menu,
-  Package,
-  Plus,
-  Settings as SettingsIcon,
-  ShieldCheck,
-  User as UserIcon,
-  Users,
-  Wrench,
-  Download,
-  Upload,
-  FileDown,
-} from "lucide-react";
+import * as LucideIcons from "lucide-react";
 import clsx from "clsx";
 import { AssetTable } from "./components/AssetTable";
 import AssetSearch from "./components/AssetSearch";
@@ -48,6 +28,9 @@ import {
   importRestaurantsFromExcel,
   downloadRestaurantTemplate,
 } from "./utils/excelHelpers";
+import { useMenuStructure } from "./hooks/useMenuStructure";
+import MenuStructureEditor from "./components/MenuStructureEditor";
+
 
 // Початкові дані для ресторанів (якщо база порожня)
 const initialRestaurants = [
@@ -108,6 +91,8 @@ const initialRestaurants = [
 ];
 
 function App() {
+  // Menu structure management (admin only)
+  const { menuStructure, save, loading: menuLoading, error: menuError } = useMenuStructure();
   // Authentication
   const { user, loading: authLoading, isAuthenticated } = useAuth();
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -617,112 +602,46 @@ function App() {
     return { total, toWriteOff, toMove };
   }, [assets]);
 
+  // Використовуємо menuStructure з Firestore для побудови меню
   const navItems = useMemo(() => {
     const isAdmin = user?.role === 'admin';
-    
-    const allNavItems = [
-      {
-        id: "dashboard",
-        label: "Дашборд",
-        icon: LayoutDashboard,
-        children: [
-          { id: "dashboard-ops", label: "Операційний огляд" },
-        ],
-      },
-      {
-        id: "settings",
-        label: "Налаштування",
-        icon: SettingsIcon,
-        children: [
-          { id: "settings-restaurant", label: "Дані ресторану" },
-          { id: "settings-accounts", label: "Облікові записи" },
-          { id: "settings-permissions", label: "Права доступу" },
-        ],
-      },
-      {
-        id: "operations",
-        label: "Операції",
-        icon: ClipboardList,
-        children: [
-          { id: "ops-checklists", label: "Чек-листи" },
-          { id: "ops-haccp", label: "HACCP журнали" },
-          { id: "ops-maintenance", label: "Сервісні заявки" },
-        ],
-      },
-      {
-        id: "inventory",
-        label: "Облік",
-        icon: Package,
-        children: [
-          { id: "inventory-products", label: "Продукти" },
-          { id: "inventory-utilities", label: "Утиліти" },
-          { id: "inventory-assets", label: "Основні засоби" },
-        ],
-      },
-      {
-        id: "reports",
-        label: "Звіти",
-        icon: FileText,
-        children: [
-          { id: "reports-products", label: "Інвентаризація продуктів" },
-          { id: "reports-assets", label: "Основні засоби" },
-        ],
-      },
-      {
-        id: "security",
-        label: "Безпека",
-        icon: ShieldCheck,
-        children: [
-          { id: "security-audit", label: "Аудит дій" },
-        ],
-      },
-      {
-        id: "team",
-        label: "Команда",
-        icon: Users,
-        children: [
-          { id: "team-roles", label: "Ролі та доступи" },
-        ],
-      },
-      {
-        id: "maintenance",
-        label: "Сервіс",
-        icon: Wrench,
-        children: [
-          { id: "maintenance-plan", label: "Планові роботи" },
-        ],
-      },
-    ];
+    // Якщо menuStructure порожній, fallback на стандартну структуру
+    const structure = (Array.isArray(menuStructure) && menuStructure.length > 0)
+      ? menuStructure
+      : [
+        // fallback: мінімальна структура
+        { id: "dashboard", label: "Дашборд", icon: "LayoutDashboard", children: [{ id: "dashboard-ops", label: "Операційний огляд" }] }
+      ];
 
-    // Адміни бачать все
-    if (isAdmin) {
-      return allNavItems;
-    }
+    // Додаємо пункт "Управління меню" для адміна
+    const structureWithAdmin = structure.map(section => {
+      if (section.id === "maintenance" && isAdmin) {
+        const hasMenuAdmin = section.children.some(child => child.id === "menu-admin");
+        return {
+          ...section,
+          children: hasMenuAdmin
+            ? section.children
+            : [...section.children, { id: "menu-admin", label: "Управління меню" }]
+        };
+      }
+      return section;
+    });
 
-    // Якщо немає прав взагалі (не завантажилися або користувач без workRole) - показуємо все
-    if (!user?.workRole || Object.keys(userPermissions).length === 0) {
-      console.log("⚠️ Немає прав або workRole, показуємо все");
-      return allNavItems;
-    }
-
-    console.log("🔍 Фільтруємо навігацію на основі прав:", userPermissions);
-
-    // Фільтруємо навігацію на основі прав користувача
-    return allNavItems.map(group => {
+    // Фільтрація за правами
+    const filtered = structureWithAdmin.map(group => {
       const filteredChildren = group.children.filter(child => {
-        // Перевіряємо чи є доступ до цього пункту меню
-        // Права можуть бути як boolean (true/false) так і масив вкладок
-        const hasAccess = userPermissions[child.id] !== undefined && userPermissions[child.id] !== false;
-        console.log(`- ${child.id}: ${hasAccess ? '✅' : '❌'}`, userPermissions[child.id]);
+        const hasAccess = isAdmin || userPermissions[child.id] !== undefined && userPermissions[child.id] !== false;
         return hasAccess;
       });
+      return { ...group, children: filteredChildren };
+    }).filter(group => group.children.length > 0);
 
-      return {
-        ...group,
-        children: filteredChildren,
-      };
-    }).filter(group => group.children.length > 0); // Приховуємо порожні групи
-  }, [user?.role, user?.workRole, userPermissions]);
+    // Додаємо іконки
+    return filtered.map(group => ({
+      ...group,
+      icon: LucideIcons[group.icon || "Folder"] || LucideIcons.Folder
+    }));
+  }, [menuStructure, user?.role, user?.workRole, userPermissions]);
 
   const renderContent = () => {
     const baseInput = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400 disabled:border-gray-200 disabled:cursor-not-allowed";
@@ -1515,6 +1434,14 @@ function App() {
       }
     }
 
+    if (activeNav === "menu-admin" && user?.role === 'admin') {
+      return (
+        <div className="grid grid-cols-1">
+          <MenuStructureEditor menuStructure={menuStructure} saveMenuStructure={save} loading={menuLoading} error={menuError} />
+        </div>
+      );
+    }
+
     if (activeNav === "inventory-assets" || activeNav.startsWith("reports-assets")) {
       if (topTab === "search") {
         return (
@@ -1646,13 +1573,13 @@ function App() {
 
   const mobileMenuButton = isMobile ? (
     <button type="button" onClick={() => setSidebarOpen(false)} className="absolute right-2 top-4 p-1 hover:bg-slate-700 rounded transition">
-      <ChevronLeft size={18} className="text-slate-300" />
+      <LucideIcons.ChevronLeft size={18} className="text-slate-300" />
     </button>
   ) : null;
 
   const desktopCollapseButton = !isMobile ? (
     <button type="button" onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className="absolute right-2 top-4 p-1 hover:bg-slate-700 rounded transition">
-      {sidebarCollapsed ? <ChevronRight size={18} className="text-slate-300" /> : <ChevronLeft size={18} className="text-slate-300" />}
+      {sidebarCollapsed ? <LucideIcons.ChevronRight size={18} className="text-slate-300" /> : <LucideIcons.ChevronLeft size={18} className="text-slate-300" />}
     </button>
   ) : null;
 
@@ -1671,7 +1598,7 @@ function App() {
             <div style={{display: "flex", alignItems: "center", gap: "0.5rem"}}>
               <group.icon size={16} /> {group.label}
             </div>
-            <ChevronDown size={14} style={{transition: "transform 150ms", transform: expandedGroups[group.id] ? "rotate(0deg)" : "rotate(-90deg)"}} />
+            <LucideIcons.ChevronDown size={14} style={{transition: "transform 150ms", transform: expandedGroups[group.id] ? "rotate(0deg)" : "rotate(-90deg)"}} />
           </button>
           {expandedGroups[group.id] && (
             <div style={{display: "flex", flexDirection: "column", gap: "0.25rem", paddingBottom: "0.5rem"}}>
@@ -1810,7 +1737,7 @@ function App() {
                   className="p-1 hover:bg-slate-700 rounded transition"
                   title="Відкрити меню"
                 >
-                  <Menu size={22} className="text-slate-300" />
+                  <LucideIcons.Menu size={22} className="text-slate-300" />
                 </button>
               )}
               {/* Плашки ліворуч */}
@@ -1843,7 +1770,7 @@ function App() {
               {/* Користувач та вихід - праворуч */}
               <div className="flex items-center gap-2 sm:gap-4">
                 <div className="hidden sm:flex items-center gap-2 text-sm text-slate-300">
-                  <UserIcon size={16} />
+                  <LucideIcons.UserIcon size={16} />
                   <span className="max-w-xs truncate">{user?.displayName || user?.email}</span>
                   {user?.role === "admin" && (
                     <span className="px-2 py-1 rounded bg-indigo-600 text-white text-xs font-semibold">
@@ -1861,7 +1788,7 @@ function App() {
                   }}
                   className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition text-xs sm:text-sm font-medium"
                 >
-                  <LogOut size={16} />
+                  <LucideIcons.LogOut size={16} />
                   <span className="hidden sm:inline">Вийти</span>
                 </button>
               </div>
