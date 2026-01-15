@@ -191,7 +191,7 @@ function App() {
   });
   const [activeNav, setActiveNav] = useState(() => {
     // Відновлення збереженої сторінки з localStorage
-    return localStorage.getItem('lucia_activeNav') || "dashboard-overview";
+    return localStorage.getItem('lucia_activeNav') || "settings-restaurant";
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -306,118 +306,28 @@ function App() {
     }
   }, [restaurantsLoading, user, firebaseRestaurants]);
 
-  const topTabs = useMemo(() => {
-    // Адміни бачать все
-    const isAdmin = user?.role === 'admin';
-    
-    // Універсальна функція фільтрації вкладок
-    const filterTabsByPermissions = (navId, allTabs) => {
-      if (isAdmin) {
-        console.log(`👑 Адмін - всі вкладки для ${navId} доступні`);
-        return allTabs;
+  // Допоміжна функція для отримання вкладок для конкретного підрозділу з menuStructure
+  const getTabsForSection = (navId) => {
+    if (!navId || !Array.isArray(menuStructure)) return [];
+    for (const section of menuStructure) {
+      if (!Array.isArray(section.children)) continue;
+      for (const child of section.children) {
+        if (child.id === navId) {
+          if (Array.isArray(child.tabLabels) && child.tabLabels.length > 0) {
+            return child.tabLabels;
+          } else if (Array.isArray(child.tabs) && child.tabs.length > 0) {
+            return child.tabs.map(id => ({ id, label: id }));
+          }
+        }
       }
-      
-      // Перевіряємо права на цей розділ
-      const sectionPermissions = userPermissions[navId];
-      console.log(`🔍 Права на ${navId}:`, sectionPermissions);
-      
-      if (!sectionPermissions || sectionPermissions === false) {
-        console.log(`❌ Немає прав на ${navId}`);
-        return [];
-      }
-      
-      // Якщо права є масив - фільтруємо вкладки
-      if (Array.isArray(sectionPermissions)) {
-        const filteredTabs = allTabs.filter(tab => sectionPermissions.includes(tab.id));
-        console.log(`✅ Доступні вкладки для ${navId}:`, filteredTabs.map(t => t.id));
-        return filteredTabs;
-      }
-      
-      // Якщо права не масив (наприклад true) - показуємо всі вкладки
-      console.log(`✅ Повний доступ до всіх вкладок ${navId}`);
-      return allTabs;
-    };
-    
-    if (activeNav === "settings-restaurant") {
-      const allTabs = [
-        { id: "main", label: "Головні" },
-        { id: "schedule", label: "Графік роботи" },
-        { id: "projects", label: "Управління проєктами" },
-      ];
-      return filterTabsByPermissions("settings-restaurant", allTabs);
     }
-    
-    if (activeNav === "settings-accounts") {
-      const allTabs = [
-        { id: "add", label: "Додати" },
-        { id: "edit", label: "Редагувати" },
-      ];
-      return filterTabsByPermissions("settings-accounts", allTabs);
-    }
-    
-    if (activeNav === "settings-permissions") {
-      const allTabs = [
-        { id: "roles", label: "Ролі та Посади" },
-        { id: "permissions", label: "Доступи ролей" },
-      ];
-      return filterTabsByPermissions("settings-permissions", allTabs);
-    }
-    
-    if (activeNav.startsWith("inventory-")) {
-      // Додаємо вкладку "Пошук" перед "Додати"
-      const allTabs = [
-        { id: "search", label: "Пошук" },
-        { id: "test1", label: "Додати" },
-        { id: "test2", label: "Редагувати" },
-        { id: "test3", label: "Типові поля" },
-        { id: "test4", label: "Права редагування" },
-        { id: "responsibility", label: "Матеріальна відповідальність" },
-      ];
-      return filterTabsByPermissions(activeNav, allTabs);
-    }
-    
-    return [
-      { id: "test1", label: "Тест 1" },
-      { id: "test2", label: "Тест 2" },
-      { id: "test3", label: "Тест 3" },
-    ];
-  }, [activeNav, user?.role, userPermissions]);
+    return [];
+  };
 
-  // Генеруємо структуру меню для RolePermissionsManager на основі реальної навігації
+  // Вкладки для поточного activeNav — тільки з menuStructure (Firestore)
+  const topTabs = useMemo(() => getTabsForSection(activeNav), [activeNav, menuStructure]);
+
   const menuStructureForPermissions = useMemo(() => {
-    // Допоміжна функція для отримання вкладок для конкретного розділу
-    const getTabsForSection = (navId) => {
-      if (navId === "settings-restaurant") {
-        return [
-          { id: "main", label: "Головні" },
-          { id: "schedule", label: "Графік роботи" },
-          { id: "projects", label: "Управління проєктами" },
-        ];
-      }
-      if (navId === "settings-accounts") {
-        return [
-          { id: "add", label: "Додати" },
-          { id: "edit", label: "Редагувати" },
-        ];
-      }
-      if (navId === "settings-permissions") {
-        return [
-          { id: "roles", label: "Ролі та Посади" },
-          { id: "permissions", label: "Доступи ролей" },
-        ];
-      }
-      if (navId.startsWith("inventory-")) {
-        return [
-          { id: "search", label: "Пошук" },
-          { id: "test1", label: "Додати" },
-          { id: "test2", label: "Редагувати" },
-          { id: "test3", label: "Типові поля" },
-          { id: "test4", label: "Права редагування" },
-          { id: "responsibility", label: "Матеріальна відповідальність" },
-        ];
-      }
-      return [];
-    };
 
     // Базова структура навігації (без фільтрації прав)
     const baseNavItems = [

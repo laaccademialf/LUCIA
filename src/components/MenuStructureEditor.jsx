@@ -107,7 +107,9 @@ const initialMenuStructure = [
 
 function MenuStructureEditor({ menuStructure, saveMenuStructure, loading, error }) {
   const [draft, setDraft] = useState(() => JSON.parse(JSON.stringify(menuStructure)));
-  useEffect(() => { setDraft(JSON.parse(JSON.stringify(menuStructure))); }, [menuStructure]);
+  useEffect(() => {
+    setDraft(JSON.parse(JSON.stringify(menuStructure)));
+  }, [menuStructure, loading]);
 
   const deleteSection = (sectionIdx) => {
     if (window.confirm('Видалити розділ?')) {
@@ -240,7 +242,7 @@ function MenuStructureEditor({ menuStructure, saveMenuStructure, loading, error 
           ))}
         </div>
       ))}
-      <button className="mt-4 px-6 py-2 rounded bg-indigo-600 text-white font-bold" onClick={handleSave} disabled={loading}>Зберегти структуру меню</button>
+      <button className="mt-4 px-6 py-2 rounded bg-indigo-600 text-white font-bold disabled:opacity-60" onClick={handleSave} disabled={loading}>Зберегти структуру меню</button>
       {error && <div className="mt-2 text-red-600 font-semibold">{error}</div>}
       <pre className="bg-slate-100 p-3 rounded text-xs overflow-x-auto max-h-96 mt-4">{JSON.stringify(draft, null, 2)}</pre>
     </div>
