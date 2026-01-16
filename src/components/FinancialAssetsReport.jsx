@@ -423,3 +423,4 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
     </div>
   );
 };
+export default FinancialAssetsReport;

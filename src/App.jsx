@@ -11,7 +11,6 @@ import { RolePermissionsManager } from "./components/RolePermissionsManager";
 import { FieldPermissionsManager } from "./components/FieldPermissionsManager";
 import { AssetFieldsManager } from "./components/AssetFieldsManager";
 import { MaterialResponsibilityManager } from "./components/MaterialResponsibilityManager";
-import { FinancialAssetsReport } from "./components/FinancialAssetsReport";
 import { mockAssets } from "./data/mockAssets";
 import { useRestaurants } from "./hooks/useRestaurants";
 import { useAssets } from "./hooks/useAssets";
@@ -30,6 +29,7 @@ import {
 } from "./utils/excelHelpers";
 import { useMenuStructure } from "./hooks/useMenuStructure";
 import MenuStructureEditor from "./components/MenuStructureEditor";
+import FinancialAssetsReport from "./components/FinancialAssetsReport";
 
 
 // Початкові дані для ресторанів (якщо база порожня)
@@ -1217,7 +1217,7 @@ function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={handleAddRestaurant}
+                    onClick={() => handleAddRestaurant()}
                     className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow text-xs sm:text-sm"
                   >
                     <LucideIcons.Plus size={18} />
@@ -1362,7 +1362,23 @@ function App() {
       );
     }
 
-    if (activeNav === "inventory-assets" || activeNav.startsWith("reports-assets")) {
+    // Підтримка нової структури меню для основних засобів (capexreport)
+    if (
+      activeNav === "inventory-assets" ||
+      activeNav.startsWith("reports-assets") ||
+      activeNav === "capexreport"
+    ) {
+      // Основний звіт по основних засобах (нова структура)
+      if (
+        (activeNav.startsWith("reports-assets") && topTab === "main") ||
+        (activeNav === "capexreport" && topTab === "maincapexreport")
+      ) {
+        return (
+          <div className="grid grid-cols-1">
+            <FinancialAssetsReport assets={assets} restaurants={restaurants} responsibilityCenters={businessUnits} />
+          </div>
+        );
+      }
       if (topTab === "search") {
         return (
           <div className="grid grid-cols-1">
