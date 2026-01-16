@@ -28,6 +28,7 @@ import {
   updateUtilityMeterPrice,
   deleteUtilityMeter,
 } from "./firebase/utilityMeters";
+import MenuStructureEditor from "./components/MenuStructureEditor";
 
 
 
