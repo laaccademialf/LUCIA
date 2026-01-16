@@ -9,27 +9,20 @@ import { UsersTable } from "./components/UsersTable";
 import { RolesPositionsManager } from "./components/RolesPositionsManager";
 import { RolePermissionsManager } from "./components/RolePermissionsManager";
 import { FieldPermissionsManager } from "./components/FieldPermissionsManager";
-import { AssetFieldsManager } from "./components/AssetFieldsManager";
-import { MaterialResponsibilityManager } from "./components/MaterialResponsibilityManager";
-import { mockAssets } from "./data/mockAssets";
+import UtilityMetersManager from "./components/UtilityMetersManager";
+import ElectricityForm from "./components/ElectricityForm";
+import { useAuth } from "./hooks/useAuth";
+import { useMenuStructure } from "./hooks/useMenuStructure";
 import { useRestaurants } from "./hooks/useRestaurants";
 import { useAssets } from "./hooks/useAssets";
 import { useAssetFields } from "./hooks/useAssetFields";
-import { useAuth } from "./hooks/useAuth";
-import { LoginModal } from "./components/LoginModal";
-import { RegisterModal } from "./components/RegisterModal";
-import { AuthSetupWarning } from "./components/AuthSetupWarning";
-import { logoutUser } from "./firebase/auth";
-import { getRolePermissions } from "./firebase/permissions";
-import { getRestaurant } from "./firebase/firestore";
 import {
-  exportRestaurantsToExcel,
-  importRestaurantsFromExcel,
-  downloadRestaurantTemplate,
-} from "./utils/excelHelpers";
-import { useMenuStructure } from "./hooks/useMenuStructure";
-import MenuStructureEditor from "./components/MenuStructureEditor";
-import FinancialAssetsReport from "./components/FinancialAssetsReport";
+  getUtilityMeters,
+  addUtilityMeter,
+  updateUtilityMeterPrice,
+  deleteUtilityMeter,
+} from "./firebase/utilityMeters";
+
 
 
 // Початкові дані для ресторанів (якщо база порожня)
@@ -91,66 +84,11 @@ const initialRestaurants = [
 ];
 
 function App() {
-  // Menu structure management (admin only)
-  const { menuStructure, save, loading: menuLoading, error: menuError } = useMenuStructure();
+  // --- ВСІ хуки на початку ---
   // Authentication
   const { user, loading: authLoading, isAuthenticated } = useAuth();
-  const [showLoginModal, setShowLoginModal] = useState(false);
-  const [showRegisterModal, setShowRegisterModal] = useState(false);
-  const [showAuthWarning, setShowAuthWarning] = useState(false);
-  const [userPermissions, setUserPermissions] = useState({});
-
-  // Завантаження прав доступу для робочої ролі користувача
-  useEffect(() => {
-    const loadPermissions = async () => {
-      if (user?.workRole) {
-        try {
-          const rolePerms = await getRolePermissions(user.workRole);
-          setUserPermissions(rolePerms.permissions || {});
-          console.log("📋 Права користувача завантажені:");
-          console.log("- Роль:", user.workRole);
-          console.log("- Права:", rolePerms.permissions);
-          console.log("- Деталі прав:");
-          Object.entries(rolePerms.permissions || {}).forEach(([key, value]) => {
-            if (Array.isArray(value)) {
-              console.log(`  ${key}: [${value.join(", ")}]`);
-            } else {
-              console.log(`  ${key}: ${value}`);
-            }
-          });
-        } catch (error) {
-          console.error("Помилка завантаження прав:", error);
-          setUserPermissions({});
-        }
-      } else {
-        console.log("⚠️ У користувача немає workRole");
-        setUserPermissions({});
-      }
-    };
-    
-    loadPermissions();
-  }, [user?.workRole]);
-
-  // Обробка зміни розміру вікна для мобільної адаптації
-  useEffect(() => {
-    const handleResize = () => {
-      const mobile = window.innerWidth < 768;
-      setIsMobile(mobile);
-      if (mobile === false) {
-        setSidebarOpen(false);
-      }
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  // Автоматично показувати вікно входу для неавторизованих користувачів
-  useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
-      setShowLoginModal(true);
-    }
-  }, [authLoading, isAuthenticated]);
-
+  // Menu structure management (admin only)
+  const { menuStructure, save, loading: menuLoading, error: menuError } = useMenuStructure();
   // Firebase hooks
   const {
     restaurants: firebaseRestaurants,
@@ -159,7 +97,6 @@ function App() {
     updateRestaurant: updateRestaurantInFirebase,
     deleteRestaurant: deleteRestaurantFromFirebase,
   } = useRestaurants();
-
   const {
     assets: firebaseAssets,
     loading: assetsLoading,
@@ -167,7 +104,6 @@ function App() {
     updateAsset: updateAssetInFirebase,
     deleteAsset: deleteAssetFromFirebase,
   } = useAssets();
-
   const {
     businessUnits,
     categories,
@@ -178,7 +114,6 @@ function App() {
     decisions,
     placementZones,
   } = useAssetFields();
-
   // Local state
   const [assets, setAssets] = useState([]);
   const [restaurants, setRestaurants] = useState([]);
@@ -239,6 +174,76 @@ function App() {
     sat: { from: "", to: "" },
     sun: { from: "", to: "" },
   });
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [showAuthWarning, setShowAuthWarning] = useState(false);
+  const [userPermissions, setUserPermissions] = useState({});
+  // --- Utility meters state ---
+  const [utilityMeters, setUtilityMeters] = useState([]);
+  const [utilityLoading, setUtilityLoading] = useState(false);
+
+  // --- Далі всі useEffect, useMemo, ... ---
+
+  // ...існуючий код App...
+
+  // --- Utility meters effect ---
+  useEffect(() => {
+    const fetchAllMeters = async () => {
+      if (!user || user.role !== "admin" || !restaurants.length) return;
+      setUtilityLoading(true);
+      let all = [];
+      for (const r of restaurants) {
+        for (const type of ["electricity", "water", "gas"]) {
+          try {
+            const meters = await getUtilityMeters(r.id, type);
+            all = all.concat(meters);
+          } catch (e) { /* ignore */ }
+        }
+      }
+      setUtilityMeters(all);
+      setUtilityLoading(false);
+    };
+    if (activeNav === "inventory-utilities" && topTab === "utilityservice") {
+      fetchAllMeters();
+    }
+  }, [activeNav, topTab, restaurants, user]);
+
+  // --- Рендер вкладки управління утилітами ---
+  if (activeNav === "inventory-utilities" && topTab === "utilityservice") {
+    const handleAddMeter = async (meter) => {
+      await addUtilityMeter(meter);
+      // Оновити список після додавання
+      const all = [];
+      for (const r of restaurants) {
+        for (const type of ["electricity", "water", "gas"]) {
+          try {
+            const meters = await getUtilityMeters(r.id, type);
+            all.push(...meters);
+          } catch {}
+        }
+      }
+      setUtilityMeters(all);
+    };
+    const handleUpdateMeter = async (meter) => {
+      await updateUtilityMeterPrice(meter.id, meter.price);
+      setUtilityMeters((prev) => prev.map(m => m.id === meter.id ? { ...m, price: meter.price } : m));
+    };
+    const handleDeleteMeter = async (id) => {
+      await deleteUtilityMeter(id);
+      setUtilityMeters((prev) => prev.filter(m => m.id !== id));
+    };
+    return (
+      <div className="p-4">
+        <UtilityMetersManager
+          restaurants={restaurants}
+          meters={utilityMeters}
+          onAddMeter={handleAddMeter}
+          onUpdateMeter={handleUpdateMeter}
+          onDeleteMeter={handleDeleteMeter}
+        />
+      </div>
+    );
+  }
 
   // Sync Firebase data with local state
   useEffect(() => {
@@ -780,6 +785,28 @@ function App() {
       );
     };
 
+    // Вкладка електроенергії
+    if (activeNav === "inventory-utilities" && topTab === "electricityinv") {
+      // TODO: meters, history, onSubmit — заглушки, замінити на реальні дані
+      const meters = [
+        { id: "meter1", number: "№0131882", prevValue: "499989" },
+      ];
+      const history = [];
+      const handleElectricitySubmit = (data) => {
+        // TODO: інтеграція з Firestore
+        alert("Збережено показники електроенергії: " + JSON.stringify(data));
+      };
+      return (
+        <div className="grid grid-cols-1">
+          <ElectricityForm
+            meters={meters}
+            history={history}
+            onSubmit={handleElectricitySubmit}
+            responsible={user?.displayName || user?.fullName || ""}
+          />
+        </div>
+      );
+    }
     if (activeNav === "settings-restaurant") {
       if (topTab === "main") {
         return (
@@ -1376,6 +1403,17 @@ function App() {
         return (
           <div className="grid grid-cols-1">
             <FinancialAssetsReport assets={assets} restaurants={restaurants} responsibilityCenters={businessUnits} />
+          </div>
+        );
+      }
+      // Детальний звіт — розділ у розробці
+      if (activeNav === "capexreport" && topTab === "detailcapexreport") {
+        return (
+          <div className="card p-6 text-sm text-slate-600">
+            <p className="text-base font-semibold text-slate-900">Розділ у розробці</p>
+            <p className="mt-1 text-slate-600">
+              Детальний звіт по основних засобах буде доступний у наступних оновленнях.
+            </p>
           </div>
         );
       }
