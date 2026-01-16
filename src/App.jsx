@@ -215,46 +215,11 @@ function App() {
     }
   }, [activeNav, topTab, restaurants, user]);
 
-  // --- Рендер вкладки управління утилітами ---
-  if (activeNav === "inventory-utilities" && topTab === "utilityservice") {
-    const handleAddMeter = async (meter) => {
-      await addUtilityMeter(meter);
-      // Оновити список після додавання
-      const all = [];
-      for (const r of restaurants) {
-        for (const type of ["electricity", "water", "gas"]) {
-          try {
-            const meters = await getUtilityMeters(r.id, type);
-            all.push(...meters);
-          } catch {}
-        }
-      }
-      setUtilityMeters(all);
-    };
-    const handleUpdateMeter = async (meter) => {
-      await updateUtilityMeterPrice(meter.id, meter.price);
-      setUtilityMeters((prev) => prev.map(m => m.id === meter.id ? { ...m, price: meter.price } : m));
-    };
-    const handleDeleteMeter = async (id) => {
-      await deleteUtilityMeter(id);
-      setUtilityMeters((prev) => prev.filter(m => m.id !== id));
-    };
-    return (
-      <div className="p-4">
-        <UtilityMetersManager
-          restaurants={restaurants}
-          meters={utilityMeters}
-          onAddMeter={handleAddMeter}
-          onUpdateMeter={handleUpdateMeter}
-          onDeleteMeter={handleDeleteMeter}
-        />
-      </div>
-    );
-  }
 
   // Sync Firebase data with local state
   useEffect(() => {
     if (!restaurantsLoading) {
+      console.log("DEBUG FirebaseRestaurants:", firebaseRestaurants);
       console.log("🔍 Фільтрація ресторанів:");
       console.log("- user:", user);
       console.log("- user.role:", user?.role);
@@ -278,6 +243,13 @@ function App() {
       }
     }
   }, [firebaseRestaurants, restaurantsLoading, user]);
+
+  // DEBUG: завантаження лічильників
+  useEffect(() => {
+    if (activeNav === "inventory-utilities" && topTab === "utilytyservice") {
+      console.log("DEBUG utilityMeters state:", utilityMeters);
+    }
+  }, [activeNav, topTab, utilityMeters]);
 
   useEffect(() => {
     if (!assetsLoading && firebaseAssets.length > 0) {
@@ -576,6 +548,49 @@ function App() {
   }, [menuStructure, user?.role, user?.workRole, userPermissions]);
 
   const renderContent = () => {
+        // ...existing code...
+        // Вкладка управління утилітами
+        if (activeNav === "inventory-utilities" && topTab === "utilytyservice") {
+          const handleAddMeter = async (meter) => {
+            await addUtilityMeter(meter);
+            // Оновити список після додавання
+            const all = [];
+            for (const r of restaurants) {
+              for (const type of ["electricity", "water", "gas"]) {
+                try {
+                  const meters = await getUtilityMeters(r.id, type);
+                  all.push(...meters);
+                } catch {}
+              }
+            }
+            setUtilityMeters(all);
+          };
+          const handleUpdateMeter = async (meter) => {
+            await updateUtilityMeterPrice(meter.id, meter.price);
+            setUtilityMeters((prev) => prev.map(m => m.id === meter.id ? { ...m, price: meter.price } : m));
+          };
+          const handleDeleteMeter = async (id) => {
+            await deleteUtilityMeter(id);
+            setUtilityMeters((prev) => prev.filter(m => m.id !== id));
+          };
+          return (
+            <div className="p-4">
+              {/* DEBUG: вкладка утиліти */}
+              <div className="mb-4 p-3 bg-yellow-100 border border-yellow-300 text-yellow-700 rounded-lg text-sm">
+                <div>DEBUG UtilityMetersManager:</div>
+                <div>restaurants: {JSON.stringify(restaurants)}</div>
+                <div>meters: {JSON.stringify(utilityMeters)}</div>
+              </div>
+              <UtilityMetersManager
+                restaurants={restaurants}
+                meters={utilityMeters}
+                onAddMeter={handleAddMeter}
+                onUpdateMeter={handleUpdateMeter}
+                onDeleteMeter={handleDeleteMeter}
+              />
+            </div>
+          );
+        }
     const baseInput = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400 disabled:border-gray-200 disabled:cursor-not-allowed";
 
     const renderAddressFields = () => (
@@ -1542,12 +1557,12 @@ function App() {
       );
     }
 
+    // Глобальний debug-блок для всіх вкладок
     return (
-      <div className="card p-6 text-sm text-slate-600">
-        <p className="text-base font-semibold text-slate-900">Розділ у розробці</p>
-        <p className="mt-1 text-slate-600">
-          Оберіть «Основні засоби» щоб працювати з інвентаризацією, або зафіксуйте вимоги для цього розділу.
-        </p>
+      <div className="mb-4 p-3 bg-blue-100 border border-blue-300 text-blue-700 rounded-lg text-sm">
+        <div>DEBUG renderContent:</div>
+        <div>activeNav: {activeNav}</div>
+        <div>topTab: {topTab}</div>
       </div>
     );
   };
