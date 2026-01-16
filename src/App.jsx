@@ -5,6 +5,8 @@ import { AssetTable } from "./components/AssetTable";
 import AssetSearch from "./components/AssetSearch";
 import { AssetForm } from "./components/AssetForm";
 import { AddUserForm } from "./components/AddUserForm";
+import { LoginModal } from "./components/LoginModal";
+import { RegisterModal } from "./components/RegisterModal";
 import { UsersTable } from "./components/UsersTable";
 import { RolesPositionsManager } from "./components/RolesPositionsManager";
 import { RolePermissionsManager } from "./components/RolePermissionsManager";
@@ -15,6 +17,7 @@ import { MaterialResponsibilityManager } from "./components/MaterialResponsibili
 import { AssetFieldsManager } from "./components/AssetFieldsManager";
 import FinancialAssetsReport from "./components/FinancialAssetsReport";
 import { useAuth } from "./hooks/useAuth";
+import { logoutUser } from "./firebase/auth";
 import { useMenuStructure } from "./hooks/useMenuStructure";
 import { useRestaurants } from "./hooks/useRestaurants";
 import { useAssets } from "./hooks/useAssets";
