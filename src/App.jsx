@@ -19,6 +19,7 @@ import FinancialAssetsReport from "./components/FinancialAssetsReport";
 import { useAuth } from "./hooks/useAuth";
 import { logoutUser } from "./firebase/auth";
 import { useMenuStructure } from "./hooks/useMenuStructure";
+import { getRolePermissions } from "./firebase/permissions";
 import { useRestaurants } from "./hooks/useRestaurants";
 import { useAssets } from "./hooks/useAssets";
 import { useAssetFields } from "./hooks/useAssetFields";
@@ -91,12 +92,27 @@ const initialRestaurants = [
 ];
 
 function App() {
+    // Безпечна функція для логування
+    function logDebug(user, userPermissions, menuStructure) {
+      try {
+        console.log('DEBUG user:', user);
+        console.log('DEBUG userPermissions:', userPermissions);
+        console.log('DEBUG menuStructure:', menuStructure);
+      } catch (e) {
+        console.warn('DEBUG логування пропущено через помилку:', e);
+      }
+    }
   // --- ВСІ хуки на початку ---
   // Authentication
   const { user, loading: authLoading, isAuthenticated } = useAuth();
   // Menu structure management (admin only)
   const { menuStructure, save, loading: menuLoading, error: menuError } = useMenuStructure();
   // Firebase hooks
+  // ...інші хуки...
+
+  // ...інші хуки, useState, useEffect...
+
+  // ...всі хуки, useState, useEffect...
   const {
     restaurants: firebaseRestaurants,
     loading: restaurantsLoading,
@@ -185,6 +201,25 @@ function App() {
   const [showRegisterModal, setShowRegisterModal] = useState(false);
   const [showAuthWarning, setShowAuthWarning] = useState(false);
   const [userPermissions, setUserPermissions] = useState({});
+
+  // Завантаження прав доступу для робочої ролі користувача (не-адмін)
+  useEffect(() => {
+    const fetchPermissions = async () => {
+      if (user && user.workRole && user.workRole !== "admin") {
+        try {
+          const perms = await getRolePermissions(user.workRole);
+          setUserPermissions(perms?.permissions || {});
+          console.log('🔑 userPermissions для workRole', user.workRole, perms?.permissions);
+        } catch (e) {
+          setUserPermissions({});
+          console.error('❌ Не вдалося завантажити права для workRole', user.workRole, e);
+        }
+      } else if (user && user.workRole === "admin") {
+        setUserPermissions({}); // для адміна не обмежуємо
+      }
+    };
+    fetchPermissions();
+  }, [user?.workRole]);
   // --- Utility meters state ---
   const [utilityMeters, setUtilityMeters] = useState([]);
   const [utilityLoading, setUtilityLoading] = useState(false);
@@ -508,6 +543,7 @@ function App() {
 
   // Використовуємо menuStructure з Firestore для побудови меню
   const navItems = useMemo(() => {
+      console.log('DEBUG navItems (перед фільтрацією):', menuStructure);
     const isAdmin = user?.role === 'admin';
     // Якщо menuStructure порожній, fallback на стандартну структуру
     const structure = (Array.isArray(menuStructure) && menuStructure.length > 0)
@@ -541,10 +577,12 @@ function App() {
     }).filter(group => group.children.length > 0);
 
     // Додаємо іконки
-    return filtered.map(group => ({
+    const result = filtered.map(group => ({
       ...group,
       icon: LucideIcons[group.icon || "Folder"] || LucideIcons.Folder
     }));
+    console.log('DEBUG navItems (після фільтрації):', result);
+    return result;
   }, [menuStructure, user?.role, user?.workRole, userPermissions]);
 
   const renderContent = () => {

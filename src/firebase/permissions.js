@@ -6,23 +6,23 @@ import { db } from "./config";
  */
 export const getRolePermissions = async (roleId) => {
   try {
-    // Спочатку пробуємо знайти по ID
+    // Пробуємо знайти по ID
     const docRef = doc(db, "rolePermissions", roleId);
     const docSnap = await getDoc(docRef);
-    
     if (docSnap.exists()) {
       return docSnap.data();
     }
-    
-    // Якщо не знайдено по ID, шукаємо по назві ролі
+
+    // Якщо не знайдено по ID, шукаємо по roleName (НЕЗАЛЕЖНО ВІД РЕЄСТРУ)
     const querySnapshot = await getDocs(collection(db, "rolePermissions"));
-    const roleByName = querySnapshot.docs.find(doc => doc.data().roleName === roleId);
-    
+    const roleByName = querySnapshot.docs.find(doc => {
+      const rn = doc.data().roleName;
+      return rn && rn.toLowerCase() === String(roleId).toLowerCase();
+    });
     if (roleByName) {
-      console.log(`✅ Знайдено роль по назві: ${roleId} -> ${roleByName.id}`);
+      console.log(`✅ Знайдено роль по roleName: ${roleId} -> ${roleByName.id}`);
       return roleByName.data();
     }
-    
     console.log(`⚠️ Роль не знайдена: ${roleId}`);
     return { permissions: {} };
   } catch (error) {
