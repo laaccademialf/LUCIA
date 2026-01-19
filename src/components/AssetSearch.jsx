@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import QRScanner from "./QRScanner";
 
-export default function AssetSearch({ assets }) {
+export default function AssetSearch({ assets, user, restaurants, onEdit }) {
   const [input, setInput] = useState("");
   const [found, setFound] = useState(null);
   const [error, setError] = useState("");
@@ -99,54 +99,69 @@ export default function AssetSearch({ assets }) {
     );
   };
 
+  // Визначаємо, чи може користувач редагувати знайдений актив
+  let canEdit = false;
+  if (user && found) {
+    if (user.role === 'admin') {
+      canEdit = true;
+    } else if (user.restaurant && restaurants && restaurants.length > 0) {
+      // Знаходимо ресторан користувача
+      const userRest = restaurants.find(r => r.id === user.restaurant);
+      // Дозволяємо редагування, якщо назва ресторану співпадає з locationName активу
+      if (userRest && found.locationName === userRest.name) {
+        canEdit = true;
+      }
+    }
+  }
   return (
-    <div className="w-full flex flex-col gap-4">
-      <div className="card p-6 bg-white border border-slate-200 text-slate-900 shadow-xl w-full">
-        <h2 className="text-xl font-semibold mb-4">Пошук активу</h2>
-        <div className="flex flex-col gap-2 mb-2 relative">
-          <div className="flex flex-row gap-2 w-full">
-            <input
-              className="border rounded px-3 py-2 text-sm flex-1 w-full"
-              placeholder="Введіть інвентарний номер або назву активу"
-              value={input}
-              onChange={handleInputChange}
-              onKeyDown={e => {
-                if (suggestions.length > 0) {
-                  if (e.key === 'ArrowDown') {
-                    setHighlighted(h => Math.min(h + 1, suggestions.length - 1));
-                  } else if (e.key === 'ArrowUp') {
-                    setHighlighted(h => Math.max(h - 1, 0));
-                  } else if (e.key === 'Enter' && highlighted >= 0) {
-                    setFound(suggestions[highlighted]);
-                    setInput(suggestions[highlighted].invNumber);
-                    setSuggestions([]);
-                    setError("");
-                    e.preventDefault();
-                  }
+    <div className="w-full flex flex-col gap-3">
+      <div className="card p-4 bg-white border border-slate-200 text-slate-900 shadow-xl w-full">
+        <div className="flex flex-row items-center gap-2 mb-2">
+          <label className="text-base font-semibold whitespace-nowrap mr-2" htmlFor="asset-search-input">Пошук активу:</label>
+          <input
+            id="asset-search-input"
+            className="border rounded px-3 py-1.5 text-sm flex-1 w-full"
+            placeholder="Введіть інвентарний номер або назву активу"
+            value={input}
+            onChange={handleInputChange}
+            onKeyDown={e => {
+              if (suggestions.length > 0) {
+                if (e.key === 'ArrowDown') {
+                  setHighlighted(h => Math.min(h + 1, suggestions.length - 1));
+                } else if (e.key === 'ArrowUp') {
+                  setHighlighted(h => Math.max(h - 1, 0));
+                } else if (e.key === 'Enter' && highlighted >= 0) {
+                  setFound(suggestions[highlighted]);
+                  setInput(suggestions[highlighted].invNumber);
+                  setSuggestions([]);
+                  setError("");
+                  e.preventDefault();
                 }
-                if (e.key === 'Enter' && highlighted === -1) {
-                  handleSearch();
-                }
-              }}
-              autoFocus
-            />
-            <button
-              className="bg-indigo-600 text-white rounded px-4 py-2 font-semibold hover:bg-indigo-500 whitespace-nowrap"
-              onClick={() => handleSearch()}
-            >
-              Знайти
-            </button>
-            <button
-              className="bg-slate-200 text-slate-800 rounded px-4 py-2 font-semibold hover:bg-slate-300 whitespace-nowrap"
-              type="button"
-              onClick={() => {
-                setError("");
-                setShowScanner((v) => !v);
-              }}
-            >
-              {showScanner ? "Сховати камеру" : "Сканувати QR"}
-            </button>
-          </div>
+              }
+              if (e.key === 'Enter' && highlighted === -1) {
+                handleSearch();
+              }
+            }}
+            autoFocus
+          />
+          <button
+            className="bg-indigo-600 text-white rounded px-3 py-1.5 font-semibold hover:bg-indigo-500 whitespace-nowrap"
+            onClick={() => handleSearch()}
+          >
+            Знайти
+          </button>
+          <button
+            className="bg-slate-200 text-slate-800 rounded px-3 py-1.5 font-semibold hover:bg-slate-300 whitespace-nowrap"
+            type="button"
+            onClick={() => {
+              setError("");
+              setShowScanner((v) => !v);
+            }}
+          >
+            {showScanner ? "Сховати камеру" : "Сканувати QR"}
+          </button>
+        </div>
+        <div className="relative">
           {suggestions.length > 0 && (
             <ul className="absolute z-10 top-full left-0 right-0 bg-white border border-slate-200 rounded shadow max-h-60 overflow-auto mt-1">
               {suggestions.map((a, i) => (
@@ -181,17 +196,30 @@ export default function AssetSearch({ assets }) {
             </div>
           )}
         </div>
-        {error && <div className="text-red-600 mb-2">{error}</div>}
+        {error && <div className="text-red-600 mt-2 mb-0.5">{error}</div>}
       </div>
       <div className="w-full">
         {found && (
-          <div className="card p-6 bg-white border border-slate-200 text-slate-900 shadow-xl w-full mt-2">
-            <h3 className="text-lg font-semibold mb-4">Інформація про актив</h3>
+          <div className="card p-4 bg-white border border-slate-200 text-slate-900 shadow-xl w-full mt-2">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-semibold">Інформація про актив</h3>
+              {onEdit && canEdit && (
+                <button
+                  className="bg-emerald-600 text-white rounded px-4 py-1.5 font-semibold hover:bg-emerald-500 text-sm"
+                  onClick={() => onEdit(found)}
+                >
+                  Редагувати
+                </button>
+              )}
+            </div>
             {renderAssetInfo(found)}
+            {onEdit && !canEdit && (
+              <div className="mt-2 text-rose-600 text-sm font-semibold">Редагування доступне лише для активів вашого ресторану</div>
+            )}
           </div>
         )}
         {!found && error && (
-          <div className="card p-6 bg-white border border-rose-200 text-rose-700 shadow-xl w-full flex items-center justify-center min-h-[120px] mt-2">
+          <div className="card p-4 bg-white border border-rose-200 text-rose-700 shadow-xl w-full flex items-center justify-center min-h-[100px] mt-2">
             <span className="font-semibold">{error}</span>
           </div>
         )}

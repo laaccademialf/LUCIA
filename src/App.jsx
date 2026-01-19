@@ -1480,7 +1480,7 @@ function App() {
       if (topTab === "search") {
         return (
           <div className="grid grid-cols-1">
-            <AssetSearch assets={assets} />
+            <AssetSearch assets={assets} user={user} restaurants={restaurants} onEdit={(asset) => { setSelected(asset); setTopTab('test2'); }} />
           </div>
         );
       }
