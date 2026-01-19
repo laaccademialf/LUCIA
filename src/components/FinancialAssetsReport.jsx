@@ -1,8 +1,82 @@
+// Додаємо імпорт для іконки Clock
+import { Clock } from "lucide-react";
 import { useMemo } from "react";
 import { TrendingUp, DollarSign, AlertTriangle, BarChart3, Download, PieChart } from "lucide-react";
 import { BarChart, Bar, PieChart as PieChartComponent, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line } from "recharts";
 
 export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsibilityCenters = [] }) => {
+      // Амортизація: сума за рік/місяць, середня ставка
+      const amortizationStats = useMemo(() => {
+        let totalAmortPerYear = 0;
+        let totalAmortPerMonth = 0;
+        let count = 0;
+        let avgRate = 0;
+        assets.forEach(a => {
+          const cost = parseFloat(a.initialCost) || 0;
+          const term = parseFloat(a.normativeTerm) || 0;
+          if (cost > 0 && term > 0) {
+            totalAmortPerYear += cost / term;
+            totalAmortPerMonth += cost / term / 12;
+            avgRate += 1 / term;
+            count++;
+          }
+        });
+        return {
+          totalAmortPerYear,
+          totalAmortPerMonth,
+          avgRate: count > 0 ? (avgRate / count * 100).toFixed(2) : 0,
+        };
+      }, [assets]);
+
+      // Активи, що не використовуються
+      const unusedAssets = useMemo(() => {
+        return assets.filter(a => (a.status && ["Не використовується", "На складі", "Вибув"].includes(a.status)));
+      }, [assets]);
+
+      // Прогнозований термін служби (закінчують у 12 міс)
+      const soonExpiredAssets = useMemo(() => {
+        const now = new Date();
+        return assets.filter(a => {
+          if (!a.commissionDate || !a.normativeTerm) return false;
+          const start = new Date(a.commissionDate);
+          if (isNaN(start)) return false;
+          const years = parseFloat(a.normativeTerm);
+          if (!years) return false;
+          const end = new Date(start);
+          end.setFullYear(end.getFullYear() + years);
+          const diffMonths = (end - now) / (1000 * 60 * 60 * 24 * 30.44);
+          return diffMonths >= 0 && diffMonths <= 12;
+        });
+      }, [assets]);
+    // ТОП-10 найдорожчих активів
+    const topExpensiveAssets = useMemo(() => {
+      return assets
+        .filter(a => a.residualValue && a.name)
+        .sort((a, b) => parseFloat(b.residualValue) - parseFloat(a.residualValue))
+        .slice(0, 10);
+    }, [assets]);
+
+    // Структура за віком (якщо є поле commissionDate)
+    const ageGroups = useMemo(() => {
+      const now = new Date();
+      const groups = {
+        '0-3': 0,
+        '3-5': 0,
+        '5-10': 0,
+        '10+': 0,
+      };
+      assets.forEach(a => {
+        if (!a.commissionDate) return;
+        const date = new Date(a.commissionDate);
+        if (isNaN(date)) return;
+        const years = (now - date) / (1000 * 60 * 60 * 24 * 365.25);
+        if (years < 3) groups['0-3']++;
+        else if (years < 5) groups['3-5']++;
+        else if (years < 10) groups['5-10']++;
+        else groups['10+']++;
+      });
+      return Object.entries(groups).map(([name, value]) => ({ name, value }));
+    }, [assets]);
   // Розрахунки основних метрик
   const metrics = useMemo(() => {
     const totalAssets = assets.length;
@@ -167,6 +241,137 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
 
   return (
     <div className="space-y-6">
+      {/* Амортизація */}
+      <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-900 mb-4">Амортизація основних засобів</h3>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <div className="text-slate-700 text-sm">Сумарна амортизація на рік</div>
+            <div className="text-2xl font-bold text-slate-900">{formatCurrency(amortizationStats.totalAmortPerYear)}</div>
+          </div>
+          <div>
+            <div className="text-slate-700 text-sm">Сумарна амортизація на місяць</div>
+            <div className="text-2xl font-bold text-slate-900">{formatCurrency(amortizationStats.totalAmortPerMonth)}</div>
+          </div>
+          <div>
+            <div className="text-slate-700 text-sm">Середня ставка амортизації</div>
+            <div className="text-2xl font-bold text-slate-900">{amortizationStats.avgRate}%</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Активи, що не використовуються */}
+      <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи, що не використовуються / на складі</h3>
+        {unusedAssets.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Назва</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Категорія</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Статус</th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-800">Залишкова вартість</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unusedAssets.map((asset, idx) => (
+                  <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50 transition">
+                    <td className="px-4 py-3 font-medium text-slate-800">{asset.name}</td>
+                    <td className="px-4 py-3 text-slate-600">{asset.category}</td>
+                    <td className="px-4 py-3">{asset.status}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-slate-900">{formatCurrency(asset.residualValue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-center text-slate-500 py-8">Немає таких активів</p>
+        )}
+      </div>
+
+      {/* Активи, у яких закінчується термін служби у 12 міс. */}
+      <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи, у яких закінчується термін служби (12 міс.)</h3>
+        {soonExpiredAssets.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Назва</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Категорія</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Дата введення</th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-800">Термін служби (років)</th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-800">Залишкова вартість</th>
+                </tr>
+              </thead>
+              <tbody>
+                {soonExpiredAssets.map((asset, idx) => (
+                  <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50 transition">
+                    <td className="px-4 py-3 font-medium text-slate-800">{asset.name}</td>
+                    <td className="px-4 py-3 text-slate-600">{asset.category}</td>
+                    <td className="px-4 py-3">{asset.commissionDate}</td>
+                    <td className="px-4 py-3 text-right">{asset.normativeTerm}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-slate-900">{formatCurrency(asset.residualValue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-center text-slate-500 py-8">Немає таких активів</p>
+        )}
+      </div>
+      {/* ТОП-10 найдорожчих активів */}
+      <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-900 mb-4">ТОП-10 найдорожчих активів (залишкова вартість)</h3>
+        {topExpensiveAssets.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Назва</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Категорія</th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-800">Залишкова вартість</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Відповідальний</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Дата введення</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topExpensiveAssets.map((asset, idx) => (
+                  <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50 transition">
+                    <td className="px-4 py-3 font-medium text-slate-800">{asset.name}</td>
+                    <td className="px-4 py-3 text-slate-600">{asset.category}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-slate-900">{formatCurrency(asset.residualValue)}</td>
+                    <td className="px-4 py-3">{asset.respPerson || '-'}</td>
+                    <td className="px-4 py-3">{asset.commissionDate || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-center text-slate-500 py-8">Немає даних</p>
+        )}
+      </div>
+
+      {/* Структура активів за віком */}
+      <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
+          <Clock size={20} className="text-indigo-600" />
+          Структура активів за віком (роки з моменту введення)
+        </h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={ageGroups}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="name" />
+            <YAxis allowDecimals={false} />
+            <Tooltip />
+            <Bar dataKey="value" fill="#6366f1" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
       {/* Заголовок */}
       <div className="flex items-center justify-between mb-6">
         <div>
