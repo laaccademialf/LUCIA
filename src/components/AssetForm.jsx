@@ -57,6 +57,8 @@ const defaultAsset = {
 };
 
 export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: restaurantsProp, assets: assetsProp = [] }) {
+  const isEdit = !!selectedAsset;
+  const isAdmin = currentUser?.role === 'admin' || currentUser?.workRole === 'admin';
   const [activeTab, setActiveTab] = useState("identification");
   const [completedTabs, setCompletedTabs] = useState([]);
   const [photos, setPhotos] = useState([]);
@@ -193,12 +195,11 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     setValue("totalWear", avg);
   }, [physicalWear, moralWear, setValue]);
 
-  // Перевірка чи можна перейти до вкладки
+  // У режимі редагування дозволяємо переміщення по вкладках без обмежень
   const canAccessTab = (tabId) => {
+    if (isEdit) return true;
     const tabIndex = tabs.findIndex((t) => t.id === tabId);
-    if (tabIndex === 0) return true; // Перша вкладка завжди доступна
-    
-    // Перевіряємо чи всі попередні вкладки завершені
+    if (tabIndex === 0) return true;
     for (let i = 0; i < tabIndex; i++) {
       if (!completedTabs.includes(tabs[i].id)) {
         return false;
@@ -296,7 +297,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-slate-900">Додати актив</h2>
+          <h2 className="text-xl font-semibold text-slate-900">{isEdit ? "Редагування актива" : "Додати актив"}</h2>
           <p className="text-sm text-slate-500 mt-1">
             Крок {currentTabIndex + 1} з {tabs.length} • Заповнюйте поля послідовно
           </p>
@@ -346,10 +347,10 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                 label={<>Інвентарний номер {requiredMark}</>} 
                 {...register("invNumber", { required: true })}
                 disabled={
-                  // Disabled якщо редагуємо існуючий актив АБО якщо немає права редагувати, або права ще вантажаться
-                  (selectedAsset !== undefined && selectedAsset !== null) || 
+                  // Для адміна завжди доступно
                   fieldPermsLoading ||
-                  !canEdit("invNumber")
+                  (!isAdmin && isEdit) ||
+                  (!isAdmin && !canEdit("invNumber"))
                 }
               />
               <Controller

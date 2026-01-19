@@ -37,6 +37,23 @@ export default function ColumnVisibilityDropdown({ columns, visibleColumns, setV
       {open && (
         <div className="origin-top-right absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-10 max-h-96 overflow-y-auto">
           <div className="py-1">
+            {/* Чекбокс "Всі" */}
+            <label className="flex items-center px-4 py-2 text-xs font-semibold text-gray-900 cursor-pointer border-b border-gray-100">
+              <input
+                type="checkbox"
+                checked={visibleColumns.length === columns.length}
+                indeterminate={visibleColumns.length > 0 && visibleColumns.length < columns.length ? 'indeterminate' : undefined}
+                onChange={e => {
+                  if (visibleColumns.length === columns.length) {
+                    setVisibleColumns([]);
+                  } else {
+                    setVisibleColumns(columns.map(col => col.key));
+                  }
+                }}
+                className="mr-2"
+              />
+              Всі
+            </label>
             {columns.map((col) => (
               <label key={col.key} className="flex items-center px-4 py-2 text-xs text-gray-700 cursor-pointer">
                 <input

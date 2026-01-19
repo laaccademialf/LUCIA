@@ -1,31 +1,53 @@
 import React, { useState } from "react";
 import QRScanner from "./QRScanner";
 
-// Можна замінити на @zxing/browser або html5-qrcode для сканування QR-кодів
-// Для початку реалізуємо простий інтерфейс з ручним вводом і місцем для сканера
-
 export default function AssetSearch({ assets }) {
   const [input, setInput] = useState("");
   const [found, setFound] = useState(null);
   const [error, setError] = useState("");
   const [showScanner, setShowScanner] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+  const [highlighted, setHighlighted] = useState(-1);
 
   const handleSearch = (customInput) => {
     setError("");
     const value = typeof customInput === 'string' ? customInput : input;
     if (!value.trim()) {
-      setError("Введіть інвентарний номер або QR-код");
+      setError("Введіть інвентарний номер або назву активу");
+      setFound(null);
       return;
     }
+    // Пошук точного збігу по номеру або QR
     const asset = assets.find(
       (a) => a.invNumber === value.trim() || a.qrCode === value.trim()
     );
     if (asset) {
       setFound(asset);
+      setError("");
+      setSuggestions([]);
     } else {
       setFound(null);
       setError("Актив не знайдено");
     }
+  };
+
+  // Автопідказки по номеру або назві
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    setInput(val);
+    setError("");
+    setFound(null);
+    if (!val.trim()) {
+      setSuggestions([]);
+      return;
+    }
+    const lower = val.trim().toLowerCase();
+    const matches = assets.filter(a =>
+      a.invNumber?.toLowerCase().includes(lower) ||
+      a.name?.toLowerCase().includes(lower)
+    ).slice(0, 10);
+    setSuggestions(matches);
+    setHighlighted(-1);
   };
 
   // Форматований вивід інформації про актив у 3 стовпчики
@@ -78,26 +100,44 @@ export default function AssetSearch({ assets }) {
   };
 
   return (
-    <div className="flex flex-col md:flex-row gap-8 w-full justify-center">
-      {/* Ліва колонка — пошук */}
-      <div className="card p-6 bg-white border border-slate-200 text-slate-900 shadow-xl w-full" style={{ maxWidth: 340, minWidth: 280 }}>
+    <div className="w-full flex flex-col gap-4">
+      <div className="card p-6 bg-white border border-slate-200 text-slate-900 shadow-xl w-full">
         <h2 className="text-xl font-semibold mb-4">Пошук активу</h2>
-        <div className="flex flex-col gap-3 mb-4">
-          <input
-            className="border rounded px-3 py-2 text-sm"
-            placeholder="Введіть інвентарний номер або QR-код"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-          />
-          <div className="flex gap-2">
+        <div className="flex flex-col gap-2 mb-2 relative">
+          <div className="flex flex-row gap-2 w-full">
+            <input
+              className="border rounded px-3 py-2 text-sm flex-1 w-full"
+              placeholder="Введіть інвентарний номер або назву активу"
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={e => {
+                if (suggestions.length > 0) {
+                  if (e.key === 'ArrowDown') {
+                    setHighlighted(h => Math.min(h + 1, suggestions.length - 1));
+                  } else if (e.key === 'ArrowUp') {
+                    setHighlighted(h => Math.max(h - 1, 0));
+                  } else if (e.key === 'Enter' && highlighted >= 0) {
+                    setFound(suggestions[highlighted]);
+                    setInput(suggestions[highlighted].invNumber);
+                    setSuggestions([]);
+                    setError("");
+                    e.preventDefault();
+                  }
+                }
+                if (e.key === 'Enter' && highlighted === -1) {
+                  handleSearch();
+                }
+              }}
+              autoFocus
+            />
             <button
-              className="bg-indigo-600 text-white rounded px-4 py-2 font-semibold hover:bg-indigo-500"
-              onClick={handleSearch}
+              className="bg-indigo-600 text-white rounded px-4 py-2 font-semibold hover:bg-indigo-500 whitespace-nowrap"
+              onClick={() => handleSearch()}
             >
               Знайти
             </button>
             <button
-              className="bg-slate-200 text-slate-800 rounded px-4 py-2 font-semibold hover:bg-slate-300"
+              className="bg-slate-200 text-slate-800 rounded px-4 py-2 font-semibold hover:bg-slate-300 whitespace-nowrap"
               type="button"
               onClick={() => {
                 setError("");
@@ -107,6 +147,24 @@ export default function AssetSearch({ assets }) {
               {showScanner ? "Сховати камеру" : "Сканувати QR"}
             </button>
           </div>
+          {suggestions.length > 0 && (
+            <ul className="absolute z-10 top-full left-0 right-0 bg-white border border-slate-200 rounded shadow max-h-60 overflow-auto mt-1">
+              {suggestions.map((a, i) => (
+                <li
+                  key={a.invNumber}
+                  className={`px-3 py-2 cursor-pointer hover:bg-indigo-100 ${i === highlighted ? 'bg-indigo-50' : ''}`}
+                  onMouseDown={() => {
+                    setFound(a);
+                    setInput(a.invNumber);
+                    setSuggestions([]);
+                    setError("");
+                  }}
+                >
+                  <span className="font-semibold">{a.invNumber}</span> — {a.name}
+                </li>
+              ))}
+            </ul>
+          )}
           {showScanner && (
             <div className="mt-2">
               <QRScanner
@@ -125,16 +183,15 @@ export default function AssetSearch({ assets }) {
         </div>
         {error && <div className="text-red-600 mb-2">{error}</div>}
       </div>
-      {/* Права колонка — інформація */}
-      <div className="flex-1">
+      <div className="w-full">
         {found && (
-          <div className="card p-6 bg-white border border-slate-200 text-slate-900 shadow-xl w-full">
+          <div className="card p-6 bg-white border border-slate-200 text-slate-900 shadow-xl w-full mt-2">
             <h3 className="text-lg font-semibold mb-4">Інформація про актив</h3>
             {renderAssetInfo(found)}
           </div>
         )}
         {!found && error && (
-          <div className="card p-6 bg-white border border-rose-200 text-rose-700 shadow-xl w-full flex items-center justify-center min-h-[120px]">
+          <div className="card p-6 bg-white border border-rose-200 text-rose-700 shadow-xl w-full flex items-center justify-center min-h-[120px] mt-2">
             <span className="font-semibold">{error}</span>
           </div>
         )}

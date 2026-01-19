@@ -60,15 +60,19 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     { key: "auditors", header: "Аудитори" },
     { key: "actions", header: "Дії" },
   ];
-  const defaultVisible = ["invNumber", "name", "category", "businessUnit", "status", "decision", "actions"];
+      const defaultVisible = ["invNumber", "name", "category", "businessUnit", "status", "decision", "actions"];
   const [visibleColumns, setVisibleColumns] = useState(defaultVisible);
+  // Фільтрація по ВСІХ активних фільтрах
   const filteredData = useMemo(() => {
     return data.filter((item) => {
-      const byCategory = filters.category ? item.category === filters.category : true;
-      const byStatus = filters.status ? item.status === filters.status : true;
-      const byDecision = filters.decision ? item.decision === filters.decision : true;
-      const byLocation = filters.location ? item.businessUnit === filters.location : true;
-      return byCategory && byStatus && byDecision && byLocation;
+      return Object.entries(filters).every(([key, val]) => {
+        if (!val) return true;
+        // Спеціальна логіка для "location" (businessUnit)
+        if (key === "location") return item.businessUnit === val;
+        // Спеціальна логіка для "locationName"
+        if (key === "locationName") return item.locationName === val;
+        return item[key] === val;
+      });
     });
   }, [data, filters]);
 
@@ -169,38 +173,67 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-2 sm:gap-3 md:grid-cols-4">
-        {!hideLocationFilter && (
-          <FilterSelect
-            label="Локація"
-            value={filters.location}
-            options={[
-              "Ресторан",
-              "Кав'ярня",
-              "Кейтеринг",
-              "Офіс",
-              "Склад",
-            ]}
-            onChange={(val) => setFilters((f) => ({ ...f, location: val }))}
-          />
-        )}
-        <FilterSelect
-          label="Категорія"
-          value={filters.category}
-          options={["Кухня", "Бар", "IT", "Меблі", "Транспорт"]}
-          onChange={(val) => setFilters((f) => ({ ...f, category: val }))}
-        />
-        <FilterSelect
-          label="Статус"
-          value={filters.status}
-          options={["В експлуатації", "Не використовується", "Законсервований"]}
-          onChange={(val) => setFilters((f) => ({ ...f, status: val }))}
-        />
-        <FilterSelect
-          label="Рішення"
-          value={filters.decision}
-          options={["Залишити", "Списати", "Продати", "Перемістити"]}
-          onChange={(val) => setFilters((f) => ({ ...f, decision: val }))}
-        />
+        {/* Динамічний фільтр для кожної видимої колонки (крім invNumber, actions) */}
+        {visibleColumns.filter(key => key !== 'actions' && key !== 'invNumber').map(key => {
+          // Кастомні списки для основних полів
+          if (key === 'businessUnit') {
+            return (
+              <FilterSelect
+                key={key}
+                label="Локація"
+                value={filters.location || ""}
+                options={["Ресторан", "Кав'ярня", "Кейтеринг", "Офіс", "Склад"]}
+                onChange={val => setFilters(f => ({ ...f, location: val }))}
+              />
+            );
+          }
+          if (key === 'category') {
+            return (
+              <FilterSelect
+                key={key}
+                label="Категорія"
+                value={filters.category || ""}
+                options={["Кухня", "Бар", "IT", "Меблі", "Транспорт"]}
+                onChange={val => setFilters(f => ({ ...f, category: val }))}
+              />
+            );
+          }
+          if (key === 'status') {
+            return (
+              <FilterSelect
+                key={key}
+                label="Статус"
+                value={filters.status || ""}
+                options={["В експлуатації", "Не використовується", "Законсервований"]}
+                onChange={val => setFilters(f => ({ ...f, status: val }))}
+              />
+            );
+          }
+          if (key === 'decision') {
+            return (
+              <FilterSelect
+                key={key}
+                label="Рішення"
+                value={filters.decision || ""}
+                options={["Залишити", "Списати", "Продати", "Перемістити"]}
+                onChange={val => setFilters(f => ({ ...f, decision: val }))}
+              />
+            );
+          }
+          // Для решти — унікальні значення з data
+          const label = allFieldDefs.find(f => f.key === key)?.header || key;
+          const filterKey = key;
+          const options = Array.from(new Set(data.map(a => a[key]).filter(Boolean)));
+          return (
+            <FilterSelect
+              key={key}
+              label={label}
+              value={filters[filterKey] || ""}
+              options={options}
+              onChange={val => setFilters(f => ({ ...f, [filterKey]: val }))}
+            />
+          );
+        })}
       </div>
 
       <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white -mx-4 sm:-mx-0">

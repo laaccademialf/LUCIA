@@ -1,35 +1,40 @@
 import { useState } from "react";
 import { Building2, Zap, Droplets, Flame, Plus, Edit2, Trash2, Save } from "lucide-react";
 
-// Типи утиліт
+// Типи утиліт (оновлено)
 const UTILITY_TYPES = [
   { key: "electricity", label: "Електроенергія", icon: <Zap className="inline text-yellow-500" size={18} /> },
-  { key: "water", label: "Вода", icon: <Droplets className="inline text-sky-500" size={18} /> },
+  { key: "water_cold", label: "Вода (холодна)", icon: <Droplets className="inline text-sky-500" size={18} /> },
+  { key: "water_hot", label: "Вода (гаряча)", icon: <Droplets className="inline text-rose-500" size={18} /> },
   { key: "gas", label: "Газ", icon: <Flame className="inline text-orange-500" size={18} /> },
 ];
 
 const UtilityMetersManager = ({ restaurants = [], meters = [], onAddMeter, onUpdateMeter, onDeleteMeter }) => {
-  const [selectedRestaurant, setSelectedRestaurant] = useState(restaurants[0]?.id || "");
-  const [selectedUtility, setSelectedUtility] = useState(UTILITY_TYPES[0].key);
+  const [selectedRestaurant, setSelectedRestaurant] = useState(""); // '' = всі
+  const [selectedUtility, setSelectedUtility] = useState(""); // '' = всі
   const [editId, setEditId] = useState(null);
   const [editPrice, setEditPrice] = useState("");
-  const [newMeter, setNewMeter] = useState({ number: "", price: "" });
+  const [newMeter, setNewMeter] = useState({ number: "", price: "", startValue: "", utilityType: "" });
 
   // Фільтр лічильників по ресторану та утиліті
-  const filteredMeters = meters.filter(
-    m => m.restaurantId === selectedRestaurant && m.utilityType === selectedUtility
-  );
+  const filteredMeters = meters.filter(m => {
+    const byRestaurant = selectedRestaurant ? m.restaurantId === selectedRestaurant : true;
+    const byUtility = selectedUtility ? m.utilityType === selectedUtility : true;
+    return byRestaurant && byUtility;
+  });
 
   const handleAddMeter = () => {
-    if (!newMeter.number || !newMeter.price) return;
+    // Додавати можна лише якщо вибрано конкретний ресторан і тип утиліти
+    if (!newMeter.number || !newMeter.price || !newMeter.startValue) return;
+    if (!selectedRestaurant || !newMeter.utilityType) return;
     onAddMeter && onAddMeter({
       ...newMeter,
       restaurantId: selectedRestaurant,
-      utilityType: selectedUtility,
+      utilityType: newMeter.utilityType,
       id: Date.now().toString(),
       createdAt: new Date().toISOString(),
     });
-    setNewMeter({ number: "", price: "" });
+    setNewMeter({ number: "", price: "", startValue: "", utilityType: "" });
   };
 
   const handleEdit = (meter) => {
@@ -53,6 +58,7 @@ const UtilityMetersManager = ({ restaurants = [], meters = [], onAddMeter, onUpd
             value={selectedRestaurant}
             onChange={e => setSelectedRestaurant(e.target.value)}
           >
+            <option value="">Всі ресторани</option>
             {restaurants.map(r => (
               <option key={r.id} value={r.id}>{r.name}</option>
             ))}
@@ -65,6 +71,7 @@ const UtilityMetersManager = ({ restaurants = [], meters = [], onAddMeter, onUpd
             value={selectedUtility}
             onChange={e => setSelectedUtility(e.target.value)}
           >
+            <option value="">Всі утиліти</option>
             {UTILITY_TYPES.map(u => (
               <option key={u.key} value={u.key}>{u.label}</option>
             ))}
@@ -130,8 +137,16 @@ const UtilityMetersManager = ({ restaurants = [], meters = [], onAddMeter, onUpd
                 />
               </td>
               <td className="px-4 py-2 flex items-center gap-2">
-                {UTILITY_TYPES.find(u => u.key === selectedUtility)?.icon}
-                <span>{UTILITY_TYPES.find(u => u.key === selectedUtility)?.label}</span>
+                <select
+                  className="border border-gray-300 rounded-lg px-2 py-1 w-36 focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+                  value={newMeter.utilityType}
+                  onChange={e => setNewMeter(n => ({ ...n, utilityType: e.target.value }))}
+                >
+                  <option value="">Оберіть тип</option>
+                  {UTILITY_TYPES.map(u => (
+                    <option key={u.key} value={u.key}>{u.label}</option>
+                  ))}
+                </select>
               </td>
               <td className="px-4 py-2">
                 <input
@@ -142,9 +157,24 @@ const UtilityMetersManager = ({ restaurants = [], meters = [], onAddMeter, onUpd
                   onChange={e => setNewMeter(n => ({ ...n, price: e.target.value }))}
                 />
               </td>
-              <td className="px-4 py-2 text-slate-400">{new Date().toISOString().slice(0, 10)}</td>
               <td className="px-4 py-2">
-                <button className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2 py-1 text-xs font-bold text-white hover:bg-emerald-500 transition-all duration-200 shadow" title="Додати" onClick={handleAddMeter}><Plus size={16} />Додати</button>
+                <input
+                  type="number"
+                  className="border border-gray-300 rounded-lg px-2 py-1 w-24 focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400"
+                  placeholder="Стартові показники"
+                  value={newMeter.startValue}
+                  onChange={e => setNewMeter(n => ({ ...n, startValue: e.target.value }))}
+                />
+              </td>
+              <td className="px-4 py-2">
+                <button
+                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2 py-1 text-xs font-bold text-white hover:bg-emerald-500 transition-all duration-200 shadow"
+                  title="Додати"
+                  onClick={handleAddMeter}
+                  disabled={!(selectedRestaurant && newMeter.utilityType && newMeter.number && newMeter.price && newMeter.startValue)}
+                >
+                  <Plus size={16} />Додати
+                </button>
               </td>
             </tr>
           </tbody>
