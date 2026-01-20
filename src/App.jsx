@@ -17,6 +17,7 @@ import { MaterialResponsibilityManager } from "./components/MaterialResponsibili
 import { AssetFieldsManager } from "./components/AssetFieldsManager";
 import FinancialAssetsReport from "./components/FinancialAssetsReport";
 import { useAuth } from "./hooks/useAuth";
+import NotificationPanel from "./components/NotificationPanel";
 import { logoutUser } from "./firebase/auth";
 import { useMenuStructure } from "./hooks/useMenuStructure";
 import { getRolePermissions } from "./firebase/permissions";
@@ -31,198 +32,114 @@ import {
 } from "./firebase/utilityMeters";
 import MenuStructureEditor from "./components/MenuStructureEditor";
 
-
-
-// Початкові дані для ресторанів (якщо база порожня)
-const initialRestaurants = [
-  {
-    regNumber: "001",
-    name: "Ресторан А",
-    address: "Вул. Хрещатик, 1",
-    seatsTotal: "50",
-    seatsSummer: "",
-    seatsWinter: "",
-    hasTerrace: false,
-    areaTotal: "100",
-    areaSummer: "",
-    areaWinter: "",
-    country: "Україна",
-    region: "Київська",
-    city: "Київ",
-    street: "Хрещатик, 1",
-    postalCode: "01001",
-    notes: "",
-    schedule: {
-      mon: { from: "09:00", to: "22:00" },
-      tue: { from: "09:00", to: "22:00" },
-      wed: { from: "09:00", to: "22:00" },
-      thu: { from: "09:00", to: "22:00" },
-      fri: { from: "09:00", to: "22:00" },
-      sat: { from: "10:00", to: "23:00" },
-      sun: { from: "10:00", to: "23:00" },
-    },
-  },
-  {
-    regNumber: "002",
-    name: "Ресторан Б",
-    address: "Вул. Шевченка, 5",
-    seatsTotal: "80",
-    seatsSummer: "",
-    seatsWinter: "",
-    hasTerrace: false,
-    areaTotal: "150",
-    areaSummer: "",
-    areaWinter: "",
-    country: "Україна",
-    region: "Львівська",
-    city: "Львів",
-    street: "Шевченка, 5",
-    postalCode: "79000",
-    notes: "",
-    schedule: {
-      mon: { from: "08:00", to: "21:00" },
-      tue: { from: "08:00", to: "21:00" },
-      wed: { from: "08:00", to: "21:00" },
-      thu: { from: "08:00", to: "21:00" },
-      fri: { from: "08:00", to: "21:00" },
-      sat: { from: "09:00", to: "22:00" },
-      sun: { from: "09:00", to: "22:00" },
-    },
-  },
-];
-
 function App() {
-    // Безпечна функція для логування
-    function logDebug(user, userPermissions, menuStructure) {
-      try {
-        console.log('DEBUG user:', user);
-        console.log('DEBUG userPermissions:', userPermissions);
-        console.log('DEBUG menuStructure:', menuStructure);
-      } catch (e) {
-        console.warn('DEBUG логування пропущено через помилку:', e);
-      }
-    }
-  // --- ВСІ хуки на початку ---
-  // Authentication
-  const { user, loading: authLoading, isAuthenticated } = useAuth();
-  // Menu structure management (admin only)
-  const { menuStructure, save, loading: menuLoading, error: menuError } = useMenuStructure();
-  // Firebase hooks
-  // ...інші хуки...
+                                // Стан розгортання груп меню
+                                const [expandedGroups, setExpandedGroups] = useState({
+                                  dashboard: false,
+                                  settings: false,
+                                  operations: false,
+                                  inventory: false,
+                                  reports: false,
+                                  security: false,
+                                  team: false,
+                                  maintenance: false,
+                                });
+                              // Модальне вікно реєстрації
+                              const [showRegisterModal, setShowRegisterModal] = useState(false);
+                            // Модальне вікно логіну
+                            const [showLoginModal, setShowLoginModal] = useState(false);
+                          // Стан бокового меню
+                          const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+                        // Мобільний режим
+                        const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+                      // Активи
+                      const [assets, setAssets] = useState([]);
+                      // Стан для вибраного активу (редагування)
+                      const [selected, setSelected] = useState(null);
+                      // Стан для фільтрів таблиці активів
+                      const [filters, setFilters] = useState({});
+                      // Стан для центрів відповідальності (business units)
+                      const [businessUnits, setBusinessUnits] = useState([]);
+                      // Стан для фільтрації ресторану у графіку
+                      const [restaurantFilter, setRestaurantFilter] = useState("");
+                      // Стан для вибраного ресторану (редагування)
+                      const [selectedRestaurant, setSelectedRestaurant] = useState(null);
+                      // Стан для форми ресторану
+                      const [restaurantForm, setRestaurantForm] = useState({
+                        regNumber: "",
+                        name: "",
+                        address: "",
+                        seatsTotal: "",
+                        seatsSummer: "",
+                        seatsWinter: "",
+                        hasTerrace: false,
+                        areaTotal: "",
+                        areaSummer: "",
+                        areaWinter: "",
+                        country: "",
+                        region: "",
+                        city: "",
+                        street: "",
+                        postalCode: "",
+                        notes: "",
+                      });
+                      // Стан для графіку роботи ресторану (schedule)
+                      const [schedule, setSchedule] = useState({
+                        mon: { from: "09:00", to: "18:00" },
+                        tue: { from: "09:00", to: "18:00" },
+                        wed: { from: "09:00", to: "18:00" },
+                        thu: { from: "09:00", to: "18:00" },
+                        fri: { from: "09:00", to: "18:00" },
+                        sat: { from: "09:00", to: "18:00" },
+                        sun: { from: "09:00", to: "18:00" },
+                      });
+                    // Права користувача
+                    const [userPermissions, setUserPermissions] = useState({});
+                  // Структура меню
+                  const { menuStructure, save, loading: menuLoading, error: menuError } = useMenuStructure();
+                // Firebase активи
+                const {
+                  assets: firebaseAssets,
+                  loading: assetsLoading,
+                  addAsset: addAssetToFirebase,
+                  updateAsset: updateAssetInFirebase,
+                  deleteAsset: deleteAssetFromFirebase,
+                } = useAssets();
+              // Лічильники утиліт
+              const [utilityMeters, setUtilityMeters] = useState([]);
+            // Firebase ресторани
+            const {
+              restaurants: firebaseRestaurants,
+              loading: restaurantsLoading,
+              addRestaurant: addRestaurantToFirebase,
+              updateRestaurant: updateRestaurantInFirebase,
+              deleteRestaurant: deleteRestaurantFromFirebase,
+            } = useRestaurants();
+          // Користувач
+          const { user, loading: authLoading, isAuthenticated } = useAuth();
+        // Список ресторанів
+        const [restaurants, setRestaurants] = useState([]);
+      // Головна вкладка
+      const [topTab, setTopTab] = useState(() => {
+        // Відновлення збереженої вкладки з localStorage
+        return localStorage.getItem('lucia_topTab') || "test1";
+      });
+    // Головна навігація
+    const [activeNav, setActiveNav] = useState(() => {
+      // Відновлення збереженої сторінки з localStorage
+      return localStorage.getItem('lucia_activeNav') || "reports-assets";
+    });
+  // --- Notification Center state ---
+  const [notifications, setNotifications] = useState([
+    // Заглушки для тесту
+    { title: "Новий актив додано", time: "1 хв тому", body: "Додано основний засіб: Холодильник" },
+    { title: "Завдання виконано", time: "10 хв тому", body: "Завершено аудит інвентаризації" },
+  ]);
+  const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
 
-  // ...інші хуки, useState, useEffect...
 
-  // ...всі хуки, useState, useEffect...
-  const {
-    restaurants: firebaseRestaurants,
-    loading: restaurantsLoading,
-    addRestaurant: addRestaurantToFirebase,
-    updateRestaurant: updateRestaurantInFirebase,
-    deleteRestaurant: deleteRestaurantFromFirebase,
-  } = useRestaurants();
-  const {
-    assets: firebaseAssets,
-    loading: assetsLoading,
-    addAsset: addAssetToFirebase,
-    updateAsset: updateAssetInFirebase,
-    deleteAsset: deleteAssetFromFirebase,
-  } = useAssets();
-  const {
-    businessUnits,
-    categories,
-    subcategories,
-    accountingTypes,
-    statuses,
-    conditions,
-    decisions,
-    placementZones,
-  } = useAssetFields();
-  // Local state
-  const [assets, setAssets] = useState([]);
-  const [restaurants, setRestaurants] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [filters, setFilters] = useState({
-    category: "",
-    status: "",
-    decision: "",
-    location: "",
-  });
-  const [activeNav, setActiveNav] = useState(() => {
-    // Відновлення збереженої сторінки з localStorage
-    return localStorage.getItem('lucia_activeNav') || "reports-assets";
-  });
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  const [expandedGroups, setExpandedGroups] = useState({
-    dashboard: false,
-    settings: false,
-    operations: false,
-    inventory: false,
-    reports: false,
-    security: false,
-    team: false,
-    maintenance: false,
-  });
-  const [topTab, setTopTab] = useState(() => {
-    // Відновлення збереженої вкладки з localStorage
-    return localStorage.getItem('lucia_topTab') || "test1";
-  });
-  const [selectedRestaurant, setSelectedRestaurant] = useState(null);
-  const [restaurantFilter, setRestaurantFilter] = useState("");
-  const [restaurantForm, setRestaurantForm] = useState({
-    regNumber: "",
-    name: "",
-    address: "",
-    seatsTotal: "",
-    seatsSummer: "",
-    seatsWinter: "",
-    hasTerrace: false,
-    areaTotal: "",
-    areaSummer: "",
-    areaWinter: "",
-    country: "",
-    region: "",
-    city: "",
-    street: "",
-    postalCode: "",
-    notes: "",
-  });
-  const [schedule, setSchedule] = useState({
-    mon: { from: "", to: "" },
-    tue: { from: "", to: "" },
-    wed: { from: "", to: "" },
-    thu: { from: "", to: "" },
-    fri: { from: "", to: "" },
-    sat: { from: "", to: "" },
-    sun: { from: "", to: "" },
-  });
-  const [showLoginModal, setShowLoginModal] = useState(false);
-  const [showRegisterModal, setShowRegisterModal] = useState(false);
-  const [showAuthWarning, setShowAuthWarning] = useState(false);
-  const [userPermissions, setUserPermissions] = useState({});
 
-  // Завантаження прав доступу для робочої ролі користувача (не-адмін)
-  useEffect(() => {
-    const fetchPermissions = async () => {
-      if (user && user.workRole && user.workRole !== "admin") {
-        try {
-          const perms = await getRolePermissions(user.workRole);
-          setUserPermissions(perms?.permissions || {});
-          console.log('🔑 userPermissions для workRole', user.workRole, perms?.permissions);
-        } catch (e) {
-          setUserPermissions({});
-          console.error('❌ Не вдалося завантажити права для workRole', user.workRole, e);
-        }
-      } else if (user && user.workRole === "admin") {
-        setUserPermissions({}); // для адміна не обмежуємо
-      }
-    };
-    fetchPermissions();
-  }, [user?.workRole]);
-  // --- Utility meters state ---
-  const [utilityMeters, setUtilityMeters] = useState([]);
-  const [utilityLoading, setUtilityLoading] = useState(false);
+
 
   // --- Далі всі useEffect, useMemo, ... ---
 
@@ -1801,8 +1718,27 @@ function App() {
                 )}
               </div>
               
-              {/* Користувач та вихід - праворуч */}
+              {/* Користувач, сповіщення та вихід - праворуч */}
               <div className="flex items-center gap-2 sm:gap-4">
+                {/* Дзвоник сповіщень */}
+                <button
+                  type="button"
+                  className="relative p-2 rounded-full hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  title="Сповіщення"
+                  onClick={() => setNotificationPanelOpen((v) => !v)}
+                >
+                  <LucideIcons.Bell size={20} className="text-slate-300" />
+                  {/* Badge для непрочитаних */}
+                  {notifications && notifications.length > 0 && (
+                    <span className="absolute top-1 right-1 block h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-white animate-pulse"></span>
+                  )}
+                </button>
+                {/* NotificationPanel popover */}
+                <NotificationPanel
+                  open={notificationPanelOpen}
+                  onClose={() => setNotificationPanelOpen(false)}
+                  notifications={notifications}
+                />
                 <div className="hidden sm:flex items-center gap-2 text-sm text-slate-300">
                   <LucideIcons.UserIcon size={16} />
                   <span className="max-w-xs truncate">{user?.displayName || user?.email}</span>
