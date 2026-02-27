@@ -5,11 +5,17 @@ export const printAssetQrLabel = async ({
   name,
   qrValue,
 }) => {
+  const printWindow = window.open("", "_blank", "width=420,height=620");
+  if (!printWindow) {
+    throw new Error("Не вдалося відкрити вікно друку. Дозвольте pop-up у браузері.");
+  }
+
   const normalizedInvNumber = String(invNumber || "").trim();
   const normalizedName = String(name || "").trim();
   const valueToEncode = String(qrValue || normalizedInvNumber || normalizedName || "").trim();
 
   if (!normalizedInvNumber || !normalizedName || !valueToEncode) {
+    printWindow.close();
     throw new Error("Для друку QR потрібні інвентарний номер і назва активу");
   }
 
@@ -59,6 +65,11 @@ export const printAssetQrLabel = async ({
         height: 36mm;
         margin: 2mm auto 0;
       }
+      .hint {
+        margin-top: 2mm;
+        font-size: 7pt;
+        color: #475569;
+      }
     </style>
   </head>
   <body>
@@ -66,61 +77,33 @@ export const printAssetQrLabel = async ({
       <div class="title">${normalizedName}</div>
       <div class="inv">Інв. №: ${normalizedInvNumber}</div>
       <img id="qr-img" class="qr" src="${qrDataUrl}" alt="QR ${normalizedInvNumber}" />
+      <div class="hint">Якщо друк не стартував — натисніть Ctrl/Cmd+P</div>
     </div>
+    <script>
+      (function() {
+        const img = document.getElementById('qr-img');
+        const start = () => {
+          setTimeout(() => {
+            window.focus();
+            window.print();
+          }, 120);
+        };
+
+        if (img && img.complete) {
+          start();
+        } else if (img) {
+          img.onload = start;
+          img.onerror = start;
+        } else {
+          start();
+        }
+      })();
+    </script>
   </body>
 </html>
 `;
 
-  const iframe = document.createElement("iframe");
-  iframe.style.position = "fixed";
-  iframe.style.right = "0";
-  iframe.style.bottom = "0";
-  iframe.style.width = "0";
-  iframe.style.height = "0";
-  iframe.style.border = "0";
-  iframe.setAttribute("aria-hidden", "true");
-  document.body.appendChild(iframe);
-
-  const cleanup = () => {
-    setTimeout(() => {
-      if (iframe.parentNode) {
-        iframe.parentNode.removeChild(iframe);
-      }
-    }, 800);
-  };
-
-  const frameWindow = iframe.contentWindow;
-  const frameDoc = frameWindow?.document;
-  if (!frameWindow || !frameDoc) {
-    cleanup();
-    throw new Error("Не вдалося ініціалізувати область друку");
-  }
-
-  frameDoc.open();
-  frameDoc.write(html);
-  frameDoc.close();
-
-  const img = frameDoc.getElementById("qr-img");
-  const startPrint = () => {
-    setTimeout(() => {
-      frameWindow.focus();
-      frameWindow.print();
-      cleanup();
-    }, 120);
-  };
-
-  if (img && img.complete) {
-    startPrint();
-    return;
-  }
-
-  if (img) {
-    img.onload = startPrint;
-    img.onerror = () => {
-      cleanup();
-      console.error("Не вдалося завантажити QR зображення для друку");
-    };
-  } else {
-    startPrint();
-  }
+  printWindow.document.open();
+  printWindow.document.write(html);
+  printWindow.document.close();
 };
