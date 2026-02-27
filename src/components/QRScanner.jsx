@@ -1,41 +1,74 @@
 // Простий QR-сканер на базі @zxing/browser
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, useState } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
-import { NotFoundException } from "@zxing/library";
 
 export default function QRScanner({ onResult, onError }) {
   const videoRef = useRef(null);
   const codeReader = useRef(null);
+  const controlsRef = useRef(null);
+  const [statusText, setStatusText] = useState("Запуск камери...");
 
   useEffect(() => {
     codeReader.current = new BrowserMultiFormatReader();
     let stopped = false;
-    let resetOnce = false;
-    codeReader.current.decodeFromVideoDevice(null, videoRef.current, (result, err) => {
+
+    const handleDecode = (result, err) => {
       if (stopped) return;
-      if (result) {
-        stopped = true;
-        onResult(result.getText());
-        if (!resetOnce) {
-          codeReader.current.reset();
-          resetOnce = true;
+      try {
+        if (result) {
+          stopped = true;
+          onResult(result.getText());
+          controlsRef.current?.stop();
+          controlsRef.current = null;
+          return;
         }
-      } else if (err && !(err instanceof NotFoundException)) {
-        onError && onError(err);
+
+        if (err && err.name !== "NotFoundException") {
+          console.error("QR decode error:", err);
+        }
+      } catch (callbackError) {
+        console.error("QR scanner callback error:", callbackError);
+        onError && onError(callbackError);
       }
-    });
+    };
+
+    const start = async () => {
+      if (!videoRef.current) return;
+
+      try {
+        setStatusText("Запит доступу до камери...");
+        controlsRef.current = await codeReader.current.decodeFromVideoDevice(
+          undefined,
+          videoRef.current,
+          handleDecode
+        );
+        setStatusText("Наведіть камеру на QR код");
+      } catch (error) {
+        setStatusText("Не вдалося запустити камеру");
+        onError && onError(error);
+      }
+    };
+
+    start();
+
     return () => {
       stopped = true;
-      if (!resetOnce) {
-        codeReader.current.reset();
-        resetOnce = true;
-      }
+      controlsRef.current?.stop();
+      controlsRef.current = null;
+      codeReader.current = null;
     };
   }, [onResult, onError]);
 
   return (
-    <div>
-      <video ref={videoRef} style={{ width: "100%", maxWidth: 320, borderRadius: 8 }} />
+    <div className="space-y-2">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        style={{ width: "100%", maxWidth: 360, minHeight: 260, borderRadius: 8, backgroundColor: "#000", objectFit: "cover" }}
+      />
+      <div className="text-xs text-slate-600">{statusText}</div>
     </div>
   );
 }

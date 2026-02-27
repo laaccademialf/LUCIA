@@ -2,6 +2,34 @@ import React, { useState } from "react";
 import QRScanner from "./QRScanner";
 import { printAssetQrLabel } from "../utils/printQrLabel";
 
+class ScannerErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, message: "" };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, message: error?.message || "Помилка запуску сканера" };
+  }
+
+  componentDidCatch(error) {
+    if (this.props.onError) {
+      this.props.onError(error);
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+          Не вдалося відкрити сканер: {this.state.message}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function AssetSearch({ assets, user, restaurants, onEdit }) {
   const [input, setInput] = useState("");
   const [found, setFound] = useState(null);
@@ -185,17 +213,19 @@ export default function AssetSearch({ assets, user, restaurants, onEdit }) {
           )}
           {showScanner && (
             <div className="mt-2">
-              <QRScanner
-                onResult={(code) => {
-                  if (!code) return;
-                  setInput(code);
-                  setTimeout(() => {
-                    handleSearch(code);
-                    setShowScanner(false);
-                  }, 100);
-                }}
-                onError={(err) => setError("Помилка сканування: " + err.message)}
-              />
+              <ScannerErrorBoundary onError={(err) => setError("Помилка сканера: " + (err?.message || "невідома помилка"))}>
+                <QRScanner
+                  onResult={(code) => {
+                    if (!code) return;
+                    setInput(code);
+                    setTimeout(() => {
+                      handleSearch(code);
+                      setShowScanner(false);
+                    }, 100);
+                  }}
+                  onError={(err) => setError("Помилка сканування: " + (err?.message || "невідома помилка"))}
+                />
+              </ScannerErrorBoundary>
             </div>
           )}
         </div>
