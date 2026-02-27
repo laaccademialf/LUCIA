@@ -8,9 +8,10 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { ArrowDownZA, ArrowUpAZ, Download, Pencil, Trash2, SlidersHorizontal } from "lucide-react";
+import { ArrowDownZA, ArrowUpAZ, Download, FileDown, Pencil, Trash2, Upload, SlidersHorizontal } from "lucide-react";
 import ColumnVisibilityDropdown from "./ColumnVisibilityDropdown";
 import clsx from "clsx";
+import { printAssetQrLabel } from "../utils/printQrLabel";
 
 // High-contrast badges on light backgrounds for readability
 const decisionColors = {
@@ -22,9 +23,10 @@ const decisionColors = {
 
 const columnHelper = createColumnHelper();
 
-export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false }) {
+export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false }) {
   // Стан для видимих колонок
   // Додаємо всі можливі поля з mockAssets
+  const fileInputRef = useRef(null);
   const allFieldDefs = [
     { key: "invNumber", header: "Інв. номер" },
     { key: "name", header: "Назва активу" },
@@ -83,11 +85,28 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         id: "actions",
         header: def.header,
         cell: (info) => (
-          <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-1 justify-end flex-nowrap">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await printAssetQrLabel({
+                    invNumber: info.row.original.invNumber,
+                    name: info.row.original.name,
+                    qrValue: info.row.original.qrCode || info.row.original.invNumber,
+                  });
+                } catch (err) {
+                  alert(err.message || "Не вдалося надрукувати QR код");
+                }
+              }}
+              className="inline-flex items-center gap-1 rounded-md bg-slate-700 border border-slate-600 px-2 py-1 text-xs font-semibold text-white hover:bg-slate-600 transition whitespace-nowrap"
+            >
+              <span className="hidden sm:inline">Друк QR</span><span className="sm:hidden">QR</span>
+            </button>
             <button
               type="button"
               onClick={() => onEdit(info.row.original)}
-              className="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 px-2 sm:px-4 py-1 sm:py-2 text-xs sm:text-sm font-bold text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-lg shadow-indigo-500/40 hover:shadow-indigo-400/60 whitespace-nowrap"
+              className="inline-flex items-center gap-1 rounded-md bg-indigo-600 border border-indigo-500 px-2 py-1 text-xs font-semibold text-white hover:bg-indigo-500 transition whitespace-nowrap"
             >
               <Pencil size={14} /> <span className="hidden sm:inline">Редагувати</span><span className="sm:hidden">Ред.</span>
             </button>
@@ -99,7 +118,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
                     onDelete(info.row.original.id);
                   }
                 }}
-                className="inline-flex items-center gap-1 rounded-lg bg-gradient-to-r from-red-600 to-red-700 border-2 border-red-500 px-2 sm:px-4 py-1 sm:py-2 text-xs sm:text-sm font-bold text-white hover:from-red-500 hover:to-red-600 hover:border-red-400 transition-all duration-200 shadow-lg shadow-red-500/40 hover:shadow-red-400/60 whitespace-nowrap"
+                className="inline-flex items-center gap-1 rounded-md bg-red-600 border border-red-500 px-2 py-1 text-xs font-semibold text-white hover:bg-red-500 transition whitespace-nowrap"
               >
                 <Trash2 size={14} /> <span className="hidden sm:inline">Видалити</span><span className="sm:hidden">Вид.</span>
               </button>
@@ -123,15 +142,15 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
           );
         }
         if (def.key === "status") {
-          return <span className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">{info.getValue()}</span>;
+          return <span className="inline-flex items-center rounded-md px-2 py-1 text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300 whitespace-nowrap">{info.getValue()}</span>;
         }
         if (def.key === "decision") {
-          return <span className={clsx("badge", decisionColors[info.getValue()] || "bg-slate-100 text-slate-700")}>{info.getValue()}</span>;
+          return <span className={clsx("badge whitespace-nowrap text-xs", decisionColors[info.getValue()] || "bg-slate-100 text-slate-700")}>{info.getValue()}</span>;
         }
         if (def.key === "initialCost" || def.key === "marketValueNew" || def.key === "marketValueUsed" || def.key === "residualValue") {
           return info.getValue() ? info.getValue().toLocaleString("uk-UA") + " ₴" : "";
         }
-        return <span>{info.getValue() ?? ""}</span>;
+        return <span className="text-sm">{info.getValue() ?? ""}</span>;
       },
     });
   });
@@ -161,13 +180,46 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
           <p className="text-xs sm:text-sm text-slate-600">{headerSubtitle}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {isAdminOnly && onImport && (
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              ref={fileInputRef}
+              style={{ display: "none" }}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  await onImport(file);
+                }
+                e.target.value = "";
+              }}
+            />
+          )}
           <ColumnVisibilityDropdown
             columns={allFieldDefs}
             visibleColumns={visibleColumns}
             setVisibleColumns={setVisibleColumns}
           />
+          {isAdminOnly && onDownloadTemplate && (
+            <button
+              type="button"
+              onClick={onDownloadTemplate}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-slate-600 text-white hover:bg-slate-500 transition-all duration-200 shadow whitespace-nowrap"
+            >
+              <FileDown size={14} /> <span className="hidden sm:inline">Шаблон</span><span className="sm:hidden">Шабл.</span>
+            </button>
+          )}
+          {isAdminOnly && onImport && (
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-emerald-600 text-white hover:bg-emerald-500 transition-all duration-200 shadow whitespace-nowrap"
+            >
+              <Upload size={14} /> <span className="hidden sm:inline">Імпорт</span><span className="sm:hidden">Імп.</span>
+            </button>
+          )}
           <button type="button" onClick={onExport} className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow whitespace-nowrap">
-            <Download size={14} /> <span className="hidden sm:inline">Експорт CSV</span><span className="sm:hidden">Експ.</span>
+            <Download size={14} /> <span className="hidden sm:inline">Експорт Excel</span><span className="sm:hidden">Експ.</span>
           </button>
         </div>
       </div>
@@ -245,7 +297,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
                 {headerGroup.headers.map((header) => (
                   <th
                     key={header.id}
-                    className="px-4 py-3 font-semibold text-slate-800 uppercase tracking-wide cursor-pointer hover:bg-slate-100 transition-colors"
+                    className="px-3 py-2.5 text-xs font-semibold text-slate-800 uppercase tracking-wide cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                     onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
                   >
                     <div className="flex items-center gap-1">
@@ -261,7 +313,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
             {table.getRowModel().rows.map((row) => (
               <tr key={row.id} className="border-b border-slate-200 last:border-0 hover:bg-slate-50 transition-colors">
                 {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="px-4 py-3 align-top text-slate-800 font-medium">
+                  <td key={cell.id} className="px-3 py-2 align-top text-slate-800 font-medium">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}

@@ -31,8 +31,32 @@ import {
   deleteUtilityMeter,
 } from "./firebase/utilityMeters";
 import MenuStructureEditor from "./components/MenuStructureEditor";
+import {
+  downloadAssetTemplate,
+  downloadRestaurantTemplate,
+  exportAssetsToExcel,
+  exportRestaurantsToExcel,
+  importAssetsFromExcel,
+  importRestaurantsFromExcel,
+} from "./utils/excelHelpers";
 
 function App() {
+                                  // --- Функція для завантаження всіх лічильників ---
+                                  const fetchAllMeters = async () => {
+                                    if (!user || user.role !== "admin" || !restaurants.length) return;
+                                    setUtilityLoading(true);
+                                    let all = [];
+                                    for (const r of restaurants) {
+                                      for (const type of ["electricity", "water_cold", "water_hot", "gas"]) {
+                                        try {
+                                          const meters = await getUtilityMeters(r.id, type);
+                                          all = all.concat(meters);
+                                        } catch (e) { /* ignore */ }
+                                      }
+                                    }
+                                    setUtilityMeters(all);
+                                    setUtilityLoading(false);
+                                  };
                                 // Стан розгортання груп меню
                                 const [expandedGroups, setExpandedGroups] = useState({
                                   dashboard: false,
@@ -50,6 +74,7 @@ function App() {
                             const [showLoginModal, setShowLoginModal] = useState(false);
                           // Стан бокового меню
                           const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+                          const [sidebarOpen, setSidebarOpen] = useState(false);
                         // Мобільний режим
                         const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
                       // Активи
@@ -107,6 +132,8 @@ function App() {
                 } = useAssets();
               // Лічильники утиліт
               const [utilityMeters, setUtilityMeters] = useState([]);
+              // Стан завантаження лічильників утиліт
+              const [utilityLoading, setUtilityLoading] = useState(false);
             // Firebase ресторани
             const {
               restaurants: firebaseRestaurants,
@@ -147,22 +174,12 @@ function App() {
 
   // --- Utility meters effect ---
   useEffect(() => {
-    const fetchAllMeters = async () => {
-      if (!user || user.role !== "admin" || !restaurants.length) return;
-      setUtilityLoading(true);
-      let all = [];
-      for (const r of restaurants) {
-        for (const type of ["electricity", "water", "gas"]) {
-          try {
-            const meters = await getUtilityMeters(r.id, type);
-            all = all.concat(meters);
-          } catch (e) { /* ignore */ }
-        }
-      }
-      setUtilityMeters(all);
-      setUtilityLoading(false);
-    };
-    if (activeNav === "inventory-utilities" && topTab === "utilityservice") {
+    if (
+      activeNav === "inventory-utilities" &&
+      topTab === "utilityservice" &&
+      user &&
+      restaurants.length > 0
+    ) {
       fetchAllMeters();
     }
   }, [activeNav, topTab, restaurants, user]);
@@ -196,9 +213,42 @@ function App() {
     }
   }, [firebaseRestaurants, restaurantsLoading, user]);
 
+  // --- Завантаження прав для поточного користувача (за роллю/робочою роллю)
+  useEffect(() => {
+    const loadPermissions = async () => {
+      if (!user) {
+        setUserPermissions({});
+        return;
+      }
+
+      // адміністратор не потребує фільтрації, зберігаємо порожній об'єкт
+      if (user.role === 'admin') {
+        setUserPermissions({});
+        return;
+      }
+
+      // беремо з workRole або role як універсальний ідентифікатор
+      const roleIdOrName = user.workRole || user.role;
+      if (!roleIdOrName) {
+        setUserPermissions({});
+        return;
+      }
+
+      try {
+        const rolePerms = await getRolePermissions(roleIdOrName);
+        console.log("DEBUG завантажено дозволи для ролі/робочої ролі:", roleIdOrName, rolePerms);
+        setUserPermissions(rolePerms.permissions || {});
+      } catch (err) {
+        console.error("Помилка отримання прав доступу для користувача:", err);
+        setUserPermissions({});
+      }
+    };
+    loadPermissions();
+  }, [user]);
+
   // DEBUG: завантаження лічильників
   useEffect(() => {
-    if (activeNav === "inventory-utilities" && topTab === "utilytyservice") {
+    if (activeNav === "inventory-utilities" && topTab === "utilityservice") {
       console.log("DEBUG utilityMeters state:", utilityMeters);
     }
   }, [activeNav, topTab, utilityMeters]);
@@ -405,50 +455,45 @@ function App() {
   };
 
   const handleExport = () => {
-    const header = [
-      "invNumber",
-      "name",
-      "category",
-      "subCategory",
-      "type",
-      "serialNumber",
-      "brand",
-      "businessUnit",
-      "locationName",
-      "zone",
-      "respCenter",
-      "respPerson",
-      "status",
-      "condition",
-      "functionality",
-      "relevance",
-      "comment",
-      "purchaseYear",
-      "commissionDate",
-      "normativeTerm",
-      "physicalWear",
-      "moralWear",
-      "totalWear",
-      "initialCost",
-      "marketValueNew",
-      "marketValueUsed",
-      "residualValue",
-      "decision",
-      "reason",
-      "newLocation",
-      "auditDate",
-      "auditors",
-    ];
+    exportAssetsToExcel(assets);
+  };
 
-    const rows = assets.map((a) => header.map((key) => a[key] ?? ""));
-    const csv = [header.join(","), ...rows.map((r) => r.join(","))].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "assets.csv";
-    link.click();
-    URL.revokeObjectURL(url);
+  const handleImportAssets = async (file) => {
+    try {
+      const importedAssets = await importAssetsFromExcel(file);
+      if (!Array.isArray(importedAssets) || importedAssets.length === 0) {
+        alert("Файл не містить даних для імпорту.");
+        return;
+      }
+
+      let created = 0;
+      let updated = 0;
+      let skipped = 0;
+
+      for (const importedAsset of importedAssets) {
+        const invNumber = String(importedAsset.invNumber || "").trim();
+        const name = String(importedAsset.name || "").trim();
+        if (!invNumber || !name) {
+          skipped += 1;
+          continue;
+        }
+
+        const existing = assets.find((asset) => String(asset.invNumber || "").trim() === invNumber);
+
+        if (existing?.id) {
+          await updateAssetInFirebase(existing.id, { ...existing, ...importedAsset, invNumber, name });
+          updated += 1;
+        } else {
+          await addAssetToFirebase({ ...importedAsset, invNumber, name });
+          created += 1;
+        }
+      }
+
+      alert(`Імпорт завершено. Додано: ${created}, оновлено: ${updated}, пропущено: ${skipped}.`);
+    } catch (error) {
+      console.error("Помилка імпорту активів:", error);
+      alert("Помилка імпорту файлу активів. Перевірте формат Excel.");
+    }
   };
 
   const summary = useMemo(() => {
@@ -461,6 +506,7 @@ function App() {
   // Використовуємо menuStructure з Firestore для побудови меню
   const navItems = useMemo(() => {
       console.log('DEBUG navItems (перед фільтрацією):', menuStructure);
+    console.log('DEBUG current user:', user, 'userPermissions:', userPermissions);
     const isAdmin = user?.role === 'admin';
     // Якщо menuStructure порожній, fallback на стандартну структуру
     const structure = (Array.isArray(menuStructure) && menuStructure.length > 0)
@@ -505,13 +551,25 @@ function App() {
   const renderContent = () => {
         // ...existing code...
         // Вкладка управління утилітами
-        if (activeNav === "inventory-utilities" && topTab === "utilytyservice") {
+        if (activeNav === "inventory-utilities" && topTab === "utilityservice") {
+          console.log("DEBUG renderContent: activeNav:", activeNav, "topTab:", topTab);
+          return (
+            <div className="p-4">
+              <div className="mb-4 p-3 bg-blue-100 border border-blue-300 text-blue-700 rounded-lg text-sm">
+                <div>DEBUG renderContent:</div>
+                <div>activeNav: {String(activeNav)}</div>
+                <div>topTab: {String(topTab)}</div>
+              </div>
+              {/* Далі йде реальний інтерфейс */}
+              {/* ...старий код повернення UtilityMetersManager... */}
+            </div>
+          );
           const handleAddMeter = async (meter) => {
             await addUtilityMeter(meter);
             // Оновити список після додавання
             const all = [];
             for (const r of restaurants) {
-              for (const type of ["electricity", "water", "gas"]) {
+              for (const type of ["electricity", "water_cold", "water_hot", "gas"]) {
                 try {
                   const meters = await getUtilityMeters(r.id, type);
                   all.push(...meters);
@@ -546,105 +604,6 @@ function App() {
             </div>
           );
         }
-    const baseInput = "w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400 disabled:border-gray-200 disabled:cursor-not-allowed";
-
-    const renderAddressFields = () => (
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <div>
-          <label className="text-sm font-semibold text-slate-800">Країна</label>
-          <input className={baseInput} value={restaurantForm.country} onChange={(e) => setRestaurantForm((p) => ({ ...p, country: e.target.value }))} />
-        </div>
-        <div>
-          <label className="text-sm font-semibold text-slate-800">Область</label>
-          <input className={baseInput} value={restaurantForm.region} onChange={(e) => setRestaurantForm((p) => ({ ...p, region: e.target.value }))} />
-        </div>
-        <div>
-          <label className="text-sm font-semibold text-slate-800">Місто / Село</label>
-          <input className={baseInput} value={restaurantForm.city} onChange={(e) => setRestaurantForm((p) => ({ ...p, city: e.target.value }))} />
-        </div>
-        <div>
-          <label className="text-sm font-semibold text-slate-800">Вулиця</label>
-          <input className={baseInput} value={restaurantForm.street} onChange={(e) => setRestaurantForm((p) => ({ ...p, street: e.target.value }))} />
-        </div>
-        <div>
-          <label className="text-sm font-semibold text-slate-800">Поштовий індекс</label>
-          <input className={baseInput} value={restaurantForm.postalCode} onChange={(e) => setRestaurantForm((p) => ({ ...p, postalCode: e.target.value }))} />
-        </div>
-      </div>
-    );
-
-    const renderSeatingFields = () => (
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="hasTerrace"
-            className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-            checked={restaurantForm.hasTerrace}
-            onChange={(e) => setRestaurantForm((p) => ({ ...p, hasTerrace: e.target.checked }))}
-          />
-          <label htmlFor="hasTerrace" className="text-sm font-semibold text-slate-800">Розділяти літо / зима</label>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Посадкові місця (всього)</label>
-            <input
-              className={baseInput}
-              value={restaurantForm.seatsTotal}
-              onChange={(e) => setRestaurantForm((p) => ({ ...p, seatsTotal: e.target.value }))}
-              disabled={restaurantForm.hasTerrace}
-            />
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Посадкові місця (літо)</label>
-            <input
-              className={baseInput}
-              value={restaurantForm.seatsSummer}
-              onChange={(e) => setRestaurantForm((p) => ({ ...p, seatsSummer: e.target.value }))}
-              disabled={!restaurantForm.hasTerrace}
-            />
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Посадкові місця (зима)</label>
-            <input
-              className={baseInput}
-              value={restaurantForm.seatsWinter}
-              onChange={(e) => setRestaurantForm((p) => ({ ...p, seatsWinter: e.target.value }))}
-              disabled={!restaurantForm.hasTerrace}
-            />
-          </div>
-
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Площа, м² (всього)</label>
-            <input
-              className={baseInput}
-              value={restaurantForm.areaTotal}
-              onChange={(e) => setRestaurantForm((p) => ({ ...p, areaTotal: e.target.value }))}
-              disabled={restaurantForm.hasTerrace}
-            />
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Площа, м² (літо)</label>
-            <input
-              className={baseInput}
-              value={restaurantForm.areaSummer}
-              onChange={(e) => setRestaurantForm((p) => ({ ...p, areaSummer: e.target.value }))}
-              disabled={!restaurantForm.hasTerrace}
-            />
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Площа, м² (зима)</label>
-            <input
-              className={baseInput}
-              value={restaurantForm.areaWinter}
-              onChange={(e) => setRestaurantForm((p) => ({ ...p, areaWinter: e.target.value }))}
-              disabled={!restaurantForm.hasTerrace}
-            />
-          </div>
-        </div>
-      </div>
-    );
 
     const renderSchedule = () => {
       const days = [
@@ -1449,6 +1408,8 @@ function App() {
                   filters={filters}
                   setFilters={setFilters}
                   onExport={handleExport}
+                  onImport={user?.role === 'admin' ? handleImportAssets : null}
+                  onDownloadTemplate={user?.role === 'admin' ? downloadAssetTemplate : null}
                   headerTitle="Редагування активів"
                   headerSubtitle="Вибери актив для редагування"
                   hideLocationFilter={user?.role !== 'admin'}
@@ -1615,8 +1576,8 @@ function App() {
   };
 
   const handleLoginSuccess = () => {
-    setActiveNav("dashboard-overview");
-    localStorage.setItem('lucia_activeNav', "dashboard-overview");
+    // на момент закриття модалки user ще не встановлений, тому переходимо у useEffect нижче
+    console.log("DEBUG: handleLoginSuccess invoked");
   };
 
   const loginModalElement = showLoginModal ? (
@@ -1626,6 +1587,26 @@ function App() {
   const registerModalElement = showRegisterModal ? (
     <RegisterModal onClose={() => setShowRegisterModal(false)} onSwitchToLogin={handleSwitchToLogin} />
   ) : null;
+
+  // -- side effects for layout / navigation helpers --
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // якщо активна вкладка недоступна, переключаємо на першу дозволену
+  useEffect(() => {
+    if (!user) return;
+    const allowedIds = navItems.flatMap(g => g.children.map(c => c.id));
+    if (allowedIds.length === 0) return;
+    if (!allowedIds.includes(activeNav)) {
+      const defaultNav = allowedIds[0];
+      console.log("DEBUG: switch activeNav to first allowed", defaultNav);
+      setActiveNav(defaultNav);
+      localStorage.setItem('lucia_activeNav', defaultNav);
+    }
+  }, [user, navItems, activeNav]);
 
   return (
     <div className="app-shell min-h-screen bg-slate-900 text-slate-50">
@@ -1768,7 +1749,6 @@ function App() {
               <button
                 onClick={() => {
                   setShowLoginModal(true);
-                  setShowAuthWarning(false);
                 }}
                 className="px-2 sm:px-4 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition text-xs sm:text-sm font-medium"
               >
@@ -1777,7 +1757,6 @@ function App() {
               <button
                 onClick={() => {
                   setShowRegisterModal(true);
-                  setShowAuthWarning(false);
                 }}
                 className="px-2 sm:px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition text-xs sm:text-sm font-semibold"
               >
@@ -1793,6 +1772,15 @@ function App() {
         {/* Main Content */}
         <main className={clsx("flex-1 mt-14 overflow-auto transition-all duration-300", isMobile ? "ml-0" : sidebarCollapsed ? "ml-20" : "ml-72")}>
           {topTabsElement}
+          {/* show loader while menu/permissions are loading */}
+          {menuLoading && (
+            <div className="p-6 text-center text-slate-300">Завантаження меню...</div>
+          )}
+          {!menuLoading && user && navItems.length === 0 && (
+            <div className="p-6 text-center text-slate-300">
+              Немає доступних розділів для вашої ролі.
+            </div>
+          )}
 
           <div className="mx-auto max-w-screen-2xl px-3 py-4 sm:px-6 sm:py-8 lg:px-8">
             <div className="mt-4">

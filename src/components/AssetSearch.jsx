@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import QRScanner from "./QRScanner";
+import { printAssetQrLabel } from "../utils/printQrLabel";
 
 export default function AssetSearch({ assets, user, restaurants, onEdit }) {
   const [input, setInput] = useState("");
@@ -116,11 +117,11 @@ export default function AssetSearch({ assets, user, restaurants, onEdit }) {
   return (
     <div className="w-full flex flex-col gap-3">
       <div className="card p-4 bg-white border border-slate-200 text-slate-900 shadow-xl w-full">
-        <div className="flex flex-row items-center gap-2 mb-2">
-          <label className="text-base font-semibold whitespace-nowrap mr-2" htmlFor="asset-search-input">Пошук активу:</label>
+        <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <label className="text-base font-semibold sm:whitespace-nowrap" htmlFor="asset-search-input">Пошук активу:</label>
           <input
             id="asset-search-input"
-            className="border rounded px-3 py-1.5 text-sm flex-1 w-full"
+            className="border rounded px-3 py-2 text-sm w-full min-w-0"
             placeholder="Введіть інвентарний номер або назву активу"
             value={input}
             onChange={handleInputChange}
@@ -144,22 +145,24 @@ export default function AssetSearch({ assets, user, restaurants, onEdit }) {
             }}
             autoFocus
           />
-          <button
-            className="bg-indigo-600 text-white rounded px-3 py-1.5 font-semibold hover:bg-indigo-500 whitespace-nowrap"
-            onClick={() => handleSearch()}
-          >
-            Знайти
-          </button>
-          <button
-            className="bg-slate-200 text-slate-800 rounded px-3 py-1.5 font-semibold hover:bg-slate-300 whitespace-nowrap"
-            type="button"
-            onClick={() => {
-              setError("");
-              setShowScanner((v) => !v);
-            }}
-          >
-            {showScanner ? "Сховати камеру" : "Сканувати QR"}
-          </button>
+          <div className="grid grid-cols-1 gap-2 sm:flex sm:items-center sm:gap-2 w-full sm:w-auto">
+            <button
+              className="bg-indigo-600 text-white rounded px-3 py-2 font-semibold hover:bg-indigo-500 whitespace-nowrap w-full sm:w-auto"
+              onClick={() => handleSearch()}
+            >
+              Знайти
+            </button>
+            <button
+              className="bg-slate-200 text-slate-800 rounded px-3 py-2 font-semibold hover:bg-slate-300 whitespace-nowrap w-full sm:w-auto"
+              type="button"
+              onClick={() => {
+                setError("");
+                setShowScanner((v) => !v);
+              }}
+            >
+              {showScanner ? "Сховати камеру" : "Сканувати QR"}
+            </button>
+          </div>
         </div>
         <div className="relative">
           {suggestions.length > 0 && (
@@ -201,16 +204,34 @@ export default function AssetSearch({ assets, user, restaurants, onEdit }) {
       <div className="w-full">
         {found && (
           <div className="card p-4 bg-white border border-slate-200 text-slate-900 shadow-xl w-full mt-2">
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-2">
               <h3 className="text-lg font-semibold">Інформація про актив</h3>
-              {onEdit && canEdit && (
+              <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                 <button
-                  className="bg-emerald-600 text-white rounded px-4 py-1.5 font-semibold hover:bg-emerald-500 text-sm"
-                  onClick={() => onEdit(found)}
+                  className="bg-indigo-600 text-white rounded px-4 py-2 font-semibold hover:bg-indigo-500 text-sm w-full sm:w-auto"
+                  onClick={async () => {
+                    try {
+                      await printAssetQrLabel({
+                        invNumber: found.invNumber,
+                        name: found.name,
+                        qrValue: found.qrCode || found.invNumber,
+                      });
+                    } catch (err) {
+                      setError(err.message || "Не вдалося надрукувати QR код");
+                    }
+                  }}
                 >
-                  Редагувати
+                  Друк QR
                 </button>
-              )}
+                {onEdit && canEdit && (
+                  <button
+                    className="bg-emerald-600 text-white rounded px-4 py-2 font-semibold hover:bg-emerald-500 text-sm w-full sm:w-auto"
+                    onClick={() => onEdit(found)}
+                  >
+                    Редагувати
+                  </button>
+                )}
+              </div>
             </div>
             {renderAssetInfo(found)}
             {onEdit && !canEdit && (

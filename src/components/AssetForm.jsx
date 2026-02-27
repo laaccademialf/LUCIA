@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
-import { CheckCircle2, ClipboardCheck, Loader2, Save, Camera, Upload, X, ChevronRight, ChevronLeft } from "lucide-react";
+import { CheckCircle2, ClipboardCheck, Loader2, Save, Camera, Upload, X, ChevronRight, ChevronLeft, Printer } from "lucide-react";
 import clsx from "clsx";
 import { useAssetFields } from "../hooks/useAssetFields";
 import { useRestaurants } from "../hooks/useRestaurants";
@@ -8,6 +8,7 @@ import { useFieldPermissions } from "../hooks/useFieldPermissions";
 import CurrencyInput from "./CurrencyInput";
 import MultiSelect from "./MultiSelect";
 import AssetNameAutocomplete from "./AssetNameAutocomplete";
+import { printAssetQrLabel } from "../utils/printQrLabel";
 
 const tabs = [
   { id: "identification", label: "Ідентифікація", requiredFields: ["invNumber", "name"] },
@@ -62,6 +63,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   const [activeTab, setActiveTab] = useState("identification");
   const [completedTabs, setCompletedTabs] = useState([]);
   const [photos, setPhotos] = useState([]);
+  const [printedQrFingerprint, setPrintedQrFingerprint] = useState("");
   
   // Завантаження типових полів з Firebase
   const {
@@ -187,6 +189,18 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
 
   const physicalWear = watch("physicalWear");
   const moralWear = watch("moralWear");
+  const invNumberValue = watch("invNumber");
+  const nameValue = watch("name");
+  const currentQrFingerprint = `${String(invNumberValue || "").trim()}::${String(nameValue || "").trim()}`;
+  const hasPrintedQr = Boolean(
+    String(invNumberValue || "").trim() &&
+    String(nameValue || "").trim() &&
+    printedQrFingerprint === currentQrFingerprint
+  );
+
+  useEffect(() => {
+    setPrintedQrFingerprint("");
+  }, [selectedAsset?.id]);
 
   useEffect(() => {
     const phys = Number(physicalWear) || 0;
@@ -638,16 +652,48 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
             </div>
             
             {isLastTab && (
-              <button 
-                type="submit" 
-                className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg font-bold text-base bg-gradient-to-r from-green-600 to-green-700 border-2 border-green-500 text-white hover:from-green-500 hover:to-green-600 hover:border-green-400 transition-all duration-200 shadow-xl shadow-green-500/50 hover:shadow-green-400/70"
-              >
-                {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} 
-                Зберегти актив
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await printAssetQrLabel({
+                        invNumber: invNumberValue,
+                        name: nameValue,
+                        qrValue: invNumberValue,
+                      });
+                      setPrintedQrFingerprint(currentQrFingerprint);
+                    } catch (error) {
+                      alert(error.message || "Не вдалося надрукувати QR код");
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg font-bold text-base bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-xl shadow-indigo-500/50"
+                >
+                  <Printer size={18} />
+                  Друк QR
+                </button>
+                <button
+                  type="submit"
+                  disabled={!hasPrintedQr}
+                  className={clsx(
+                    "inline-flex items-center gap-2 px-6 py-3.5 rounded-lg font-bold text-base border-2 transition-all duration-200 shadow-xl",
+                    hasPrintedQr
+                      ? "bg-gradient-to-r from-green-600 to-green-700 border-green-500 text-white hover:from-green-500 hover:to-green-600 hover:border-green-400 shadow-green-500/50 hover:shadow-green-400/70"
+                      : "bg-slate-300 border-slate-300 text-slate-500 cursor-not-allowed shadow-none"
+                  )}
+                >
+                  {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                  Зберегти актив
+                </button>
+              </>
             )}
           </div>
         </div>
+        {isLastTab && !hasPrintedQr && (
+          <div className="text-xs sm:text-sm text-amber-600 font-semibold">
+            Перед збереженням потрібно роздрукувати QR етикетку.
+          </div>
+        )}
       </form>
     </div>
   );

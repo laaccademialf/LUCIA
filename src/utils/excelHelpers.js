@@ -1,5 +1,40 @@
 import * as XLSX from "xlsx";
 
+export const ASSET_IMPORT_FIELDS = [
+  "invNumber",
+  "name",
+  "category",
+  "subCategory",
+  "type",
+  "serialNumber",
+  "brand",
+  "businessUnit",
+  "locationName",
+  "zone",
+  "respCenter",
+  "respPerson",
+  "status",
+  "condition",
+  "functionality",
+  "relevance",
+  "comment",
+  "purchaseYear",
+  "commissionDate",
+  "normativeTerm",
+  "physicalWear",
+  "moralWear",
+  "totalWear",
+  "initialCost",
+  "marketValueNew",
+  "marketValueUsed",
+  "residualValue",
+  "decision",
+  "reason",
+  "newLocation",
+  "auditDate",
+  "auditors",
+];
+
 /**
  * Експорт ресторанів у Excel файл
  * @param {Array} restaurants - Масив ресторанів
@@ -211,4 +246,94 @@ export const downloadRestaurantTemplate = () => {
 
   XLSX.utils.book_append_sheet(wb, ws, "Ресторани");
   XLSX.writeFile(wb, "restaurant_template.xlsx");
+};
+
+export const exportAssetsToExcel = (assets, filename = "assets.xlsx") => {
+  const rows = assets.map((asset) =>
+    ASSET_IMPORT_FIELDS.reduce((acc, key) => {
+      acc[key] = asset?.[key] ?? "";
+      return acc;
+    }, {})
+  );
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [ASSET_IMPORT_FIELDS.reduce((acc, key) => ({ ...acc, [key]: "" }), {})]);
+  ws["!cols"] = ASSET_IMPORT_FIELDS.map(() => ({ wch: 18 }));
+
+  XLSX.utils.book_append_sheet(wb, ws, "Активи");
+  XLSX.writeFile(wb, filename);
+};
+
+export const importAssetsFromExcel = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+        const assets = jsonData.map((row) =>
+          ASSET_IMPORT_FIELDS.reduce((acc, key) => {
+            acc[key] = row[key] ?? "";
+            return acc;
+          }, {})
+        );
+
+        resolve(assets);
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    reader.onerror = (error) => reject(error);
+    reader.readAsArrayBuffer(file);
+  });
+};
+
+export const downloadAssetTemplate = () => {
+  const sample = {
+    invNumber: "A-0001",
+    name: "Холодильник",
+    category: "Кухня",
+    subCategory: "Холодильне обладнання",
+    type: "Обладнання",
+    serialNumber: "SN-001",
+    brand: "SampleBrand",
+    businessUnit: "Ресторан",
+    locationName: "La Famiglia Kyiv",
+    zone: "Кухня",
+    respCenter: "Операційний відділ",
+    respPerson: "Іван Іванов",
+    status: "В експлуатації",
+    condition: "Добрий",
+    functionality: "Повна",
+    relevance: "Актуальний",
+    comment: "Приклад запису",
+    purchaseYear: "2024",
+    commissionDate: "2024-01-15",
+    normativeTerm: "5",
+    physicalWear: "10",
+    moralWear: "5",
+    totalWear: "15",
+    initialCost: "50000",
+    marketValueNew: "52000",
+    marketValueUsed: "43000",
+    residualValue: "42500",
+    decision: "Залишити",
+    reason: "Робочий стан",
+    newLocation: "",
+    auditDate: "2026-02-27",
+    auditors: "Комісія",
+  };
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet([sample]);
+  ws["!cols"] = ASSET_IMPORT_FIELDS.map(() => ({ wch: 18 }));
+
+  XLSX.utils.book_append_sheet(wb, ws, "Активи");
+  XLSX.writeFile(wb, "asset_template.xlsx");
 };
