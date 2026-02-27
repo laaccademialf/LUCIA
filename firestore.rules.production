@@ -24,6 +24,16 @@ service cloud.firestore {
         )
       );
     }
+
+    function isMaintenance() {
+      return isAuthenticated() && (
+        isAdmin() ||
+        (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['maintenance', 'Maintenance', 'service', 'Service', 'exploitation', 'Exploitation', 'експлуатація', 'Експлуатація'] ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.workRole in ['maintenance', 'Maintenance', 'service', 'Service', 'exploitation', 'Exploitation', 'експлуатація', 'Експлуатація', 'інженер', 'Інженер', 'відділ експлуатації', 'Відділ експлуатації']
+        )
+      );
+    }
     
     // Правила для користувачів
     match /users/{userId} {
@@ -81,6 +91,20 @@ service cloud.firestore {
     match /supplierDispatches/{dispatchId} {
       allow read: if isAuthenticated();
       allow write: if isProcurement();
+    }
+
+    // Сервісні заявки (міні CRM для експлуатації)
+    match /serviceRequests/{requestId} {
+      allow read: if isAuthenticated();
+
+      // Будь-який авторизований користувач може створити заявку від свого імені
+      allow create: if isAuthenticated() && request.resource.data.createdById == request.auth.uid;
+
+      // Оновлювати можуть відділ експлуатації/адмін або автор власної заявки
+      allow update: if isMaintenance() || request.auth.uid == resource.data.createdById;
+
+      // Видалення тільки для відділу експлуатації/адміна
+      allow delete: if isMaintenance();
     }
 
     // Заявки на продукцію від ресторанів

@@ -32,6 +32,7 @@ import {
 } from "./firebase/utilityMeters";
 import MenuStructureEditor from "./components/MenuStructureEditor";
 import ProductBookingModule from "./components/ProductBookingModule";
+import ServiceRequestsModule from "./components/ServiceRequestsModule";
 import {
   downloadAssetTemplate,
   downloadRestaurantTemplate,
@@ -1509,6 +1510,14 @@ function App() {
           </div>
         );
       }
+    }
+
+    if (activeNav === "ops-maintenance" || activeNav.includes("ops-maintenance")) {
+      return (
+        <div className="grid grid-cols-1">
+          <ServiceRequestsModule topTab={topTab} restaurants={restaurants} user={user} />
+        </div>
+      );
     }
 
     if (activeNav === "productbooking" || activeNav.includes("productbooking")) {

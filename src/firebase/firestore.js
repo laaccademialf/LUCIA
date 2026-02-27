@@ -476,6 +476,72 @@ export const addSupplierDispatch = async (dispatch) => {
   }
 };
 
+// ==================== СЕРВІСНІ ЗАЯВКИ ====================
+
+export const getServiceRequests = async () => {
+  try {
+    const requestsRef = collection(db, "serviceRequests");
+    const q = query(requestsRef, orderBy("createdAt", "desc"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((item) => ({
+      id: item.id,
+      ...item.data(),
+    }));
+  } catch (error) {
+    console.error("Помилка отримання сервісних заявок:", error);
+    throw error;
+  }
+};
+
+export const addServiceRequest = async (requestData) => {
+  try {
+    const docRef = await addDoc(collection(db, "serviceRequests"), {
+      ...requestData,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    return docRef.id;
+  } catch (error) {
+    console.error("Помилка створення сервісної заявки:", error);
+    throw error;
+  }
+};
+
+export const updateServiceRequest = async (id, data) => {
+  try {
+    const docRef = doc(db, "serviceRequests", id);
+    await updateDoc(docRef, {
+      ...data,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка оновлення сервісної заявки:", error);
+    throw error;
+  }
+};
+
+export const deleteServiceRequest = async (id) => {
+  try {
+    await deleteDoc(doc(db, "serviceRequests", id));
+  } catch (error) {
+    console.error("Помилка видалення сервісної заявки:", error);
+    throw error;
+  }
+};
+
+export const subscribeToServiceRequests = (callback) => {
+  const requestsRef = collection(db, "serviceRequests");
+  const q = query(requestsRef, orderBy("createdAt", "desc"));
+
+  return onSnapshot(q, (snapshot) => {
+    const requests = snapshot.docs.map((item) => ({
+      id: item.id,
+      ...item.data(),
+    }));
+    callback(requests);
+  });
+};
+
 // ==================== ДОПОМІЖНІ ФУНКЦІЇ ====================
 
 /**
