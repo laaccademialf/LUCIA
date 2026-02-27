@@ -9,8 +9,20 @@ service cloud.firestore {
     
     // Функція перевірки ролі адміністратора
     function isAdmin() {
-      return isAuthenticated() && 
-             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return isAuthenticated() && (
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'Admin', 'ADMIN'] ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.workRole in ['admin', 'Admin', 'ADMIN', 'адмін', 'Адмін']
+      );
+    }
+
+    function isProcurement() {
+      return isAuthenticated() && (
+        isAdmin() ||
+        (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['procurement', 'Procurement', 'purchasing', 'Purchasing', 'закупівлі', 'Закупівлі'] ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.workRole in ['procurement', 'Procurement', 'purchasing', 'Purchasing', 'закупівлі', 'Закупівлі', 'закупки', 'відділ закупівель', 'Відділ закупівель']
+        )
+      );
     }
     
     // Правила для користувачів
@@ -42,6 +54,40 @@ service cloud.firestore {
       
       // Писати можуть всі автентифіковані (можна змінити на тільки адмінів)
       allow write: if isAuthenticated();
+    }
+
+    // Довідник продуктів для модуля замовлень
+    match /bookingProducts/{productId} {
+      // Читати можуть всі автентифіковані користувачі
+      allow read: if isAuthenticated();
+
+      // Створення/оновлення/видалення — адміністратор або закупівлі
+      allow write: if isProcurement();
+    }
+
+    // Довідник постачальників
+    match /bookingSuppliers/{supplierId} {
+      allow read: if isAuthenticated();
+      allow write: if isProcurement();
+    }
+
+    // Типові поля замовлень (категорії, одиниці вимірювання)
+    match /bookingTypicalFields/{fieldId} {
+      allow read: if isAuthenticated();
+      allow write: if isProcurement();
+    }
+
+    // Заявки на продукцію від ресторанів
+    match /productOrders/{orderId} {
+      // Читати можуть всі автентифіковані користувачі
+      allow read: if isAuthenticated();
+
+      // Створювати може автентифікований користувач від свого імені (або адмін)
+      allow create: if isAuthenticated() &&
+        (isProcurement() || request.resource.data.createdById == request.auth.uid);
+
+      // Оновлення/видалення — адміністратор або закупівлі
+      allow update, delete: if isProcurement();
     }
   }
 }

@@ -31,6 +31,7 @@ import {
   deleteUtilityMeter,
 } from "./firebase/utilityMeters";
 import MenuStructureEditor from "./components/MenuStructureEditor";
+import ProductBookingModule from "./components/ProductBookingModule";
 import {
   downloadAssetTemplate,
   downloadRestaurantTemplate,
@@ -1508,6 +1509,14 @@ function App() {
           </div>
         );
       }
+    }
+
+    if (activeNav === "productbooking" || activeNav.includes("productbooking")) {
+      return (
+        <div className="grid grid-cols-1">
+          <ProductBookingModule topTab={topTab} restaurants={restaurants} user={user} />
+        </div>
+      );
     }
 
     if (activeNav === "menu-admin" && user?.role === 'admin') {
