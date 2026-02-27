@@ -912,15 +912,46 @@ const statusLabel = (status) => {
   return status;
 };
 
-function OrdersManagementTab({ orders, updateOrder, canManageOrders, user }) {
+function OrdersManagementTab({ orders, updateOrder, createSupplierDispatch, canManageOrders, user }) {
   const [statusFilter, setStatusFilter] = useState("");
+  const [orderDateFrom, setOrderDateFrom] = useState("");
+  const [orderDateTo, setOrderDateTo] = useState("");
+  const [deliveryDateFrom, setDeliveryDateFrom] = useState("");
+  const [deliveryDateTo, setDeliveryDateTo] = useState("");
+  const [lineEdits, setLineEdits] = useState({});
+  const [sendingSupplier, setSendingSupplier] = useState("");
+  const [expandedSuppliers, setExpandedSuppliers] = useState({});
+  const [expandedSummarySuppliers, setExpandedSummarySuppliers] = useState({});
+  const [expandedRestaurants, setExpandedRestaurants] = useState({});
 
   const visibleOrders = useMemo(() => {
     const filteredByRole = canManageOrders
       ? orders
       : orders.filter((order) => String(order.restaurantId) === String(user?.restaurant || ""));
-    return filteredByRole.filter((order) => (statusFilter ? order.status === statusFilter : true));
-  }, [orders, statusFilter, canManageOrders, user]);
+
+    return filteredByRole.filter((order) => {
+      const byStatus = statusFilter ? order.status === statusFilter : true;
+
+      const orderDate = String(order.createdAt || "").slice(0, 10);
+      const byOrderDateFrom = orderDateFrom ? orderDate && orderDate >= orderDateFrom : true;
+      const byOrderDateTo = orderDateTo ? orderDate && orderDate <= orderDateTo : true;
+
+      const deliveryDate = String(order.requiredDate || "");
+      const byDeliveryFrom = deliveryDateFrom ? deliveryDate && deliveryDate >= deliveryDateFrom : true;
+      const byDeliveryTo = deliveryDateTo ? deliveryDate && deliveryDate <= deliveryDateTo : true;
+
+      return byStatus && byOrderDateFrom && byOrderDateTo && byDeliveryFrom && byDeliveryTo;
+    });
+  }, [
+    orders,
+    statusFilter,
+    canManageOrders,
+    user,
+    orderDateFrom,
+    orderDateTo,
+    deliveryDateFrom,
+    deliveryDateTo,
+  ]);
 
   const groupedBySupplier = useMemo(() => {
     const map = {};
@@ -943,11 +974,154 @@ function OrdersManagementTab({ orders, updateOrder, canManageOrders, user }) {
     return map;
   }, [visibleOrders]);
 
+  const consolidatedBySupplier = useMemo(() => {
+    const supplierMap = {};
+
+    for (const order of visibleOrders) {
+      for (const item of order.items || []) {
+        if (item.sentToSupplier || order.status === "completed") continue;
+
+        const supplier = item.supplier || "Без постачальника";
+        if (!supplierMap[supplier]) supplierMap[supplier] = {};
+
+        const productKey = item.productId || item.productName || "Без назви";
+        const key = [productKey, item.unit || "", order.requiredDate || ""].join("|");
+
+        if (!supplierMap[supplier][key]) {
+          supplierMap[supplier][key] = {
+            supplier,
+            productId: item.productId || "",
+            productName: item.productName || "Без назви",
+            unit: item.unit || "",
+            requiredDate: order.requiredDate || "",
+            totalQty: 0,
+            totalAmount: 0,
+            restaurants: [],
+            orderIds: new Set(),
+          };
+        }
+
+        const lineKey = `${order.id}::${item.productId || item.productName || "line"}`;
+        const editedQty = lineEdits[lineKey];
+        const effectiveQty = editedQty === undefined ? toNumber(item.qty) : toNumber(editedQty);
+        const effectiveAmount = effectiveQty * toNumber(item.unitPrice);
+
+        supplierMap[supplier][key].totalQty += effectiveQty;
+        supplierMap[supplier][key].totalAmount += effectiveAmount;
+        supplierMap[supplier][key].restaurants.push({
+          lineKey,
+          restaurantId: order.restaurantId,
+          restaurantName: order.restaurantName,
+          qty: effectiveQty,
+          requiredDate: order.requiredDate,
+          orderId: order.id,
+          productId: item.productId || "",
+          productName: item.productName || "Без назви",
+          unit: item.unit || "",
+          unitPrice: toNumber(item.unitPrice),
+        });
+        supplierMap[supplier][key].orderIds.add(order.id);
+      }
+    }
+
+    return Object.fromEntries(
+      Object.entries(supplierMap).map(([supplier, keyed]) => [
+        supplier,
+        Object.values(keyed).map((row) => ({
+          ...row,
+          orderIds: Array.from(row.orderIds),
+        })),
+      ])
+    );
+  }, [visibleOrders, lineEdits]);
+
+  const dispatchableSuppliers = useMemo(() => Object.keys(consolidatedBySupplier), [consolidatedBySupplier]);
+
+  const isSupplierExpanded = (supplier) => {
+    if (expandedSuppliers[supplier] === undefined) return false;
+    return expandedSuppliers[supplier];
+  };
+
+  const toggleSupplierExpanded = (supplier) => {
+    setExpandedSuppliers((prev) => ({
+      ...prev,
+      [supplier]: !(prev[supplier] === undefined ? false : prev[supplier]),
+    }));
+  };
+
+  const dispatchableOrdersCount = useMemo(() => {
+    const ids = new Set();
+    Object.values(consolidatedBySupplier).forEach((rows) => {
+      rows.forEach((row) => row.orderIds.forEach((id) => ids.add(id)));
+    });
+    return ids.size;
+  }, [consolidatedBySupplier]);
+
   const overallSuppliersAmount = useMemo(() => {
     return Object.values(groupedBySupplier)
       .flat()
       .reduce((sum, item) => sum + toNumber(item.amount), 0);
   }, [groupedBySupplier]);
+
+  const groupedByRestaurant = useMemo(() => {
+    const map = {};
+
+    for (const order of visibleOrders) {
+      const restaurant = order.restaurantName || "Невідомий ресторан";
+      if (!map[restaurant]) map[restaurant] = [];
+
+      for (const item of order.items || []) {
+        map[restaurant].push({
+          orderId: order.id,
+          supplier: item.supplier || "Без постачальника",
+          productName: item.productName || "Без назви",
+          qty: toNumber(item.qty),
+          unit: item.unit || "",
+          unitPrice: toNumber(item.unitPrice),
+          amount: toNumber(item.amount),
+          requiredDate: order.requiredDate || "",
+        });
+      }
+    }
+
+    return map;
+  }, [visibleOrders]);
+
+  const isRestaurantExpanded = (restaurant) => {
+    if (expandedRestaurants[restaurant] === undefined) return false;
+    return expandedRestaurants[restaurant];
+  };
+
+  const toggleRestaurantExpanded = (restaurant) => {
+    setExpandedRestaurants((prev) => ({
+      ...prev,
+      [restaurant]: !(prev[restaurant] === undefined ? false : prev[restaurant]),
+    }));
+  };
+
+  const isSummarySupplierExpanded = (supplier) => {
+    if (expandedSummarySuppliers[supplier] === undefined) return false;
+    return expandedSummarySuppliers[supplier];
+  };
+
+  const toggleSummarySupplierExpanded = (supplier) => {
+    setExpandedSummarySuppliers((prev) => ({
+      ...prev,
+      [supplier]: !(prev[supplier] === undefined ? false : prev[supplier]),
+    }));
+  };
+
+  const deriveOrderStatus = (items, currentStatus) => {
+    if (currentStatus === "completed") return "completed";
+    const hasItems = items.length > 0;
+    const hasUnsent = items.some((item) => !item.sentToSupplier);
+    const hasSent = items.some((item) => item.sentToSupplier);
+
+    if (!hasItems) return "new";
+    if (!hasUnsent) return "sent";
+    if (hasSent && hasUnsent) return "processing";
+    return "new";
+  };
 
   const updateStatus = async (order, status) => {
     const { id, ...payload } = order;
@@ -955,6 +1129,161 @@ function OrdersManagementTab({ orders, updateOrder, canManageOrders, user }) {
     if (!result.success) {
       alert("Не вдалося оновити статус заявки.");
     }
+  };
+
+  const applyLineCorrection = async (entry) => {
+    if (!canManageOrders) return;
+
+    const editedQty = lineEdits[entry.lineKey];
+    if (editedQty === undefined) return;
+
+    const qty = toNumber(editedQty);
+    if (qty <= 0) {
+      alert("Кількість має бути більше 0.");
+      return;
+    }
+
+    const order = orders.find((item) => item.id === entry.orderId);
+    if (!order) {
+      alert("Не вдалося знайти заявку для коригування.");
+      return;
+    }
+
+    const updatedItems = (order.items || []).map((item) => {
+      const sameProduct = (item.productId || item.productName) === (entry.productId || entry.productName);
+      if (!sameProduct) return item;
+      return {
+        ...item,
+        qty,
+        amount: qty * toNumber(item.unitPrice),
+        sentToSupplier: false,
+      };
+    });
+
+    const totalItems = updatedItems.reduce((sum, item) => sum + toNumber(item.qty), 0);
+    const totalAmount = updatedItems.reduce((sum, item) => sum + toNumber(item.amount), 0);
+    const { id, ...payload } = order;
+
+    const result = await updateOrder(id, {
+      ...payload,
+      items: updatedItems,
+      totalItems,
+      totalAmount,
+      status: deriveOrderStatus(updatedItems, order.status),
+      correctedAt: new Date().toISOString(),
+    });
+
+    if (!result.success) {
+      alert("Не вдалося зберегти коригування.");
+      return;
+    }
+
+    setLineEdits((prev) => {
+      const next = { ...prev };
+      delete next[entry.lineKey];
+      return next;
+    });
+  };
+
+  const sendToSpecificSuppliers = async (suppliersToSend) => {
+    if (!canManageOrders) return;
+
+    const normalizedSuppliers = suppliersToSend.filter((supplier) => consolidatedBySupplier[supplier]?.length > 0);
+    if (normalizedSuppliers.length === 0) {
+      alert("Немає нових даних для відправки.");
+      return;
+    }
+
+    const dispatchBatchId = `dispatch_${Date.now()}`;
+    const managerName = user?.displayName || user?.fullName || user?.email || "Закупівлі";
+    const managerId = user?.uid || "";
+    const now = new Date().toISOString();
+
+    try {
+      const ordersMap = new Map(orders.map((order) => [order.id, { ...order, items: [...(order.items || [])] }]));
+      const patchedOrders = new Map();
+
+      for (const supplier of normalizedSuppliers) {
+        const rows = consolidatedBySupplier[supplier] || [];
+        const dispatchPayload = {
+          supplier,
+          dispatchBatchId,
+          status: "sent",
+          sentBy: managerName,
+          sentById: managerId,
+          orderIds: Array.from(new Set(rows.flatMap((row) => row.orderIds))),
+          lines: rows.map((row) => ({
+            productName: row.productName,
+            unit: row.unit,
+            requiredDate: row.requiredDate,
+            totalQty: row.totalQty,
+            totalAmount: row.totalAmount,
+            restaurants: row.restaurants,
+          })),
+        };
+
+        const dispatchResult = await createSupplierDispatch(dispatchPayload);
+        if (!dispatchResult.success) {
+          throw dispatchResult.error || new Error("Не вдалося створити відправку постачальнику");
+        }
+
+        const affectedOrderIds = dispatchPayload.orderIds;
+        for (const orderId of affectedOrderIds) {
+          const workingOrder = patchedOrders.get(orderId) || ordersMap.get(orderId);
+          if (!workingOrder) continue;
+
+          const nextItems = (workingOrder.items || []).map((item) => {
+            const itemSupplier = item.supplier || "Без постачальника";
+            if (itemSupplier !== supplier || item.sentToSupplier) return item;
+            return {
+              ...item,
+              sentToSupplier: true,
+              sentAt: now,
+            };
+          });
+
+          const totalItems = nextItems.reduce((sum, item) => sum + toNumber(item.qty), 0);
+          const totalAmount = nextItems.reduce((sum, item) => sum + toNumber(item.amount), 0);
+
+          patchedOrders.set(orderId, {
+            ...workingOrder,
+            items: nextItems,
+            totalItems,
+            totalAmount,
+            status: deriveOrderStatus(nextItems, workingOrder.status),
+            dispatchBatchId,
+            sentBy: managerName,
+            sentById: managerId,
+            sentAt: now,
+          });
+        }
+      }
+
+      for (const [orderId, payload] of patchedOrders.entries()) {
+        const { id, ...orderData } = payload;
+        const updateResult = await updateOrder(orderId, orderData);
+        if (!updateResult.success) {
+          throw updateResult.error || new Error(`Не вдалося оновити заявку ${orderId}`);
+        }
+      }
+
+      alert(`Відправлено постачальникам: ${normalizedSuppliers.length}. Оновлено заявок: ${patchedOrders.size}.`);
+    } catch (error) {
+      console.error("Помилка відправки постачальникам:", error);
+      alert(`Не вдалося відправити постачальникам: ${error?.message || "невідома помилка"}`);
+    } finally {
+      setSendingSupplier("");
+    }
+  };
+
+  const sendAllSuppliers = async () => {
+    setSendingSupplier("ALL");
+    await sendToSpecificSuppliers(dispatchableSuppliers);
+  };
+
+  const sendOneSupplier = async (supplier) => {
+    setSendingSupplier(supplier);
+    await sendToSpecificSuppliers([supplier]);
   };
 
   return (
@@ -973,6 +1302,58 @@ function OrdersManagementTab({ orders, updateOrder, canManageOrders, user }) {
             <option value="completed">Закриті</option>
           </select>
         </div>
+
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p className="mb-2 text-sm font-semibold text-slate-900">Фільтр по датах</p>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
+            <div>
+              <label className="text-xs font-semibold text-slate-700">Замовлення від</label>
+              <input type="date" className={inputClass} value={orderDateFrom} onChange={(e) => setOrderDateFrom(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-700">Замовлення до</label>
+              <input type="date" className={inputClass} value={orderDateTo} onChange={(e) => setOrderDateTo(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-700">Поставка від</label>
+              <input type="date" className={inputClass} value={deliveryDateFrom} onChange={(e) => setDeliveryDateFrom(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-700">Поставка до</label>
+              <input type="date" className={inputClass} value={deliveryDateTo} onChange={(e) => setDeliveryDateTo(e.target.value)} />
+            </div>
+            <div className="flex items-end">
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                onClick={() => {
+                  setOrderDateFrom("");
+                  setOrderDateTo("");
+                  setDeliveryDateFrom("");
+                  setDeliveryDateTo("");
+                }}
+              >
+                Скинути дати
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {canManageOrders && (
+          <div className="mb-4 flex items-center justify-between rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3">
+            <p className="text-sm font-semibold text-indigo-900">
+              Готово до відправки: {dispatchableOrdersCount} заявок / {dispatchableSuppliers.length} постачальників
+            </p>
+            <button
+              type="button"
+              onClick={sendAllSuppliers}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={dispatchableSuppliers.length === 0 || sendingSupplier === "ALL"}
+            >
+              {sendingSupplier === "ALL" ? "Відправлення..." : "Відправити всім постачальникам"}
+            </button>
+          </div>
+        )}
 
         {!canManageOrders && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -1031,40 +1412,136 @@ function OrdersManagementTab({ orders, updateOrder, canManageOrders, user }) {
       </div>
 
       <div className={cardClass}>
+        <h3 className="text-base font-semibold text-slate-900 mb-3">Зведення по ресторанах</h3>
+        <div className="space-y-3">
+          {Object.entries(groupedByRestaurant).map(([restaurant, items]) => (
+            <div key={`restaurant_${restaurant}`} className="rounded-lg border border-slate-200 p-3">
+              <div className="mb-2 flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() => toggleRestaurantExpanded(restaurant)}
+                  className="flex flex-1 items-start gap-3 text-left"
+                >
+                  <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-xs font-bold text-slate-700">
+                    {isRestaurantExpanded(restaurant) ? "−" : "+"}
+                  </span>
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-slate-900">{restaurant}</p>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">Рядків: {items.length}</span>
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
+                        Постачальників: {new Set(items.map((item) => item.supplier)).size}
+                      </span>
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
+                        Разом: {items.reduce((sum, item) => sum + toNumber(item.qty), 0).toFixed(2)}
+                      </span>
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
+                        Сума: {formatMoney(items.reduce((sum, item) => sum + toNumber(item.amount), 0))}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+              </div>
+              {isRestaurantExpanded(restaurant) && (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="text-slate-600">
+                      <tr>
+                        <th className="px-2 py-1 text-left">Постачальник</th>
+                        <th className="px-2 py-1 text-left">Продукт</th>
+                        <th className="px-2 py-1 text-left">Ціна</th>
+                        <th className="px-2 py-1 text-left">К-сть</th>
+                        <th className="px-2 py-1 text-left">Сума</th>
+                        <th className="px-2 py-1 text-left">Поставка</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((item, index) => (
+                        <tr key={`${restaurant}_${item.orderId}_${index}`} className="border-t border-slate-100">
+                          <td className="px-2 py-1">{item.supplier}</td>
+                          <td className="px-2 py-1">{item.productName}</td>
+                          <td className="px-2 py-1">{formatMoney(item.unitPrice)}</td>
+                          <td className="px-2 py-1">{item.qty} {item.unit}</td>
+                          <td className="px-2 py-1 font-medium">{formatMoney(item.amount)}</td>
+                          <td className="px-2 py-1">{item.requiredDate || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ))}
+          {Object.keys(groupedByRestaurant).length === 0 && (
+            <div className="text-sm text-slate-500">Немає даних для зведення по ресторанах.</div>
+          )}
+        </div>
+      </div>
+
+      <div className={cardClass}>
         <h3 className="text-base font-semibold text-slate-900 mb-3">Зведення для постачальників</h3>
         <div className="space-y-3">
           {Object.entries(groupedBySupplier).map(([supplier, items]) => (
             <div key={supplier} className="rounded-lg border border-slate-200 p-3">
-              <p className="font-semibold text-slate-900 mb-2">{supplier}</p>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead className="text-slate-600">
-                    <tr>
-                      <th className="px-2 py-1 text-left">Ресторан</th>
-                      <th className="px-2 py-1 text-left">Продукт</th>
-                      <th className="px-2 py-1 text-left">Ціна</th>
-                      <th className="px-2 py-1 text-left">К-сть</th>
-                      <th className="px-2 py-1 text-left">Сума</th>
-                      <th className="px-2 py-1 text-left">Поставка</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((item, index) => (
-                      <tr key={`${item.orderId}_${index}`} className="border-t border-slate-100">
-                        <td className="px-2 py-1">{item.restaurantName}</td>
-                        <td className="px-2 py-1">{item.productName}</td>
-                        <td className="px-2 py-1">{formatMoney(item.unitPrice)}</td>
-                        <td className="px-2 py-1">{item.qty} {item.unit}</td>
-                        <td className="px-2 py-1 font-medium">{formatMoney(item.amount)}</td>
-                        <td className="px-2 py-1">{item.requiredDate}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="mb-2 flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() => toggleSummarySupplierExpanded(supplier)}
+                  className="flex flex-1 items-start gap-3 text-left"
+                >
+                  <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-xs font-bold text-slate-700">
+                    {isSummarySupplierExpanded(supplier) ? "−" : "+"}
+                  </span>
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-slate-900">{supplier}</p>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">Рядків: {items.length}</span>
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
+                        Ресторанів: {new Set(items.map((item) => item.restaurantName)).size}
+                      </span>
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
+                        Разом: {items.reduce((sum, item) => sum + toNumber(item.qty), 0).toFixed(2)}
+                      </span>
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
+                        Сума: {formatMoney(items.reduce((sum, item) => sum + toNumber(item.amount), 0))}
+                      </span>
+                    </div>
+                  </div>
+                </button>
               </div>
-              <p className="mt-2 text-right text-sm font-semibold text-slate-800">
-                Разом по постачальнику: {formatMoney(items.reduce((sum, item) => sum + toNumber(item.amount), 0))}
-              </p>
+              {isSummarySupplierExpanded(supplier) && (
+                <>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="text-slate-600">
+                        <tr>
+                          <th className="px-2 py-1 text-left">Ресторан</th>
+                          <th className="px-2 py-1 text-left">Продукт</th>
+                          <th className="px-2 py-1 text-left">Ціна</th>
+                          <th className="px-2 py-1 text-left">К-сть</th>
+                          <th className="px-2 py-1 text-left">Сума</th>
+                          <th className="px-2 py-1 text-left">Поставка</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {items.map((item, index) => (
+                          <tr key={`${item.orderId}_${index}`} className="border-t border-slate-100">
+                            <td className="px-2 py-1">{item.restaurantName}</td>
+                            <td className="px-2 py-1">{item.productName}</td>
+                            <td className="px-2 py-1">{formatMoney(item.unitPrice)}</td>
+                            <td className="px-2 py-1">{item.qty} {item.unit}</td>
+                            <td className="px-2 py-1 font-medium">{formatMoney(item.amount)}</td>
+                            <td className="px-2 py-1">{item.requiredDate}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="mt-2 text-right text-sm font-semibold text-slate-800">
+                    Разом по постачальнику: {formatMoney(items.reduce((sum, item) => sum + toNumber(item.amount), 0))}
+                  </p>
+                </>
+              )}
             </div>
           ))}
           {Object.keys(groupedBySupplier).length === 0 && (
@@ -1074,6 +1551,109 @@ function OrdersManagementTab({ orders, updateOrder, canManageOrders, user }) {
             <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-right text-base font-semibold text-indigo-900">
               Разом по всіх постачальниках: {formatMoney(overallSuppliersAmount)}
             </div>
+          )}
+        </div>
+      </div>
+
+      <div className={cardClass}>
+        <h3 className="text-base font-semibold text-slate-900 mb-3">Консолідоване замовлення (по ресторанах)</h3>
+        <div className="space-y-3">
+          {Object.entries(consolidatedBySupplier).map(([supplier, rows]) => (
+            <div key={`consolidated_${supplier}`} className="rounded-lg border border-slate-200 p-3">
+              <div className="mb-2 flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() => toggleSupplierExpanded(supplier)}
+                  className="flex flex-1 items-start gap-3 text-left"
+                >
+                  <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-xs font-bold text-slate-700">
+                    {isSupplierExpanded(supplier) ? "−" : "+"}
+                  </span>
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-slate-900">{supplier}</p>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">Позицій: {rows.length}</span>
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
+                        Ресторанів: {new Set(rows.flatMap((row) => row.restaurants.map((r) => r.restaurantName))).size}
+                      </span>
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
+                        Разом: {rows.reduce((sum, row) => sum + toNumber(row.totalQty), 0).toFixed(2)}
+                      </span>
+                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
+                        Сума: {formatMoney(rows.reduce((sum, row) => sum + toNumber(row.totalAmount), 0))}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+                <div className="flex items-center gap-2 pt-0.5">
+                  {canManageOrders && (
+                    <button
+                      type="button"
+                      onClick={() => sendOneSupplier(supplier)}
+                      className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={rows.length === 0 || sendingSupplier === supplier || sendingSupplier === "ALL"}
+                    >
+                      {sendingSupplier === supplier ? "Відправлення..." : "Відправити цьому постачальнику"}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {isSupplierExpanded(supplier) && (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-slate-700">
+                      <tr>
+                        <th className="px-2 py-1 text-left">Продукт</th>
+                        <th className="px-2 py-1 text-left">Дата</th>
+                        <th className="px-2 py-1 text-left">Разом</th>
+                        <th className="px-2 py-1 text-left">Сума</th>
+                        <th className="px-2 py-1 text-left">Коригування по ресторанах</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row, index) => (
+                        <tr key={`${supplier}_${row.productName}_${row.requiredDate}_${index}`} className="border-t border-slate-100 align-top">
+                          <td className="px-2 py-1 font-medium text-slate-900">{row.productName}</td>
+                          <td className="px-2 py-1">{row.requiredDate || "-"}</td>
+                          <td className="px-2 py-1">{row.totalQty} {row.unit}</td>
+                          <td className="px-2 py-1 font-semibold">{formatMoney(row.totalAmount)}</td>
+                          <td className="px-2 py-1">
+                            <div className="space-y-2">
+                              {row.restaurants.map((entry, entryIndex) => (
+                                <div key={`${entry.orderId}_${entry.restaurantId}_${entryIndex}`} className="flex flex-wrap items-center gap-2 text-xs text-slate-700">
+                                  <span className="min-w-[200px]">{entry.restaurantName} ({entry.requiredDate || "без дати"})</span>
+                                  <input
+                                    type="number"
+                                    min="0.1"
+                                    step="0.1"
+                                    className="w-24 rounded border border-slate-300 px-2 py-1"
+                                    value={lineEdits[entry.lineKey] ?? entry.qty}
+                                    onChange={(e) => setLineEdits((prev) => ({ ...prev, [entry.lineKey]: e.target.value }))}
+                                  />
+                                  <span>{row.unit}</span>
+                                  {canManageOrders && (
+                                    <button
+                                      type="button"
+                                      className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                                      onClick={() => applyLineCorrection(entry)}
+                                    >
+                                      Зберегти
+                                    </button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          ))}
+          {Object.keys(consolidatedBySupplier).length === 0 && (
+            <div className="text-sm text-slate-500">Немає нових даних для консолідації або все вже відправлено постачальникам.</div>
           )}
         </div>
       </div>
@@ -1094,6 +1674,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     deleteProduct,
     createOrder,
     updateOrder,
+    createSupplierDispatch,
     createSupplier,
     updateSupplier,
     removeSupplier,
@@ -1166,7 +1747,15 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
   }
 
   if (tabKind === "orders") {
-    return <OrdersManagementTab orders={orders} updateOrder={updateOrder} canManageOrders={canManageOrders} user={user} />;
+    return (
+      <OrdersManagementTab
+        orders={orders}
+        updateOrder={updateOrder}
+        createSupplierDispatch={createSupplierDispatch}
+        canManageOrders={canManageOrders}
+        user={user}
+      />
+    );
   }
 
   return <BookingTab products={products} orders={orders} createOrder={createOrder} restaurants={restaurants} user={user} />;

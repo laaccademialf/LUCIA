@@ -462,6 +462,20 @@ export const subscribeToBookingTypicalFields = (callback) => {
   });
 };
 
+export const addSupplierDispatch = async (dispatch) => {
+  try {
+    const docRef = await addDoc(collection(db, "supplierDispatches"), {
+      ...dispatch,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    return docRef.id;
+  } catch (error) {
+    console.error("Помилка створення відправки постачальнику:", error);
+    throw error;
+  }
+};
+
 // ==================== ДОПОМІЖНІ ФУНКЦІЇ ====================
 
 /**

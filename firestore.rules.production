@@ -77,6 +77,12 @@ service cloud.firestore {
       allow write: if isProcurement();
     }
 
+    // Журнал відправок консолідованих заявок постачальникам
+    match /supplierDispatches/{dispatchId} {
+      allow read: if isAuthenticated();
+      allow write: if isProcurement();
+    }
+
     // Заявки на продукцію від ресторанів
     match /productOrders/{orderId} {
       // Читати можуть всі автентифіковані користувачі

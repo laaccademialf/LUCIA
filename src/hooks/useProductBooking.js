@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  addSupplierDispatch,
   addBookingSupplier,
   addBookingTypicalField,
   addBookingProduct,
@@ -202,6 +203,16 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
+  const createSupplierDispatch = async (dispatch) => {
+    try {
+      const id = await addSupplierDispatch(dispatch);
+      return { success: true, id };
+    } catch (err) {
+      setError(err);
+      return { success: false, error: err };
+    }
+  };
+
   return {
     products,
     orders,
@@ -220,5 +231,6 @@ export const useProductBooking = (enableRealtime = true) => {
     createTypicalField,
     updateTypicalField,
     removeTypicalField,
+    createSupplierDispatch,
   };
 };
