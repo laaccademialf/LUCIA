@@ -33,6 +33,8 @@ import {
 import MenuStructureEditor from "./components/MenuStructureEditor";
 import ProductBookingModule from "./components/ProductBookingModule";
 import ServiceRequestsModule from "./components/ServiceRequestsModule";
+import ChecklistModule from "./components/ChecklistModule";
+import { useChecklists } from "./hooks/useChecklists";
 import {
   downloadAssetTemplate,
   downloadRestaurantTemplate,
@@ -42,7 +44,80 @@ import {
   importRestaurantsFromExcel,
 } from "./utils/excelHelpers";
 
+const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+const toMinutes = (value) => {
+  if (!value || typeof value !== "string" || !value.includes(":")) return null;
+  const [hours, minutes] = value.split(":").map(Number);
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+  return hours * 60 + minutes;
+};
+
+const fromMinutes = (value) => {
+  if (typeof value !== "number" || Number.isNaN(value)) return "";
+  const normalized = ((value % 1440) + 1440) % 1440;
+  const h = Math.floor(normalized / 60);
+  const m = normalized % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+};
+
+const getPlannedTime = (item, scheduleByDay, dayKey) => {
+  const mode = item?.timeMode || "before_open";
+  const daySchedule = scheduleByDay?.[dayKey] || { from: "", to: "" };
+  const openMinutes = toMinutes(daySchedule.from);
+  const closeMinutes = toMinutes(daySchedule.to);
+  const offset = Number(item?.offsetMinutes || 0);
+
+  if (mode === "exact") return item?.exactTime || "";
+  if (mode === "before_open" && openMinutes !== null) return fromMinutes(openMinutes - offset);
+  if (mode === "after_open" && openMinutes !== null) return fromMinutes(openMinutes + offset);
+  if (mode === "before_close" && closeMinutes !== null) return fromMinutes(closeMinutes - offset);
+  return "";
+};
+
+const getOverdueText = (plannedDate, nowDate) => {
+  const diffMinutes = Math.max(1, Math.floor((nowDate.getTime() - plannedDate.getTime()) / 60000));
+  if (diffMinutes < 60) return `Прострочено на ${diffMinutes} хв`;
+  const hours = Math.floor(diffMinutes / 60);
+  const minutes = diffMinutes % 60;
+  return `Прострочено на ${hours} год ${minutes} хв`;
+};
+
+const playChecklistAlertTone = () => {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const audioContext = new AudioCtx();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
+    gainNode.gain.setValueAtTime(0.0001, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.12, audioContext.currentTime + 0.02);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.25);
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + 0.26);
+    oscillator.onended = () => {
+      audioContext.close();
+    };
+  } catch (error) {
+    console.warn("Не вдалося відтворити сигнал сповіщення:", error);
+  }
+};
+
 function App() {
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+
+  useEffect(() => {
+    const timerId = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+
+    return () => clearInterval(timerId);
+  }, []);
+
                                   // --- Функція для завантаження всіх лічильників ---
                                   const fetchAllMeters = async () => {
                                     if (!user || user.role !== "admin" || !restaurants.length) return;
@@ -144,6 +219,7 @@ function App() {
               updateRestaurant: updateRestaurantInFirebase,
               deleteRestaurant: deleteRestaurantFromFirebase,
             } = useRestaurants();
+          const { templates: checklistTemplates, executions: checklistExecutions } = useChecklists(true);
           // Користувач
           const { user, loading: authLoading, isAuthenticated } = useAuth();
         // Список ресторанів
@@ -159,12 +235,11 @@ function App() {
       return localStorage.getItem('lucia_activeNav') || "reports-assets";
     });
   // --- Notification Center state ---
-  const [notifications, setNotifications] = useState([
-    // Заглушки для тесту
-    { title: "Новий актив додано", time: "1 хв тому", body: "Додано основний засіб: Холодильник" },
-    { title: "Завдання виконано", time: "10 хв тому", body: "Завершено аудит інвентаризації" },
-  ]);
+  const [notifications, setNotifications] = useState([]);
   const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
+  const [checklistReminderTick, setChecklistReminderTick] = useState(0);
+  const seenMissedChecklistKeysRef = useRef(new Set());
+  const userInteractedRef = useRef(false);
 
   const baseInput =
     "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
@@ -174,6 +249,101 @@ function App() {
 
 
   // --- Далі всі useEffect, useMemo, ... ---
+
+  useEffect(() => {
+    const markInteracted = () => {
+      userInteractedRef.current = true;
+    };
+
+    window.addEventListener("pointerdown", markInteracted, { once: true });
+    window.addEventListener("keydown", markInteracted, { once: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", markInteracted);
+      window.removeEventListener("keydown", markInteracted);
+    };
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setChecklistReminderTick((v) => v + 1);
+    }, 30000);
+
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    if (!user || !Array.isArray(restaurants) || restaurants.length === 0) {
+      setNotifications([]);
+      seenMissedChecklistKeysRef.current = new Set();
+      return;
+    }
+
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const dayKey = dayKeys[new Date(`${today}T00:00:00`).getDay()];
+    const missedItems = [];
+
+    for (const restaurant of restaurants) {
+      const restaurantTemplates = (checklistTemplates || []).filter((template) => {
+        if (template?.isActive === false) return false;
+        if (!Array.isArray(template?.items) || template.items.length === 0) return false;
+        if (Array.isArray(template?.activeDays) && template.activeDays.length > 0 && !template.activeDays.includes(dayKey)) {
+          return false;
+        }
+        if (!Array.isArray(template?.restaurantIds) || template.restaurantIds.length === 0) return true;
+        return template.restaurantIds.map(String).includes(String(restaurant.id));
+      });
+
+      for (const template of restaurantTemplates) {
+        const execution = (checklistExecutions || []).find(
+          (item) =>
+            String(item.restaurantId || "") === String(restaurant.id) &&
+            String(item.date || "") === today &&
+            String(item.kind || "") === String(template.kind || "opening")
+        );
+
+        for (const task of template.items || []) {
+          const plannedTime = getPlannedTime(task, restaurant.schedule, dayKey);
+          if (!plannedTime) continue;
+
+          const plannedDate = new Date(`${today}T${plannedTime}:00`);
+          if (Number.isNaN(plannedDate.getTime()) || plannedDate > now) continue;
+
+          const done = Boolean(execution?.checks?.[task.id]?.done);
+          if (done) continue;
+
+          const reminderKey = `${today}_${restaurant.id}_${template.id}_${task.id}`;
+          missedItems.push({
+            key: reminderKey,
+            title: `Пропущено чеклист: ${task.title || "Без назви"}`,
+            time: getOverdueText(plannedDate, now),
+            body: `${restaurant.name || "Ресторан"} · План: ${plannedTime} · ${template.kind === "shift" ? "Під час зміни" : "Відкриття"}`,
+          });
+        }
+      }
+    }
+
+    missedItems.sort((a, b) => a.time.localeCompare(b.time));
+    const nextNotifications = missedItems.slice(0, 50);
+    setNotifications(nextNotifications);
+
+    const seen = seenMissedChecklistKeysRef.current;
+    const currentKeys = new Set(nextNotifications.map((item) => item.key));
+    const newKeys = nextNotifications.filter((item) => !seen.has(item.key));
+
+    if (newKeys.length > 0 && userInteractedRef.current) {
+      playChecklistAlertTone();
+    }
+
+    seenMissedChecklistKeysRef.current = currentKeys;
+  }, [
+    user,
+    restaurants,
+    checklistTemplates,
+    checklistExecutions,
+    checklistReminderTick,
+  ]);
 
   // ...існуючий код App...
 
@@ -317,7 +487,13 @@ function App() {
 
   // Вкладки для поточного activeNav — з menuStructure, але фільтруються згідно з userPermissions
   const topTabs = useMemo(() => {
-    const allTabs = getTabsForSection(activeNav);
+    const allTabs = getTabsForSection(activeNav).map((tab) => {
+      if (activeNav === "ops-checklists" && tab.id === "openingchecklist") {
+        return { ...tab, label: "Чеклисти" };
+      }
+      return tab;
+    });
+
     if (!user || user.role === 'admin') return allTabs;
     const allowed = userPermissions[activeNav];
     if (allowed === true) return allTabs;
@@ -1520,6 +1696,14 @@ function App() {
       );
     }
 
+    if (activeNav === "ops-checklists" || activeNav.includes("ops-checklists")) {
+      return (
+        <div className="grid grid-cols-1">
+          <ChecklistModule topTab={topTab} restaurants={restaurants} user={user} />
+        </div>
+      );
+    }
+
     if (activeNav === "productbooking" || activeNav.includes("productbooking")) {
       return (
         <div className="grid grid-cols-1">
@@ -1912,6 +2096,16 @@ function App() {
               
               {/* Користувач, сповіщення та вихід - праворуч */}
               <div className="flex items-center gap-2 sm:gap-4">
+                <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300">
+                  <LucideIcons.Clock3 size={16} />
+                  <span className="text-sm font-medium tabular-nums">
+                    {currentTime.toLocaleTimeString("uk-UA", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </span>
+                </div>
                 {/* Дзвоник сповіщень */}
                 <button
                   type="button"

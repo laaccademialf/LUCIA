@@ -476,6 +476,136 @@ export const addSupplierDispatch = async (dispatch) => {
   }
 };
 
+// ==================== ЧЕК-ЛИСТИ ====================
+
+export const getChecklistTemplates = async () => {
+  try {
+    const templatesRef = collection(db, "checklistTemplates");
+    const q = query(templatesRef, orderBy("name"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((item) => ({
+      id: item.id,
+      ...item.data(),
+    }));
+  } catch (error) {
+    console.error("Помилка отримання шаблонів чек-листів:", error);
+    throw error;
+  }
+};
+
+export const addChecklistTemplate = async (template) => {
+  try {
+    const docRef = await addDoc(collection(db, "checklistTemplates"), {
+      ...template,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    return docRef.id;
+  } catch (error) {
+    console.error("Помилка створення шаблону чек-листа:", error);
+    throw error;
+  }
+};
+
+export const updateChecklistTemplate = async (id, data) => {
+  try {
+    const docRef = doc(db, "checklistTemplates", id);
+    await updateDoc(docRef, {
+      ...data,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка оновлення шаблону чек-листа:", error);
+    throw error;
+  }
+};
+
+export const deleteChecklistTemplate = async (id) => {
+  try {
+    await deleteDoc(doc(db, "checklistTemplates", id));
+  } catch (error) {
+    console.error("Помилка видалення шаблону чек-листа:", error);
+    throw error;
+  }
+};
+
+export const subscribeToChecklistTemplates = (callback) => {
+  const templatesRef = collection(db, "checklistTemplates");
+  const q = query(templatesRef, orderBy("name"));
+
+  return onSnapshot(q, (snapshot) => {
+    const templates = snapshot.docs.map((item) => ({
+      id: item.id,
+      ...item.data(),
+    }));
+    callback(templates);
+  });
+};
+
+export const getChecklistExecutions = async () => {
+  try {
+    const executionsRef = collection(db, "checklistExecutions");
+    const q = query(executionsRef, orderBy("date", "desc"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((item) => ({
+      id: item.id,
+      ...item.data(),
+    }));
+  } catch (error) {
+    console.error("Помилка отримання виконань чек-листів:", error);
+    throw error;
+  }
+};
+
+export const addChecklistExecution = async (execution) => {
+  try {
+    const docRef = await addDoc(collection(db, "checklistExecutions"), {
+      ...execution,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    return docRef.id;
+  } catch (error) {
+    console.error("Помилка створення виконання чек-листа:", error);
+    throw error;
+  }
+};
+
+export const updateChecklistExecution = async (id, data) => {
+  try {
+    const docRef = doc(db, "checklistExecutions", id);
+    await updateDoc(docRef, {
+      ...data,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка оновлення виконання чек-листа:", error);
+    throw error;
+  }
+};
+
+export const deleteChecklistExecution = async (id) => {
+  try {
+    await deleteDoc(doc(db, "checklistExecutions", id));
+  } catch (error) {
+    console.error("Помилка видалення виконання чек-листа:", error);
+    throw error;
+  }
+};
+
+export const subscribeToChecklistExecutions = (callback) => {
+  const executionsRef = collection(db, "checklistExecutions");
+  const q = query(executionsRef, orderBy("date", "desc"));
+
+  return onSnapshot(q, (snapshot) => {
+    const executions = snapshot.docs.map((item) => ({
+      id: item.id,
+      ...item.data(),
+    }));
+    callback(executions);
+  });
+};
+
 // ==================== СЕРВІСНІ ЗАЯВКИ ====================
 
 export const getServiceRequests = async () => {

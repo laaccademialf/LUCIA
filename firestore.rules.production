@@ -93,6 +93,19 @@ service cloud.firestore {
       allow write: if isProcurement();
     }
 
+    // Шаблони чеклистів (налаштування)
+    match /checklistTemplates/{templateId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Виконання чеклистів по ресторанах і датах
+    match /checklistExecutions/{executionId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
     // Сервісні заявки (міні CRM для експлуатації)
     match /serviceRequests/{requestId} {
       allow read: if isAuthenticated();

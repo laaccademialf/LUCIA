@@ -47,7 +47,15 @@ const initialMenuStructure = [
     id: "operations",
     label: "Операції",
     children: [
-      { id: "ops-checklists", label: "Чек-листи", tabs: [], tabLabels: [] },
+      {
+        id: "ops-checklists",
+        label: "Чек-листи",
+        tabs: ["openingchecklist", "settingchecklists"],
+        tabLabels: [
+          { id: "openingchecklist", label: "Чеклист відкриття" },
+          { id: "settingchecklists", label: "Налаштування чеклистів" }
+        ]
+      },
       { id: "ops-haccp", label: "HACCP журнали", tabs: [], tabLabels: [] },
       { id: "ops-maintenance", label: "Сервісні заявки", tabs: [], tabLabels: [] }
     ]
