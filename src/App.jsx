@@ -164,6 +164,9 @@ function App() {
   ]);
   const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
 
+  const baseInput =
+    "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
+
 
 
 
@@ -466,30 +469,97 @@ function App() {
         return;
       }
 
+      const normalizeInvNumber = (value) => String(value ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+
+      const existingByInvNumber = new Map();
+      const duplicatedInDb = new Set();
+      for (const asset of assets) {
+        const normalized = normalizeInvNumber(asset?.invNumber);
+        if (!normalized) continue;
+        if (existingByInvNumber.has(normalized)) {
+          duplicatedInDb.add(normalized);
+          continue;
+        }
+        existingByInvNumber.set(normalized, asset);
+      }
+
       let created = 0;
       let updated = 0;
       let skipped = 0;
+      let failed = 0;
+      const errors = [];
+      const seenInFile = new Map();
 
-      for (const importedAsset of importedAssets) {
-        const invNumber = String(importedAsset.invNumber || "").trim();
-        const name = String(importedAsset.name || "").trim();
-        if (!invNumber || !name) {
+      const rows = importedAssets.map((asset, index) => ({
+        rowNumber: index + 2,
+        asset,
+      }));
+
+      const validRows = [];
+
+      for (const row of rows) {
+        const rawInvNumber = String(row.asset?.invNumber ?? "").trim();
+        const rawName = String(row.asset?.name ?? "").trim();
+        const invNumber = normalizeInvNumber(rawInvNumber);
+
+        if (!invNumber) {
           skipped += 1;
+          errors.push(`Рядок ${row.rowNumber}: порожній інвентарний номер.`);
           continue;
         }
 
-        const existing = assets.find((asset) => String(asset.invNumber || "").trim() === invNumber);
+        if (!rawName) {
+          skipped += 1;
+          errors.push(`Рядок ${row.rowNumber}: порожня назва активу.`);
+          continue;
+        }
 
-        if (existing?.id) {
-          await updateAssetInFirebase(existing.id, { ...existing, ...importedAsset, invNumber, name });
-          updated += 1;
-        } else {
-          await addAssetToFirebase({ ...importedAsset, invNumber, name });
-          created += 1;
+        if (seenInFile.has(invNumber)) {
+          const firstRow = seenInFile.get(invNumber);
+          skipped += 1;
+          errors.push(`Рядок ${row.rowNumber}: дубль інвентарного номера "${invNumber}" (перший у рядку ${firstRow}).`);
+          continue;
+        }
+
+        seenInFile.set(invNumber, row.rowNumber);
+        validRows.push({
+          ...row,
+          invNumber,
+          name: rawName,
+        });
+      }
+
+      for (const row of validRows) {
+        const importedAsset = row.asset;
+        const invNumber = row.invNumber;
+        const name = row.name;
+        const existing = existingByInvNumber.get(invNumber);
+
+        try {
+          if (existing?.id) {
+            await updateAssetInFirebase(existing.id, { ...existing, ...importedAsset, invNumber, name });
+            updated += 1;
+          } else {
+            await addAssetToFirebase({ ...importedAsset, invNumber, name });
+            created += 1;
+          }
+        } catch (rowError) {
+          failed += 1;
+          errors.push(`Рядок ${row.rowNumber}: не вдалося імпортувати (${rowError?.message || "невідома помилка"}).`);
         }
       }
 
-      alert(`Імпорт завершено. Додано: ${created}, оновлено: ${updated}, пропущено: ${skipped}.`);
+      const dbDuplicatesWarning = duplicatedInDb.size > 0
+        ? `\nУвага: в базі вже є дублікати інвентарних номерів (${Array.from(duplicatedInDb).slice(0, 5).join(", ")}${duplicatedInDb.size > 5 ? "..." : ""}).`
+        : "";
+
+      const errorPreview = errors.length > 0
+        ? `\n\nПроблемні рядки:\n- ${errors.slice(0, 10).join("\n- ")}${errors.length > 10 ? "\n- ..." : ""}`
+        : "";
+
+      alert(
+        `Імпорт завершено.\nДодано: ${created}\nОновлено: ${updated}\nПропущено: ${skipped}\nПомилки запису: ${failed}${dbDuplicatesWarning}${errorPreview}`
+      );
     } catch (error) {
       console.error("Помилка імпорту активів:", error);
       alert("Помилка імпорту файлу активів. Перевірте формат Excel.");
@@ -547,6 +617,129 @@ function App() {
     console.log('DEBUG navItems (після фільтрації):', result);
     return result;
   }, [menuStructure, user?.role, user?.workRole, userPermissions]);
+
+  const renderAddressFields = () => (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div>
+        <label className="text-sm font-semibold text-slate-800">Країна</label>
+        <input
+          className={baseInput}
+          value={restaurantForm.country}
+          onChange={(e) => setRestaurantForm((p) => ({ ...p, country: e.target.value }))}
+        />
+      </div>
+      <div>
+        <label className="text-sm font-semibold text-slate-800">Область</label>
+        <input
+          className={baseInput}
+          value={restaurantForm.region}
+          onChange={(e) => setRestaurantForm((p) => ({ ...p, region: e.target.value }))}
+        />
+      </div>
+      <div>
+        <label className="text-sm font-semibold text-slate-800">Місто</label>
+        <input
+          className={baseInput}
+          value={restaurantForm.city}
+          onChange={(e) => setRestaurantForm((p) => ({ ...p, city: e.target.value }))}
+        />
+      </div>
+      <div>
+        <label className="text-sm font-semibold text-slate-800">Вулиця</label>
+        <input
+          className={baseInput}
+          value={restaurantForm.street}
+          onChange={(e) => setRestaurantForm((p) => ({ ...p, street: e.target.value }))}
+        />
+      </div>
+      <div>
+        <label className="text-sm font-semibold text-slate-800">Поштовий індекс</label>
+        <input
+          className={baseInput}
+          value={restaurantForm.postalCode}
+          onChange={(e) => setRestaurantForm((p) => ({ ...p, postalCode: e.target.value }))}
+        />
+      </div>
+      <div>
+        <label className="text-sm font-semibold text-slate-800">Адреса (рядок)</label>
+        <input
+          className={baseInput}
+          value={restaurantForm.address}
+          onChange={(e) => setRestaurantForm((p) => ({ ...p, address: e.target.value }))}
+        />
+      </div>
+    </div>
+  );
+
+  const renderSeatingFields = () => (
+    <div className="space-y-3">
+      <p className="text-sm font-semibold text-slate-700">Посадкові місця та площа</p>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Посадкові (всього)</label>
+          <input
+            type="number"
+            className={baseInput}
+            value={restaurantForm.seatsTotal}
+            onChange={(e) => setRestaurantForm((p) => ({ ...p, seatsTotal: e.target.value }))}
+          />
+        </div>
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Посадкові (літо)</label>
+          <input
+            type="number"
+            className={baseInput}
+            value={restaurantForm.seatsSummer}
+            onChange={(e) => setRestaurantForm((p) => ({ ...p, seatsSummer: e.target.value }))}
+          />
+        </div>
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Посадкові (зима)</label>
+          <input
+            type="number"
+            className={baseInput}
+            value={restaurantForm.seatsWinter}
+            onChange={(e) => setRestaurantForm((p) => ({ ...p, seatsWinter: e.target.value }))}
+          />
+        </div>
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Площа (всього)</label>
+          <input
+            type="number"
+            className={baseInput}
+            value={restaurantForm.areaTotal}
+            onChange={(e) => setRestaurantForm((p) => ({ ...p, areaTotal: e.target.value }))}
+          />
+        </div>
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Площа (літо)</label>
+          <input
+            type="number"
+            className={baseInput}
+            value={restaurantForm.areaSummer}
+            onChange={(e) => setRestaurantForm((p) => ({ ...p, areaSummer: e.target.value }))}
+          />
+        </div>
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Площа (зима)</label>
+          <input
+            type="number"
+            className={baseInput}
+            value={restaurantForm.areaWinter}
+            onChange={(e) => setRestaurantForm((p) => ({ ...p, areaWinter: e.target.value }))}
+          />
+        </div>
+      </div>
+      <label className="flex items-center gap-2 text-sm text-slate-800">
+        <input
+          type="checkbox"
+          checked={restaurantForm.hasTerrace}
+          onChange={(e) => setRestaurantForm((p) => ({ ...p, hasTerrace: e.target.checked }))}
+        />
+        Наявна тераса
+      </label>
+    </div>
+  );
 
   const renderContent = () => {
         // ...existing code...
