@@ -65,6 +65,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   const [activeTab, setActiveTab] = useState("identification");
   const [completedTabs, setCompletedTabs] = useState([]);
   const [photos, setPhotos] = useState([]);
+  const [processingPhotos, setProcessingPhotos] = useState(false);
   const [printedQrFingerprint, setPrintedQrFingerprint] = useState("");
   
   // Завантаження типових полів з Firebase
@@ -122,10 +123,28 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       .map(p => p.name);
   }, [selectedRespCenter, responsibilityCenters, responsiblePersons]);
 
+  const normalizePhotosForState = (items) => {
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((item, index) => {
+        if (typeof item === "string") {
+          return { url: item, name: `Фото ${index + 1}` };
+        }
+        if (item && typeof item === "object") {
+          return {
+            url: typeof item.url === "string" ? item.url : "",
+            name: typeof item.name === "string" ? item.name : `Фото ${index + 1}`,
+          };
+        }
+        return { url: "", name: "" };
+      })
+      .filter((item) => item.url);
+  };
+
   useEffect(() => {
     if (selectedAsset) {
       reset({ ...defaultAsset, ...selectedAsset });
-      setPhotos(selectedAsset.photos || []);
+      setPhotos(normalizePhotosForState(selectedAsset.photos));
     } else {
       // При створенні нового активу підставляємо ресторан користувача
       const userRestaurant = currentUser?.restaurant
@@ -266,16 +285,105 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   };
 
   // Обробка фото
-  const handlePhotoUpload = (e) => {
-    const files = Array.from(e.target.files);
-    
-    files.forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setPhotos((prev) => [...prev, { url: event.target.result, name: file.name }]);
-      };
-      reader.readAsDataURL(file);
-    });
+  const compressImageToDataUrl = async (file) => {
+    const readAsDataUrl = (inputFile) =>
+      new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(inputFile);
+      });
+
+    const loadImage = (src) =>
+      new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = reject;
+        image.src = src;
+      });
+
+    const sourceDataUrl = await readAsDataUrl(file);
+    const image = await loadImage(sourceDataUrl);
+
+    const MAX_SIDE = 1600;
+    const TARGET_MAX_CHARS = 210000;
+
+    let width = image.naturalWidth || image.width;
+    let height = image.naturalHeight || image.height;
+
+    if (width > MAX_SIDE || height > MAX_SIDE) {
+      const ratio = Math.min(MAX_SIDE / width, MAX_SIDE / height);
+      width = Math.max(1, Math.round(width * ratio));
+      height = Math.max(1, Math.round(height * ratio));
+    }
+
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return sourceDataUrl;
+    }
+
+    const draw = (drawWidth, drawHeight) => {
+      canvas.width = drawWidth;
+      canvas.height = drawHeight;
+      context.clearRect(0, 0, drawWidth, drawHeight);
+      context.drawImage(image, 0, 0, drawWidth, drawHeight);
+    };
+
+    draw(width, height);
+
+    let quality = 0.82;
+    let output = canvas.toDataURL("image/jpeg", quality);
+
+    while (output.length > TARGET_MAX_CHARS && quality > 0.45) {
+      quality -= 0.08;
+      output = canvas.toDataURL("image/jpeg", quality);
+    }
+
+    while (output.length > TARGET_MAX_CHARS && width > 900 && height > 900) {
+      width = Math.round(width * 0.86);
+      height = Math.round(height * 0.86);
+      draw(width, height);
+      output = canvas.toDataURL("image/jpeg", Math.max(quality, 0.55));
+    }
+
+    return output;
+  };
+
+  const handlePhotoUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+
+    setProcessingPhotos(true);
+
+    const preparedPhotos = [];
+    let failedCount = 0;
+
+    for (const file of files) {
+      try {
+        if (!String(file.type || "").startsWith("image/")) {
+          failedCount += 1;
+          continue;
+        }
+
+        const compressedDataUrl = await compressImageToDataUrl(file);
+        preparedPhotos.push({ url: compressedDataUrl, name: file.name });
+      } catch (error) {
+        console.error("Помилка обробки фото:", error);
+        failedCount += 1;
+      }
+    }
+
+    if (preparedPhotos.length > 0) {
+      setPhotos((prev) => [...prev, ...preparedPhotos]);
+    }
+
+    if (failedCount > 0) {
+      alert(`Не вдалося обробити ${failedCount} фото.`);
+    }
+
+    setProcessingPhotos(false);
+    e.target.value = "";
   };
 
   const handleCameraCapture = (e) => {
@@ -286,24 +394,126 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     setPhotos((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const onSubmitForm = (values) => {
-    const payload = {
-      ...values,
-      photos: photos,
-      physicalWear: Number(values.physicalWear) || 0,
-      moralWear: Number(values.moralWear) || 0,
-      totalWear: Number(values.totalWear) || 0,
-      purchaseYear: values.purchaseYear ? Number(values.purchaseYear) : "",
-      normativeTerm: values.normativeTerm ? Number(values.normativeTerm) : "",
-      initialCost: values.initialCost ? Number(values.initialCost) : 0,
-      marketValueNew: values.marketValueNew ? Number(values.marketValueNew) : 0,
-      marketValueUsed: values.marketValueUsed ? Number(values.marketValueUsed) : 0,
-      residualValue: values.residualValue ? Number(values.residualValue) : 0,
+  const onSubmitForm = async (values) => {
+    const safeString = (input) => {
+      if (input === null || input === undefined) return "";
+      return typeof input === "string" ? input : String(input);
     };
-    onSubmit(payload);
-    setActiveTab("identification");
-    setCompletedTabs([]);
-    setPhotos([]);
+
+    const toSafeNumber = (input, fallback = 0) => {
+      const parsed = Number(input);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+
+    const sanitizePhotoUrls = (items) => {
+      const MAX_PHOTOS = 5;
+      const MAX_SINGLE_PHOTO_CHARS = 220000;
+      const MAX_TOTAL_CHARS = 700000;
+
+      if (!Array.isArray(items)) {
+        return { urls: [], droppedCount: 0 };
+      }
+
+      const normalized = items
+        .map((item) => {
+          if (typeof item === "string") return item;
+          if (item && typeof item === "object" && typeof item.url === "string") return item.url;
+          return "";
+        })
+        .filter((url) => Boolean(url));
+
+      const accepted = [];
+      let totalChars = 0;
+      let droppedCount = 0;
+
+      for (const url of normalized) {
+        const isTooLargeSingle = url.length > MAX_SINGLE_PHOTO_CHARS;
+        const isOverCount = accepted.length >= MAX_PHOTOS;
+        const isOverTotal = totalChars + url.length > MAX_TOTAL_CHARS;
+
+        if (isTooLargeSingle || isOverCount || isOverTotal) {
+          droppedCount += 1;
+          continue;
+        }
+
+        accepted.push(url);
+        totalChars += url.length;
+      }
+
+      return { urls: accepted, droppedCount };
+    };
+
+    const stripUndefinedDeep = (input) => {
+      if (Array.isArray(input)) {
+        return input
+          .map(stripUndefinedDeep)
+          .filter((item) => item !== undefined);
+      }
+
+      if (input && typeof input === "object") {
+        return Object.entries(input).reduce((acc, [key, value]) => {
+          if (value === undefined) return acc;
+          const normalized = stripUndefinedDeep(value);
+          if (normalized !== undefined) {
+            acc[key] = normalized;
+          }
+          return acc;
+        }, {});
+      }
+
+      return input;
+    };
+
+    const { urls: safePhotoUrls, droppedCount } = sanitizePhotoUrls(photos);
+
+    const payload = {
+      invNumber: safeString(values.invNumber).trim(),
+      invNumber1C: safeString(values.invNumber1C).trim(),
+      name: safeString(values.name).trim(),
+      category: safeString(values.category).trim(),
+      subCategory: safeString(values.subCategory).trim(),
+      type: safeString(values.type).trim(),
+      serialNumber: safeString(values.serialNumber).trim(),
+      brand: safeString(values.brand).trim(),
+      photos: safePhotoUrls,
+      businessUnit: safeString(values.businessUnit).trim(),
+      locationName: safeString(values.locationName).trim(),
+      zone: safeString(values.zone).trim(),
+      respCenter: safeString(values.respCenter).trim(),
+      respPerson: typeof values.respPerson === "string" ? values.respPerson : "",
+      status: safeString(values.status).trim(),
+      condition: safeString(values.condition).trim(),
+      functionality: safeString(values.functionality).trim(),
+      relevance: safeString(values.relevance).trim(),
+      comment: safeString(values.comment).trim(),
+      purchaseYear: safeString(values.purchaseYear).trim(),
+      commissionDate: safeString(values.commissionDate).trim(),
+      normativeTerm: values.normativeTerm === "" ? "" : toSafeNumber(values.normativeTerm, ""),
+      physicalWear: toSafeNumber(values.physicalWear, 0),
+      moralWear: toSafeNumber(values.moralWear, 0),
+      totalWear: toSafeNumber(values.totalWear, 0),
+      initialCost: toSafeNumber(values.initialCost, 0),
+      marketValueNew: toSafeNumber(values.marketValueNew, 0),
+      marketValueUsed: toSafeNumber(values.marketValueUsed, 0),
+      residualValue: toSafeNumber(values.residualValue, 0),
+      decision: safeString(values.decision).trim(),
+      reason: safeString(values.reason).trim(),
+      reasonComment: safeString(values.reasonComment).trim(),
+      newLocation: safeString(values.newLocation).trim(),
+      auditDate: safeString(values.auditDate).trim(),
+      auditors: safeString(values.auditors).trim(),
+    };
+
+    if (droppedCount > 0) {
+      alert(`Частину фото (${droppedCount}) не збережено через обмеження розміру. Рекомендується стискати фото перед завантаженням.`);
+    }
+
+    const saved = await onSubmit(stripUndefinedDeep(payload));
+    if (saved !== false) {
+      setActiveTab("identification");
+      setCompletedTabs([]);
+      setPhotos([]);
+    }
   };
 
   const requiredMark = <span className="text-rose-500">*</span>;
@@ -314,7 +524,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   const isLastTab = currentTabIndex === tabs.length - 1;
 
   return (
-    <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
+    <div className="card p-3 sm:p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">{isEdit ? "Редагування актива" : "Додати актив"}</h2>
@@ -327,7 +537,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="mt-3 sm:mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
         {tabs.map((tab, index) => {
           const isCompleted = completedTabs.includes(tab.id);
           const isActive = activeTab === tab.id;
@@ -359,7 +569,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
         })}
       </div>
 
-      <form className="mt-6 flex flex-col gap-6" onSubmit={handleSubmit(onSubmitForm)}>
+      <form className="mt-4 sm:mt-6 flex flex-col gap-4 sm:gap-6" onSubmit={handleSubmit(onSubmitForm)}>
         {activeTab === "identification" && (
           <div className="space-y-6">
             <FieldGrid>
@@ -426,26 +636,28 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                 {/* Кнопка завантаження з файлу */}
                 <label className="flex items-center gap-2 px-4 py-3 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 cursor-pointer transition shadow">
                   <Upload size={18} />
-                  Завантажити фото
+                  {processingPhotos ? "Обробка..." : "Завантажити фото"}
                   <input
                     type="file"
                     accept="image/*"
                     multiple
                     className="hidden"
                     onChange={handlePhotoUpload}
+                    disabled={processingPhotos}
                   />
                 </label>
 
                 {/* Кнопка камери (для мобільних) */}
                 <label className="flex items-center gap-2 px-4 py-3 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-500 cursor-pointer transition shadow">
                   <Camera size={18} />
-                  Зробити фото
+                  {processingPhotos ? "Обробка..." : "Зробити фото"}
                   <input
                     type="file"
                     accept="image/*"
                     capture="environment"
                     className="hidden"
                     onChange={handleCameraCapture}
+                    disabled={processingPhotos}
                   />
                 </label>
               </div>
@@ -717,15 +929,20 @@ function FieldGrid({ children }) {
 }
 
 // Light, high-contrast inputs for better readability on dark container
-const baseInput = "w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-sm text-gray-900 font-medium shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all duration-150 placeholder:text-gray-500";
+const baseInput = "w-full rounded-lg border border-gray-300 bg-white px-3 sm:px-4 py-2.5 sm:py-3 text-sm text-gray-900 font-medium shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all duration-150 placeholder:text-gray-500";
 
 const Input = ({ label, disabled, type = "text", ...rest }) => (
-  <label className="flex flex-col gap-2.5 text-sm">
+  <label className="flex min-w-0 flex-col gap-2.5 text-sm">
     <span className="font-semibold text-slate-800">{label}</span>
     <input 
       type={type}
       disabled={disabled} 
-      className={clsx(baseInput, disabled && "bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200")} 
+      className={clsx(
+        baseInput,
+        "min-w-0 max-w-full",
+        type === "date" && "[color-scheme:light]",
+        disabled && "bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200"
+      )}
       {...rest} 
     />
   </label>

@@ -604,19 +604,60 @@ function App() {
   };
 
   const handleSubmit = async (asset) => {
+    const sanitizeFirestoreValue = (value) => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+
+      const valueType = typeof value;
+      if (valueType === "string" || valueType === "boolean") return value;
+      if (valueType === "number") return Number.isFinite(value) ? value : null;
+
+      if (value instanceof Date) return value.toISOString();
+
+      if (Array.isArray(value)) {
+        return value
+          .map((item) => sanitizeFirestoreValue(item))
+          .map((item) => (Array.isArray(item) ? item.join(", ") : item))
+          .filter((item) => item !== undefined);
+      }
+
+      if (valueType === "object") {
+        return Object.entries(value).reduce((acc, [key, nestedValue]) => {
+          const sanitized = sanitizeFirestoreValue(nestedValue);
+          if (sanitized !== undefined) {
+            acc[key] = sanitized;
+          }
+          return acc;
+        }, {});
+      }
+
+      return String(value);
+    };
+
+    const sanitizedAsset = sanitizeFirestoreValue(asset);
+
     try {
       const exists = assets.find((a) => a.invNumber === asset.invNumber);
+      let result;
+
       if (exists) {
         // Оновлення існуючого активу
-        await updateAssetInFirebase(exists.id, asset);
+        result = await updateAssetInFirebase(exists.id, sanitizedAsset);
       } else {
         // Додавання нового активу
-        await addAssetToFirebase(asset);
+        result = await addAssetToFirebase(sanitizedAsset);
       }
+
+      if (result?.success === false) {
+        throw result.error || new Error("Не вдалося зберегти актив");
+      }
+
       setSelected(null);
+      return true;
     } catch (error) {
       console.error("Помилка збереження активу:", error);
-      alert("Помилка збереження активу. Перевірте консоль.");
+      alert(`Помилка збереження активу: ${error?.message || "невідома помилка"}`);
+      return false;
     }
   };
 
@@ -714,14 +755,56 @@ function App() {
         const existing = existingByInvNumber.get(invNumber);
 
         try {
+          const sanitizeFirestoreValue = (value) => {
+            if (value === undefined) return undefined;
+            if (value === null) return null;
+
+            const valueType = typeof value;
+            if (valueType === "string" || valueType === "boolean") return value;
+            if (valueType === "number") return Number.isFinite(value) ? value : null;
+
+            if (value instanceof Date) return value.toISOString();
+
+            if (Array.isArray(value)) {
+              return value
+                .map((item) => sanitizeFirestoreValue(item))
+                .map((item) => (Array.isArray(item) ? item.join(", ") : item))
+                .filter((item) => item !== undefined);
+            }
+
+            if (valueType === "object") {
+              return Object.entries(value).reduce((acc, [key, nestedValue]) => {
+                const sanitized = sanitizeFirestoreValue(nestedValue);
+                if (sanitized !== undefined) {
+                  acc[key] = sanitized;
+                }
+                return acc;
+              }, {});
+            }
+
+            return String(value);
+          };
+
+          const mergedPayload = { ...existing, ...importedAsset, invNumber, name };
+          const sanitizedPayload = sanitizeFirestoreValue(mergedPayload);
+          let result;
           if (existing?.id) {
-            await updateAssetInFirebase(existing.id, { ...existing, ...importedAsset, invNumber, name });
+            result = await updateAssetInFirebase(existing.id, sanitizedPayload);
             updated += 1;
           } else {
-            await addAssetToFirebase({ ...importedAsset, invNumber, name });
+            result = await addAssetToFirebase(sanitizedPayload);
             created += 1;
           }
+
+          if (result?.success === false) {
+            throw result.error || new Error("помилка запису");
+          }
         } catch (rowError) {
+          if (existing?.id) {
+            updated = Math.max(0, updated - 1);
+          } else {
+            created = Math.max(0, created - 1);
+          }
           failed += 1;
           errors.push(`Рядок ${row.rowNumber}: не вдалося імпортувати (${rowError?.message || "невідома помилка"}).`);
         }
