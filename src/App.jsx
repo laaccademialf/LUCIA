@@ -1454,7 +1454,10 @@ function App() {
             console.log("Поточний користувач:", user);
             console.log("Роль користувача:", user?.role);
             
-            await deleteRestaurantFromFirebase(id);
+            const result = await deleteRestaurantFromFirebase(id);
+            if (!result?.success) {
+              throw result?.error || new Error("Не вдалося видалити ресторан");
+            }
             console.log("Ресторан успішно видалено");
             alert("✅ Ресторан успішно видалено!");
           } catch (error) {
@@ -1479,10 +1482,16 @@ function App() {
 
             if (selectedRestaurant.id) {
               // Оновлення існуючого
-              await updateRestaurantInFirebase(selectedRestaurant.id, restaurantToSave);
+              const result = await updateRestaurantInFirebase(selectedRestaurant.id, restaurantToSave);
+              if (!result?.success) {
+                throw result?.error || new Error("Не вдалося оновити ресторан");
+              }
             } else {
               // Додавання нового
-              await addRestaurantToFirebase(restaurantToSave);
+              const result = await addRestaurantToFirebase(restaurantToSave);
+              if (!result?.success) {
+                throw result?.error || new Error("Не вдалося додати ресторан");
+              }
             }
             setSelectedRestaurant(null);
           } catch (error) {

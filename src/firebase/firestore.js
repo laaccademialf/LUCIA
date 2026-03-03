@@ -24,8 +24,8 @@ export const getRestaurants = async () => {
     const q = query(restaurantsRef, orderBy("regNumber"));
     const snapshot = await getDocs(q);
     return snapshot.docs.map((doc) => ({
-      id: doc.id,
       ...doc.data(),
+      id: doc.id,
     }));
   } catch (error) {
     console.error("Помилка отримання ресторанів:", error);
@@ -43,7 +43,7 @@ export const getRestaurant = async (id) => {
     const docRef = doc(db, "restaurants", id);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
-      return { id: docSnap.id, ...docSnap.data() };
+      return { ...docSnap.data(), id: docSnap.id };
     }
     return null;
   } catch (error) {
@@ -59,8 +59,9 @@ export const getRestaurant = async (id) => {
  */
 export const addRestaurant = async (restaurant) => {
   try {
+    const { id: _ignoredId, ...restaurantData } = restaurant || {};
     const docRef = await addDoc(collection(db, "restaurants"), {
-      ...restaurant,
+      ...restaurantData,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -79,9 +80,10 @@ export const addRestaurant = async (restaurant) => {
  */
 export const updateRestaurant = async (id, data) => {
   try {
+    const { id: _ignoredId, ...restaurantData } = data || {};
     const docRef = doc(db, "restaurants", id);
     await updateDoc(docRef, {
-      ...data,
+      ...restaurantData,
       updatedAt: new Date().toISOString(),
     });
   } catch (error) {
@@ -115,8 +117,8 @@ export const subscribeToRestaurants = (callback) => {
   
   return onSnapshot(q, (snapshot) => {
     const restaurants = snapshot.docs.map((doc) => ({
-      id: doc.id,
       ...doc.data(),
+      id: doc.id,
     }));
     callback(restaurants);
   });
