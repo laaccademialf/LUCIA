@@ -36,6 +36,7 @@ import ServiceRequestsModule from "./components/ServiceRequestsModule";
 import ChecklistModule from "./components/ChecklistModule";
 import TeamHiringModule from "./components/TeamHiringModule";
 import { useChecklists } from "./hooks/useChecklists";
+import { useServiceRequests } from "./hooks/useServiceRequests";
 import {
   downloadAssetTemplate,
   downloadRestaurantTemplate,
@@ -222,6 +223,7 @@ function App() {
             } = useRestaurants();
             const { businessUnits: assetBusinessUnits } = useAssetFields();
           const { templates: checklistTemplates, executions: checklistExecutions } = useChecklists(true);
+          const { requests: serviceRequests } = useServiceRequests(true);
           // Користувач
           const { user, loading: authLoading, isAuthenticated } = useAuth();
         // Список ресторанів
@@ -520,6 +522,67 @@ function App() {
     // Якщо доступу немає — не показувати вкладки
     return [];
   }, [activeNav, menuStructure, user, userPermissions]);
+
+  const dashboardData = useMemo(() => {
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+
+    const totalRestaurants = restaurants.length;
+    const totalAssets = assets.length;
+    const activeAssets = assets.filter((item) =>
+      String(item?.status || "").toLowerCase().includes("експлуата")
+    ).length;
+
+    const totalChecklistTemplates = checklistTemplates.length;
+    const todayExecutions = checklistExecutions.filter((item) => String(item?.date || "") === today);
+    const overdueChecklistCount = notifications.length;
+
+    const totalServiceRequests = serviceRequests.length;
+    const openServiceRequests = serviceRequests.filter((item) => {
+      const status = String(item?.status || "").toLowerCase();
+      return status !== "resolved" && status !== "closed";
+    }).length;
+
+    const getMinutes = (timeValue) => {
+      if (!timeValue || !String(timeValue).includes(":")) return null;
+      const [hours, minutes] = String(timeValue).split(":").map(Number);
+      if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+      return hours * 60 + minutes;
+    };
+
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const dayMap = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+    const dayKey = dayMap[now.getDay()];
+
+    const currentlyOpenRestaurants = restaurants.filter((restaurant) => {
+      const daySchedule = restaurant?.schedule?.[dayKey];
+      const from = getMinutes(daySchedule?.from);
+      const to = getMinutes(daySchedule?.to);
+      if (from === null || to === null) return false;
+      return nowMinutes >= from && nowMinutes <= to;
+    }).length;
+
+    return {
+      totalRestaurants,
+      totalAssets,
+      activeAssets,
+      totalChecklistTemplates,
+      todayExecutions: todayExecutions.length,
+      overdueChecklistCount,
+      totalServiceRequests,
+      openServiceRequests,
+      currentlyOpenRestaurants,
+      totalBusinessUnits: businessUnits.length,
+    };
+  }, [
+    restaurants,
+    assets,
+    checklistTemplates,
+    checklistExecutions,
+    notifications,
+    serviceRequests,
+    businessUnits,
+  ]);
 
   const menuStructureForPermissions = useMemo(() => {
 
@@ -1021,6 +1084,68 @@ function App() {
 
   const renderContent = () => {
         // ...existing code...
+        if (
+          activeNav === "dashboard" ||
+          activeNav === "dashboard-ops" ||
+          topTab === "maindashboard" ||
+          topTab === "dashboard-ops"
+        ) {
+          const statCards = [
+            { label: "Ресторани", value: dashboardData.totalRestaurants, hint: `Відкрито зараз: ${dashboardData.currentlyOpenRestaurants}` },
+            { label: "Активи", value: dashboardData.totalAssets, hint: `В експлуатації: ${dashboardData.activeAssets}` },
+            { label: "Чеклисти", value: dashboardData.totalChecklistTemplates, hint: `Виконання сьогодні: ${dashboardData.todayExecutions}` },
+            { label: "Сервісні заявки", value: dashboardData.totalServiceRequests, hint: `Відкритих: ${dashboardData.openServiceRequests}` },
+            { label: "Прострочені задачі", value: dashboardData.overdueChecklistCount, hint: "На основі нагадувань" },
+            { label: "Бізнес-напрями", value: dashboardData.totalBusinessUnits, hint: "З довідника активів" },
+          ];
+
+          return (
+            <div className="space-y-5">
+              <div className="rounded-2xl border border-indigo-300/40 bg-gradient-to-r from-indigo-700 via-indigo-600 to-blue-600 p-5 text-white shadow-xl">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-bold">Огляд системи</h2>
+                    <p className="text-indigo-100 text-sm mt-1">Ключові показники по модулях у реальному часі</p>
+                  </div>
+                  <div className="rounded-xl bg-white/15 px-3 py-2 text-sm font-semibold">
+                    Оновлено: {currentTime.toLocaleString("uk-UA")}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                {statCards.map((card) => (
+                  <div key={card.label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
+                    <p className="text-sm font-semibold text-slate-600">{card.label}</p>
+                    <p className="text-3xl font-bold text-slate-900 mt-1">{card.value}</p>
+                    <p className="text-xs text-slate-500 mt-2">{card.hint}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
+                  <h3 className="text-base font-semibold text-slate-900 mb-3">Фокус на сьогодні</h3>
+                  <ul className="space-y-2 text-sm text-slate-700">
+                    <li className="flex items-center justify-between"><span>Прострочені чеклисти</span><span className="font-bold text-rose-600">{dashboardData.overdueChecklistCount}</span></li>
+                    <li className="flex items-center justify-between"><span>Активні сервісні заявки</span><span className="font-bold text-amber-600">{dashboardData.openServiceRequests}</span></li>
+                    <li className="flex items-center justify-between"><span>Заклади, що працюють зараз</span><span className="font-bold text-emerald-600">{dashboardData.currentlyOpenRestaurants}</span></li>
+                  </ul>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
+                  <h3 className="text-base font-semibold text-slate-900 mb-3">Швидка аналітика</h3>
+                  <div className="space-y-3 text-sm text-slate-700">
+                    <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">Система містить <span className="font-semibold">{dashboardData.totalAssets}</span> активів у <span className="font-semibold">{dashboardData.totalRestaurants}</span> закладах.</div>
+                    <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">Сформовано <span className="font-semibold">{dashboardData.totalChecklistTemplates}</span> шаблонів чеклистів.</div>
+                    <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">У сервісному модулі всього <span className="font-semibold">{dashboardData.totalServiceRequests}</span> заявок.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
         // Вкладка управління утилітами
         if (activeNav === "inventory-utilities" && topTab === "utilityservice") {
           console.log("DEBUG renderContent: activeNav:", activeNav, "topTab:", topTab);
