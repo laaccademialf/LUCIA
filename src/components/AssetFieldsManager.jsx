@@ -1,44 +1,58 @@
 import { useState, useEffect } from "react";
-import { Plus, Trash2, AlertCircle, List, CheckCircle } from "lucide-react";
+import { Plus, Trash2, AlertCircle, List, CheckCircle, Pencil, Check, X } from "lucide-react";
 import {
   getCategories,
   addCategory,
   deleteCategory,
+  updateCategory,
   getSubcategories,
   addSubcategory,
   deleteSubcategory,
+  updateSubcategory,
   getAccountingTypes,
   addAccountingType,
   deleteAccountingType,
+  updateAccountingType,
   getBusinessUnits,
   addBusinessUnit,
   deleteBusinessUnit,
+  updateBusinessUnit,
   getStatuses,
   addStatus,
   deleteStatus,
+  updateStatus,
   getConditions,
   addCondition,
   deleteCondition,
+  updateCondition,
   getDecisions,
   addDecision,
   deleteDecision,
+  updateDecision,
   getPlacementZones,
   addPlacementZone,
   deletePlacementZone,
+  updatePlacementZone,
   getFunctionalities,
   addFunctionality,
   deleteFunctionality,
+  updateFunctionality,
   getRelevances,
   addRelevance,
   deleteRelevance,
+  updateRelevance,
   getReasons,
   addReason,
   deleteReason,
+  updateReason,
 } from "../firebase/assetFields";
 
-const FieldSection = ({ title, items, onAdd, onDelete, color = "blue", placeholder }) => {
+const FieldSection = ({ title, items, onAdd, onDelete, onEdit, color = "blue", placeholder }) => {
   const [newItem, setNewItem] = useState("");
   const [loading, setLoading] = useState(false);
+  const [editingId, setEditingId] = useState("");
+  const [editingValue, setEditingValue] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const handleAdd = async () => {
     if (!newItem.trim()) return;
@@ -57,6 +71,31 @@ const FieldSection = ({ title, items, onAdd, onDelete, color = "blue", placehold
   const handleKeyPress = (e) => {
     if (e.key === "Enter") {
       handleAdd();
+    }
+  };
+
+  const startEdit = (item) => {
+    setEditingId(item.id);
+    setEditingValue(item.name || "");
+  };
+
+  const cancelEdit = () => {
+    setEditingId("");
+    setEditingValue("");
+  };
+
+  const saveEdit = async () => {
+    const trimmedName = editingValue.trim();
+    if (!editingId || !trimmedName) return;
+
+    setSavingEdit(true);
+    try {
+      await onEdit(editingId, trimmedName);
+      cancelEdit();
+    } catch (error) {
+      console.error("Помилка редагування:", error);
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -160,17 +199,59 @@ const FieldSection = ({ title, items, onAdd, onDelete, color = "blue", placehold
               key={item.id}
               className="flex items-center justify-between bg-white px-3 py-2 rounded-lg border border-slate-200 hover:shadow-md transition"
             >
-              <span className="text-slate-800 font-medium">{item.name}</span>
-              <button
-                onClick={() => {
-                  if (window.confirm(`Видалити "${item.name}"?`)) {
-                    onDelete(item.id);
-                  }
-                }}
-                className="text-red-600 hover:text-red-800 hover:bg-red-100 p-1.5 rounded transition"
-              >
-                <Trash2 size={16} />
-              </button>
+              {editingId === item.id ? (
+                <div className="flex items-center gap-2 w-full">
+                  <input
+                    type="text"
+                    value={editingValue}
+                    onChange={(e) => setEditingValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveEdit();
+                      if (e.key === "Escape") cancelEdit();
+                    }}
+                    className="flex-1 px-2 py-1.5 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <button
+                    onClick={saveEdit}
+                    disabled={savingEdit || !editingValue.trim()}
+                    className="text-emerald-600 hover:text-emerald-800 hover:bg-emerald-100 p-1.5 rounded transition disabled:opacity-50"
+                    title="Зберегти"
+                  >
+                    <Check size={16} />
+                  </button>
+                  <button
+                    onClick={cancelEdit}
+                    className="text-slate-600 hover:text-slate-800 hover:bg-slate-100 p-1.5 rounded transition"
+                    title="Скасувати"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <span className="text-slate-800 font-medium">{item.name}</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => startEdit(item)}
+                      className="text-indigo-600 hover:text-indigo-800 hover:bg-indigo-100 p-1.5 rounded transition"
+                      title="Редагувати"
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Видалити "${item.name}"?`)) {
+                          onDelete(item.id);
+                        }
+                      }}
+                      className="text-red-600 hover:text-red-800 hover:bg-red-100 p-1.5 rounded transition"
+                      title="Видалити"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           ))
         )}
@@ -179,10 +260,14 @@ const FieldSection = ({ title, items, onAdd, onDelete, color = "blue", placehold
   );
 };
 
-const SubcategorySection = ({ items, categories, onAdd, onDelete }) => {
+const SubcategorySection = ({ items, categories, onAdd, onDelete, onEdit }) => {
   const [newItem, setNewItem] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
   const [loading, setLoading] = useState(false);
+  const [editingId, setEditingId] = useState("");
+  const [editingValue, setEditingValue] = useState("");
+  const [editingCategoryId, setEditingCategoryId] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const handleAdd = async () => {
     if (!newItem.trim() || !selectedCategoryId) return;
@@ -201,6 +286,33 @@ const SubcategorySection = ({ items, categories, onAdd, onDelete }) => {
   const handleKeyPress = (e) => {
     if (e.key === "Enter") {
       handleAdd();
+    }
+  };
+
+  const startEdit = (item) => {
+    setEditingId(item.id);
+    setEditingValue(item.name || "");
+    setEditingCategoryId(item.categoryId || "");
+  };
+
+  const cancelEdit = () => {
+    setEditingId("");
+    setEditingValue("");
+    setEditingCategoryId("");
+  };
+
+  const saveEdit = async () => {
+    const trimmedName = editingValue.trim();
+    if (!editingId || !trimmedName || !editingCategoryId) return;
+
+    setSavingEdit(true);
+    try {
+      await onEdit(editingId, trimmedName, editingCategoryId);
+      cancelEdit();
+    } catch (error) {
+      console.error("Помилка редагування:", error);
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -262,22 +374,78 @@ const SubcategorySection = ({ items, categories, onAdd, onDelete }) => {
               key={item.id}
               className="flex items-center justify-between bg-white px-3 py-2 rounded-lg border border-slate-200 hover:shadow-md transition"
             >
-              <div className="min-w-0">
-                <span className="text-slate-800 font-medium block truncate">{item.name}</span>
-                <span className="text-xs text-slate-500 block truncate">
-                  {item.categoryName || "Без категорії"}
-                </span>
-              </div>
-              <button
-                onClick={() => {
-                  if (window.confirm(`Видалити "${item.name}"?`)) {
-                    onDelete(item.id);
-                  }
-                }}
-                className="text-red-600 hover:text-red-800 hover:bg-red-100 p-1.5 rounded transition"
-              >
-                <Trash2 size={16} />
-              </button>
+              {editingId === item.id ? (
+                <div className="w-full space-y-2">
+                  <select
+                    value={editingCategoryId}
+                    onChange={(e) => setEditingCategoryId(e.target.value)}
+                    className="w-full px-2 py-1.5 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="">Оберіть категорію</option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={editingValue}
+                      onChange={(e) => setEditingValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveEdit();
+                        if (e.key === "Escape") cancelEdit();
+                      }}
+                      className="flex-1 px-2 py-1.5 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <button
+                      onClick={saveEdit}
+                      disabled={savingEdit || !editingValue.trim() || !editingCategoryId}
+                      className="text-emerald-600 hover:text-emerald-800 hover:bg-emerald-100 p-1.5 rounded transition disabled:opacity-50"
+                      title="Зберегти"
+                    >
+                      <Check size={16} />
+                    </button>
+                    <button
+                      onClick={cancelEdit}
+                      className="text-slate-600 hover:text-slate-800 hover:bg-slate-100 p-1.5 rounded transition"
+                      title="Скасувати"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="min-w-0">
+                    <span className="text-slate-800 font-medium block truncate">{item.name}</span>
+                    <span className="text-xs text-slate-500 block truncate">
+                      {item.categoryName || "Без категорії"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => startEdit(item)}
+                      className="text-indigo-600 hover:text-indigo-800 hover:bg-indigo-100 p-1.5 rounded transition"
+                      title="Редагувати"
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Видалити "${item.name}"?`)) {
+                          onDelete(item.id);
+                        }
+                      }}
+                      className="text-red-600 hover:text-red-800 hover:bg-red-100 p-1.5 rounded transition"
+                      title="Видалити"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           ))
         )}
@@ -365,6 +533,11 @@ export const AssetFieldsManager = () => {
     setCategories(categories.filter((item) => item.id !== id));
   };
 
+  const handleEditCategory = async (id, name) => {
+    await updateCategory(id, name);
+    setCategories(categories.map((item) => (item.id === id ? { ...item, name } : item)));
+  };
+
   const handleAddSubcategory = async (name, categoryId) => {
     const selectedCategory = categories.find((item) => item.id === categoryId);
     const categoryName = selectedCategory?.name || "";
@@ -377,6 +550,24 @@ export const AssetFieldsManager = () => {
     setSubcategories(subcategories.filter((item) => item.id !== id));
   };
 
+  const handleEditSubcategory = async (id, name, categoryId) => {
+    const selectedCategory = categories.find((item) => item.id === categoryId);
+    const categoryName = selectedCategory?.name || "";
+    await updateSubcategory(id, name, categoryId, categoryName);
+    setSubcategories(
+      subcategories.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              name,
+              categoryId,
+              categoryName,
+            }
+          : item
+      )
+    );
+  };
+
   const handleAddAccountingType = async (name) => {
     const newItem = await addAccountingType(name);
     setAccountingTypes([...accountingTypes, newItem]);
@@ -385,6 +576,11 @@ export const AssetFieldsManager = () => {
   const handleDeleteAccountingType = async (id) => {
     await deleteAccountingType(id);
     setAccountingTypes(accountingTypes.filter((item) => item.id !== id));
+  };
+
+  const handleEditAccountingType = async (id, name) => {
+    await updateAccountingType(id, name);
+    setAccountingTypes(accountingTypes.map((item) => (item.id === id ? { ...item, name } : item)));
   };
 
   const handleAddBusinessUnit = async (name) => {
@@ -397,6 +593,11 @@ export const AssetFieldsManager = () => {
     setBusinessUnits(businessUnits.filter((item) => item.id !== id));
   };
 
+  const handleEditBusinessUnit = async (id, name) => {
+    await updateBusinessUnit(id, name);
+    setBusinessUnits(businessUnits.map((item) => (item.id === id ? { ...item, name } : item)));
+  };
+
   const handleAddStatus = async (name) => {
     const newItem = await addStatus(name);
     setStatuses([...statuses, newItem]);
@@ -405,6 +606,11 @@ export const AssetFieldsManager = () => {
   const handleDeleteStatus = async (id) => {
     await deleteStatus(id);
     setStatuses(statuses.filter((item) => item.id !== id));
+  };
+
+  const handleEditStatus = async (id, name) => {
+    await updateStatus(id, name);
+    setStatuses(statuses.map((item) => (item.id === id ? { ...item, name } : item)));
   };
 
   const handleAddCondition = async (name) => {
@@ -417,6 +623,11 @@ export const AssetFieldsManager = () => {
     setConditions(conditions.filter((item) => item.id !== id));
   };
 
+  const handleEditCondition = async (id, name) => {
+    await updateCondition(id, name);
+    setConditions(conditions.map((item) => (item.id === id ? { ...item, name } : item)));
+  };
+
   const handleAddDecision = async (name) => {
     const newItem = await addDecision(name);
     setDecisions([...decisions, newItem]);
@@ -425,6 +636,11 @@ export const AssetFieldsManager = () => {
   const handleDeleteDecision = async (id) => {
     await deleteDecision(id);
     setDecisions(decisions.filter((item) => item.id !== id));
+  };
+
+  const handleEditDecision = async (id, name) => {
+    await updateDecision(id, name);
+    setDecisions(decisions.map((item) => (item.id === id ? { ...item, name } : item)));
   };
 
   const handleAddPlacementZone = async (name) => {
@@ -437,6 +653,11 @@ export const AssetFieldsManager = () => {
     setPlacementZones(placementZones.filter((item) => item.id !== id));
   };
 
+  const handleEditPlacementZone = async (id, name) => {
+    await updatePlacementZone(id, name);
+    setPlacementZones(placementZones.map((item) => (item.id === id ? { ...item, name } : item)));
+  };
+
   const handleAddFunctionality = async (name) => {
     const newItem = await addFunctionality(name);
     setFunctionalities([...functionalities, newItem]);
@@ -445,6 +666,11 @@ export const AssetFieldsManager = () => {
   const handleDeleteFunctionality = async (id) => {
     await deleteFunctionality(id);
     setFunctionalities(functionalities.filter((item) => item.id !== id));
+  };
+
+  const handleEditFunctionality = async (id, name) => {
+    await updateFunctionality(id, name);
+    setFunctionalities(functionalities.map((item) => (item.id === id ? { ...item, name } : item)));
   };
 
   const handleAddRelevance = async (name) => {
@@ -457,6 +683,11 @@ export const AssetFieldsManager = () => {
     setRelevances(relevances.filter((item) => item.id !== id));
   };
 
+  const handleEditRelevance = async (id, name) => {
+    await updateRelevance(id, name);
+    setRelevances(relevances.map((item) => (item.id === id ? { ...item, name } : item)));
+  };
+
   const handleAddReason = async (name) => {
     const newItem = await addReason(name);
     setReasons([...reasons, newItem]);
@@ -465,6 +696,11 @@ export const AssetFieldsManager = () => {
   const handleDeleteReason = async (id) => {
     await deleteReason(id);
     setReasons(reasons.filter((item) => item.id !== id));
+  };
+
+  const handleEditReason = async (id, name) => {
+    await updateReason(id, name);
+    setReasons(reasons.map((item) => (item.id === id ? { ...item, name } : item)));
   };
 
   if (loading) {
@@ -495,6 +731,7 @@ export const AssetFieldsManager = () => {
           items={categories}
           onAdd={handleAddCategory}
           onDelete={handleDeleteCategory}
+          onEdit={handleEditCategory}
           color="blue"
           placeholder="Наприклад: Кухня"
         />
@@ -504,6 +741,7 @@ export const AssetFieldsManager = () => {
           categories={categories}
           onAdd={handleAddSubcategory}
           onDelete={handleDeleteSubcategory}
+          onEdit={handleEditSubcategory}
         />
 
         <FieldSection
@@ -511,6 +749,7 @@ export const AssetFieldsManager = () => {
           items={accountingTypes}
           onAdd={handleAddAccountingType}
           onDelete={handleDeleteAccountingType}
+          onEdit={handleEditAccountingType}
           color="purple"
           placeholder="Наприклад: ОС"
         />
@@ -520,6 +759,7 @@ export const AssetFieldsManager = () => {
           items={businessUnits}
           onAdd={handleAddBusinessUnit}
           onDelete={handleDeleteBusinessUnit}
+          onEdit={handleEditBusinessUnit}
           color="green"
           placeholder="Наприклад: Ресторан"
         />
@@ -529,6 +769,7 @@ export const AssetFieldsManager = () => {
           items={statuses}
           onAdd={handleAddStatus}
           onDelete={handleDeleteStatus}
+          onEdit={handleEditStatus}
           color="yellow"
           placeholder="Наприклад: В експлуатації"
         />
@@ -538,6 +779,7 @@ export const AssetFieldsManager = () => {
           items={conditions}
           onAdd={handleAddCondition}
           onDelete={handleDeleteCondition}
+          onEdit={handleEditCondition}
           color="orange"
           placeholder="Наприклад: Добрий"
         />
@@ -547,6 +789,7 @@ export const AssetFieldsManager = () => {
           items={decisions}
           onAdd={handleAddDecision}
           onDelete={handleDeleteDecision}
+          onEdit={handleEditDecision}
           color="red"
           placeholder="Наприклад: Залишити"
         />
@@ -556,6 +799,7 @@ export const AssetFieldsManager = () => {
           items={placementZones}
           onAdd={handleAddPlacementZone}
           onDelete={handleDeletePlacementZone}
+          onEdit={handleEditPlacementZone}
           color="blue"
           placeholder="Наприклад: Зал"
         />
@@ -565,6 +809,7 @@ export const AssetFieldsManager = () => {
           items={functionalities}
           onAdd={handleAddFunctionality}
           onDelete={handleDeleteFunctionality}
+          onEdit={handleEditFunctionality}
           color="green"
           placeholder="Наприклад: Працює"
         />
@@ -574,6 +819,7 @@ export const AssetFieldsManager = () => {
           items={relevances}
           onAdd={handleAddRelevance}
           onDelete={handleDeleteRelevance}
+          onEdit={handleEditRelevance}
           color="purple"
           placeholder="Наприклад: Актуальний"
         />
@@ -583,6 +829,7 @@ export const AssetFieldsManager = () => {
           items={reasons}
           onAdd={handleAddReason}
           onDelete={handleDeleteReason}
+          onEdit={handleEditReason}
           color="red"
           placeholder="Наприклад: Знос"
         />

@@ -4,6 +4,7 @@ import {
   addDoc,
   deleteDoc,
   doc,
+  updateDoc,
   query,
   orderBy,
 } from "firebase/firestore";
@@ -39,6 +40,18 @@ export const deleteCategory = async (id) => {
     await deleteDoc(doc(db, "assetCategories", id));
   } catch (error) {
     console.error("Помилка видалення категорії:", error);
+    throw error;
+  }
+};
+
+export const updateCategory = async (id, name) => {
+  try {
+    await updateDoc(doc(db, "assetCategories", id), {
+      name,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка редагування категорії:", error);
     throw error;
   }
 };
@@ -79,6 +92,20 @@ export const deleteSubcategory = async (id) => {
   }
 };
 
+export const updateSubcategory = async (id, name, categoryId = "", categoryName = "") => {
+  try {
+    await updateDoc(doc(db, "assetSubcategories", id), {
+      name,
+      categoryId,
+      categoryName,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка редагування підкатегорії:", error);
+    throw error;
+  }
+};
+
 // ==================== ТИПИ ОБЛІКУ ====================
 export const getAccountingTypes = async () => {
   try {
@@ -109,6 +136,18 @@ export const deleteAccountingType = async (id) => {
     await deleteDoc(doc(db, "assetAccountingTypes", id));
   } catch (error) {
     console.error("Помилка видалення типу обліку:", error);
+    throw error;
+  }
+};
+
+export const updateAccountingType = async (id, name) => {
+  try {
+    await updateDoc(doc(db, "assetAccountingTypes", id), {
+      name,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка редагування типу обліку:", error);
     throw error;
   }
 };
@@ -147,6 +186,18 @@ export const deleteBusinessUnit = async (id) => {
   }
 };
 
+export const updateBusinessUnit = async (id, name) => {
+  try {
+    await updateDoc(doc(db, "assetBusinessUnits", id), {
+      name,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка редагування бізнес напряму:", error);
+    throw error;
+  }
+};
+
 // ==================== СТАТУСИ ====================
 export const getStatuses = async () => {
   try {
@@ -177,6 +228,18 @@ export const deleteStatus = async (id) => {
     await deleteDoc(doc(db, "assetStatuses", id));
   } catch (error) {
     console.error("Помилка видалення статусу:", error);
+    throw error;
+  }
+};
+
+export const updateStatus = async (id, name) => {
+  try {
+    await updateDoc(doc(db, "assetStatuses", id), {
+      name,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка редагування статусу:", error);
     throw error;
   }
 };
@@ -215,6 +278,18 @@ export const deleteCondition = async (id) => {
   }
 };
 
+export const updateCondition = async (id, name) => {
+  try {
+    await updateDoc(doc(db, "assetConditions", id), {
+      name,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка редагування стану:", error);
+    throw error;
+  }
+};
+
 // ==================== РІШЕННЯ ====================
 export const getDecisions = async () => {
   try {
@@ -249,6 +324,18 @@ export const deleteDecision = async (id) => {
   }
 };
 
+export const updateDecision = async (id, name) => {
+  try {
+    await updateDoc(doc(db, "assetDecisions", id), {
+      name,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка редагування рішення:", error);
+    throw error;
+  }
+};
+
 // ==================== ЗОНИ РОЗМІЩЕННЯ ====================
 export const getPlacementZones = async () => {
   try {
@@ -279,6 +366,18 @@ export const deletePlacementZone = async (id) => {
     await deleteDoc(doc(db, "assetPlacementZones", id));
   } catch (error) {
     console.error("Помилка видалення зони розміщення:", error);
+    throw error;
+  }
+};
+
+export const updatePlacementZone = async (id, name) => {
+  try {
+    await updateDoc(doc(db, "assetPlacementZones", id), {
+      name,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка редагування зони розміщення:", error);
     throw error;
   }
 };
@@ -386,6 +485,18 @@ export const deleteFunctionality = async (id) => {
   }
 };
 
+export const updateFunctionality = async (id, name) => {
+  try {
+    await updateDoc(doc(db, "assetFunctionalities", id), {
+      name,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка редагування працездатності:", error);
+    throw error;
+  }
+};
+
 // ==================== МОРАЛЬНА АКТУАЛЬНІСТЬ ====================
 export const getRelevances = async () => {
   try {
@@ -420,6 +531,18 @@ export const deleteRelevance = async (id) => {
   }
 };
 
+export const updateRelevance = async (id, name) => {
+  try {
+    await updateDoc(doc(db, "assetRelevances", id), {
+      name,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка редагування моральної актуальності:", error);
+    throw error;
+  }
+};
+
 // ==================== ПРИЧИНИ ====================
 export const getReasons = async () => {
   try {
@@ -450,6 +573,18 @@ export const deleteReason = async (id) => {
     await deleteDoc(doc(db, "assetReasons", id));
   } catch (error) {
     console.error("Помилка видалення причини:", error);
+    throw error;
+  }
+};
+
+export const updateReason = async (id, name) => {
+  try {
+    await updateDoc(doc(db, "assetReasons", id), {
+      name,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка редагування причини:", error);
     throw error;
   }
 };
