@@ -100,7 +100,17 @@ const initialMenuStructure = [
     id: "team",
     label: "Команда",
     children: [
-      { id: "team-roles", label: "Ролі та доступи", tabs: [], tabLabels: [] }
+      {
+        id: "team-roles",
+        label: "Персонал",
+        tabs: ["mystaffing", "myrequest", "jobtitlesettings", "recruitment"],
+        tabLabels: [
+          { id: "mystaffing", label: "Мій персонал" },
+          { id: "myrequest", label: "Заявки" },
+          { id: "jobtitlesettings", label: "Керування посадами" },
+          { id: "recruitment", label: "Рекрутер" }
+        ]
+      }
     ]
   },
   {

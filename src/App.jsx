@@ -34,6 +34,7 @@ import MenuStructureEditor from "./components/MenuStructureEditor";
 import ProductBookingModule from "./components/ProductBookingModule";
 import ServiceRequestsModule from "./components/ServiceRequestsModule";
 import ChecklistModule from "./components/ChecklistModule";
+import TeamHiringModule from "./components/TeamHiringModule";
 import { useChecklists } from "./hooks/useChecklists";
 import {
   downloadAssetTemplate,
@@ -1819,6 +1820,21 @@ function App() {
       return (
         <div className="grid grid-cols-1">
           <ProductBookingModule topTab={topTab} restaurants={restaurants} user={user} />
+        </div>
+      );
+    }
+
+    const activeNavKey = String(activeNav || "").toLowerCase();
+    const topTabKey = String(topTab || "").toLowerCase();
+    const teamNavIds = new Set(["stafing"]);
+    const teamTabIds = new Set(["mystafing", "myrequest", "jobtitlesettings", "recrutment"]);
+    const isTeamHiringNav = teamNavIds.has(activeNavKey);
+    const isTeamHiringTab = teamTabIds.has(topTabKey);
+
+    if (isTeamHiringNav || isTeamHiringTab) {
+      return (
+        <div className="grid grid-cols-1">
+          <TeamHiringModule topTab={topTab} restaurants={restaurants} user={user} />
         </div>
       );
     }
