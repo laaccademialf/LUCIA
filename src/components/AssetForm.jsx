@@ -962,11 +962,11 @@ function FieldGrid({ children }) {
 }
 
 // Light, high-contrast inputs for better readability on dark container
-const baseInput = "w-full rounded-md sm:rounded-lg border border-gray-300 bg-white px-2.5 sm:px-3 py-1.5 sm:py-2.5 text-[13px] sm:text-sm leading-tight text-gray-900 font-medium shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all duration-150 placeholder:text-gray-500";
+const baseInput = "w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-[13px] leading-tight text-gray-900 font-medium shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all duration-150 placeholder:text-gray-500";
 
 const Input = ({ label, disabled, type = "text", ...rest }) => (
-  <label className="flex min-w-0 items-center gap-2.5 text-sm sm:flex-col sm:items-stretch">
-    <span className="w-36 shrink-0 text-[13px] leading-tight font-semibold text-slate-800 sm:w-auto sm:text-sm sm:leading-normal">
+  <label className="flex min-w-0 items-center gap-2.5 text-sm">
+    <span className="w-40 lg:w-44 shrink-0 text-[13px] leading-tight font-semibold text-slate-800">
       {label}
     </span>
     <input 
@@ -974,7 +974,7 @@ const Input = ({ label, disabled, type = "text", ...rest }) => (
       disabled={disabled} 
       className={clsx(
         baseInput,
-        "min-w-0 max-w-full flex-1 sm:flex-none",
+        "min-w-0 max-w-full flex-1",
         type === "date" && "[color-scheme:light]",
         disabled && "bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200"
       )}
@@ -984,11 +984,11 @@ const Input = ({ label, disabled, type = "text", ...rest }) => (
 );
 
 const Select = ({ label, options = [], ...rest }) => (
-  <label className="flex min-w-0 items-center gap-2.5 text-sm sm:flex-col sm:items-stretch">
-    <span className="w-36 shrink-0 text-[13px] leading-tight font-semibold text-slate-800 sm:w-auto sm:text-sm sm:leading-normal">
+  <label className="flex min-w-0 items-center gap-2.5 text-sm">
+    <span className="w-40 lg:w-44 shrink-0 text-[13px] leading-tight font-semibold text-slate-800">
       {label}
     </span>
-    <select className={clsx(baseInput, "min-w-0 max-w-full flex-1 sm:flex-none appearance-none cursor-pointer pr-8 bg-right bg-no-repeat [&>option]:bg-white [&>option]:text-gray-900 [&>option]:py-3 [&>option]:font-medium")} {...rest}>
+    <select className={clsx(baseInput, "min-w-0 max-w-full flex-1 appearance-none cursor-pointer pr-8 bg-right bg-no-repeat [&>option]:bg-white [&>option]:text-gray-900 [&>option]:py-3 [&>option]:font-medium")} {...rest}>
       <option value="" className="bg-white text-gray-900">Обери опцію...</option>
       {options.map((opt) => (
         <option key={opt} value={opt} className="bg-white text-gray-900">
@@ -1000,8 +1000,8 @@ const Select = ({ label, options = [], ...rest }) => (
 );
 
 const Textarea = ({ label, rows = 3, ...rest }) => (
-  <label className="flex flex-col gap-2.5 text-sm">
-    <span className="font-semibold text-slate-800">{label}</span>
-    <textarea rows={rows} className={`${baseInput} resize-none min-h-[72px] sm:min-h-[100px]`} {...rest} />
+  <label className="flex min-w-0 items-start gap-2.5 text-sm">
+    <span className="w-40 lg:w-44 shrink-0 text-[13px] leading-tight font-semibold text-slate-800 pt-1">{label}</span>
+    <textarea rows={rows} className={`${baseInput} min-w-0 flex-1 resize-none min-h-[72px]`} {...rest} />
   </label>
 );

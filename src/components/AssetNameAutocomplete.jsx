@@ -144,9 +144,9 @@ const AssetNameAutocomplete = forwardRef(({
 
   return (
     <div className="form-group" ref={wrapperRef}>
-      <div className="flex min-w-0 items-center gap-2.5 text-sm sm:flex-col sm:items-stretch">
+      <div className="flex min-w-0 items-center gap-2.5 text-sm">
         {label && (
-          <label className="w-36 shrink-0 text-[13px] leading-tight font-semibold text-slate-700 sm:w-auto sm:text-sm sm:leading-normal">
+          <label className="w-40 lg:w-44 shrink-0 text-[13px] leading-tight font-semibold text-slate-700">
             {label}
           </label>
         )}
@@ -166,7 +166,7 @@ const AssetNameAutocomplete = forwardRef(({
             }}
             disabled={disabled}
             className={`
-              w-full min-w-0 px-2.5 sm:px-3 py-1.5 sm:py-2 pr-9 sm:pr-10 border rounded-md sm:rounded-lg text-[13px] sm:text-sm leading-tight
+              w-full min-w-0 px-2.5 py-1.5 pr-9 border rounded-md text-[13px] leading-tight
               ${disabled ? 'bg-slate-100 cursor-not-allowed' : ''}
               ${error ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-indigo-500"}
               focus:outline-none focus:ring-2 transition
@@ -175,7 +175,7 @@ const AssetNameAutocomplete = forwardRef(({
           />
           <Search 
             size={16} 
-            className="absolute right-2.5 sm:right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" 
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" 
           />
         </div>
 
@@ -264,9 +264,6 @@ const AssetNameAutocomplete = forwardRef(({
             <span className="text-xs text-red-600 mt-1 block">{error.message}</span>
           )}
 
-          <p className="text-xs text-slate-500 mt-1">
-            💡 Почніть вводити назву - система запропонує існуючі варіанти
-          </p>
         </div>
       </div>
     </div>

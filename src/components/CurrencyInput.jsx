@@ -33,13 +33,13 @@ const CurrencyInput = forwardRef(({ label, error, ...props }, ref) => {
   };
 
   return (
-    <div className="form-group">
+    <div className="form-group flex min-w-0 items-center gap-2.5 text-sm">
       {label && (
-        <label className="block text-[13px] sm:text-sm font-semibold text-slate-700 mb-1">
+        <label className="w-40 lg:w-44 shrink-0 text-[13px] leading-tight font-semibold text-slate-700">
           {label}
         </label>
       )}
-      <div className="relative">
+      <div className="relative min-w-0 flex-1">
         <input
           {...props}
           ref={ref}
@@ -47,18 +47,18 @@ const CurrencyInput = forwardRef(({ label, error, ...props }, ref) => {
           onChange={handleChange}
           onBlur={handleBlur}
           className={`
-            w-full px-2.5 sm:px-3 py-1.5 sm:py-2 border rounded-md sm:rounded-lg text-[13px] sm:text-sm leading-tight
+            w-full min-w-0 px-2.5 py-1.5 border rounded-md text-[13px] leading-tight
             ${error ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-indigo-500"}
             focus:outline-none focus:ring-2 transition
           `}
         />
-        <span className="absolute right-2.5 sm:right-3 top-1/2 -translate-y-1/2 text-slate-500 text-[13px] sm:text-sm pointer-events-none">
+        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 text-[13px] pointer-events-none">
           ₴
         </span>
+        {error && (
+          <span className="text-xs text-red-600 mt-1 block">{error.message}</span>
+        )}
       </div>
-      {error && (
-        <span className="text-xs text-red-600 mt-1 block">{error.message}</span>
-      )}
     </div>
   );
 });

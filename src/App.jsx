@@ -219,6 +219,7 @@ function App() {
               updateRestaurant: updateRestaurantInFirebase,
               deleteRestaurant: deleteRestaurantFromFirebase,
             } = useRestaurants();
+            const { businessUnits: assetBusinessUnits } = useAssetFields();
           const { templates: checklistTemplates, executions: checklistExecutions } = useChecklists(true);
           // Користувач
           const { user, loading: authLoading, isAuthenticated } = useAuth();
@@ -387,6 +388,21 @@ function App() {
       }
     }
   }, [firebaseRestaurants, restaurantsLoading, user]);
+
+  useEffect(() => {
+    const normalizedFromDictionary = Array.isArray(assetBusinessUnits)
+      ? assetBusinessUnits.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+
+    const normalizedFromRestaurants = Array.isArray(firebaseRestaurants)
+      ? firebaseRestaurants
+          .map((restaurant) => String(restaurant?.businessUnit || "").trim())
+          .filter(Boolean)
+      : [];
+
+    const merged = Array.from(new Set([...normalizedFromDictionary, ...normalizedFromRestaurants]));
+    setBusinessUnits(merged);
+  }, [assetBusinessUnits, firebaseRestaurants]);
 
   // --- Завантаження прав для поточного користувача (за роллю/робочою роллю)
   useEffect(() => {
@@ -1248,11 +1264,12 @@ function App() {
 
       if (topTab === "projects") {
         const handleAddRestaurant = () => {
+          const defaultBusinessUnit = businessUnits[0] || "";
           setSelectedRestaurant({
             id: null,
             regNumber: "",
             name: "",
-            businessUnit: "",
+            businessUnit: defaultBusinessUnit,
             address: "",
             seatsTotal: "",
             seatsSummer: "",
@@ -1279,20 +1296,26 @@ function App() {
           });
         };
 
-        const handleEditRestaurant = async (restaurant) => {
-          try {
-            // Завантажуємо ПОВНІ дані ресторану з Firestore, щоб мати всі поля
-            const fullRestaurant = await getRestaurant(restaurant.id);
-            if (fullRestaurant) {
-              setSelectedRestaurant(fullRestaurant);
-            } else {
-              console.error("Не вдалося завантажити дані ресторану");
-              alert("Помилка завантаження даних ресторану");
-            }
-          } catch (error) {
-            console.error("Помилка завантаження ресторану для редагування:", error);
+        const handleEditRestaurant = (restaurant) => {
+          const fullRestaurant =
+            firebaseRestaurants.find((item) => String(item.id) === String(restaurant.id)) ||
+            restaurant;
+
+          if (!fullRestaurant) {
+            console.error("Не вдалося завантажити дані ресторану");
             alert("Помилка завантаження даних ресторану");
+            return;
           }
+
+          const fallbackBusinessUnit =
+            String(fullRestaurant.businessUnit || "").trim() ||
+            businessUnits[0] ||
+            "";
+
+          setSelectedRestaurant({
+            ...fullRestaurant,
+            businessUnit: fallbackBusinessUnit,
+          });
         };
 
         const handleDeleteRestaurant = async (id) => {
@@ -1323,12 +1346,17 @@ function App() {
 
         const handleSaveRestaurant = async () => {
           try {
+            const restaurantToSave = {
+              ...selectedRestaurant,
+              businessUnit: String(selectedRestaurant.businessUnit || "").trim() || businessUnits[0] || "",
+            };
+
             if (selectedRestaurant.id) {
               // Оновлення існуючого
-              await updateRestaurantInFirebase(selectedRestaurant.id, selectedRestaurant);
+              await updateRestaurantInFirebase(selectedRestaurant.id, restaurantToSave);
             } else {
               // Додавання нового
-              await addRestaurantToFirebase(selectedRestaurant);
+              await addRestaurantToFirebase(restaurantToSave);
             }
             setSelectedRestaurant(null);
           } catch (error) {
