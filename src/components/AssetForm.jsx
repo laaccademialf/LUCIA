@@ -463,7 +463,8 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                       <button
                         type="button"
                         onClick={() => removePhoto(index)}
-                        className="absolute -top-2 -right-2 p-1 rounded-full bg-red-600 text-white hover:bg-red-700 opacity-0 group-hover:opacity-100 transition shadow-lg"
+                        aria-label={`Видалити фото ${index + 1}`}
+                        className="absolute top-1 right-1 inline-flex items-center justify-center w-7 h-7 rounded-full bg-red-600 text-white hover:bg-red-700 active:scale-95 transition shadow-lg"
                       >
                         <X size={16} />
                       </button>
