@@ -35,7 +35,7 @@ const CurrencyInput = forwardRef(({ label, error, ...props }, ref) => {
   return (
     <div className="form-group">
       {label && (
-        <label className="block text-sm font-semibold text-slate-700 mb-1">
+        <label className="block text-[13px] sm:text-sm font-semibold text-slate-700 mb-1">
           {label}
         </label>
       )}
@@ -47,12 +47,12 @@ const CurrencyInput = forwardRef(({ label, error, ...props }, ref) => {
           onChange={handleChange}
           onBlur={handleBlur}
           className={`
-            w-full px-3 py-2 border rounded-lg
+            w-full px-2.5 sm:px-3 py-1.5 sm:py-2 border rounded-md sm:rounded-lg text-[13px] sm:text-sm leading-tight
             ${error ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-indigo-500"}
             focus:outline-none focus:ring-2 transition
           `}
         />
-        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 text-sm pointer-events-none">
+        <span className="absolute right-2.5 sm:right-3 top-1/2 -translate-y-1/2 text-slate-500 text-[13px] sm:text-sm pointer-events-none">
           ₴
         </span>
       </div>

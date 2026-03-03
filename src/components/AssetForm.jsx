@@ -570,7 +570,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
         </div>
       </div>
 
-      <div className="mt-3 sm:mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="mt-3 sm:mt-4 flex gap-2 overflow-x-auto pb-1 snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden sm:grid sm:grid-cols-4 sm:gap-2 sm:overflow-visible sm:pb-0">
         {tabs.map((tab, index) => {
           const isCompleted = completedTabs.includes(tab.id);
           const isActive = activeTab === tab.id;
@@ -583,7 +583,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
               onClick={() => canAccess && setActiveTab(tab.id)}
               disabled={!canAccess}
               className={clsx(
-                "rounded-lg px-4 py-3.5 text-sm font-bold transition-all duration-200 border-2 relative",
+                "relative shrink-0 snap-start min-w-[120px] sm:min-w-0 rounded-md sm:rounded-lg px-2.5 sm:px-4 py-2 sm:py-3.5 text-[13px] sm:text-sm font-bold leading-tight transition-all duration-200 border-2",
                 isActive
                   ? "bg-indigo-600 text-white shadow-xl shadow-indigo-500/40 border-indigo-500 scale-105"
                   : isCompleted
@@ -662,13 +662,13 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
             </FieldGrid>
 
             {/* Блок завантаження фото */}
-            <div className="border-t-2 border-slate-200 pt-6">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">Фотографії активу</h3>
+            <div className="border-t-2 border-slate-200 pt-4 sm:pt-6">
+              <h3 className="text-sm sm:text-lg font-semibold text-slate-800 mb-2 sm:mb-4">Фотографії активу</h3>
               
-              <div className="flex flex-wrap gap-3 mb-4">
+              <div className="flex flex-nowrap gap-2 mb-2 sm:mb-4">
                 {/* Кнопка завантаження з файлу */}
-                <label className="flex items-center gap-2 px-4 py-3 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 cursor-pointer transition shadow">
-                  <Upload size={18} />
+                <label className="flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-4 py-2 sm:py-3 rounded-md sm:rounded-lg bg-blue-600 text-white text-[12px] sm:text-sm font-semibold hover:bg-blue-500 cursor-pointer transition shadow">
+                  <Upload size={14} className="sm:w-[18px] sm:h-[18px]" />
                   {processingPhotos ? "Обробка..." : "Завантажити фото"}
                   <input
                     type="file"
@@ -681,8 +681,8 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                 </label>
 
                 {/* Кнопка камери (для мобільних) */}
-                <label className="flex items-center gap-2 px-4 py-3 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-500 cursor-pointer transition shadow">
-                  <Camera size={18} />
+                <label className="flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-4 py-2 sm:py-3 rounded-md sm:rounded-lg bg-green-600 text-white text-[12px] sm:text-sm font-semibold hover:bg-green-500 cursor-pointer transition shadow">
+                  <Camera size={14} className="sm:w-[18px] sm:h-[18px]" />
                   {processingPhotos ? "Обробка..." : "Зробити фото"}
                   <input
                     type="file"
@@ -697,33 +697,33 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
 
               {/* Превʼю фотографій */}
               {photos.length > 0 && (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-3 sm:grid-cols-3 md:grid-cols-4 gap-2 sm:gap-4">
                   {photos.map((photo, index) => (
                     <div key={index} className="relative group">
                       <img
                         src={photo.url}
                         alt={`Фото ${index + 1}`}
-                        className="w-full h-32 object-cover rounded-lg border-2 border-slate-300 shadow"
+                        className="w-full h-20 sm:h-32 object-cover rounded-md sm:rounded-lg border border-slate-300 sm:border-2 shadow"
                       />
                       <button
                         type="button"
                         onClick={() => removePhoto(index)}
                         aria-label={`Видалити фото ${index + 1}`}
-                        className="absolute top-1 right-1 inline-flex items-center justify-center w-7 h-7 rounded-full bg-red-600 text-white hover:bg-red-700 active:scale-95 transition shadow-lg"
+                        className="absolute top-0.5 right-0.5 sm:top-1 sm:right-1 inline-flex items-center justify-center w-5 h-5 sm:w-7 sm:h-7 rounded-full bg-red-600 text-white hover:bg-red-700 active:scale-95 transition shadow-lg"
                       >
-                        <X size={16} />
+                        <X size={12} className="sm:w-4 sm:h-4" />
                       </button>
-                      <p className="text-xs text-slate-600 mt-1 truncate">{photo.name}</p>
+                      <p className="text-[10px] sm:text-xs text-slate-600 mt-0.5 sm:mt-1 truncate">{photo.name}</p>
                     </div>
                   ))}
                 </div>
               )}
 
               {photos.length === 0 && (
-                <div className="text-center py-8 border-2 border-dashed border-slate-300 rounded-lg bg-slate-50">
-                  <Camera size={48} className="mx-auto mb-2 text-slate-400" />
-                  <p className="text-slate-600">Немає завантажених фото</p>
-                  <p className="text-sm text-slate-500">Завантажте фото активу для ідентифікації</p>
+                <div className="text-center py-4 sm:py-8 border border-dashed sm:border-2 border-slate-300 rounded-md sm:rounded-lg bg-slate-50">
+                  <Camera size={28} className="mx-auto mb-1 sm:mb-2 text-slate-400 sm:w-12 sm:h-12" />
+                  <p className="text-xs sm:text-base text-slate-600">Немає завантажених фото</p>
+                  <p className="text-[11px] sm:text-sm text-slate-500">Завантажте фото активу для ідентифікації</p>
                 </div>
               )}
             </div>
@@ -879,15 +879,15 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
         )}
 
         {/* Навігаційні кнопки */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t-2 border-indigo-700 pt-4">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 border-t-2 border-indigo-700 pt-3 sm:pt-4">
+          <div className="flex items-center gap-2 sm:gap-3">
             {!isFirstTab && (
               <button
                 type="button"
                 onClick={handlePrev}
-                className="inline-flex items-center gap-2 px-5 py-3 rounded-lg font-bold text-base bg-slate-200 text-slate-700 hover:bg-slate-300 transition-all duration-200 shadow"
+                className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-3 rounded-md sm:rounded-lg font-bold text-sm sm:text-base bg-slate-200 text-slate-700 hover:bg-slate-300 transition-all duration-200 shadow"
               >
-                <ChevronLeft size={18} />
+                <ChevronLeft size={16} className="sm:w-[18px] sm:h-[18px]" />
                 Назад
               </button>
             )}
@@ -896,15 +896,15 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
               <button
                 type="button"
                 onClick={handleNext}
-                className="inline-flex items-center gap-2 px-5 py-3 rounded-lg font-bold text-base bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow-xl shadow-indigo-500/50"
+                className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-3 rounded-md sm:rounded-lg font-bold text-sm sm:text-base bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow-xl shadow-indigo-500/50"
               >
                 Далі
-                <ChevronRight size={18} />
+                <ChevronRight size={16} className="sm:w-[18px] sm:h-[18px]" />
               </button>
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             <div className="text-sm font-bold text-rose-400">
               {Object.keys(errors).length > 0 && "Заповніть обовʼязкові поля"}
             </div>
@@ -925,22 +925,22 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                       alert(error.message || "Не вдалося надрукувати QR код");
                     }
                   }}
-                  className="inline-flex items-center gap-2 px-6 py-3.5 rounded-lg font-bold text-base bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-xl shadow-indigo-500/50"
+                  className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2 sm:py-3.5 rounded-md sm:rounded-lg font-bold text-sm sm:text-base bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-xl shadow-indigo-500/50"
                 >
-                  <Printer size={18} />
+                  <Printer size={16} className="sm:w-[18px] sm:h-[18px]" />
                   Друк QR
                 </button>
                 <button
                   type="submit"
                   disabled={requiresQrPrintBeforeSave && !hasPrintedQr}
                   className={clsx(
-                    "inline-flex items-center gap-2 px-6 py-3.5 rounded-lg font-bold text-base border-2 transition-all duration-200 shadow-xl",
+                    "inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2 sm:py-3.5 rounded-md sm:rounded-lg font-bold text-sm sm:text-base border-2 transition-all duration-200 shadow-xl",
                     !requiresQrPrintBeforeSave || hasPrintedQr
                       ? "bg-gradient-to-r from-green-600 to-green-700 border-green-500 text-white hover:from-green-500 hover:to-green-600 hover:border-green-400 shadow-green-500/50 hover:shadow-green-400/70"
                       : "bg-slate-300 border-slate-300 text-slate-500 cursor-not-allowed shadow-none"
                   )}
                 >
-                  {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                  {isSubmitting ? <Loader2 size={16} className="animate-spin sm:w-[18px] sm:h-[18px]" /> : <Save size={16} className="sm:w-[18px] sm:h-[18px]" />}
                   Зберегти актив
                 </button>
               </>
@@ -962,17 +962,19 @@ function FieldGrid({ children }) {
 }
 
 // Light, high-contrast inputs for better readability on dark container
-const baseInput = "w-full rounded-lg border border-gray-300 bg-white px-3 sm:px-4 py-2.5 sm:py-3 text-sm text-gray-900 font-medium shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all duration-150 placeholder:text-gray-500";
+const baseInput = "w-full rounded-md sm:rounded-lg border border-gray-300 bg-white px-2.5 sm:px-3 py-1.5 sm:py-2.5 text-[13px] sm:text-sm leading-tight text-gray-900 font-medium shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all duration-150 placeholder:text-gray-500";
 
 const Input = ({ label, disabled, type = "text", ...rest }) => (
-  <label className="flex min-w-0 flex-col gap-2.5 text-sm">
-    <span className="font-semibold text-slate-800">{label}</span>
+  <label className="flex min-w-0 items-center gap-2.5 text-sm sm:flex-col sm:items-stretch">
+    <span className="w-36 shrink-0 text-[13px] leading-tight font-semibold text-slate-800 sm:w-auto sm:text-sm sm:leading-normal">
+      {label}
+    </span>
     <input 
       type={type}
       disabled={disabled} 
       className={clsx(
         baseInput,
-        "min-w-0 max-w-full",
+        "min-w-0 max-w-full flex-1 sm:flex-none",
         type === "date" && "[color-scheme:light]",
         disabled && "bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200"
       )}
@@ -982,9 +984,11 @@ const Input = ({ label, disabled, type = "text", ...rest }) => (
 );
 
 const Select = ({ label, options = [], ...rest }) => (
-  <label className="flex flex-col gap-2.5 text-sm">
-    <span className="font-semibold text-slate-800">{label}</span>
-    <select className={clsx(baseInput, "appearance-none cursor-pointer pr-8 bg-right bg-no-repeat [&>option]:bg-white [&>option]:text-gray-900 [&>option]:py-3 [&>option]:font-medium")} {...rest}>
+  <label className="flex min-w-0 items-center gap-2.5 text-sm sm:flex-col sm:items-stretch">
+    <span className="w-36 shrink-0 text-[13px] leading-tight font-semibold text-slate-800 sm:w-auto sm:text-sm sm:leading-normal">
+      {label}
+    </span>
+    <select className={clsx(baseInput, "min-w-0 max-w-full flex-1 sm:flex-none appearance-none cursor-pointer pr-8 bg-right bg-no-repeat [&>option]:bg-white [&>option]:text-gray-900 [&>option]:py-3 [&>option]:font-medium")} {...rest}>
       <option value="" className="bg-white text-gray-900">Обери опцію...</option>
       {options.map((opt) => (
         <option key={opt} value={opt} className="bg-white text-gray-900">
@@ -998,6 +1002,6 @@ const Select = ({ label, options = [], ...rest }) => (
 const Textarea = ({ label, rows = 3, ...rest }) => (
   <label className="flex flex-col gap-2.5 text-sm">
     <span className="font-semibold text-slate-800">{label}</span>
-    <textarea rows={rows} className={`${baseInput} resize-none min-h-[100px]`} {...rest} />
+    <textarea rows={rows} className={`${baseInput} resize-none min-h-[72px] sm:min-h-[100px]`} {...rest} />
   </label>
 );
