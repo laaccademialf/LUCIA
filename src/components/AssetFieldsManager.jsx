@@ -179,6 +179,113 @@ const FieldSection = ({ title, items, onAdd, onDelete, color = "blue", placehold
   );
 };
 
+const SubcategorySection = ({ items, categories, onAdd, onDelete }) => {
+  const [newItem, setNewItem] = useState("");
+  const [selectedCategoryId, setSelectedCategoryId] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleAdd = async () => {
+    if (!newItem.trim() || !selectedCategoryId) return;
+
+    setLoading(true);
+    try {
+      await onAdd(newItem.trim(), selectedCategoryId);
+      setNewItem("");
+    } catch (error) {
+      console.error("Помилка додавання:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.key === "Enter") {
+      handleAdd();
+    }
+  };
+
+  return (
+    <div className="bg-cyan-50 border-2 border-cyan-200 rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <List size={20} className="text-cyan-600" />
+          <h3 className="font-bold text-slate-800">Підкатегорії</h3>
+          <span className="px-2 py-0.5 rounded-full bg-cyan-200 text-cyan-800 text-xs font-semibold">
+            {items.length}
+          </span>
+        </div>
+      </div>
+
+      <div className="space-y-2 mb-3">
+        <select
+          value={selectedCategoryId}
+          onChange={(e) => setSelectedCategoryId(e.target.value)}
+          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        >
+          <option value="">Оберіть категорію</option>
+          {categories.map((category) => (
+            <option key={category.id} value={category.id}>
+              {category.name}
+            </option>
+          ))}
+        </select>
+
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={newItem}
+            onChange={(e) => setNewItem(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="Наприклад: Плита"
+            className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+          <button
+            onClick={handleAdd}
+            disabled={loading || !newItem.trim() || !selectedCategoryId}
+            className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-300 text-white font-semibold disabled:cursor-not-allowed transition flex items-center gap-2"
+          >
+            {loading ? (
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+            ) : (
+              <Plus size={16} />
+            )}
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-2 max-h-48 overflow-y-auto">
+        {items.length === 0 ? (
+          <p className="text-center text-slate-500 text-sm py-4">Немає елементів</p>
+        ) : (
+          items.map((item) => (
+            <div
+              key={item.id}
+              className="flex items-center justify-between bg-white px-3 py-2 rounded-lg border border-slate-200 hover:shadow-md transition"
+            >
+              <div className="min-w-0">
+                <span className="text-slate-800 font-medium block truncate">{item.name}</span>
+                <span className="text-xs text-slate-500 block truncate">
+                  {item.categoryName || "Без категорії"}
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  if (window.confirm(`Видалити "${item.name}"?`)) {
+                    onDelete(item.id);
+                  }
+                }}
+                className="text-red-600 hover:text-red-800 hover:bg-red-100 p-1.5 rounded transition"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const AssetFieldsManager = () => {
   const [categories, setCategories] = useState([]);
   const [subcategories, setSubcategories] = useState([]);
@@ -258,8 +365,10 @@ export const AssetFieldsManager = () => {
     setCategories(categories.filter((item) => item.id !== id));
   };
 
-  const handleAddSubcategory = async (name) => {
-    const newItem = await addSubcategory(name);
+  const handleAddSubcategory = async (name, categoryId) => {
+    const selectedCategory = categories.find((item) => item.id === categoryId);
+    const categoryName = selectedCategory?.name || "";
+    const newItem = await addSubcategory(name, categoryId, categoryName);
     setSubcategories([...subcategories, newItem]);
   };
 
@@ -390,13 +499,11 @@ export const AssetFieldsManager = () => {
           placeholder="Наприклад: Кухня"
         />
 
-        <FieldSection
-          title="Підкатегорії"
+        <SubcategorySection
           items={subcategories}
+          categories={categories}
           onAdd={handleAddSubcategory}
           onDelete={handleDeleteSubcategory}
-          color="cyan"
-          placeholder="Наприклад: Плита"
         />
 
         <FieldSection

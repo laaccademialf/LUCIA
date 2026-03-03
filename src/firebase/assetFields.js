@@ -55,13 +55,15 @@ export const getSubcategories = async () => {
   }
 };
 
-export const addSubcategory = async (name) => {
+export const addSubcategory = async (name, categoryId = "", categoryName = "") => {
   try {
     const docRef = await addDoc(collection(db, "assetSubcategories"), {
       name,
+      categoryId,
+      categoryName,
       createdAt: new Date().toISOString(),
     });
-    return { id: docRef.id, name };
+    return { id: docRef.id, name, categoryId, categoryName };
   } catch (error) {
     console.error("Помилка додавання підкатегорії:", error);
     throw error;

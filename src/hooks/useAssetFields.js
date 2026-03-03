@@ -17,7 +17,9 @@ import {
 
 export const useAssetFields = () => {
   const [categories, setCategories] = useState([]);
+  const [categoryItems, setCategoryItems] = useState([]);
   const [subcategories, setSubcategories] = useState([]);
+  const [subcategoryItems, setSubcategoryItems] = useState([]);
   const [accountingTypes, setAccountingTypes] = useState([]);
   const [businessUnits, setBusinessUnits] = useState([]);
   const [statuses, setStatuses] = useState([]);
@@ -65,7 +67,9 @@ export const useAssetFields = () => {
         ]);
 
         setCategories(categoriesData.map((item) => item.name));
+        setCategoryItems(categoriesData);
         setSubcategories(subcategoriesData.map((item) => item.name));
+        setSubcategoryItems(subcategoriesData);
         setAccountingTypes(accountingTypesData.map((item) => item.name));
         setBusinessUnits(businessUnitsData.map((item) => item.name));
         setStatuses(statusesData.map((item) => item.name));
@@ -89,7 +93,9 @@ export const useAssetFields = () => {
 
   return {
     categories,
+    categoryItems,
     subcategories,
+    subcategoryItems,
     accountingTypes,
     businessUnits,
     statuses,

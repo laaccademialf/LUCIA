@@ -72,6 +72,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   const {
     categories,
     subcategories,
+    subcategoryItems,
     accountingTypes,
     businessUnits,
     statuses,
@@ -109,6 +110,8 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
 
   // Спостерігаємо за вибраним центром відповідальності
   const selectedRespCenter = watch("respCenter");
+  const selectedCategory = watch("category");
+  const selectedSubCategory = watch("subCategory");
 
   // Фільтруємо МВО по вибраному центру
   const filteredResponsiblePersons = useMemo(() => {
@@ -122,6 +125,36 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       .filter(p => p.centerId === centerObj.id)
       .map(p => p.name);
   }, [selectedRespCenter, responsibilityCenters, responsiblePersons]);
+
+  const filteredSubcategories = useMemo(() => {
+    if (!Array.isArray(subcategoryItems) || subcategoryItems.length === 0) {
+      return subcategories;
+    }
+
+    const normalizedCategory = String(selectedCategory || "").trim();
+    const visibleItems = !normalizedCategory
+      ? subcategoryItems
+      : subcategoryItems.filter((item) => {
+          const itemCategory = String(item.categoryName || "").trim();
+          if (!itemCategory) {
+            return true;
+          }
+          return itemCategory === normalizedCategory;
+        });
+
+    const names = visibleItems
+      .map((item) => String(item.name || "").trim())
+      .filter(Boolean);
+
+    return Array.from(new Set(names));
+  }, [subcategoryItems, subcategories, selectedCategory]);
+
+  useEffect(() => {
+    if (!selectedSubCategory) return;
+    if (!filteredSubcategories.includes(selectedSubCategory)) {
+      setValue("subCategory", "");
+    }
+  }, [selectedSubCategory, filteredSubcategories, setValue]);
 
   const normalizePhotosForState = (items) => {
     if (!Array.isArray(items)) return [];
@@ -617,7 +650,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
               <Select
                 label="Підкатегорія"
                 {...register("subCategory")}
-                options={subcategories.length > 0 ? subcategories : []}
+                options={filteredSubcategories.length > 0 ? filteredSubcategories : []}
               />
               <Select
                 label="Тип обліку"
