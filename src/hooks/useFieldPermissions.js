@@ -52,9 +52,9 @@ export const useFieldPermissions = (workRoleId) => {
       return true; // За замовчуванням дозволяємо, поки не налаштовані права
     }
     
-    // Перевіряємо конкретний дозвіл - якщо поле є і воно true, то дозволяємо
-    // Якщо поле є і воно false або undefined - забороняємо
-    const allowed = fieldPermissions[fieldId] === true;
+    // Перевіряємо конкретний дозвіл:
+    // false -> заборонено, true/undefined -> дозволено (щоб нові поля не блокувалися автоматично)
+    const allowed = fieldPermissions[fieldId] !== false;
     console.log(`🔒 canEdit(${fieldId}): ${allowed} (значення в permissions: ${fieldPermissions[fieldId]})`);
     return allowed;
   };

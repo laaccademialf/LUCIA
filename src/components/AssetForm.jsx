@@ -23,6 +23,7 @@ const tabs = [
 
 const defaultAsset = {
   invNumber: "",
+  invNumber1C: "",
   name: "",
   category: "",
   subCategory: "",
@@ -52,6 +53,7 @@ const defaultAsset = {
   residualValue: "",
   decision: "Залишити",
   reason: "Знос",
+  reasonComment: "",
   newLocation: "",
   auditDate: new Date().toISOString().slice(0, 10),
   auditors: "",
@@ -191,12 +193,16 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   const moralWear = watch("moralWear");
   const invNumberValue = watch("invNumber");
   const nameValue = watch("name");
+  const initialNameValue = String(selectedAsset?.name || "").trim();
+  const currentNameValue = String(nameValue || "").trim();
+  const isNameChangedInEdit = isEdit && currentNameValue !== initialNameValue;
   const currentQrFingerprint = `${String(invNumberValue || "").trim()}::${String(nameValue || "").trim()}`;
   const hasPrintedQr = Boolean(
     String(invNumberValue || "").trim() &&
     String(nameValue || "").trim() &&
     printedQrFingerprint === currentQrFingerprint
   );
+  const requiresQrPrintBeforeSave = isNameChangedInEdit;
 
   useEffect(() => {
     setPrintedQrFingerprint("");
@@ -366,6 +372,11 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                   (!isAdmin && isEdit) ||
                   (!isAdmin && !canEdit("invNumber"))
                 }
+              />
+              <Input
+                label="Інвентарний номер 1С"
+                {...register("invNumber1C")}
+                disabled={fieldPermsLoading || !canEdit("invNumber1C")}
               />
               <Controller
                 name="name"
@@ -609,6 +620,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
               {...register("reason")}
               options={reasons.length > 0 ? reasons : ["Знос", "Надлишок", "Непридатність"]}
             />
+            <Textarea label="Коментар до причини" {...register("reasonComment")} rows={2} />
             {isMove && <Input label="Нова локація" {...register("newLocation")}/>}            
           </FieldGrid>
         )}
@@ -674,10 +686,10 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                 </button>
                 <button
                   type="submit"
-                  disabled={!hasPrintedQr}
+                  disabled={requiresQrPrintBeforeSave && !hasPrintedQr}
                   className={clsx(
                     "inline-flex items-center gap-2 px-6 py-3.5 rounded-lg font-bold text-base border-2 transition-all duration-200 shadow-xl",
-                    hasPrintedQr
+                    !requiresQrPrintBeforeSave || hasPrintedQr
                       ? "bg-gradient-to-r from-green-600 to-green-700 border-green-500 text-white hover:from-green-500 hover:to-green-600 hover:border-green-400 shadow-green-500/50 hover:shadow-green-400/70"
                       : "bg-slate-300 border-slate-300 text-slate-500 cursor-not-allowed shadow-none"
                   )}
@@ -689,9 +701,9 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
             )}
           </div>
         </div>
-        {isLastTab && !hasPrintedQr && (
+        {isLastTab && requiresQrPrintBeforeSave && !hasPrintedQr && (
           <div className="text-xs sm:text-sm text-amber-600 font-semibold">
-            Перед збереженням потрібно роздрукувати QR етикетку.
+            Ви змінили назву активу. Перед збереженням потрібно роздрукувати QR етикетку.
           </div>
         )}
       </form>

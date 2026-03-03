@@ -9,6 +9,7 @@ const ASSET_FIELDS = {
     label: "Ідентифікація",
     fields: [
       { id: "invNumber", label: "Інвентарний номер" },
+      { id: "invNumber1C", label: "Інвентарний номер 1С" },
       { id: "name", label: "Назва активу" },
       { id: "category", label: "Категорія" },
       { id: "subCategory", label: "Підкатегорія" },
@@ -104,15 +105,20 @@ export function FieldPermissionsManager() {
       const permissions = {};
       workRoles.forEach(role => {
         const existing = permsByRoleId[role.id] || permsByRoleName[role.name];
-        if (existing) {
-          permissions[role.id] = existing;
-        } else {
-          permissions[role.id] = {};
-          Object.values(ASSET_FIELDS).forEach(tab => {
-            tab.fields.forEach(field => {
-              permissions[role.id][field.id] = true;
-            });
+        const defaults = {};
+        Object.values(ASSET_FIELDS).forEach(tab => {
+          tab.fields.forEach(field => {
+            defaults[field.id] = true;
           });
+        });
+
+        if (existing) {
+          permissions[role.id] = {
+            ...defaults,
+            ...existing,
+          };
+        } else {
+          permissions[role.id] = defaults;
         }
       });
 

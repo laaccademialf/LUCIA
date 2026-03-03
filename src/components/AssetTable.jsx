@@ -29,6 +29,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
   const fileInputRef = useRef(null);
   const allFieldDefs = [
     { key: "invNumber", header: "Інв. номер" },
+    { key: "invNumber1C", header: "Інв. номер 1С" },
     { key: "name", header: "Назва активу" },
     { key: "category", header: "Категорія" },
     { key: "subCategory", header: "Підкатегорія" },

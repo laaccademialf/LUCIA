@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 
 export const ASSET_IMPORT_FIELDS = [
   "invNumber",
+  "invNumber1C",
   "name",
   "category",
   "subCategory",
@@ -297,6 +298,7 @@ export const importAssetsFromExcel = (file) => {
 export const downloadAssetTemplate = () => {
   const sample = {
     invNumber: "A-0001",
+    invNumber1C: "1C-0001",
     name: "Холодильник",
     category: "Кухня",
     subCategory: "Холодильне обладнання",
