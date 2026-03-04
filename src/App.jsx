@@ -14,6 +14,7 @@ import { FieldPermissionsManager } from "./components/FieldPermissionsManager";
 import UtilityMetersManager from "./components/UtilityMetersManager";
 import ElectricityForm from "./components/ElectricityForm";
 import { MaterialResponsibilityManager } from "./components/MaterialResponsibilityManager";
+import AssetTransferWriteoffManager from "./components/AssetTransferWriteoffManager";
 import { AssetFieldsManager } from "./components/AssetFieldsManager";
 import FinancialAssetsReport from "./components/FinancialAssetsReport";
 import { useAuth } from "./hooks/useAuth";
@@ -1965,6 +1966,32 @@ function App() {
 
     const activeNavKey = String(activeNav || "").toLowerCase();
     const topTabKey = String(topTab || "").toLowerCase();
+
+    const isAssetManagementNav =
+      activeNavKey.includes("capexmang") ||
+      activeNavKey.includes("assetmanag") ||
+      activeNavKey.includes("управл") ||
+      activeNavKey.includes("керув");
+    const isAssetManagementTab =
+      topTabKey.includes("capexway") ||
+      topTabKey.includes("assetmanag") ||
+      topTabKey.includes("transfer") ||
+      topTabKey.includes("move") ||
+      topTabKey.includes("writeoff");
+
+    if (isAssetManagementNav || isAssetManagementTab) {
+      return (
+        <div className="grid grid-cols-1">
+          <AssetTransferWriteoffManager
+            assets={assets}
+            restaurants={firebaseRestaurants}
+            user={user}
+            updateAsset={updateAssetInFirebase}
+          />
+        </div>
+      );
+    }
+
     const teamNavIds = new Set(["stafing"]);
     const teamTabIds = new Set(["mystafing", "myrequest", "jobtitlesettings", "recrutment"]);
     const isTeamHiringNav = teamNavIds.has(activeNavKey);
