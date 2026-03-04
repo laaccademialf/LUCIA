@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2 } from "lucide-react";
+import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2, Download, Upload, FileDown } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
+import { downloadProductsTemplate, exportInventoriesToExcel, exportProductsAndInventoriesToExcel, importProductsFromExcel } from "../utils/productInventoryExcel";
 
 const normalizeTabKind = (tabId = "") => {
   const value = String(tabId).toLowerCase();
   if (value.includes("vendor") || value.includes("supplier") || value.includes("постач")) return "suppliers";
+  if (
+    value.includes("inventar") ||
+    value.includes("inventory") ||
+    value.includes("інвентар") ||
+    value.includes("залишк")
+  ) return "inventory";
   if (
     value.includes("typical") ||
     value.includes("typcal") ||
@@ -23,7 +30,10 @@ const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shad
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
 
 const toNumber = (value) => {
-  const parsed = Number(value);
+  const normalized = String(value ?? "")
+    .replace(/\s+/g, "")
+    .replace(",", ".");
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
@@ -36,7 +46,7 @@ const hasProcurementAccess = (user) => {
   return terms.some((term) => roleValue.includes(term) || workRoleValue.includes(term));
 };
 
-function ProductAdminTab({ products, suppliers, categories, units, canManageProducts, addProduct, updateProduct, deleteProduct }) {
+function ProductAdminTab({ products, suppliers, categories, units, inventories, canManageProducts, addProduct, updateProduct }) {
   const [draft, setDraft] = useState({ name: "", category: "", unit: "", supplier: "", unitPrice: "" });
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -67,7 +77,10 @@ function ProductAdminTab({ products, suppliers, categories, units, canManageProd
   }, [products, searchTerm, categoryFilter, supplierFilter, statusFilter]);
 
   const handleAdd = async () => {
-    if (!draft.name.trim() || !draft.category.trim() || !draft.unit.trim() || !draft.supplier.trim()) return;
+    if (!draft.name.trim() || !draft.category.trim() || !draft.unit.trim() || !draft.supplier.trim()) {
+      alert("Заповніть обов'язкові поля: Назва, Категорія, Одиниця, Постачальник.");
+      return;
+    }
     const unitPrice = toNumber(draft.unitPrice);
     const newProduct = {
       name: draft.name.trim(),
@@ -93,10 +106,42 @@ function ProductAdminTab({ products, suppliers, categories, units, canManageProd
     }
   };
 
-  const removeProduct = async (id) => {
-    const result = await deleteProduct(id);
-    if (!result.success) {
-      alert("Не вдалося видалити продукт.");
+  const handleExportProductsAndInventories = () => {
+    exportProductsAndInventoriesToExcel(products, inventories);
+  };
+
+  const handleImportProducts = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const importedProducts = await importProductsFromExcel(file);
+      if (importedProducts.length === 0) {
+        alert("У файлі не знайдено валідних продуктів для імпорту.");
+        return;
+      }
+
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const product of importedProducts) {
+        const exists = products.some(
+          (item) => String(item.name || "").trim().toLowerCase() === String(product.name || "").trim().toLowerCase()
+        );
+
+        if (exists) continue;
+
+        const result = await addProduct(product);
+        if (result.success) successCount += 1;
+        else failCount += 1;
+      }
+
+      alert(`Імпорт завершено. Додано: ${successCount}. Помилок: ${failCount}.`);
+    } catch (error) {
+      console.error("Помилка імпорту продуктів:", error);
+      alert("Не вдалося імпортувати файл продуктів.");
+    } finally {
+      event.target.value = "";
     }
   };
 
@@ -105,6 +150,43 @@ function ProductAdminTab({ products, suppliers, categories, units, canManageProd
       <div className="flex items-center gap-2 mb-4">
         <Package size={18} className="text-indigo-600" />
         <h2 className="text-lg font-semibold">Адміністрування продуктів</h2>
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <input
+          type="file"
+          accept=".xlsx,.xls"
+          ref={(input) => {
+            window.productImportInput = input;
+          }}
+          style={{ display: "none" }}
+          onChange={handleImportProducts}
+        />
+        {canManageProducts && (
+          <>
+            <button
+              type="button"
+              onClick={() => downloadProductsTemplate()}
+              className="inline-flex items-center gap-2 rounded-lg bg-slate-600 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-500"
+            >
+              <FileDown size={15} /> Шаблон
+            </button>
+            <button
+              type="button"
+              onClick={() => window.productImportInput?.click()}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+            >
+              <Upload size={15} /> Імпорт продуктів
+            </button>
+          </>
+        )}
+        <button
+          type="button"
+          onClick={handleExportProductsAndInventories}
+          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-500"
+        >
+          <Download size={15} /> Експорт Ексель
+        </button>
       </div>
 
       {!canManageProducts && (
@@ -247,9 +329,6 @@ function ProductAdminTab({ products, suppliers, categories, units, canManageProd
                       <button type="button" className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold hover:bg-slate-100" onClick={() => toggleActive(item)}>
                         {item.isActive ? "Вимкнути" : "Увімкнути"}
                       </button>
-                      <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-red-600 px-2 py-1 text-xs font-semibold text-white hover:bg-red-500" onClick={() => removeProduct(item.id)}>
-                        <Trash2 size={14} /> Видалити
-                      </button>
                     </div>
                   </td>
                 )}
@@ -264,6 +343,308 @@ function ProductAdminTab({ products, suppliers, categories, units, canManageProd
             )}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+function InventoryTab({ products, inventories, restaurants, user, createInventory }) {
+  const activeProducts = useMemo(() => products.filter((item) => item.isActive !== false), [products]);
+  const [restaurantId, setRestaurantId] = useState(user?.role === "admin" ? "" : String(user?.restaurant || ""));
+  const [quantities, setQuantities] = useState({});
+  const [searchTerm, setSearchTerm] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const inventoryDate = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const availableCategories = useMemo(() => {
+    return Array.from(new Set(activeProducts.map((item) => item.category).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
+  }, [activeProducts]);
+
+  const keywordSuggestions = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return [];
+    return activeProducts
+      .map((item) => String(item.name || "").trim())
+      .filter(Boolean)
+      .filter((name) => name.toLowerCase().includes(term))
+      .sort((a, b) => {
+        const aStarts = a.toLowerCase().startsWith(term) ? 0 : 1;
+        const bStarts = b.toLowerCase().startsWith(term) ? 0 : 1;
+        if (aStarts !== bStarts) return aStarts - bStarts;
+        return a.localeCompare(b, "uk");
+      })
+      .slice(0, 8);
+  }, [activeProducts, searchTerm]);
+
+  const filteredProducts = useMemo(() => {
+    const normalizedSearch = searchTerm.trim().toLowerCase();
+    return activeProducts.filter((item) => {
+      const bySearch = normalizedSearch ? String(item.name || "").toLowerCase().includes(normalizedSearch) : true;
+      const byCategory = categoryFilter ? String(item.category || "") === categoryFilter : true;
+      return bySearch && byCategory;
+    });
+  }, [activeProducts, searchTerm, categoryFilter]);
+
+  const adjustQuantity = (productId, delta) => {
+    setQuantities((prev) => {
+      const current = toNumber(prev[productId]);
+      const next = Math.max(0, current + delta);
+      return {
+        ...prev,
+        [productId]: next === 0 ? "" : String(next),
+      };
+    });
+  };
+
+  const availableRestaurants = useMemo(() => {
+    if (user?.role === "admin") return restaurants;
+    return restaurants.filter((item) => String(item.id) === String(user?.restaurant));
+  }, [restaurants, user]);
+
+  const visibleInventories = useMemo(() => {
+    if (user?.role === "admin") return inventories;
+    return inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
+  }, [inventories, user]);
+
+  const filledLines = useMemo(() => {
+    return activeProducts
+      .map((product) => {
+        const qty = toNumber(quantities[product.id]);
+        if (qty <= 0) return null;
+        const unitPrice = toNumber(product.unitPrice);
+        return {
+          productId: product.id,
+          productName: product.name,
+          category: product.category,
+          unit: product.unit,
+          qty,
+          unitPrice,
+          amount: qty * unitPrice,
+        };
+      })
+      .filter(Boolean);
+  }, [activeProducts, quantities]);
+
+  const handleSaveInventory = async () => {
+    if (!restaurantId) {
+      alert("Оберіть ресторан для інвентаризації.");
+      return;
+    }
+
+    if (filledLines.length === 0) {
+      alert("Введіть хоча б одну кількість більше 0.");
+      return;
+    }
+
+    const restaurantName = restaurants.find((item) => String(item.id) === String(restaurantId))?.name || "Невідомий ресторан";
+    const totalItems = filledLines.reduce((sum, item) => sum + toNumber(item.qty), 0);
+    const totalAmount = filledLines.reduce((sum, item) => sum + toNumber(item.amount), 0);
+
+    const payload = {
+      restaurantId: String(restaurantId),
+      restaurantName,
+      inventoryDate,
+      items: filledLines,
+      totalItems,
+      totalAmount,
+      createdBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+      createdById: user?.uid || "",
+    };
+
+    const result = await createInventory(payload);
+    if (!result.success) {
+      alert("Не вдалося зберегти інвентаризацію.");
+      return;
+    }
+
+    setQuantities({});
+    alert("Інвентаризацію успішно збережено.");
+  };
+
+  const handleExportSingleInventory = (inventory) => {
+    const safeDate = String(inventory?.inventoryDate || "inventory").replace(/[^0-9-]/g, "");
+    const safeRestaurant = String(inventory?.restaurantName || "restaurant")
+      .trim()
+      .replace(/\s+/g, "_")
+      .replace(/[^a-zA-Z0-9а-яА-ЯіїєІЇЄґҐ_-]/g, "");
+    const fileName = `inventory_${safeDate || "date"}_${safeRestaurant || "restaurant"}.xlsx`;
+    exportInventoriesToExcel([inventory], fileName);
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className={cardClass}>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+          <ClipboardCheck size={18} className="text-indigo-600" />
+          <h2 className="text-sm sm:text-lg font-semibold">Інвентаризація продуктів</h2>
+          </div>
+          <p className="text-xs sm:text-sm font-semibold text-slate-600">Дата: {inventoryDate}</p>
+        </div>
+
+        {user?.role === "admin" && (
+          <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-1">
+            <div>
+              <label className="text-sm font-semibold text-slate-800">Ресторан</label>
+              <select
+                className={inputClass}
+                value={restaurantId}
+                onChange={(e) => setRestaurantId(e.target.value)}
+              >
+                <option value="">Оберіть ресторан</option>
+                {availableRestaurants.map((restaurant) => (
+                  <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
+        <div className="mb-4 grid grid-cols-2 gap-2 sm:gap-3">
+          <div>
+            <label className="text-xs sm:text-sm font-semibold text-slate-800">Фільтр по категорії</label>
+            <select
+              className="mt-1 h-8 sm:h-9 w-full rounded-lg border border-slate-300 bg-white px-2 sm:px-3 py-1 text-xs sm:text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+            >
+              <option value="">Всі категорії</option>
+              {availableCategories.map((category) => (
+                <option key={category} value={category}>{category}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs sm:text-sm font-semibold text-slate-800">Пошук по назві</label>
+            <input
+              className="mt-1 h-8 sm:h-9 w-full rounded-lg border border-slate-300 bg-white px-2 sm:px-3 py-1 text-xs sm:text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Введіть назву продукту"
+              list="inventory-product-suggestions"
+            />
+            <datalist id="inventory-product-suggestions">
+              {keywordSuggestions.map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
+          </div>
+        </div>
+
+        <div className="mb-0.5 grid grid-cols-[1fr_auto] items-center gap-2 px-2 py-0.5 leading-none text-[10px] sm:text-[11px] font-semibold text-slate-700 sm:grid-cols-[1.2fr_0.8fr_0.5fr_1fr]">
+          <div>Продукт</div>
+          <div className="hidden sm:block">Категорія</div>
+          <div className="hidden sm:block">Одиниця</div>
+          <div className="text-left">Кількість</div>
+        </div>
+
+        <div className="overflow-x-auto overflow-y-auto max-h-[300px] sm:max-h-[420px] rounded-lg border border-slate-200">
+          <table className="min-w-full text-sm">
+            <tbody>
+              {filteredProducts.map((product) => (
+                <tr key={product.id} className="border-t border-slate-200">
+                  <td className="px-2 py-1 font-medium text-slate-900 text-[11px] sm:text-xs leading-tight whitespace-normal break-words">{product.name}</td>
+                  <td className="hidden sm:table-cell px-2 py-1 text-xs">{product.category || "-"}</td>
+                  <td className="hidden sm:table-cell px-2 py-1 text-xs">{product.unit || "-"}</td>
+                  <td className="px-2 py-1">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="inline-flex h-6 w-6 items-center justify-center rounded border border-slate-300 bg-white text-[11px] font-bold text-slate-700 hover:bg-slate-100"
+                        onClick={() => adjustQuantity(product.id, -1)}
+                        aria-label={`Зменшити кількість ${product.name}`}
+                      >
+                        −
+                      </button>
+                      <input
+                        type="text"
+                        min="0"
+                        step="0.01"
+                        inputMode="decimal"
+                        pattern="[0-9]*[.,]?[0-9]*"
+                        className="h-6 w-12 sm:w-16 rounded border border-slate-300 bg-white px-1 py-0 text-[11px] sm:text-xs"
+                        value={quantities[product.id] || ""}
+                        onChange={(e) => {
+                          const rawValue = String(e.target.value || "");
+                          const sanitized = rawValue.replace(/[^0-9.,]/g, "");
+                          setQuantities((prev) => ({ ...prev, [product.id]: sanitized }));
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="inline-flex h-6 w-6 items-center justify-center rounded border border-slate-300 bg-white text-[11px] font-bold text-slate-700 hover:bg-slate-100"
+                        onClick={() => adjustQuantity(product.id, 1)}
+                        aria-label={`Збільшити кількість ${product.name}`}
+                      >
+                        +
+                      </button>
+                      <span className="text-xs text-slate-500">{product.unit || "од."}</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filteredProducts.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-3 py-6 text-center text-slate-500">За поточними фільтрами продукти не знайдено.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-slate-700">Заповнених позицій: <span className="font-semibold">{filledLines.length}</span></p>
+          <button
+            type="button"
+            onClick={handleSaveInventory}
+            className="w-full sm:w-auto rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+          >
+            Зберегти інвентаризацію
+          </button>
+        </div>
+      </div>
+
+      <div className={cardClass}>
+        <h3 className="mb-3 text-base font-semibold text-slate-900">Проведені інвентаризації</h3>
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-slate-700">
+              <tr>
+                <th className="px-3 py-2 text-left">Дата</th>
+                <th className="px-3 py-2 text-left">Ресторан</th>
+                <th className="px-3 py-2 text-left">Позицій</th>
+                <th className="px-3 py-2 text-left">Сума</th>
+                <th className="px-3 py-2 text-left">Хто створив</th>
+                <th className="px-3 py-2 text-left">Дії</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleInventories.map((inventory) => (
+                <tr key={inventory.id} className="border-t border-slate-200">
+                  <td className="px-3 py-2">{inventory.inventoryDate || "-"}</td>
+                  <td className="px-3 py-2">{inventory.restaurantName || "-"}</td>
+                  <td className="px-3 py-2">{Array.isArray(inventory.items) ? inventory.items.length : 0}</td>
+                  <td className="px-3 py-2 font-medium">{formatMoney(inventory.totalAmount)}</td>
+                  <td className="px-3 py-2">{inventory.createdBy || "-"}</td>
+                  <td className="px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() => handleExportSingleInventory(inventory)}
+                      className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500"
+                    >
+                      <Download size={14} /> Ексель
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {visibleInventories.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-3 py-6 text-center text-slate-500">Інвентаризацій поки немає.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -1667,6 +2048,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     orders,
     suppliers,
     typicalFields,
+    inventories,
     loading,
     error,
     addProduct,
@@ -1681,23 +2063,50 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     createTypicalField,
     updateTypicalField,
     removeTypicalField,
+    createInventory,
   } = useProductBooking(true);
 
   const tabKind = normalizeTabKind(topTab);
   const canManageProducts = hasProcurementAccess(user);
   const canManageOrders = hasProcurementAccess(user);
-  const availableSuppliers = useMemo(
-    () => suppliers.filter((item) => item.isActive !== false).map((item) => item.name),
-    [suppliers]
-  );
-  const availableCategories = useMemo(
-    () => typicalFields.filter((item) => item.type === "category" && item.isActive !== false).map((item) => item.name),
-    [typicalFields]
-  );
-  const availableUnits = useMemo(
-    () => typicalFields.filter((item) => item.type === "unit" && item.isActive !== false).map((item) => item.name),
-    [typicalFields]
-  );
+  const availableSuppliers = useMemo(() => {
+    const fromDirectory = suppliers
+      .filter((item) => item.isActive !== false)
+      .map((item) => String(item.name || "").trim())
+      .filter(Boolean);
+
+    const fromProducts = products
+      .map((item) => String(item.supplier || "").trim())
+      .filter(Boolean);
+
+    return Array.from(new Set([...fromDirectory, ...fromProducts])).sort((a, b) => a.localeCompare(b, "uk"));
+  }, [suppliers, products]);
+
+  const availableCategories = useMemo(() => {
+    const fromDirectory = typicalFields
+      .filter((item) => item.type === "category" && item.isActive !== false)
+      .map((item) => String(item.name || "").trim())
+      .filter(Boolean);
+
+    const fromProducts = products
+      .map((item) => String(item.category || "").trim())
+      .filter(Boolean);
+
+    return Array.from(new Set([...fromDirectory, ...fromProducts])).sort((a, b) => a.localeCompare(b, "uk"));
+  }, [typicalFields, products]);
+
+  const availableUnits = useMemo(() => {
+    const fromDirectory = typicalFields
+      .filter((item) => item.type === "unit" && item.isActive !== false)
+      .map((item) => String(item.name || "").trim())
+      .filter(Boolean);
+
+    const fromProducts = products
+      .map((item) => String(item.unit || "").trim())
+      .filter(Boolean);
+
+    return Array.from(new Set([...fromDirectory, ...fromProducts])).sort((a, b) => a.localeCompare(b, "uk"));
+  }, [typicalFields, products]);
 
   if (loading) {
     return <div className={`${cardClass} text-sm text-slate-600`}>Завантаження даних з бази...</div>;
@@ -1714,10 +2123,22 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
         suppliers={availableSuppliers}
         categories={availableCategories}
         units={availableUnits}
+        inventories={inventories}
           canManageProducts={canManageProducts}
         addProduct={addProduct}
         updateProduct={updateProduct}
-        deleteProduct={deleteProduct}
+      />
+    );
+  }
+
+  if (tabKind === "inventory") {
+    return (
+      <InventoryTab
+        products={products}
+        inventories={inventories}
+        restaurants={restaurants}
+        user={user}
+        createInventory={createInventory}
       />
     );
   }

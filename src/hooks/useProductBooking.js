@@ -4,6 +4,7 @@ import {
   addBookingSupplier,
   addBookingTypicalField,
   addBookingProduct,
+  addProductInventory,
   addProductOrder,
   deleteBookingSupplier,
   deleteBookingTypicalField,
@@ -11,10 +12,12 @@ import {
   getBookingSuppliers,
   getBookingTypicalFields,
   getBookingProducts,
+  getProductInventories,
   getProductOrders,
   subscribeToBookingSuppliers,
   subscribeToBookingTypicalFields,
   subscribeToBookingProducts,
+  subscribeToProductInventories,
   subscribeToProductOrders,
   updateBookingSupplier,
   updateBookingTypicalField,
@@ -27,6 +30,7 @@ export const useProductBooking = (enableRealtime = true) => {
   const [orders, setOrders] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [typicalFields, setTypicalFields] = useState([]);
+  const [inventories, setInventories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -35,6 +39,7 @@ export const useProductBooking = (enableRealtime = true) => {
     let unsubscribeOrders;
     let unsubscribeSuppliers;
     let unsubscribeTypicalFields;
+    let unsubscribeInventories;
 
     if (enableRealtime) {
       try {
@@ -57,6 +62,11 @@ export const useProductBooking = (enableRealtime = true) => {
           setTypicalFields(data);
           setLoading(false);
         });
+
+        unsubscribeInventories = subscribeToProductInventories((data) => {
+          setInventories(data);
+          setLoading(false);
+        });
       } catch (err) {
         console.error("Помилка підписки на модуль замовлень:", err);
         setError(err);
@@ -65,16 +75,18 @@ export const useProductBooking = (enableRealtime = true) => {
     } else {
       const fetchData = async () => {
         try {
-          const [productsData, ordersData, suppliersData, typicalFieldsData] = await Promise.all([
+          const [productsData, ordersData, suppliersData, typicalFieldsData, inventoriesData] = await Promise.all([
             getBookingProducts(),
             getProductOrders(),
             getBookingSuppliers(),
             getBookingTypicalFields(),
+            getProductInventories(),
           ]);
           setProducts(productsData);
           setOrders(ordersData);
           setSuppliers(suppliersData);
           setTypicalFields(typicalFieldsData);
+          setInventories(inventoriesData);
         } catch (err) {
           console.error("Помилка завантаження модуля замовлень:", err);
           setError(err);
@@ -90,6 +102,7 @@ export const useProductBooking = (enableRealtime = true) => {
       if (unsubscribeOrders) unsubscribeOrders();
       if (unsubscribeSuppliers) unsubscribeSuppliers();
       if (unsubscribeTypicalFields) unsubscribeTypicalFields();
+      if (unsubscribeInventories) unsubscribeInventories();
     };
   }, [enableRealtime]);
 
@@ -213,11 +226,22 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
+  const createInventory = async (inventory) => {
+    try {
+      const id = await addProductInventory(inventory);
+      return { success: true, id };
+    } catch (err) {
+      setError(err);
+      return { success: false, error: err };
+    }
+  };
+
   return {
     products,
     orders,
     suppliers,
     typicalFields,
+    inventories,
     loading,
     error,
     addProduct,
@@ -232,5 +256,6 @@ export const useProductBooking = (enableRealtime = true) => {
     updateTypicalField,
     removeTypicalField,
     createSupplierDispatch,
+    createInventory,
   };
 };

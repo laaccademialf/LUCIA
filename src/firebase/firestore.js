@@ -478,6 +478,48 @@ export const addSupplierDispatch = async (dispatch) => {
   }
 };
 
+export const getProductInventories = async () => {
+  try {
+    const inventoriesRef = collection(db, "productInventories");
+    const q = query(inventoriesRef, orderBy("createdAt", "desc"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((item) => ({
+      id: item.id,
+      ...item.data(),
+    }));
+  } catch (error) {
+    console.error("Помилка отримання інвентаризацій продуктів:", error);
+    throw error;
+  }
+};
+
+export const addProductInventory = async (inventory) => {
+  try {
+    const docRef = await addDoc(collection(db, "productInventories"), {
+      ...inventory,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    return docRef.id;
+  } catch (error) {
+    console.error("Помилка збереження інвентаризації продуктів:", error);
+    throw error;
+  }
+};
+
+export const subscribeToProductInventories = (callback) => {
+  const inventoriesRef = collection(db, "productInventories");
+  const q = query(inventoriesRef, orderBy("createdAt", "desc"));
+
+  return onSnapshot(q, (snapshot) => {
+    const inventories = snapshot.docs.map((item) => ({
+      id: item.id,
+      ...item.data(),
+    }));
+    callback(inventories);
+  });
+};
+
 // ==================== ЧЕК-ЛИСТИ ====================
 
 export const getChecklistTemplates = async () => {

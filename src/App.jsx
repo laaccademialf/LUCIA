@@ -1950,7 +1950,12 @@ function App() {
       );
     }
 
-    if (activeNav === "productbooking" || activeNav.includes("productbooking")) {
+    if (
+      activeNav === "inventory-products" ||
+      activeNav.includes("inventory-products") ||
+      activeNav === "productbooking" ||
+      activeNav.includes("productbooking")
+    ) {
       return (
         <div className="grid grid-cols-1">
           <ProductBookingModule topTab={topTab} restaurants={restaurants} user={user} />
