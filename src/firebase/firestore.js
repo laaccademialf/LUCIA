@@ -507,6 +507,19 @@ export const addProductInventory = async (inventory) => {
   }
 };
 
+export const updateProductInventory = async (id, data) => {
+  try {
+    const docRef = doc(db, "productInventories", id);
+    await updateDoc(docRef, {
+      ...data,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка оновлення інвентаризації продуктів:", error);
+    throw error;
+  }
+};
+
 export const subscribeToProductInventories = (callback) => {
   const inventoriesRef = collection(db, "productInventories");
   const q = query(inventoriesRef, orderBy("createdAt", "desc"));

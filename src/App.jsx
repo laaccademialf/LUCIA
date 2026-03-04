@@ -2337,11 +2337,11 @@ function App() {
               <div className={clsx("flex items-center gap-3", isMobile ? "flex-1 justify-center md:justify-start ml-2" : "")}>
                 {/* Назва ресторану для всіх */}
                 {user?.restaurant && (
-                  <div className={clsx("flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-900/30 border border-emerald-700/50 text-emerald-300", isMobile ? "text-xs hidden sm:flex" : "")}>
+                  <div className={clsx("flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg bg-emerald-900/30 border border-emerald-700/50 text-emerald-300", isMobile ? "text-xs max-w-[160px]" : "")}>
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                     </svg>
-                    <span className="text-sm font-semibold">
+                    <span className={clsx("font-semibold truncate", isMobile ? "text-xs" : "text-sm")}>
                       {restaurants.find(r => r.id === user.restaurant)?.name || 'Невідомий ресторан'}
                     </span>
                   </div>
@@ -2453,8 +2453,13 @@ function App() {
             </div>
           )}
 
-          <div className="mx-auto max-w-screen-2xl px-3 py-4 sm:px-6 sm:py-8 lg:px-8">
-            <div className="mt-4">
+          <div
+            className={clsx(
+              "mx-auto max-w-screen-2xl px-3 sm:px-6 lg:px-8",
+              activeNav === "inventory-products" ? "pt-1 pb-4 sm:pt-2 sm:pb-6" : "py-4 sm:py-8"
+            )}
+          >
+            <div className={clsx(activeNav === "inventory-products" ? "mt-0" : "mt-4")}>
               {renderContent()}
             </div>
           </div>

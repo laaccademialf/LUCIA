@@ -22,6 +22,7 @@ import {
   updateBookingSupplier,
   updateBookingTypicalField,
   updateBookingProduct,
+  updateProductInventory,
   updateProductOrder,
 } from "../firebase/firestore";
 
@@ -236,6 +237,16 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
+  const updateInventory = async (id, data) => {
+    try {
+      await updateProductInventory(id, data);
+      return { success: true };
+    } catch (err) {
+      setError(err);
+      return { success: false, error: err };
+    }
+  };
+
   return {
     products,
     orders,
@@ -257,5 +268,6 @@ export const useProductBooking = (enableRealtime = true) => {
     removeTypicalField,
     createSupplierDispatch,
     createInventory,
+    updateInventory,
   };
 };

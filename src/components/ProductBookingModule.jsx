@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2, Download, Upload, FileDown } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2, Download, Upload, FileDown, X, Printer } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
 import { downloadProductsTemplate, exportInventoriesToExcel, exportProductsAndInventoriesToExcel, importProductsFromExcel } from "../utils/productInventoryExcel";
 
@@ -38,6 +38,20 @@ const toNumber = (value) => {
 };
 
 const formatMoney = (value) => `${toNumber(value).toFixed(2)} грн`;
+
+const formatDateUk = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "-";
+  const shortMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (shortMatch) {
+    return `${shortMatch[3]}.${shortMatch[2]}.${shortMatch[1]}`;
+  }
+  const date = new Date(raw);
+  if (!Number.isNaN(date.getTime())) {
+    return date.toLocaleDateString("uk-UA");
+  }
+  return raw;
+};
 
 const hasProcurementAccess = (user) => {
   const roleValue = String(user?.role || "").toLowerCase();
@@ -348,13 +362,16 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
   );
 }
 
-function InventoryTab({ products, inventories, restaurants, user, createInventory }) {
+function InventoryTab({ products, inventories, restaurants, user, createInventory, updateInventory }) {
   const activeProducts = useMemo(() => products.filter((item) => item.isActive !== false), [products]);
+  const quantityInputRefs = useRef({});
+  const [activeRowProductId, setActiveRowProductId] = useState(null);
   const [restaurantId, setRestaurantId] = useState(user?.role === "admin" ? "" : String(user?.restaurant || ""));
   const [quantities, setQuantities] = useState({});
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
-  const inventoryDate = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [editingInventoryId, setEditingInventoryId] = useState("");
+  const [inventoryDate, setInventoryDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const availableCategories = useMemo(() => {
     return Array.from(new Set(activeProducts.map((item) => item.category).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
@@ -394,6 +411,14 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         [productId]: next === 0 ? "" : String(next),
       };
     });
+  };
+
+  const focusQuantityInput = (productId) => {
+    const input = quantityInputRefs.current?.[productId];
+    if (!input) return;
+    setActiveRowProductId(productId);
+    input.focus();
+    input.select?.();
   };
 
   const availableRestaurants = useMemo(() => {
@@ -451,14 +476,51 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       createdById: user?.uid || "",
     };
 
-    const result = await createInventory(payload);
+    const result = editingInventoryId
+      ? await updateInventory(editingInventoryId, {
+          ...payload,
+          updatedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+          updatedById: user?.uid || "",
+        })
+      : await createInventory(payload);
+
     if (!result.success) {
       alert("Не вдалося зберегти інвентаризацію.");
       return;
     }
 
     setQuantities({});
-    alert("Інвентаризацію успішно збережено.");
+    setEditingInventoryId("");
+    setInventoryDate(new Date().toISOString().slice(0, 10));
+    alert(editingInventoryId ? "Інвентаризацію успішно оновлено." : "Інвентаризацію успішно збережено.");
+  };
+
+  const handleRestoreInventory = (inventory) => {
+    const restoredQuantities = {};
+    (inventory?.items || []).forEach((item) => {
+      const productId = String(item?.productId || "");
+      if (!productId) return;
+      const qty = toNumber(item?.qty);
+      if (qty > 0) {
+        restoredQuantities[productId] = String(qty);
+      }
+    });
+
+    setQuantities(restoredQuantities);
+    setEditingInventoryId(String(inventory?.id || ""));
+    setInventoryDate(String(inventory?.inventoryDate || new Date().toISOString().slice(0, 10)));
+    if (user?.role === "admin") {
+      setRestaurantId(String(inventory?.restaurantId || ""));
+    }
+  };
+
+  const handleCancelEditing = () => {
+    setEditingInventoryId("");
+    setQuantities({});
+    setInventoryDate(new Date().toISOString().slice(0, 10));
+    if (user?.role === "admin") {
+      setRestaurantId("");
+    }
   };
 
   const handleExportSingleInventory = (inventory) => {
@@ -471,17 +533,172 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     exportInventoriesToExcel([inventory], fileName);
   };
 
+  const handlePrintSingleInventory = (inventory) => {
+    const printWindow = window.open("", "_blank", "width=980,height=760");
+    if (!printWindow) {
+      alert("Не вдалося відкрити вікно друку. Дозвольте pop-up у браузері.");
+      return;
+    }
+
+    const escapeHtml = (value) => String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
+    const rowsHtml = (inventory?.items || []).map((item, index) => {
+      const qty = toNumber(item?.qty);
+      const unitPrice = toNumber(item?.unitPrice);
+      const amount = toNumber(item?.amount);
+      return `
+        <tr>
+          <td>${index + 1}</td>
+          <td>${escapeHtml(item?.productName || "-")}</td>
+          <td>${escapeHtml(item?.category || "-")}</td>
+          <td>${qty.toFixed(2)}</td>
+          <td>${escapeHtml(item?.unit || "-")}</td>
+          <td>${unitPrice.toFixed(2)}</td>
+          <td>${amount.toFixed(2)}</td>
+          <td></td>
+        </tr>
+      `;
+    }).join("");
+
+    const html = `
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Інвентаризація продуктів</title>
+    <style>
+      @page { size: A4 portrait; margin: 10mm; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        color: #0f172a;
+        background: #fff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      }
+      .sheet {
+        width: 100%;
+      }
+      .header {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 10px;
+        font-size: 12px;
+      }
+      .title {
+        font-size: 18px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 11px;
+      }
+      th, td {
+        border: 1px solid #cbd5e1;
+        padding: 4px 6px;
+        vertical-align: top;
+      }
+      th {
+        text-align: left;
+        background: #f8fafc;
+        font-weight: 700;
+      }
+      .summary {
+        margin-top: 10px;
+        display: flex;
+        gap: 16px;
+        font-size: 12px;
+      }
+      .signatures {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        font-size: 12px;
+      }
+      .line {
+        margin-top: 28px;
+        border-bottom: 1px solid #334155;
+      }
+      .hint {
+        margin-top: 8px;
+        font-size: 11px;
+        color: #475569;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sheet">
+      <div class="title">Інвентаризація продуктів</div>
+      <div class="header">
+        <div><strong>Дата:</strong> ${escapeHtml(formatDateUk(inventory?.inventoryDate))}</div>
+        <div><strong>Ресторан:</strong> ${escapeHtml(inventory?.restaurantName || "-")}</div>
+        <div><strong>Хто створив:</strong> ${escapeHtml(inventory?.createdBy || "-")}</div>
+        <div><strong>К-сть позицій:</strong> ${Array.isArray(inventory?.items) ? inventory.items.length : 0}</div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 32px;">#</th>
+            <th>Продукт</th>
+            <th>Категорія</th>
+            <th style="width: 70px;">К-сть</th>
+            <th style="width: 70px;">Од.</th>
+            <th style="width: 90px;">Ціна</th>
+            <th style="width: 100px;">Сума</th>
+            <th style="width: 140px;">Ручна примітка</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml || '<tr><td colspan="8">Немає позицій</td></tr>'}
+        </tbody>
+      </table>
+
+      <div class="summary">
+        <div><strong>Всього од.:</strong> ${toNumber(inventory?.totalItems).toFixed(2)}</div>
+        <div><strong>Загальна сума:</strong> ${toNumber(inventory?.totalAmount).toFixed(2)} грн</div>
+      </div>
+
+      <div class="signatures">
+        <div>
+          <div>Відповідальний:</div>
+          <div class="line"></div>
+        </div>
+        <div>
+          <div>Перевірив:</div>
+          <div class="line"></div>
+        </div>
+      </div>
+
+      <div class="hint">Якщо друк не стартував — натисніть Ctrl/Cmd+P</div>
+    </div>
+
+    <script>
+      setTimeout(() => {
+        window.focus();
+        window.print();
+      }, 150);
+    </script>
+  </body>
+</html>
+`;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
   return (
     <div className="space-y-5">
-      <div className={cardClass}>
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-          <ClipboardCheck size={18} className="text-indigo-600" />
-          <h2 className="text-sm sm:text-lg font-semibold">Інвентаризація продуктів</h2>
-          </div>
-          <p className="text-xs sm:text-sm font-semibold text-slate-600">Дата: {inventoryDate}</p>
-        </div>
-
+      <div className={`${cardClass} pt-2 sm:pt-3 px-2 sm:px-5 pb-2 sm:pb-3`}>
         {user?.role === "admin" && (
           <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-1">
             <div>
@@ -516,13 +733,25 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
           </div>
           <div>
             <label className="text-xs sm:text-sm font-semibold text-slate-800">Пошук по назві</label>
-            <input
-              className="mt-1 h-8 sm:h-9 w-full rounded-lg border border-slate-300 bg-white px-2 sm:px-3 py-1 text-xs sm:text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Введіть назву продукту"
-              list="inventory-product-suggestions"
-            />
+            <div className="relative mt-1">
+              <input
+                className="h-8 sm:h-9 w-full rounded-lg border border-slate-300 bg-white px-2 pr-7 sm:px-3 sm:pr-8 py-1 text-xs sm:text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Введіть назву продукту"
+                list="inventory-product-suggestions"
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                  onClick={() => setSearchTerm("")}
+                  aria-label="Очистити пошук"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
             <datalist id="inventory-product-suggestions">
               {keywordSuggestions.map((name) => (
                 <option key={name} value={name} />
@@ -531,19 +760,34 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
           </div>
         </div>
 
-        <div className="mb-0.5 grid grid-cols-[1fr_auto] items-center gap-2 px-2 py-0.5 leading-none text-[10px] sm:text-[11px] font-semibold text-slate-700 sm:grid-cols-[1.2fr_0.8fr_0.5fr_1fr]">
+        <div className="mb-0.5 grid grid-cols-[1fr_auto] items-center gap-2 px-1 py-0.5 leading-none text-[10px] font-semibold text-slate-700 sm:hidden">
           <div>Продукт</div>
-          <div className="hidden sm:block">Категорія</div>
-          <div className="hidden sm:block">Одиниця</div>
           <div className="text-left">Кількість</div>
         </div>
 
-        <div className="overflow-x-auto overflow-y-auto max-h-[300px] sm:max-h-[420px] rounded-lg border border-slate-200">
+        <div className="-mx-1 sm:mx-0 overflow-x-auto overflow-y-auto max-h-[380px] sm:max-h-[520px] rounded-lg border border-slate-200">
           <table className="min-w-full text-sm">
+            <thead className="hidden sm:table-header-group bg-slate-50 text-slate-700">
+              <tr>
+                <th className="px-2 py-1 text-left">Продукт</th>
+                <th className="px-2 py-1 text-left">Категорія</th>
+                <th className="px-2 py-1 text-left">Одиниця</th>
+                <th className="px-2 py-1 text-left">Кількість</th>
+              </tr>
+            </thead>
             <tbody>
               {filteredProducts.map((product) => (
-                <tr key={product.id} className="border-t border-slate-200">
-                  <td className="px-2 py-1 font-medium text-slate-900 text-[11px] sm:text-xs leading-tight whitespace-normal break-words">{product.name}</td>
+                <tr
+                  key={product.id}
+                  className={`border-t border-slate-200 transition-colors ${activeRowProductId === product.id ? "bg-amber-100/70" : ""}`}
+                >
+                  <td
+                    className="px-2 py-1 font-medium text-slate-900 text-[11px] sm:text-xs leading-tight whitespace-normal break-words cursor-pointer"
+                    onClick={() => focusQuantityInput(product.id)}
+                    title="Натисніть, щоб ввести кількість"
+                  >
+                    {product.name}
+                  </td>
                   <td className="hidden sm:table-cell px-2 py-1 text-xs">{product.category || "-"}</td>
                   <td className="hidden sm:table-cell px-2 py-1 text-xs">{product.unit || "-"}</td>
                   <td className="px-2 py-1">
@@ -563,6 +807,22 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                         inputMode="decimal"
                         pattern="[0-9]*[.,]?[0-9]*"
                         className="h-6 w-12 sm:w-16 rounded border border-slate-300 bg-white px-1 py-0 text-[11px] sm:text-xs"
+                        ref={(el) => {
+                          if (el) {
+                            quantityInputRefs.current[product.id] = el;
+                          } else {
+                            delete quantityInputRefs.current[product.id];
+                          }
+                        }}
+                        onFocus={() => setActiveRowProductId(product.id)}
+                        onBlur={() => {
+                          setTimeout(() => {
+                            const current = quantityInputRefs.current?.[product.id];
+                            if (!current || document.activeElement !== current) {
+                              setActiveRowProductId((prev) => (prev === product.id ? null : prev));
+                            }
+                          }, 0);
+                        }}
                         value={quantities[product.id] || ""}
                         onChange={(e) => {
                           const rawValue = String(e.target.value || "");
@@ -592,21 +852,39 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
           </table>
         </div>
 
-        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-slate-700">Заповнених позицій: <span className="font-semibold">{filledLines.length}</span></p>
-          <button
-            type="button"
-            onClick={handleSaveInventory}
-            className="w-full sm:w-auto rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
-          >
-            Зберегти інвентаризацію
-          </button>
+        <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm text-slate-700">
+            <p>
+              Заповнених позицій: <span className="font-semibold">{filledLines.length}</span>
+              <span className="mx-2 text-slate-400">•</span>
+              <span className="font-semibold">Дата: {formatDateUk(inventoryDate)}</span>
+            </p>
+            {editingInventoryId && <p className="mt-1 text-amber-700 font-semibold">Режим редагування інвентаризації</p>}
+          </div>
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+            {editingInventoryId && (
+              <button
+                type="button"
+                onClick={handleCancelEditing}
+                className="w-full sm:w-auto rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Скасувати редагування
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleSaveInventory}
+              className="w-full sm:w-auto rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+            >
+              {editingInventoryId ? "Оновити інвентаризацію" : "Зберегти інвентаризацію"}
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className={cardClass}>
+      <div className={`${cardClass} px-2 sm:px-5`}>
         <h3 className="mb-3 text-base font-semibold text-slate-900">Проведені інвентаризації</h3>
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
+        <div className="-mx-1 sm:mx-0 overflow-x-auto rounded-lg border border-slate-200">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-700">
               <tr>
@@ -621,19 +899,35 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
             <tbody>
               {visibleInventories.map((inventory) => (
                 <tr key={inventory.id} className="border-t border-slate-200">
-                  <td className="px-3 py-2">{inventory.inventoryDate || "-"}</td>
+                  <td className="px-3 py-2">{formatDateUk(inventory.inventoryDate)}</td>
                   <td className="px-3 py-2">{inventory.restaurantName || "-"}</td>
                   <td className="px-3 py-2">{Array.isArray(inventory.items) ? inventory.items.length : 0}</td>
                   <td className="px-3 py-2 font-medium">{formatMoney(inventory.totalAmount)}</td>
                   <td className="px-3 py-2">{inventory.createdBy || "-"}</td>
                   <td className="px-3 py-2">
-                    <button
-                      type="button"
-                      onClick={() => handleExportSingleInventory(inventory)}
-                      className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500"
-                    >
-                      <Download size={14} /> Ексель
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleExportSingleInventory(inventory)}
+                        className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500"
+                      >
+                        <Download size={14} /> Ексель
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handlePrintSingleInventory(inventory)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                      >
+                        <Printer size={14} /> Друк
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRestoreInventory(inventory)}
+                        className="inline-flex items-center rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                      >
+                        Повернути
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -2064,6 +2358,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     updateTypicalField,
     removeTypicalField,
     createInventory,
+    updateInventory,
   } = useProductBooking(true);
 
   const tabKind = normalizeTabKind(topTab);
@@ -2139,6 +2434,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
         restaurants={restaurants}
         user={user}
         createInventory={createInventory}
+        updateInventory={updateInventory}
       />
     );
   }
