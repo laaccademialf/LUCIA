@@ -667,10 +667,23 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (topTabs.length > 0) {
-      setTopTab(topTabs[0].id);
+    if (topTabs.length === 0) {
+      if (topTab !== "") {
+        setTopTab("");
+      }
+      localStorage.removeItem('lucia_topTab');
+      return;
     }
-  }, [activeNav, topTabs]);
+
+    const hasCurrentTopTab = topTabs.some((tab) => tab.id === topTab);
+    if (hasCurrentTopTab) {
+      return;
+    }
+
+    const nextTopTab = topTabs[0].id;
+    setTopTab(nextTopTab);
+    localStorage.setItem('lucia_topTab', nextTopTab);
+  }, [activeNav, topTabs, topTab]);
 
   const toggleGroup = (id) => {
     setExpandedGroups((prev) => {
