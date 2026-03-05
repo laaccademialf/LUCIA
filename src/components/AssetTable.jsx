@@ -23,7 +23,7 @@ const decisionColors = {
 
 const columnHelper = createColumnHelper();
 
-export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false }) {
+export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, editDisabledReason = "Редагування тимчасово недоступне", getRowClassName = null }) {
   // Стан для видимих колонок
   // Додаємо всі можливі поля з mockAssets
   const fileInputRef = useRef(null);
@@ -104,13 +104,25 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
             >
               <span className="hidden sm:inline">Друк QR</span><span className="sm:hidden">QR</span>
             </button>
-            <button
-              type="button"
-              onClick={() => onEdit(info.row.original)}
-              className="inline-flex items-center gap-1 rounded-md bg-indigo-600 border border-indigo-500 px-2 py-1 text-xs font-semibold text-white hover:bg-indigo-500 transition whitespace-nowrap"
-            >
-              <Pencil size={14} /> <span className="hidden sm:inline">Редагувати</span><span className="sm:hidden">Ред.</span>
-            </button>
+            {onEdit && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!canEdit) return;
+                  onEdit(info.row.original);
+                }}
+                disabled={!canEdit}
+                title={!canEdit ? editDisabledReason : "Редагувати актив"}
+                className={clsx(
+                  "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition whitespace-nowrap",
+                  canEdit
+                    ? "bg-indigo-600 border border-indigo-500 text-white hover:bg-indigo-500"
+                    : "bg-slate-300 border border-slate-300 text-slate-600 cursor-not-allowed"
+                )}
+              >
+                <Pencil size={14} /> <span className="hidden sm:inline">Редагувати</span><span className="sm:hidden">Ред.</span>
+              </button>
+            )}
             {isAdminOnly && onDelete && (
               <button
                 type="button"
@@ -312,7 +324,13 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
           </thead>
           <tbody>
             {table.getRowModel().rows.map((row) => (
-              <tr key={row.id} className="border-b border-slate-200 last:border-0 hover:bg-slate-50 transition-colors">
+              <tr
+                key={row.id}
+                className={clsx(
+                  "border-b border-slate-200 last:border-0 hover:bg-slate-50 transition-colors",
+                  typeof getRowClassName === "function" ? getRowClassName(row.original) : ""
+                )}
+              >
                 {row.getVisibleCells().map((cell) => (
                   <td key={cell.id} className="px-3 py-2 align-top text-slate-800 font-medium">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}

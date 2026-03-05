@@ -17,11 +17,18 @@ import { MaterialResponsibilityManager } from "./components/MaterialResponsibili
 import AssetTransferWriteoffManager from "./components/AssetTransferWriteoffManager";
 import { AssetFieldsManager } from "./components/AssetFieldsManager";
 import FinancialAssetsReport from "./components/FinancialAssetsReport";
+import AssetDetailedReport from "./components/AssetDetailedReport";
 import { useAuth } from "./hooks/useAuth";
 import NotificationPanel from "./components/NotificationPanel";
 import { logoutUser } from "./firebase/auth";
 import { useMenuStructure } from "./hooks/useMenuStructure";
 import { getRolePermissions } from "./firebase/permissions";
+import {
+  startAssetInventorySession as startAssetInventorySessionInFirestore,
+  endAssetInventorySession as endAssetInventorySessionInFirestore,
+  subscribeToActiveAssetInventorySession,
+  subscribeToAssetInventorySessions,
+} from "./firebase/firestore";
 import { useRestaurants } from "./hooks/useRestaurants";
 import { useAssets } from "./hooks/useAssets";
 import { useAssetFields } from "./hooks/useAssetFields";
@@ -63,6 +70,24 @@ const fromMinutes = (value) => {
   const m = normalized % 60;
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 };
+
+const ASSET_FIELD_LABELS = {
+  initialCost: "Початкова вартість",
+  marketValueNew: "Ринкова вартість (нова)",
+  marketValueUsed: "Ринкова вартість (б/в)",
+  residualValue: "Залишкова вартість",
+  status: "Статус",
+  condition: "Стан",
+  physicalWear: "Фізичний знос",
+  moralWear: "Моральний знос",
+  totalWear: "Загальний знос",
+  decision: "Рішення",
+  reason: "Причина",
+  comment: "Коментар",
+  created: "Створення активу",
+};
+
+const getAssetFieldLabel = (field) => ASSET_FIELD_LABELS[String(field || "")] || String(field || "-");
 
 const getPlannedTime = (item, scheduleByDay, dayKey) => {
   const mode = item?.timeMode || "before_open";
@@ -234,6 +259,10 @@ function App() {
         // Відновлення збереженої вкладки з localStorage
         return localStorage.getItem('lucia_topTab') || "test1";
       });
+
+      const [assetInventorySession, setAssetInventorySession] = useState(null);
+      const [assetInventorySessionLoading, setAssetInventorySessionLoading] = useState(true);
+      const [assetInventorySessionsHistory, setAssetInventorySessionsHistory] = useState([]);
     // Головна навігація
     const [activeNav, setActiveNav] = useState(() => {
       // Відновлення збереженої сторінки з localStorage
@@ -511,6 +540,9 @@ function App() {
       if (activeNav === "ops-checklists" && tab.id === "openingchecklist") {
         return { ...tab, label: "Чеклисти" };
       }
+      if (activeNav === "inventory-assets" && tab.id === "test2") {
+        return { ...tab, label: "Інвентаризація" };
+      }
       return tab;
     });
 
@@ -685,6 +717,358 @@ function App() {
     localStorage.setItem('lucia_topTab', nextTopTab);
   }, [activeNav, topTabs, topTab]);
 
+  const assetInventorySessionScopeId = useMemo(() => {
+    if (user?.role === "admin") return "global";
+    if (user?.restaurant) return `restaurant:${String(user.restaurant)}`;
+    return "global";
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setAssetInventorySession(null);
+      setAssetInventorySessionLoading(false);
+      return;
+    }
+
+    setAssetInventorySessionLoading(true);
+    const unsubscribe = subscribeToActiveAssetInventorySession(assetInventorySessionScopeId, (session) => {
+      setAssetInventorySession(session);
+      setAssetInventorySessionLoading(false);
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [user, assetInventorySessionScopeId]);
+
+  useEffect(() => {
+    if (!user) {
+      setAssetInventorySessionsHistory([]);
+      return;
+    }
+
+    const unsubscribe = subscribeToAssetInventorySessions(assetInventorySessionScopeId, (sessions) => {
+      setAssetInventorySessionsHistory(Array.isArray(sessions) ? sessions : []);
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [user, assetInventorySessionScopeId]);
+
+  const isAssetInventorySessionActive = Boolean(assetInventorySession?.isActive);
+
+  const recentlyInventoriedAssetIds = useMemo(() => {
+    const activeSessionId = String(assetInventorySession?.id || "");
+    if (!activeSessionId || !isAssetInventorySessionActive) return new Set();
+    const ids = new Set();
+    assets.forEach((asset) => {
+      const history = Array.isArray(asset?.inventoryChangeHistory) ? asset.inventoryChangeHistory : [];
+      const hasChangeInLastSession = history.some(
+        (entry) => String(entry?.inventorySessionId || "") === activeSessionId
+      );
+      if (hasChangeInLastSession && asset?.id) {
+        ids.add(String(asset.id));
+      }
+    });
+    return ids;
+  }, [assets, assetInventorySession, isAssetInventorySessionActive]);
+
+  const getSessionRestaurantLabel = (session) => {
+    const sessionRestaurantId = String(session?.startedForRestaurantId || "");
+    if (sessionRestaurantId) {
+      return restaurants.find((item) => String(item.id) === sessionRestaurantId)?.name || sessionRestaurantId;
+    }
+
+    const scopeId = String(session?.scopeId || "");
+    if (scopeId.startsWith("restaurant:")) {
+      const restaurantIdFromScope = scopeId.slice("restaurant:".length);
+      return restaurants.find((item) => String(item.id) === restaurantIdFromScope)?.name || restaurantIdFromScope;
+    }
+
+    return "Всі заклади";
+  };
+
+  const getSessionChangeRows = (session) => {
+    const sessionId = String(session?.id || "");
+    if (!sessionId) return [];
+
+    const rows = [];
+    assets.forEach((asset) => {
+      const history = Array.isArray(asset?.inventoryChangeHistory) ? asset.inventoryChangeHistory : [];
+      history.forEach((entry) => {
+        if (String(entry?.inventorySessionId || "") !== sessionId) return;
+        const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+        changes.forEach((change) => {
+          rows.push({
+            assetInvNumber: asset?.invNumber || "-",
+            assetName: asset?.name || "-",
+            restaurant: asset?.locationName || "-",
+            changedAt: entry?.changedAt || "",
+            changedBy: entry?.changedByName || "-",
+            field: change?.field || "-",
+            previousValue: change?.previousValue,
+            nextValue: change?.nextValue,
+          });
+        });
+      });
+    });
+
+    return rows.sort((a, b) => String(a.changedAt || "").localeCompare(String(b.changedAt || "")));
+  };
+
+  const printSingleAssetInventorySession = (session) => {
+    const printWindow = window.open("", "_blank", "width=1200,height=820");
+    if (!printWindow) {
+      alert("Не вдалося відкрити вікно друку. Дозвольте pop-up у браузері.");
+      return;
+    }
+
+    const escapeHtml = (value) => String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
+    const sessionRows = getSessionChangeRows(session);
+
+    const groupedByAsset = sessionRows.reduce((acc, row) => {
+      const key = `${row.assetInvNumber}__${row.assetName}__${row.restaurant}`;
+      if (!acc[key]) {
+        acc[key] = {
+          assetInvNumber: row.assetInvNumber,
+          assetName: row.assetName,
+          restaurant: row.restaurant,
+          changes: [],
+        };
+      }
+      acc[key].changes.push(row);
+      return acc;
+    }, {});
+
+    const groupedAssets = Object.values(groupedByAsset).sort((a, b) =>
+      String(a.assetInvNumber || "").localeCompare(String(b.assetInvNumber || ""), "uk", { numeric: true })
+    );
+
+    const groupedBlocksHtml = groupedAssets.map((group, blockIndex) => {
+      const changesHtml = group.changes.map((change, changeIndex) => `
+        <tr>
+          <td>${changeIndex + 1}</td>
+          <td>${escapeHtml(getAssetFieldLabel(change.field))}</td>
+          <td>${escapeHtml(change.previousValue ?? "-")}</td>
+          <td>${escapeHtml(change.nextValue ?? "-")}</td>
+          <td>${escapeHtml(change.changedBy)}</td>
+          <td>${change.changedAt ? new Date(change.changedAt).toLocaleString("uk-UA") : "-"}</td>
+        </tr>
+      `).join("");
+
+      return `
+        <section class="asset-block">
+          <div class="asset-header">
+            <div><strong>${blockIndex + 1}. Актив:</strong> ${escapeHtml(group.assetName)}</div>
+            <div><strong>Інв. номер:</strong> ${escapeHtml(group.assetInvNumber)}</div>
+            <div><strong>Ресторан:</strong> ${escapeHtml(group.restaurant)}</div>
+            <div><strong>К-сть змін:</strong> ${group.changes.length}</div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 34px;">#</th>
+                <th>Поле</th>
+                <th>Було</th>
+                <th>Стало</th>
+                <th>Хто змінив</th>
+                <th>Коли</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${changesHtml || '<tr><td colspan="6">Змін не зафіксовано</td></tr>'}
+            </tbody>
+          </table>
+        </section>
+      `;
+    }).join("");
+
+    const html = `
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Акт інвентаризації ОЗ</title>
+    <style>
+      @page { size: A4 landscape; margin: 10mm; }
+      body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; }
+      h1 { margin: 0 0 8px; font-size: 20px; }
+      .meta { margin-bottom: 10px; font-size: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; }
+      table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+      th, td { border: 1px solid #cbd5e1; padding: 4px 6px; text-align: left; vertical-align: top; }
+      th { background: #f8fafc; font-weight: 700; }
+      .asset-block { margin-top: 10px; break-inside: avoid; }
+      .asset-header {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 2px 14px;
+        padding: 6px 8px;
+        margin-bottom: 4px;
+        border: 1px solid #cbd5e1;
+        background: #f8fafc;
+        font-size: 11px;
+      }
+      .hint { margin-top: 8px; font-size: 11px; color: #475569; }
+      .signatures { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+      .line { margin-top: 28px; border-bottom: 1px solid #334155; }
+    </style>
+  </head>
+  <body>
+    <h1>Акт інвентаризації основних засобів</h1>
+    <div class="meta">
+      <div><strong>ID сесії:</strong> ${escapeHtml(session?.id || "-")}</div>
+      <div><strong>Ресторан:</strong> ${escapeHtml(getSessionRestaurantLabel(session))}</div>
+      <div><strong>Початок:</strong> ${session?.startedAt ? new Date(session.startedAt).toLocaleString("uk-UA") : "-"}</div>
+      <div><strong>Завершення:</strong> ${session?.endedAt ? new Date(session.endedAt).toLocaleString("uk-UA") : "-"}</div>
+      <div><strong>Хто почав:</strong> ${escapeHtml(session?.startedByName || "-")}</div>
+      <div><strong>Хто завершив:</strong> ${escapeHtml(session?.endedByName || "-")}</div>
+      <div><strong>К-сть змін:</strong> ${sessionRows.length}</div>
+      <div><strong>Сформовано:</strong> ${new Date().toLocaleString("uk-UA")}</div>
+    </div>
+
+    ${groupedBlocksHtml || '<table><tbody><tr><td>У цій інвентаризації зміни не зафіксовані</td></tr></tbody></table>'}
+
+    <div class="signatures">
+      <div><div>Відповідальний за інвентаризацію:</div><div class="line"></div></div>
+      <div><div>Підтвердження керівника:</div><div class="line"></div></div>
+    </div>
+
+    <div class="hint">Якщо друк не стартував — натисніть Ctrl/Cmd+P</div>
+    <script>
+      setTimeout(() => { window.focus(); window.print(); }, 120);
+    </script>
+  </body>
+</html>`;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
+  const printAssetInventoryJournal = () => {
+    const printWindow = window.open("", "_blank", "width=1100,height=780");
+    if (!printWindow) {
+      alert("Не вдалося відкрити вікно друку. Дозвольте pop-up у браузері.");
+      return;
+    }
+
+    const rowsHtml = assetInventorySessionsHistory.map((session, index) => {
+      const startedAt = session?.startedAt ? new Date(session.startedAt).toLocaleString("uk-UA") : "-";
+      const endedAt = session?.endedAt ? new Date(session.endedAt).toLocaleString("uk-UA") : "-";
+      const status = session?.isActive ? "Активна" : "Завершена";
+      const restaurant = getSessionRestaurantLabel(session);
+      const startedBy = String(session?.startedByName || "-")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+      const endedBy = String(session?.endedByName || "-")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+
+      return `
+        <tr>
+          <td>${index + 1}</td>
+          <td>${startedAt}</td>
+          <td>${endedAt}</td>
+          <td>${restaurant}</td>
+          <td>${status}</td>
+          <td>${startedBy}</td>
+          <td>${endedBy}</td>
+          <td>${session?.id || "-"}</td>
+        </tr>
+      `;
+    }).join("");
+
+    const html = `
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Журнал інвентаризацій ОЗ</title>
+    <style>
+      @page { size: A4 landscape; margin: 10mm; }
+      body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; }
+      h1 { margin: 0 0 8px; font-size: 20px; }
+      .meta { margin-bottom: 10px; font-size: 12px; }
+      table { width: 100%; border-collapse: collapse; font-size: 11px; }
+      th, td { border: 1px solid #cbd5e1; padding: 5px 6px; text-align: left; }
+      th { background: #f8fafc; font-weight: 700; }
+      .hint { margin-top: 8px; font-size: 11px; color: #475569; }
+    </style>
+  </head>
+  <body>
+    <h1>Журнал інвентаризацій основних засобів</h1>
+    <div class="meta">
+      Сформовано: ${new Date().toLocaleString("uk-UA")}<br/>
+      Scope: ${assetInventorySessionScopeId}<br/>
+      К-сть записів: ${assetInventorySessionsHistory.length}
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 36px;">#</th>
+          <th>Початок</th>
+          <th>Завершення</th>
+          <th>Ресторан</th>
+          <th>Статус</th>
+          <th>Хто почав</th>
+          <th>Хто завершив</th>
+          <th>ID сесії</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml || '<tr><td colspan="8">Записів немає</td></tr>'}
+      </tbody>
+    </table>
+    <div class="hint">Якщо друк не стартував — натисніть Ctrl/Cmd+P</div>
+    <script>
+      setTimeout(() => { window.focus(); window.print(); }, 120);
+    </script>
+  </body>
+</html>`;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
+  const startAssetInventorySession = async () => {
+    if (isAssetInventorySessionActive || !user) return;
+    const startedByName = user?.displayName || user?.fullName || user?.email || "Користувач";
+    try {
+      await startAssetInventorySessionInFirestore(assetInventorySessionScopeId, {
+        startedById: user?.uid || "",
+        startedByName,
+        startedForRestaurantId: user?.restaurant || "",
+      });
+    } catch (error) {
+      alert(`Не вдалося запустити сесію інвентаризації: ${error?.message || "невідома помилка"}`);
+    }
+  };
+
+  const endAssetInventorySession = async () => {
+    if (!isAssetInventorySessionActive || !assetInventorySession?.id || !user) return;
+    const endedByName = user?.displayName || user?.fullName || user?.email || "Користувач";
+    try {
+      await endAssetInventorySessionInFirestore(assetInventorySession.id, {
+        endedById: user?.uid || "",
+        endedByName,
+      });
+      setSelected(null);
+    } catch (error) {
+      alert(`Не вдалося завершити сесію інвентаризації: ${error?.message || "невідома помилка"}`);
+    }
+  };
+
   const toggleGroup = (id) => {
     setExpandedGroups((prev) => {
       const isCurrentlyExpanded = prev[id];
@@ -735,9 +1119,74 @@ function App() {
       let result;
 
       if (exists) {
+        const trackedFields = [
+          "status",
+          "condition",
+          "initialCost",
+          "marketValueNew",
+          "marketValueUsed",
+          "residualValue",
+          "physicalWear",
+          "moralWear",
+          "totalWear",
+          "decision",
+          "reason",
+          "comment",
+        ];
+
+        const changes = trackedFields
+          .map((field) => {
+            const previousValue = exists?.[field] ?? null;
+            const nextValue = sanitizedAsset?.[field] ?? null;
+            if (String(previousValue ?? "") === String(nextValue ?? "")) {
+              return null;
+            }
+            return {
+              field,
+              previousValue,
+              nextValue,
+            };
+          })
+          .filter(Boolean);
+
+        if (changes.length > 0) {
+          const historyEntry = {
+            changedAt: new Date().toISOString(),
+            changedById: user?.uid || "",
+            changedByName: user?.displayName || user?.fullName || user?.email || "Користувач",
+            source: "inventory_edit",
+            inventorySessionId: assetInventorySession?.id || "",
+            inventorySessionScopeId: assetInventorySessionScopeId,
+            changes,
+          };
+
+          sanitizedAsset.inventoryChangeHistory = [
+            ...(Array.isArray(exists?.inventoryChangeHistory) ? exists.inventoryChangeHistory : []),
+            historyEntry,
+          ];
+        }
+
         // Оновлення існуючого активу
         result = await updateAssetInFirebase(exists.id, sanitizedAsset);
       } else {
+        sanitizedAsset.inventoryChangeHistory = [
+          {
+            changedAt: new Date().toISOString(),
+            changedById: user?.uid || "",
+            changedByName: user?.displayName || user?.fullName || user?.email || "Користувач",
+            source: "asset_created",
+            inventorySessionId: assetInventorySession?.id || "",
+            inventorySessionScopeId: assetInventorySessionScopeId,
+            changes: [
+              {
+                field: "created",
+                previousValue: null,
+                nextValue: "created",
+              },
+            ],
+          },
+        ];
+
         // Додавання нового активу
         result = await addAssetToFirebase(sanitizedAsset);
       }
@@ -2046,11 +2495,8 @@ function App() {
       // Детальний звіт — розділ у розробці
       if (activeNav === "capexreport" && topTab === "detailcapexreport") {
         return (
-          <div className="card p-6 text-sm text-slate-600">
-            <p className="text-base font-semibold text-slate-900">Розділ у розробці</p>
-            <p className="mt-1 text-slate-600">
-              Детальний звіт по основних засобах буде доступний у наступних оновленнях.
-            </p>
+          <div className="grid grid-cols-1">
+            <AssetDetailedReport assets={assets} />
           </div>
         );
       }
@@ -2082,6 +2528,31 @@ function App() {
       if (topTab === "test2") {
         // Якщо вибрано актив для редагування - показуємо форму
         if (selected) {
+          if (!isAssetInventorySessionActive) {
+            return (
+              <div className="card p-6 text-sm text-slate-700">
+                <p className="text-base font-semibold text-slate-900">Редагування тимчасово заблоковано</p>
+                <p className="mt-1 text-slate-600">Перегляд активів доступний завжди, але для редагування потрібно активувати сесію інвентаризації.</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={startAssetInventorySession}
+                    className="inline-flex items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+                  >
+                    Почати інвентаризацію
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(null)}
+                    className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    Повернутись до списку
+                  </button>
+                </div>
+              </div>
+            );
+          }
+
           return (
             <div className="grid grid-cols-1">
               <AssetForm selectedAsset={selected} onSubmit={handleSubmit} currentUser={user} restaurants={restaurants} assets={assets} />
@@ -2105,6 +2576,13 @@ function App() {
                 <AssetTable
                   data={assetsToShow}
                   onEdit={setSelected}
+                  canEdit={isAssetInventorySessionActive}
+                  editDisabledReason="Запустіть сесію інвентаризації, щоб редагувати активи"
+                  getRowClassName={(assetRow) =>
+                    recentlyInventoriedAssetIds.has(String(assetRow?.id || ""))
+                      ? "bg-emerald-100/60"
+                      : ""
+                  }
                   onDelete={user?.role === 'admin' ? handleDeleteAsset : null}
                   filters={filters}
                   setFilters={setFilters}
@@ -2112,7 +2590,11 @@ function App() {
                   onImport={user?.role === 'admin' ? handleImportAssets : null}
                   onDownloadTemplate={user?.role === 'admin' ? downloadAssetTemplate : null}
                   headerTitle="Редагування активів"
-                  headerSubtitle="Вибери актив для редагування"
+                  headerSubtitle={
+                    isAssetInventorySessionActive
+                      ? "Вибери актив для редагування"
+                      : "Перегляд доступний. Для редагування запустіть сесію інвентаризації"
+                  }
                   hideLocationFilter={user?.role !== 'admin'}
                   isAdminOnly={user?.role === 'admin'}
                 />
@@ -2142,6 +2624,82 @@ function App() {
         return (
           <div className="grid grid-cols-1">
             <MaterialResponsibilityManager />
+          </div>
+        );
+      }
+
+      if (topTab.includes("capexinventory") || topTab.includes("journal") || topTab.includes("jornial")) {
+        return (
+          <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+              <div>
+                <h2 className="text-lg font-semibold">Журнал інвентаризацій ОЗ</h2>
+                <p className="text-sm text-slate-600">Історія запуску та завершення сесій інвентаризації ({assetInventorySessionScopeId})</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="rounded bg-slate-100 border border-slate-200 px-2 py-1 text-xs text-slate-700">
+                  Записів: {assetInventorySessionsHistory.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={printAssetInventoryJournal}
+                  className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Друк журналу
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-slate-700">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Початок</th>
+                    <th className="px-3 py-2 text-left">Завершення</th>
+                    <th className="px-3 py-2 text-left">Ресторан</th>
+                    <th className="px-3 py-2 text-left">Статус</th>
+                    <th className="px-3 py-2 text-left">Хто почав</th>
+                    <th className="px-3 py-2 text-left">Хто завершив</th>
+                    <th className="px-3 py-2 text-left">ID сесії</th>
+                    <th className="px-3 py-2 text-left">Дії</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {assetInventorySessionsHistory.map((session) => (
+                    <tr key={session.id} className="border-t border-slate-200">
+                      <td className="px-3 py-2">{session?.startedAt ? new Date(session.startedAt).toLocaleString("uk-UA") : "-"}</td>
+                      <td className="px-3 py-2">{session?.endedAt ? new Date(session.endedAt).toLocaleString("uk-UA") : "-"}</td>
+                      <td className="px-3 py-2">{getSessionRestaurantLabel(session)}</td>
+                      <td className="px-3 py-2">
+                        <span className={clsx(
+                          "inline-flex items-center rounded-md px-2 py-1 text-xs font-semibold",
+                          session?.isActive ? "bg-emerald-100 text-emerald-800 border border-emerald-300" : "bg-slate-100 text-slate-700 border border-slate-300"
+                        )}>
+                          {session?.isActive ? "Активна" : "Завершена"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">{session?.startedByName || "-"}</td>
+                      <td className="px-3 py-2">{session?.endedByName || "-"}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-slate-600">{session?.id || "-"}</td>
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          onClick={() => printSingleAssetInventorySession(session)}
+                          className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                        >
+                          Друк інвентаризації
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {assetInventorySessionsHistory.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="px-3 py-8 text-center text-slate-500">Сесій інвентаризації поки немає.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         );
       }
@@ -2256,12 +2814,75 @@ function App() {
 
   const topTabsElement = topTabs.length > 0 ? (
     <div className="sticky top-0 z-30 bg-slate-900/95 border-b border-slate-800 shadow-lg" style={{boxShadow: "0 4px 6px -1px rgba(15, 23, 42, 0.4)"}}>
-      <div className="w-full px-0 lg:px-0 h-10 flex gap-0 overflow-x-auto items-stretch justify-start">
+      <div className="w-full px-0 lg:px-0 min-h-10 flex gap-0 overflow-x-auto items-stretch justify-between">
+        <div className="flex gap-0 items-stretch overflow-x-auto">
         {topTabs.map(tab => (
-          <button key={tab.id} type="button" onClick={() => {setTopTab(tab.id); localStorage.setItem('lucia_topTab', tab.id); setSelected(null);}} style={{padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: "600", border: "1px solid #475569", transition: "all 150ms", textAlign: "center", whiteSpace: "nowrap", borderRadius: "0", flexShrink: 0, backgroundColor: topTab === tab.id ? "#4f46e5" : "#1e293b", color: topTab === tab.id ? "white" : "#e2e8f0", borderColor: topTab === tab.id ? "#818cf8" : "#475569"}}>
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => {
+              setTopTab(tab.id);
+              localStorage.setItem('lucia_topTab', tab.id);
+              setSelected(null);
+            }}
+            style={{
+              padding: "0.5rem 0.75rem",
+              fontSize: "0.875rem",
+              fontWeight: "600",
+              border: "1px solid #475569",
+              transition: "all 150ms",
+              textAlign: "center",
+              whiteSpace: "nowrap",
+              borderRadius: "0",
+              flexShrink: 0,
+              backgroundColor: topTab === tab.id ? "#4f46e5" : "#1e293b",
+              color: topTab === tab.id ? "white" : "#e2e8f0",
+              borderColor: topTab === tab.id ? "#818cf8" : "#475569",
+              cursor: "pointer",
+            }}
+          >
             {tab.label}
           </button>
         ))}
+        </div>
+        {activeNav === "inventory-assets" && (
+          <div className="hidden md:flex items-center gap-2 pr-3 py-1">
+            <span className={clsx(
+              "rounded px-2 py-1 text-xs font-semibold border",
+              assetInventorySessionLoading
+                ? "bg-slate-800 text-slate-300 border-slate-600"
+                :
+              isAssetInventorySessionActive
+                ? "bg-emerald-900/30 text-emerald-300 border-emerald-700/50"
+                : "bg-slate-800 text-slate-300 border-slate-600"
+            )}>
+              {assetInventorySessionLoading
+                ? "Завантаження статусу сесії..."
+                : isAssetInventorySessionActive
+                ? `Сесія активна з ${new Date(assetInventorySession?.startedAt || Date.now()).toLocaleString("uk-UA")}`
+                : "Сесія інвентаризації не активна"}
+            </span>
+            {!isAssetInventorySessionActive ? (
+              <button
+                type="button"
+                onClick={startAssetInventorySession}
+                disabled={assetInventorySessionLoading}
+                className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+              >
+                Почати інвентаризацію
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={endAssetInventorySession}
+                disabled={assetInventorySessionLoading}
+                className="rounded bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-60"
+              >
+                Завершити інвентаризацію
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   ) : null;

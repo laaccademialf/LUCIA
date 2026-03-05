@@ -88,6 +88,8 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
   const [assetId, setAssetId] = useState("");
   const [requestType, setRequestType] = useState("transfer");
   const [targetRestaurantId, setTargetRestaurantId] = useState("");
+  const [employeeName, setEmployeeName] = useState("");
+  const [employeePosition, setEmployeePosition] = useState("");
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -122,7 +124,8 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
     return assets.filter((asset) => {
       const transferByMe = toNormalizedId(asset?.transferRequest?.requestedById) === userId;
       const writeOffByMe = toNormalizedId(asset?.writeOffRequest?.requestedById) === userId;
-      return transferByMe || writeOffByMe;
+      const usageByMe = toNormalizedId(asset?.employeeUsage?.assignedById) === userId;
+      return transferByMe || writeOffByMe || usageByMe;
     });
   }, [assets, user]);
 
@@ -181,6 +184,54 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       return;
     }
 
+    if (requestType === "assign") {
+      const normalizedEmployeeName = employeeName.trim();
+      if (!normalizedEmployeeName) {
+        alert("Вкажіть ПІБ співробітника.");
+        return;
+      }
+
+      const assignmentPayload = {
+        employeeUsage: {
+          status: "active",
+          assignedAt: nowIso,
+          assignedById: toNormalizedId(user?.uid),
+          assignedByName: requestedByName,
+          employeeName: normalizedEmployeeName,
+          employeePosition: employeePosition.trim(),
+          comment: reason.trim(),
+        },
+        employeeUsageHistory: [
+          ...(Array.isArray(selectedAsset?.employeeUsageHistory) ? selectedAsset.employeeUsageHistory : []),
+          {
+            status: "active",
+            assignedAt: nowIso,
+            assignedById: toNormalizedId(user?.uid),
+            assignedByName: requestedByName,
+            employeeName: normalizedEmployeeName,
+            employeePosition: employeePosition.trim(),
+            comment: reason.trim(),
+          },
+        ],
+        respPerson: normalizedEmployeeName,
+      };
+
+      setSubmitting(true);
+      const result = await updateAsset(selectedAsset.id, assignmentPayload);
+      setSubmitting(false);
+      if (!result?.success) {
+        alert("Не вдалося передати актив у користування співробітнику.");
+        return;
+      }
+
+      setAssetId("");
+      setReason("");
+      setEmployeeName("");
+      setEmployeePosition("");
+      alert("Актив передано у користування співробітнику.");
+      return;
+    }
+
     const writeOffPayload = {
       writeOffRequest: {
         status: "pending",
@@ -201,6 +252,8 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
 
     setAssetId("");
     setReason("");
+    setEmployeeName("");
+    setEmployeePosition("");
     alert("Запит на списання відправлено на погодження фінансовому директору.");
   };
 
@@ -418,21 +471,108 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
     });
   };
 
+  const printEmployeeUsageAct = (asset) => {
+    const usage = asset?.employeeUsage;
+    if (!usage) {
+      alert("Для цього активу немає передачі у користування співробітнику.");
+      return;
+    }
+
+    const bodyHtml = `
+      <h1>Акт передачі активу у користування</h1>
+      <div class="meta">
+        <div><strong>Дата:</strong> ${escapeHtml(formatDateTime(usage?.assignedAt || new Date().toISOString()))}</div>
+        <div><strong>Актив:</strong> ${escapeHtml(asset?.name || "-")}</div>
+        <div><strong>Інв. №:</strong> ${escapeHtml(asset?.invNumber || "-")}</div>
+        <div><strong>Локація:</strong> ${escapeHtml(asset?.locationName || "-")}</div>
+        <div><strong>Передав:</strong> ${escapeHtml(usage?.assignedByName || "-")}</div>
+        <div><strong>Отримав:</strong> ${escapeHtml(usage?.employeeName || "-")}</div>
+        <div><strong>Посада:</strong> ${escapeHtml(usage?.employeePosition || "-")}</div>
+        <div><strong>Статус:</strong> ${escapeHtml(usage?.status || "active")}</div>
+      </div>
+      <table>
+        <thead><tr><th>Назва</th><th>Категорія</th><th>Серійний номер</th><th>Коментар</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>${escapeHtml(asset?.name || "-")}</td>
+            <td>${escapeHtml(asset?.category || "-")}</td>
+            <td>${escapeHtml(asset?.serialNumber || "-")}</td>
+            <td>${escapeHtml(usage?.comment || "-")}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="signatures">
+        <div><div>Передав (ПІБ, підпис):</div><div class="line"></div></div>
+        <div><div>Отримав (ПІБ, підпис):</div><div class="line"></div></div>
+      </div>
+    `;
+
+    openPrintDocument({
+      title: "Акт передачі у користування",
+      bodyHtml,
+    });
+  };
+
+  const returnFromEmployeeUsage = async (asset) => {
+    const usage = asset?.employeeUsage;
+    if (!usage || usage.status !== "active") {
+      alert("Актив вже не перебуває в активному користуванні співробітника.");
+      return;
+    }
+
+    if (!window.confirm(`Повернути актив "${asset?.name || "-"}" з користування співробітника ${usage?.employeeName || "-"}?`)) {
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const returnedByName = user?.displayName || user?.fullName || user?.email || "Користувач";
+
+    const result = await updateAsset(asset.id, {
+      employeeUsage: {
+        ...usage,
+        status: "returned",
+        returnedAt: nowIso,
+        returnedById: toNormalizedId(user?.uid),
+        returnedByName,
+      },
+      employeeUsageHistory: [
+        ...(Array.isArray(asset?.employeeUsageHistory) ? asset.employeeUsageHistory : []),
+        {
+          ...usage,
+          status: "returned",
+          returnedAt: nowIso,
+          returnedById: toNormalizedId(user?.uid),
+          returnedByName,
+        },
+      ],
+      respPerson: "",
+    });
+
+    if (!result?.success) {
+      alert("Не вдалося оформити повернення з користування.");
+      return;
+    }
+
+    alert("Актив успішно повернено з користування співробітника.");
+  };
+
   const renderRequestStatus = (asset) => {
     const transfer = asset?.transferRequest;
     const writeOff = asset?.writeOffRequest;
+    const employeeUsage = asset?.employeeUsage;
 
     if (transfer) return `Переміщення: ${transfer.status || "-"}`;
     if (writeOff) return `Списання: ${writeOff.status || "-"}`;
+    if (employeeUsage) return `Користування: ${employeeUsage.status || "active"}`;
     return "-";
   };
 
   return (
     <div className="space-y-5">
       <div className={cardClass}>
-        <h2 className="text-lg font-semibold">Управління активами: переміщення та списання</h2>
+        <h2 className="text-lg font-semibold">Управління активами: переміщення, списання, користування</h2>
         <p className="mt-1 text-sm text-slate-600">
-          Керуючий створює запит, далі виконується погодження: для переміщення — керівником закладу-отримувача, для списання — фінансовим директором.
+          Керуючий може переміщати, списувати або передавати актив у користування співробітнику з друком відповідного акту.
         </p>
 
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -451,6 +591,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
             <select className={inputClass} value={requestType} onChange={(e) => setRequestType(e.target.value)}>
               <option value="transfer">Переміщення між закладами</option>
               <option value="writeoff">Списання ОС</option>
+              <option value="assign">Передача у користування співробітнику</option>
             </select>
           </div>
 
@@ -466,13 +607,43 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
             </div>
           )}
 
-          <div className={requestType === "transfer" ? "" : "md:col-span-2"}>
+          {requestType === "assign" && (
+            <div>
+              <label className="text-sm font-semibold">ПІБ співробітника</label>
+              <input
+                className={inputClass}
+                value={employeeName}
+                onChange={(e) => setEmployeeName(e.target.value)}
+                placeholder="Наприклад: Іваненко Іван"
+              />
+            </div>
+          )}
+
+          {requestType === "assign" && (
+            <div>
+              <label className="text-sm font-semibold">Посада співробітника</label>
+              <input
+                className={inputClass}
+                value={employeePosition}
+                onChange={(e) => setEmployeePosition(e.target.value)}
+                placeholder="Наприклад: Офіціант"
+              />
+            </div>
+          )}
+
+          <div className={requestType === "writeoff" ? "md:col-span-2" : ""}>
             <label className="text-sm font-semibold">Причина / коментар</label>
             <textarea
               className={`${inputClass} min-h-[84px]`}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder={requestType === "transfer" ? "Причина переміщення" : "Підстава для списання"}
+              placeholder={
+                requestType === "transfer"
+                  ? "Причина переміщення"
+                  : requestType === "assign"
+                    ? "Коментар до передачі у користування"
+                    : "Підстава для списання"
+              }
             />
           </div>
         </div>
@@ -484,7 +655,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
             onClick={submitRequest}
             className="inline-flex items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-60"
           >
-            {submitting ? "Збереження..." : "Відправити на погодження"}
+            {submitting ? "Збереження..." : requestType === "assign" ? "Передати у користування" : "Відправити на погодження"}
           </button>
         </div>
       </div>
@@ -582,20 +753,34 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
             <tbody>
               {myRequests.map((asset) => {
                 const isTransfer = Boolean(asset?.transferRequest);
-                const request = isTransfer ? asset.transferRequest : asset.writeOffRequest;
+                const isWriteOff = Boolean(asset?.writeOffRequest);
+                const isUsage = Boolean(asset?.employeeUsage);
+                const request = isTransfer ? asset.transferRequest : isWriteOff ? asset.writeOffRequest : asset.employeeUsage;
+                const isActiveEmployeeUsage = isUsage && String(asset?.employeeUsage?.status || "") === "active";
                 return (
                   <tr key={asset.id} className="border-t border-slate-200">
                     <td className="px-3 py-2">{asset.invNumber} — {asset.name}</td>
                     <td className="px-3 py-2">{renderRequestStatus(asset)}</td>
-                    <td className="px-3 py-2">{formatDateTime(request?.approvedAt || request?.rejectedAt || request?.requestedAt)}</td>
+                    <td className="px-3 py-2">{formatDateTime(request?.approvedAt || request?.rejectedAt || request?.requestedAt || request?.assignedAt)}</td>
                     <td className="px-3 py-2">
-                      <button
-                        type="button"
-                        onClick={() => (isTransfer ? printTransferAct(asset) : printWriteOffAct(asset))}
-                        className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                      >
-                        <Printer size={14} /> Друк акту
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => (isTransfer ? printTransferAct(asset) : isUsage ? printEmployeeUsageAct(asset) : printWriteOffAct(asset))}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                        >
+                          <Printer size={14} /> Друк акту
+                        </button>
+                        {isActiveEmployeeUsage && (
+                          <button
+                            type="button"
+                            onClick={() => returnFromEmployeeUsage(asset)}
+                            className="inline-flex items-center gap-1 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-500"
+                          >
+                            Повернути з користування
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

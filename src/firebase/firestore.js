@@ -215,6 +215,86 @@ export const subscribeToAssets = (callback) => {
   });
 };
 
+// ==================== СЕСІЇ ІНВЕНТАРИЗАЦІЇ ОЗ ====================
+
+export const startAssetInventorySession = async (scopeId, sessionData = {}) => {
+  try {
+    const sessionsRef = collection(db, "assetInventorySessions");
+    const nowIso = new Date().toISOString();
+
+    const activeSnapshot = await getDocs(sessionsRef);
+    await Promise.all(
+      activeSnapshot.docs
+        .map((item) => ({ id: item.id, ...item.data() }))
+        .filter((item) => String(item.scopeId || "global") === String(scopeId || "global") && item.isActive === true)
+        .map((item) =>
+          updateDoc(doc(db, "assetInventorySessions", item.id), {
+            isActive: false,
+            endedAt: nowIso,
+            endedReason: "auto_closed_by_new_session",
+            updatedAt: nowIso,
+          })
+        )
+    );
+
+    const docRef = await addDoc(sessionsRef, {
+      scopeId: String(scopeId || "global"),
+      isActive: true,
+      startedAt: nowIso,
+      updatedAt: nowIso,
+      ...sessionData,
+    });
+
+    return docRef.id;
+  } catch (error) {
+    console.error("Помилка старту сесії інвентаризації ОЗ:", error);
+    throw error;
+  }
+};
+
+export const endAssetInventorySession = async (sessionId, endData = {}) => {
+  try {
+    const nowIso = new Date().toISOString();
+    const sessionRef = doc(db, "assetInventorySessions", sessionId);
+    await updateDoc(sessionRef, {
+      isActive: false,
+      endedAt: nowIso,
+      updatedAt: nowIso,
+      ...endData,
+    });
+  } catch (error) {
+    console.error("Помилка завершення сесії інвентаризації ОЗ:", error);
+    throw error;
+  }
+};
+
+export const subscribeToActiveAssetInventorySession = (scopeId, callback) => {
+  const sessionsRef = collection(db, "assetInventorySessions");
+  const q = query(sessionsRef, orderBy("startedAt", "desc"));
+
+  return onSnapshot(q, (snapshot) => {
+    const sessions = snapshot.docs
+      .map((item) => ({ id: item.id, ...item.data() }))
+      .filter((item) => String(item.scopeId || "global") === String(scopeId || "global") && item.isActive === true)
+      .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
+
+    callback(sessions[0] || null);
+  });
+};
+
+export const subscribeToAssetInventorySessions = (scopeId, callback) => {
+  const sessionsRef = collection(db, "assetInventorySessions");
+  const q = query(sessionsRef, orderBy("startedAt", "desc"));
+
+  return onSnapshot(q, (snapshot) => {
+    const sessions = snapshot.docs
+      .map((item) => ({ id: item.id, ...item.data() }))
+      .filter((item) => String(item.scopeId || "global") === String(scopeId || "global"));
+
+    callback(sessions);
+  });
+};
+
 // ==================== ЗАМОВЛЕННЯ ПРОДУКЦІЇ ====================
 
 export const getBookingProducts = async () => {
