@@ -2482,15 +2482,15 @@ function App() {
       );
     }
 
-    const teamNavIds = new Set(["stafing"]);
-    const teamTabIds = new Set(["mystafing", "myrequest", "jobtitlesettings", "recrutment"]);
+    const teamNavIds = new Set(["stafing", "workhoursemployee", "employeekeeper"]);
+    const teamTabIds = new Set(["mystafing", "myrequest", "jobtitlesettings", "recrutment", "workhoursemployee", "employeekeeper"]);
     const isTeamHiringNav = teamNavIds.has(activeNavKey);
     const isTeamHiringTab = teamTabIds.has(topTabKey);
 
     if (isTeamHiringNav || isTeamHiringTab) {
       return (
         <div className="grid grid-cols-1">
-          <TeamHiringModule topTab={topTab} restaurants={restaurants} user={user} />
+          <TeamHiringModule topTab={topTab} activeNav={activeNav} restaurants={restaurants} user={user} />
         </div>
       );
     }

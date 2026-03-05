@@ -1,23 +1,46 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  addTeamEmployee,
+  addTeamShiftEvent,
   addJobTitle,
   addRecruitmentRequest,
   deleteJobTitle,
   subscribeToJobTitles,
   subscribeToRecruitmentRequests,
-  subscribeToStaffingPlans,
+  subscribeToTeamEmployees,
+  subscribeToTeamShiftEvents,
   updateJobTitle,
   updateRecruitmentRequest,
-  upsertStaffingPlan,
 } from "../firebase/staffing";
 
 const cardClass = "card p-4 sm:p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100";
 
-const resolveTabMode = (topTab) => {
+const resolveTabMode = (topTab, activeNav) => {
   const key = String(topTab || "").toLowerCase();
+  const navKey = String(activeNav || "").toLowerCase();
+
+  // First priority: explicit top tab inside the section.
+  if (key.includes("kiper") || key.includes("keeper")) {
+    return "employee-keeper";
+  }
+
+  if (key.includes("tabel") || key.includes("table") || key.includes("workhour")) {
+    return "work-hours-employee";
+  }
+
+  // Fallback: dedicated nav section without explicit topTab match.
+  if (navKey === "workhoursemployee") return "work-hours-employee";
+  if (navKey === "employeekeeper") return "employee-keeper";
+
   if (key === "mystafing") {
     return "my-staffing";
+  }
+  if (key === "workhoursemployee") {
+    return "work-hours-employee";
+  }
+  if (key === "employeekeeper") {
+    return "employee-keeper";
   }
   if (key === "myrequest") {
     return "requests";
@@ -35,13 +58,14 @@ const monthToLabel = (value) => {
   return `${month}.${year}`;
 };
 
-export default function TeamHiringModule({ topTab, restaurants = [], user }) {
+export default function TeamHiringModule({ topTab, activeNav, restaurants = [], user }) {
   const [jobTitles, setJobTitles] = useState([]);
-  const [staffingPlans, setStaffingPlans] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [shiftEvents, setShiftEvents] = useState([]);
   const [requests, setRequests] = useState([]);
   const [selectedRestaurantId, setSelectedRestaurantId] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [savingRowId, setSavingRowId] = useState("");
+  const [keeperCode, setKeeperCode] = useState("");
 
   const [jobForm, setJobForm] = useState({
     id: "",
@@ -60,8 +84,12 @@ export default function TeamHiringModule({ topTab, restaurants = [], user }) {
     comment: "",
   });
 
-  const [rowDrafts, setRowDrafts] = useState({});
-  const mode = resolveTabMode(topTab);
+  const [employeeForm, setEmployeeForm] = useState({
+    lastName: "",
+    firstName: "",
+    jobTitleId: "",
+  });
+  const mode = resolveTabMode(topTab, activeNav);
   const canRecruiterProcess = useMemo(() => {
     const role = String(user?.role || "").toLowerCase();
     const workRole = String(user?.workRole || "").toLowerCase();
@@ -70,13 +98,15 @@ export default function TeamHiringModule({ topTab, restaurants = [], user }) {
 
   useEffect(() => {
     const unsubJobs = subscribeToJobTitles(setJobTitles);
-    const unsubPlans = subscribeToStaffingPlans(setStaffingPlans);
     const unsubRequests = subscribeToRecruitmentRequests(setRequests);
+    const unsubEmployees = subscribeToTeamEmployees(setEmployees);
+    const unsubEvents = subscribeToTeamShiftEvents(setShiftEvents);
 
     return () => {
       unsubJobs?.();
-      unsubPlans?.();
       unsubRequests?.();
+      unsubEmployees?.();
+      unsubEvents?.();
     };
   }, []);
 
@@ -95,9 +125,14 @@ export default function TeamHiringModule({ topTab, restaurants = [], user }) {
     [jobTitles, selectedRestaurantId]
   );
 
-  const plansForRestaurantMonth = useMemo(
-    () => staffingPlans.filter((item) => String(item.restaurantId) === String(selectedRestaurantId) && String(item.month) === String(month)),
-    [staffingPlans, selectedRestaurantId, month]
+  const employeesForRestaurant = useMemo(
+    () => employees.filter((item) => String(item.restaurantId) === String(selectedRestaurantId)),
+    [employees, selectedRestaurantId]
+  );
+
+  const eventsForRestaurant = useMemo(
+    () => shiftEvents.filter((item) => String(item.restaurantId) === String(selectedRestaurantId)),
+    [shiftEvents, selectedRestaurantId]
   );
 
   const requestsForRestaurant = useMemo(
@@ -105,52 +140,197 @@ export default function TeamHiringModule({ topTab, restaurants = [], user }) {
     [requests, selectedRestaurantId]
   );
 
-  const editableRows = useMemo(() => {
-    return jobsForRestaurant.map((job) => {
-      const plan = plansForRestaurantMonth.find((item) => String(item.jobTitleId) === String(job.id));
-      const draft = rowDrafts[job.id];
-      return {
-        job,
-        actualCount: draft?.actualCount ?? Number(plan?.actualCount || 0),
-        plannedCount: draft?.plannedCount ?? Number(plan?.plannedCount || 0),
-      };
-    });
-  }, [jobsForRestaurant, plansForRestaurantMonth, rowDrafts]);
+  const employeeJobTitleMap = useMemo(() => {
+    return jobsForRestaurant.reduce((acc, item) => {
+      acc[item.id] = item.title || "";
+      return acc;
+    }, {});
+  }, [jobsForRestaurant]);
 
-  const updateRowDraft = (jobId, field, value) => {
-    const numericValue = Number(value);
-    setRowDrafts((prev) => ({
-      ...prev,
-      [jobId]: {
-        ...prev[jobId],
-        [field]: Number.isFinite(numericValue) ? numericValue : 0,
-      },
-    }));
+  const computeSessions = (events) => {
+    const ordered = [...events].sort((a, b) =>
+      String(a.eventAt || a.createdAt || "").localeCompare(String(b.eventAt || b.createdAt || ""))
+    );
+
+    let openStart = null;
+    const sessions = [];
+
+    ordered.forEach((event) => {
+      const type = String(event.type || "").toLowerCase();
+      const point = String(event.eventAt || event.createdAt || "");
+      if (!point) return;
+
+      if (type === "start") {
+        if (!openStart) {
+          openStart = point;
+        }
+        return;
+      }
+
+      if (type === "end" && openStart) {
+        const startMs = Date.parse(openStart);
+        const endMs = Date.parse(point);
+        if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs) {
+          sessions.push({ startAt: openStart, endAt: point, durationMs: endMs - startMs });
+        }
+        openStart = null;
+      }
+    });
+
+    return { sessions, hasOpenShift: Boolean(openStart), openStartAt: openStart };
   };
 
-  const saveStaffingRow = async (jobId) => {
-    const row = editableRows.find((item) => item.job.id === jobId);
-    if (!row || !selectedRestaurantId) return;
+  const employeeEventsMap = useMemo(() => {
+    return eventsForRestaurant.reduce((acc, event) => {
+      const employeeId = String(event.employeeId || "");
+      if (!employeeId) return acc;
+      if (!acc[employeeId]) acc[employeeId] = [];
+      acc[employeeId].push(event);
+      return acc;
+    }, {});
+  }, [eventsForRestaurant]);
 
-    setSavingRowId(jobId);
+  const employeeSummaries = useMemo(() => {
+    return employeesForRestaurant
+      .map((employee) => {
+        const employeeEvents = employeeEventsMap[employee.id] || [];
+        const monthEvents = employeeEvents.filter((event) => String(event.eventAt || "").slice(0, 7) === String(month));
+        const { sessions, hasOpenShift, openStartAt } = computeSessions(monthEvents);
+        const totalMs = sessions.reduce((acc, session) => acc + session.durationMs, 0);
+
+        return {
+          ...employee,
+          sessionsCount: sessions.length,
+          workedHours: Math.round((totalMs / (1000 * 60 * 60)) * 100) / 100,
+          hasOpenShift,
+          openStartAt,
+        };
+      })
+      .sort((a, b) => String(a.employeeNumber || "").localeCompare(String(b.employeeNumber || "")));
+  }, [employeesForRestaurant, employeeEventsMap, month]);
+
+  const keeperEmployee = useMemo(() => {
+    const code = String(keeperCode || "").trim();
+    if (!code) return null;
+    return employeesForRestaurant.find((item) => String(item.employeeNumber || "") === code) || null;
+  }, [keeperCode, employeesForRestaurant]);
+
+  const keeperEmployeeStatus = useMemo(() => {
+    if (!keeperEmployee) {
+      return { hasOpenShift: false, openStartAt: null };
+    }
+    const result = computeSessions(employeeEventsMap[keeperEmployee.id] || []);
+    return { hasOpenShift: result.hasOpenShift, openStartAt: result.openStartAt };
+  }, [keeperEmployee, employeeEventsMap]);
+
+  const generateEmployeeNumber = () => {
+    const restaurant = currentRestaurant;
+    const regNumber = String(restaurant?.regNumber || "").trim();
+    const prefix = regNumber.slice(0, 3) || String(restaurant?.id || "").slice(0, 3).toUpperCase() || "EMP";
+
+    const maxSuffix = employeesForRestaurant.reduce((acc, item) => {
+      const num = String(item.employeeNumber || "");
+      if (!num.startsWith(prefix)) return acc;
+      const tail = num.slice(prefix.length);
+      const parsed = Number(tail);
+      if (!Number.isFinite(parsed)) return acc;
+      return Math.max(acc, parsed);
+    }, 0);
+
+    return `${prefix}${String(maxSuffix + 1).padStart(4, "0")}`;
+  };
+
+  const submitEmployee = async () => {
+    const lastName = String(employeeForm.lastName || "").trim();
+    const firstName = String(employeeForm.firstName || "").trim();
+    const jobTitleId = String(employeeForm.jobTitleId || "").trim();
+    const jobTitleName = employeeJobTitleMap[jobTitleId] || "";
+
+    if (!selectedRestaurantId || !lastName || !firstName || !jobTitleId) {
+      alert("Заповніть прізвище, ім'я та посаду");
+      return;
+    }
+
     try {
-      await upsertStaffingPlan({
+      await addTeamEmployee({
         restaurantId: selectedRestaurantId,
         restaurantName: currentRestaurant?.name || "",
-        month,
-        jobTitleId: row.job.id,
-        jobTitleName: row.job.title,
-        actualCount: Number(row.actualCount || 0),
-        plannedCount: Number(row.plannedCount || 0),
-        updatedById: user?.uid || "",
-        updatedByName: user?.name || user?.email || "",
+        employeeNumber: generateEmployeeNumber(),
+        lastName,
+        firstName,
+        fullName: `${lastName} ${firstName}`.trim(),
+        jobTitleId,
+        jobTitleName,
+        isActive: true,
+        createdById: user?.uid || "",
+        createdByName: user?.name || user?.email || "",
       });
+
+      setEmployeeForm({ lastName: "", firstName: "", jobTitleId: "" });
     } catch (error) {
-      console.error("Помилка збереження плану:", error);
-      alert("Не вдалося зберегти план по посаді");
-    } finally {
-      setSavingRowId("");
+      console.error("Помилка створення співробітника:", error);
+      alert("Не вдалося додати співробітника");
     }
+  };
+
+  const handleKeeperAction = async (actionType) => {
+    if (!keeperEmployee) {
+      alert("Співробітника з таким номером не знайдено");
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const isStart = actionType === "start";
+
+    if (isStart && keeperEmployeeStatus.hasOpenShift) {
+      alert("Зміна вже розпочата. Спочатку натисніть 'Кінець роботи'.");
+      return;
+    }
+
+    if (!isStart && !keeperEmployeeStatus.hasOpenShift) {
+      alert("Немає відкритої зміни. Спочатку натисніть 'Початок роботи'.");
+      return;
+    }
+
+    try {
+      await addTeamShiftEvent({
+        restaurantId: selectedRestaurantId,
+        restaurantName: currentRestaurant?.name || "",
+        employeeId: keeperEmployee.id,
+        employeeNumber: keeperEmployee.employeeNumber || "",
+        employeeName: keeperEmployee.fullName || `${keeperEmployee.lastName || ""} ${keeperEmployee.firstName || ""}`.trim(),
+        jobTitleId: keeperEmployee.jobTitleId || "",
+        jobTitleName: keeperEmployee.jobTitleName || "",
+        type: isStart ? "start" : "end",
+        eventAt: nowIso,
+      });
+
+      alert(isStart ? "Початок роботи зафіксовано" : "Кінець роботи зафіксовано");
+    } catch (error) {
+      console.error("Помилка фіксації події зміни:", error);
+      alert("Не вдалося зафіксувати подію");
+    }
+  };
+
+  const keypadButtons = [
+    "1", "2", "3",
+    "4", "5", "6",
+    "7", "8", "9",
+    "C", "0", "⌫",
+  ];
+
+  const onKeypadPress = (value) => {
+    if (value === "C") {
+      setKeeperCode("");
+      return;
+    }
+
+    if (value === "⌫") {
+      setKeeperCode((prev) => prev.slice(0, -1));
+      return;
+    }
+
+    setKeeperCode((prev) => `${prev}${value}`.slice(0, 12));
   };
 
   const submitJob = async () => {
@@ -264,8 +444,120 @@ export default function TeamHiringModule({ topTab, restaurants = [], user }) {
     </div>
   );
 
+  const employeePositionOptions = useMemo(() => {
+    return jobsForRestaurant.map((item) => ({ id: item.id, title: item.title }));
+  }, [jobsForRestaurant]);
+
   if (!selectedRestaurantId && mode !== "recruiter") {
     return <div className={cardClass}>Оберіть заклад, щоб працювати з персоналом.</div>;
+  }
+
+  if (mode === "employee-keeper") {
+    return (
+      <div className="space-y-4">
+        <div className={cardClass}>
+          {renderRestaurantSelector()}
+          <h3 className="text-base font-semibold mt-4 mb-3">Табель · Кіпер</h3>
+          <p className="text-sm text-slate-600">Введіть номер співробітника на цифровій клавіатурі та зафіксуйте початок/кінець зміни.</p>
+
+          <div className="mt-4 max-w-sm">
+            <label className="text-sm font-semibold text-slate-800">Номер співробітника</label>
+            <input
+              className={`${inputClass} text-center text-xl tracking-[0.2em] font-semibold`}
+              value={keeperCode}
+              onChange={(e) => setKeeperCode(String(e.target.value || "").replace(/[^0-9A-Za-z]/g, "").slice(0, 12))}
+              placeholder="___"
+            />
+            {keeperEmployee ? (
+              <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                {keeperEmployee.fullName} · {keeperEmployee.jobTitleName || "Без посади"}
+              </div>
+            ) : keeperCode ? (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Співробітник з таким номером не знайдений
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-4 grid grid-cols-3 gap-2 max-w-sm">
+            {keypadButtons.map((btn) => (
+              <button
+                key={btn}
+                type="button"
+                onClick={() => onKeypadPress(btn)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-3 text-lg font-semibold text-slate-800 hover:bg-slate-100"
+              >
+                {btn}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => handleKeeperAction("start")}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+            >
+              Початок роботи
+            </button>
+            <button
+              type="button"
+              onClick={() => handleKeeperAction("end")}
+              className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-500"
+            >
+              Кінець роботи
+            </button>
+          </div>
+
+          {keeperEmployee && (
+            <div className="mt-3 text-sm text-slate-600">
+              Статус зміни: {keeperEmployeeStatus.hasOpenShift ? "В роботі" : "Поза зміною"}
+              {keeperEmployeeStatus.openStartAt && (
+                <span> · Початок: {new Date(keeperEmployeeStatus.openStartAt).toLocaleString("uk-UA")}</span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === "work-hours-employee") {
+    return (
+      <div className={cardClass}>
+        {renderRestaurantSelector()}
+        <h3 className="text-base font-semibold mt-4 mb-3">Табель · Підсумок по годинах ({monthToLabel(month)})</h3>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-600 border-b border-slate-200">
+                <th className="py-2 pr-3">Номер</th>
+                <th className="py-2 pr-3">Співробітник</th>
+                <th className="py-2 pr-3">Посада</th>
+                <th className="py-2 pr-3">Змін</th>
+                <th className="py-2 pr-3">Годин</th>
+                <th className="py-2">Статус</th>
+              </tr>
+            </thead>
+            <tbody>
+              {employeeSummaries.map((row) => (
+                <tr key={row.id} className="border-b border-slate-100">
+                  <td className="py-2 pr-3 font-semibold">{row.employeeNumber || "—"}</td>
+                  <td className="py-2 pr-3">{row.fullName || "—"}</td>
+                  <td className="py-2 pr-3">{row.jobTitleName || "—"}</td>
+                  <td className="py-2 pr-3">{row.sessionsCount}</td>
+                  <td className="py-2 pr-3 font-semibold">{row.workedHours.toFixed(2)}</td>
+                  <td className="py-2">{row.hasOpenShift ? "В роботі" : "Поза зміною"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {employeeSummaries.length === 0 && (
+          <p className="text-sm text-slate-500 mt-3">Немає співробітників для цього закладу.</p>
+        )}
+      </div>
+    );
   }
 
   if (mode === "job-settings") {
@@ -450,58 +742,90 @@ export default function TeamHiringModule({ topTab, restaurants = [], user }) {
   }
 
   return (
-    <div className={cardClass}>
-      {renderRestaurantSelector()}
-      <h3 className="text-base font-semibold mt-4 mb-3">Мій персонал · План на {monthToLabel(month)}</h3>
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead>
-            <tr className="text-left text-slate-600 border-b border-slate-200">
-              <th className="py-2 pr-3">Посада</th>
-              <th className="py-2 pr-3">Факт, осіб</th>
-              <th className="py-2 pr-3">План, осіб</th>
-              <th className="py-2 pr-3">Різниця</th>
-              <th className="py-2">Дія</th>
-            </tr>
-          </thead>
-          <tbody>
-            {editableRows.map((row) => (
-              <tr key={row.job.id} className="border-b border-slate-100">
-                <td className="py-2 pr-3 font-semibold">{row.job.title}</td>
-                <td className="py-2 pr-3">
-                  <input
-                    type="number"
-                    className="w-24 rounded-lg border border-slate-300 px-2 py-1"
-                    value={row.actualCount}
-                    onChange={(e) => updateRowDraft(row.job.id, "actualCount", e.target.value)}
-                  />
-                </td>
-                <td className="py-2 pr-3">
-                  <input
-                    type="number"
-                    className="w-24 rounded-lg border border-slate-300 px-2 py-1"
-                    value={row.plannedCount}
-                    onChange={(e) => updateRowDraft(row.job.id, "plannedCount", e.target.value)}
-                  />
-                </td>
-                <td className="py-2 pr-3 font-semibold">{Number(row.plannedCount) - Number(row.actualCount)}</td>
-                <td className="py-2">
-                  <button
-                    className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 disabled:opacity-60"
-                    onClick={() => saveStaffingRow(row.job.id)}
-                    disabled={savingRowId === row.job.id}
-                  >
-                    {savingRowId === row.job.id ? "Збереження..." : "Зберегти"}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <div className="space-y-4">
+      <div className={cardClass}>
+        {renderRestaurantSelector()}
+        <h3 className="text-base font-semibold mt-4 mb-3">Мій персонал · Співробітники</h3>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Прізвище</label>
+            <input
+              className={inputClass}
+              value={employeeForm.lastName}
+              onChange={(e) => setEmployeeForm((prev) => ({ ...prev, lastName: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Ім'я</label>
+            <input
+              className={inputClass}
+              value={employeeForm.firstName}
+              onChange={(e) => setEmployeeForm((prev) => ({ ...prev, firstName: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Посада</label>
+            <select
+              className={inputClass}
+              value={employeeForm.jobTitleId}
+              onChange={(e) => setEmployeeForm((prev) => ({ ...prev, jobTitleId: e.target.value }))}
+            >
+              <option value="">Оберіть посаду</option>
+              {employeePositionOptions.map((item) => (
+                <option key={item.id} value={item.id}>{item.title}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button
+              type="button"
+              onClick={submitEmployee}
+              className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+            >
+              Додати співробітника
+            </button>
+          </div>
+        </div>
+
+        <p className="mt-2 text-xs text-slate-500">
+          Номер співробітника генерується автоматично: префікс закладу + 0001, 0002...
+        </p>
       </div>
-      {editableRows.length === 0 && (
-        <p className="text-sm text-slate-500 mt-3">Немає посад для цього закладу. Додайте їх у вкладці керування посадами.</p>
-      )}
+
+      <div className={cardClass}>
+        <h3 className="text-base font-semibold mb-3">Список співробітників</h3>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="text-left text-slate-600 border-b border-slate-200">
+                <th className="py-2 pr-3">Номер</th>
+                <th className="py-2 pr-3">Прізвище</th>
+                <th className="py-2 pr-3">Ім'я</th>
+                <th className="py-2 pr-3">Посада</th>
+                <th className="py-2">Статус</th>
+              </tr>
+            </thead>
+            <tbody>
+              {employeesForRestaurant
+                .slice()
+                .sort((a, b) => String(a.employeeNumber || "").localeCompare(String(b.employeeNumber || "")))
+                .map((employee) => (
+                  <tr key={employee.id} className="border-b border-slate-100">
+                    <td className="py-2 pr-3 font-semibold">{employee.employeeNumber || "—"}</td>
+                    <td className="py-2 pr-3">{employee.lastName || "—"}</td>
+                    <td className="py-2 pr-3">{employee.firstName || "—"}</td>
+                    <td className="py-2 pr-3">{employee.jobTitleName || "—"}</td>
+                    <td className="py-2">{employee.isActive === false ? "Неактивний" : "Активний"}</td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+        {employeesForRestaurant.length === 0 && (
+          <p className="text-sm text-slate-500 mt-3">Немає співробітників для цього закладу.</p>
+        )}
+      </div>
     </div>
   );
 }

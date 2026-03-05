@@ -13,6 +13,8 @@ import { db } from "./config";
 const JOB_TITLES_COLLECTION = "teamJobTitles";
 const STAFFING_PLANS_COLLECTION = "teamStaffingPlans";
 const REQUESTS_COLLECTION = "teamRecruitmentRequests";
+const EMPLOYEES_COLLECTION = "teamEmployees";
+const SHIFT_EVENTS_COLLECTION = "teamShiftEvents";
 
 export const subscribeToJobTitles = (callback) => {
   const q = query(collection(db, JOB_TITLES_COLLECTION));
@@ -96,4 +98,46 @@ export const updateRecruitmentRequest = async (id, payload) => {
     ...payload,
     updatedAt: new Date().toISOString(),
   });
+};
+
+export const subscribeToTeamEmployees = (callback) => {
+  const q = query(collection(db, EMPLOYEES_COLLECTION));
+  return onSnapshot(q, (snapshot) => {
+    const items = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+    callback(items);
+  });
+};
+
+export const addTeamEmployee = async (payload) => {
+  const normalized = {
+    ...payload,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const docRef = await addDoc(collection(db, EMPLOYEES_COLLECTION), normalized);
+  return { id: docRef.id, ...normalized };
+};
+
+export const updateTeamEmployee = async (id, payload) => {
+  await updateDoc(doc(db, EMPLOYEES_COLLECTION, id), {
+    ...payload,
+    updatedAt: new Date().toISOString(),
+  });
+};
+
+export const subscribeToTeamShiftEvents = (callback) => {
+  const q = query(collection(db, SHIFT_EVENTS_COLLECTION));
+  return onSnapshot(q, (snapshot) => {
+    const items = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+    callback(items);
+  });
+};
+
+export const addTeamShiftEvent = async (payload) => {
+  const normalized = {
+    ...payload,
+    createdAt: new Date().toISOString(),
+  };
+  const docRef = await addDoc(collection(db, SHIFT_EVENTS_COLLECTION), normalized);
+  return { id: docRef.id, ...normalized };
 };
