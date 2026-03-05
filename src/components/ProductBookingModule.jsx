@@ -64,12 +64,25 @@ const getRestaurantNameById = (restaurants = [], restaurantId) => {
 const hasProcurementAccess = (user) => {
   const roleValue = String(user?.role || "").toLowerCase();
   const workRoleValue = String(user?.workRole || "").toLowerCase();
-  const terms = ["admin", "procurement", "purchasing", "закуп", "закупівл", "постач"];
+  const terms = [
+    "admin",
+    "procurement",
+    "purchasing",
+    "закуп",
+    "закупівл",
+    "постач",
+    "manager",
+    "керуюч",
+    "управля",
+  ];
   return terms.some((term) => roleValue.includes(term) || workRoleValue.includes(term));
 };
 
+const isGlobalAdminUser = (user) => String(user?.role || "").toLowerCase() === "admin" && !user?.restaurant;
+
 function ProductAdminTab({ products, suppliers, categories, units, inventories, restaurants, user, canManageProducts, addProduct, updateProduct, deleteProduct }) {
-  const defaultRestaurantId = user?.role === "admin" ? "" : String(user?.restaurant || "");
+  const isGlobalAdmin = isGlobalAdminUser(user);
+  const defaultRestaurantId = isGlobalAdmin ? "" : String(user?.restaurant || "");
   const [draft, setDraft] = useState({
     restaurantId: defaultRestaurantId,
     name: "",
@@ -87,21 +100,21 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
   const [importMode, setImportMode] = useState("selected");
 
   useEffect(() => {
-    if (user?.role === "admin") return;
+    if (isGlobalAdmin) return;
     const scopedRestaurant = String(user?.restaurant || "");
     setRestaurantFilter(scopedRestaurant);
     setDraft((prev) => ({ ...prev, restaurantId: scopedRestaurant }));
-  }, [user]);
+  }, [user, isGlobalAdmin]);
 
   const availableRestaurants = useMemo(() => {
-    if (user?.role === "admin") return restaurants;
+    if (isGlobalAdmin) return restaurants;
     return restaurants.filter((item) => String(item.id) === String(user?.restaurant || ""));
-  }, [restaurants, user]);
+  }, [restaurants, user, isGlobalAdmin]);
 
   const filteredProducts = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
     return products.filter((item) => {
-      const byRestaurant = restaurantFilter ? sameRestaurant(item.restaurantId, restaurantFilter) : user?.role === "admin";
+      const byRestaurant = restaurantFilter ? sameRestaurant(item.restaurantId, restaurantFilter) : isGlobalAdmin;
       const bySearch = normalizedSearch
         ? [item.name, item.code1C, item.category, item.unit, item.supplier, item.restaurantName]
             .filter(Boolean)
@@ -120,7 +133,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
 
       return byRestaurant && bySearch && byCategory && bySupplier && byStatus;
     });
-  }, [products, searchTerm, categoryFilter, supplierFilter, statusFilter, restaurantFilter, user]);
+  }, [products, searchTerm, categoryFilter, supplierFilter, statusFilter, restaurantFilter, isGlobalAdmin]);
 
   const handleAdd = async () => {
     if (!draft.restaurantId.trim()) {
@@ -285,7 +298,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
               onChange={(e) => setImportMode(e.target.value)}
             >
               <option value="selected">Імпорт у вибраний заклад</option>
-              {user?.role === "admin" && <option value="from-file">Мультизакладний імпорт з файлу</option>}
+              {isGlobalAdmin && <option value="from-file">Мультизакладний імпорт з файлу</option>}
             </select>
             <button
               type="button"
@@ -402,9 +415,9 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
             className={inputClass}
             value={restaurantFilter}
             onChange={(e) => setRestaurantFilter(e.target.value)}
-            disabled={user?.role !== "admin"}
+            disabled={!isGlobalAdmin}
           >
-            <option value="">{user?.role === "admin" ? "Всі заклади" : "Оберіть заклад"}</option>
+            <option value="">{isGlobalAdmin ? "Всі заклади" : "Оберіть заклад"}</option>
             {availableRestaurants.map((restaurant) => (
               <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
             ))}
@@ -451,7 +464,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
               setCategoryFilter("");
               setSupplierFilter("");
               setStatusFilter("all");
-              setRestaurantFilter(user?.role === "admin" ? "" : String(user?.restaurant || ""));
+              setRestaurantFilter(isGlobalAdmin ? "" : String(user?.restaurant || ""));
             }}
           >
             Скинути фільтри
@@ -526,9 +539,10 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
 }
 
 function InventoryTab({ products, inventories, restaurants, user, createInventory, updateInventory }) {
+  const isGlobalAdmin = isGlobalAdminUser(user);
   const quantityInputRefs = useRef({});
   const [activeRowProductId, setActiveRowProductId] = useState(null);
-  const [restaurantId, setRestaurantId] = useState(user?.role === "admin" ? "" : String(user?.restaurant || ""));
+  const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
   const [quantities, setQuantities] = useState({});
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -537,9 +551,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const [activeSession, setActiveSession] = useState(null);
 
   useEffect(() => {
-    if (user?.role === "admin") return;
+    if (isGlobalAdmin) return;
     setRestaurantId(String(user?.restaurant || ""));
-  }, [user]);
+  }, [user, isGlobalAdmin]);
 
   useEffect(() => {
     const scopeId = String(restaurantId || "");
@@ -623,14 +637,14 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   };
 
   const availableRestaurants = useMemo(() => {
-    if (user?.role === "admin") return restaurants;
+    if (isGlobalAdmin) return restaurants;
     return restaurants.filter((item) => String(item.id) === String(user?.restaurant));
-  }, [restaurants, user]);
+  }, [restaurants, user, isGlobalAdmin]);
 
   const visibleInventories = useMemo(() => {
-    if (user?.role === "admin") return inventories;
+    if (isGlobalAdmin) return inventories;
     return inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
-  }, [inventories, user]);
+  }, [inventories, user, isGlobalAdmin]);
 
   const filledLines = useMemo(() => {
     return scopedProducts
@@ -727,7 +741,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
           new Date().toISOString().slice(0, 10)
       )
     );
-    if (user?.role === "admin") {
+    if (isGlobalAdmin) {
       setRestaurantId(String(inventory?.restaurantId || ""));
     }
   };
@@ -780,7 +794,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     setEditingInventoryId("");
     setQuantities({});
     setInventoryDate(new Date().toISOString().slice(0, 10));
-    if (user?.role === "admin") {
+    if (isGlobalAdmin) {
       setRestaurantId("");
     }
   };
@@ -973,7 +987,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   return (
     <div className="space-y-5">
       <div className={`${cardClass} pt-2 sm:pt-3 px-2 sm:px-5 pb-2 sm:pb-3`}>
-        {user?.role === "admin" && (
+        {isGlobalAdmin && (
           <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-1">
             <div>
               <label className="text-sm font-semibold text-slate-800">Ресторан</label>
@@ -1264,10 +1278,11 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
 }
 
 function InventoryJournalTab({ inventories, user }) {
+  const isGlobalAdmin = isGlobalAdminUser(user);
   const visibleInventories = useMemo(() => {
-    if (user?.role === "admin") return inventories;
+    if (isGlobalAdmin) return inventories;
     return inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
-  }, [inventories, user]);
+  }, [inventories, user, isGlobalAdmin]);
 
   const handleExportSingleInventory = (inventory) => {
     const safeDate = String(inventory?.inventoryDate || "inventory").replace(/[^0-9-]/g, "");
@@ -1625,8 +1640,9 @@ function TypicalFieldsTab({ fields, canManage, createTypicalField, updateTypical
 }
 
 function BookingTab({ products, orders, createOrder, restaurants, user }) {
+  const isGlobalAdmin = isGlobalAdminUser(user);
   const pageSizeOptions = [12, 25, 50];
-  const [restaurantId, setRestaurantId] = useState(user?.role === "admin" ? "" : String(user?.restaurant || ""));
+  const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
   const [requiredDate, setRequiredDate] = useState("");
   const [comment, setComment] = useState("");
   const [quantities, setQuantities] = useState({});
@@ -1638,19 +1654,19 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
   const [rowsPerPage, setRowsPerPage] = useState(12);
 
   useEffect(() => {
-    if (user?.role === "admin") return;
+    if (isGlobalAdmin) return;
     setRestaurantId(String(user?.restaurant || ""));
-  }, [user]);
+  }, [user, isGlobalAdmin]);
 
   const availableRestaurants = useMemo(() => {
-    if (user?.role === "admin") return restaurants;
+    if (isGlobalAdmin) return restaurants;
     return restaurants.filter((r) => String(r.id) === String(user?.restaurant));
-  }, [restaurants, user]);
+  }, [restaurants, user, isGlobalAdmin]);
 
   const myOrders = useMemo(() => {
-    if (user?.role === "admin") return orders;
+    if (isGlobalAdmin) return orders;
     return orders.filter((order) => String(order.restaurantId) === String(user?.restaurant));
-  }, [orders, user]);
+  }, [orders, user, isGlobalAdmin]);
 
   const activeProducts = useMemo(() => {
     const selectedRestaurantId = String(restaurantId || "");
@@ -1833,7 +1849,7 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
                 className={inputClass}
                 value={restaurantId}
                 onChange={(e) => setRestaurantId(e.target.value)}
-                disabled={user?.role !== "admin"}
+                disabled={!isGlobalAdmin}
               >
                 <option value="">Оберіть ресторан</option>
                 {availableRestaurants.map((restaurant) => (
