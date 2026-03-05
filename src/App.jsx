@@ -1546,6 +1546,14 @@ function App() {
   );
 
   const renderContent = () => {
+        const isGlobalAdmin = user?.role === 'admin' && !user?.restaurant;
+        const userRestaurantName = user?.restaurant
+          ? restaurants.find((r) => r.id === user.restaurant)?.name
+          : "";
+        const assetsForReports = !isGlobalAdmin && user?.restaurant
+          ? assets.filter((asset) => String(asset?.locationName || "") === String(userRestaurantName || ""))
+          : assets;
+
         // ...existing code...
         if (
           activeNav === "dashboard" ||
@@ -2488,7 +2496,7 @@ function App() {
       ) {
         return (
           <div className="grid grid-cols-1">
-            <FinancialAssetsReport assets={assets} restaurants={restaurants} responsibilityCenters={businessUnits} />
+            <FinancialAssetsReport assets={assetsForReports} restaurants={restaurants} responsibilityCenters={businessUnits} />
           </div>
         );
       }
@@ -2496,7 +2504,7 @@ function App() {
       if (activeNav === "capexreport" && topTab === "detailcapexreport") {
         return (
           <div className="grid grid-cols-1">
-            <AssetDetailedReport assets={assets} />
+            <AssetDetailedReport assets={assetsForReports} />
           </div>
         );
       }
@@ -2513,7 +2521,7 @@ function App() {
         if (activeNav.startsWith("reports-assets")) {
           return (
             <div className="grid grid-cols-1">
-              <FinancialAssetsReport assets={assets} restaurants={restaurants} responsibilityCenters={businessUnits} />
+              <FinancialAssetsReport assets={assetsForReports} restaurants={restaurants} responsibilityCenters={businessUnits} />
             </div>
           );
         }
@@ -2814,7 +2822,7 @@ function App() {
 
   const topTabsElement = topTabs.length > 0 ? (
     <div className="sticky top-0 z-30 bg-slate-900/95 border-b border-slate-800 shadow-lg" style={{boxShadow: "0 4px 6px -1px rgba(15, 23, 42, 0.4)"}}>
-      <div className="w-full px-0 lg:px-0 min-h-10 flex gap-0 overflow-x-auto items-stretch justify-between">
+      <div className={clsx("w-full px-0 lg:px-0 min-h-10", isMobile ? "flex flex-col" : "flex items-stretch justify-between") }>
         <div className="flex gap-0 items-stretch overflow-x-auto">
         {topTabs.map(tab => (
           <button
@@ -2846,9 +2854,13 @@ function App() {
         ))}
         </div>
         {activeNav === "inventory-assets" && (
-          <div className="flex items-center gap-2 pr-3 py-1">
+          <div className={clsx(
+            "flex items-center gap-2 py-1",
+            isMobile ? "px-2 pb-2 flex-wrap border-t border-slate-800" : "pr-3"
+          )}>
             <span className={clsx(
               "rounded px-2 py-1 text-xs font-semibold border",
+              isMobile && "flex-1 min-w-[170px]",
               assetInventorySessionLoading
                 ? "bg-slate-800 text-slate-300 border-slate-600"
                 :
@@ -2859,7 +2871,9 @@ function App() {
               {assetInventorySessionLoading
                 ? "Завантаження статусу сесії..."
                 : isAssetInventorySessionActive
-                ? `Сесія активна з ${new Date(assetInventorySession?.startedAt || Date.now()).toLocaleString("uk-UA")}`
+                ? (isMobile
+                  ? "Сесія інвентаризації активна"
+                  : `Сесія активна з ${new Date(assetInventorySession?.startedAt || Date.now()).toLocaleString("uk-UA")}`)
                 : "Сесія інвентаризації не активна"}
             </span>
             {!isAssetInventorySessionActive ? (
@@ -2867,7 +2881,10 @@ function App() {
                 type="button"
                 onClick={startAssetInventorySession}
                 disabled={assetInventorySessionLoading}
-                className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+                className={clsx(
+                  "rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-60",
+                  isMobile && "ml-auto"
+                )}
               >
                 Почати інвентаризацію
               </button>
@@ -2876,7 +2893,10 @@ function App() {
                 type="button"
                 onClick={endAssetInventorySession}
                 disabled={assetInventorySessionLoading}
-                className="rounded bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-60"
+                className={clsx(
+                  "rounded bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-60",
+                  isMobile && "ml-auto"
+                )}
               >
                 Завершити інвентаризацію
               </button>
