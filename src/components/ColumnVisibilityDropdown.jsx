@@ -26,7 +26,7 @@ export default function ColumnVisibilityDropdown({ columns, visibleColumns, setV
     <div className="relative inline-block text-left" ref={ref}>
       <button
         type="button"
-        className="inline-flex items-center px-3 py-2 border border-gray-300 bg-white rounded-md shadow-sm text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none"
+        className="inline-flex items-center px-2 py-1 border border-gray-300 bg-white rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 focus:outline-none"
         onClick={() => setOpen((v) => !v)}
       >
         Вибір колонок

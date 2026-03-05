@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { CheckCircle2, ClipboardCheck, Loader2, Save, Camera, Upload, X, ChevronRight, ChevronLeft, Printer } from "lucide-react";
 import clsx from "clsx";
@@ -112,6 +112,18 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   const selectedRespCenter = watch("respCenter");
   const selectedCategory = watch("category");
   const selectedSubCategory = watch("subCategory");
+  const selectedType = watch("type");
+  const selectedBusinessUnit = watch("businessUnit");
+  const selectedLocationName = watch("locationName");
+  const selectedZone = watch("zone");
+  const selectedStatus = watch("status");
+  const selectedCondition = watch("condition");
+  const selectedFunctionality = watch("functionality");
+  const selectedRelevance = watch("relevance");
+  const selectedDecision = watch("decision");
+  const selectedReason = watch("reason");
+  const previousCategoryRef = useRef("");
+  const subcategoryGuardInitializedRef = useRef(false);
 
   // Фільтруємо МВО по вибраному центру
   const filteredResponsiblePersons = useMemo(() => {
@@ -125,6 +137,23 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       .filter(p => p.centerId === centerObj.id)
       .map(p => p.name);
   }, [selectedRespCenter, responsibilityCenters, responsiblePersons]);
+
+  const ensureCurrentOption = (options = [], currentValue = "") => {
+    const normalized = Array.from(
+      new Set(
+        (Array.isArray(options) ? options : [])
+          .map((item) => String(item || "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    const current = String(currentValue || "").trim();
+    if (current && !normalized.includes(current)) {
+      return [current, ...normalized];
+    }
+
+    return normalized;
+  };
 
   const filteredSubcategories = useMemo(() => {
     if (!Array.isArray(subcategoryItems) || subcategoryItems.length === 0) {
@@ -150,11 +179,28 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   }, [subcategoryItems, subcategories, selectedCategory]);
 
   useEffect(() => {
-    if (!selectedSubCategory) return;
-    if (!filteredSubcategories.includes(selectedSubCategory)) {
+    const normalizedCategory = String(selectedCategory || "").trim();
+
+    // Reinitialize guard when switching between assets/new form,
+    // so existing saved values are not cleared on first render.
+    if (!subcategoryGuardInitializedRef.current) {
+      previousCategoryRef.current = normalizedCategory;
+      subcategoryGuardInitializedRef.current = true;
+      return;
+    }
+
+    const hasCategoryChanged = previousCategoryRef.current !== normalizedCategory;
+
+    if (hasCategoryChanged && selectedSubCategory && !filteredSubcategories.includes(selectedSubCategory)) {
       setValue("subCategory", "");
     }
-  }, [selectedSubCategory, filteredSubcategories, setValue]);
+
+    previousCategoryRef.current = normalizedCategory;
+  }, [selectedCategory, selectedSubCategory, filteredSubcategories, setValue]);
+
+  useEffect(() => {
+    subcategoryGuardInitializedRef.current = false;
+  }, [selectedAsset?.id]);
 
   const normalizePhotosForState = (items) => {
     if (!Array.isArray(items)) return [];
@@ -500,6 +546,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     const { urls: safePhotoUrls, droppedCount } = sanitizePhotoUrls(photos);
 
     const payload = {
+      id: selectedAsset?.id,
       invNumber: safeString(values.invNumber).trim(),
       invNumber1C: safeString(values.invNumber1C).trim(),
       name: safeString(values.name).trim(),
@@ -645,17 +692,20 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
               <Select
                 label="Категорія"
                 {...register("category")}
-                options={categories.length > 0 ? categories : ["Кухня", "Бар", "IT", "Меблі", "Транспорт"]}
+                options={ensureCurrentOption(
+                  categories.length > 0 ? categories : ["Кухня", "Бар", "IT", "Меблі", "Транспорт"],
+                  selectedCategory
+                )}
               />
               <Select
                 label="Підкатегорія"
                 {...register("subCategory")}
-                options={filteredSubcategories.length > 0 ? filteredSubcategories : []}
+                options={ensureCurrentOption(filteredSubcategories.length > 0 ? filteredSubcategories : [], selectedSubCategory)}
               />
               <Select
                 label="Тип обліку"
                 {...register("type")}
-                options={accountingTypes.length > 0 ? accountingTypes : ["ОС", "МШП"]}
+                options={ensureCurrentOption(accountingTypes.length > 0 ? accountingTypes : ["ОС", "МШП"], selectedType)}
               />
               <Input label="Серійний номер" {...register("serialNumber")}/>
               <Input label="Виробник / бренд" {...register("brand")}/>
@@ -735,22 +785,31 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
             <Select
               label={<>Бізнес-напрям {requiredMark}</>}
               {...register("businessUnit", { required: true })}
-              options={businessUnits.length > 0 ? businessUnits : ["Ресторан", "Кав'ярня", "Кейтеринг", "Офіс", "Склад"]}
+              options={ensureCurrentOption(
+                businessUnits.length > 0 ? businessUnits : ["Ресторан", "Кав'ярня", "Кейтеринг", "Офіс", "Склад"],
+                selectedBusinessUnit
+              )}
             />
             <Select
               label={<>Назва локації (Ресторан) {requiredMark}</>}
               {...register("locationName", { required: true })}
-              options={restaurants.map((r) => r.name)}
+              options={ensureCurrentOption(restaurants.map((r) => r.name), selectedLocationName)}
             />
             <Select
               label="Зона розміщення"
               {...register("zone")}
-              options={placementZones.length > 0 ? placementZones : ["Зал", "Кухня", "Бар", "Склад", "Адміністрація"]}
+              options={ensureCurrentOption(
+                placementZones.length > 0 ? placementZones : ["Зал", "Кухня", "Бар", "Склад", "Адміністрація"],
+                selectedZone
+              )}
             />
             <Select
               label="Центр відповідальності"
               {...register("respCenter")}
-              options={responsibilityCenters.length > 0 ? responsibilityCenters.map(c => c.name) : ["Відділ ІТ", "Бухгалтерія", "HR", "Маркетинг"]}
+              options={ensureCurrentOption(
+                responsibilityCenters.length > 0 ? responsibilityCenters.map(c => c.name) : ["Відділ ІТ", "Бухгалтерія", "HR", "Маркетинг"],
+                selectedRespCenter
+              )}
             />
             <Controller
               name="respPerson"
@@ -772,22 +831,34 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
             <Select
               label="Статус активу"
               {...register("status")}
-              options={statuses.length > 0 ? statuses : ["В експлуатації", "Не використовується", "Законсервований"]}
+              options={ensureCurrentOption(
+                statuses.length > 0 ? statuses : ["В експлуатації", "Не використовується", "Законсервований"],
+                selectedStatus
+              )}
             />
             <Select
               label="Фактичний стан"
               {...register("condition")}
-              options={conditions.length > 0 ? conditions : ["Новий", "Добрий", "Задовільний", "Критичний"]}
+              options={ensureCurrentOption(
+                conditions.length > 0 ? conditions : ["Новий", "Добрий", "Задовільний", "Критичний"],
+                selectedCondition
+              )}
             />
             <Select
               label="Працездатність"
               {...register("functionality")}
-              options={functionalities.length > 0 ? functionalities : ["Працює", "Частково", "Не працює"]}
+              options={ensureCurrentOption(
+                functionalities.length > 0 ? functionalities : ["Працює", "Частково", "Не працює"],
+                selectedFunctionality
+              )}
             />
             <Select
               label="Моральна актуальність"
               {...register("relevance")}
-              options={relevances.length > 0 ? relevances : ["Актуальний", "Частково застарілий", "Застарілий"]}
+              options={ensureCurrentOption(
+                relevances.length > 0 ? relevances : ["Актуальний", "Частково застарілий", "Застарілий"],
+                selectedRelevance
+              )}
             />
             <Textarea label="Коментар по стану" {...register("comment")} rows={3} />
           </FieldGrid>
@@ -859,12 +930,18 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
             <Select
               label={<>Рішення {requiredMark}</>}
               {...register("decision", { required: true })}
-              options={decisions.length > 0 ? decisions : ["Залишити", "Списати", "Продати", "Перемістити"]}
+              options={ensureCurrentOption(
+                decisions.length > 0 ? decisions : ["Залишити", "Списати", "Продати", "Перемістити"],
+                selectedDecision
+              )}
             />
             <Select
               label="Причина"
               {...register("reason")}
-              options={reasons.length > 0 ? reasons : ["Знос", "Надлишок", "Непридатність"]}
+              options={ensureCurrentOption(
+                reasons.length > 0 ? reasons : ["Знос", "Надлишок", "Непридатність"],
+                selectedReason
+              )}
             />
             <Textarea label="Коментар до причини" {...register("reasonComment")} rows={2} />
             {isMove && <Input label="Нова локація" {...register("newLocation")}/>}            

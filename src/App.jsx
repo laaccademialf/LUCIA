@@ -1113,34 +1113,47 @@ function App() {
     };
 
     const sanitizedAsset = sanitizeFirestoreValue(asset);
+    const normalizedInvNumber = String(asset?.invNumber || "").trim();
 
     try {
-      const exists = assets.find((a) => a.invNumber === asset.invNumber);
+      const exists = asset?.id
+        ? assets.find((a) => String(a?.id || "") === String(asset.id))
+        : assets.find((a) => String(a?.invNumber || "").trim() === normalizedInvNumber);
       let result;
 
       if (exists) {
-        const trackedFields = [
-          "status",
-          "condition",
-          "initialCost",
-          "marketValueNew",
-          "marketValueUsed",
-          "residualValue",
-          "physicalWear",
-          "moralWear",
-          "totalWear",
-          "decision",
-          "reason",
-          "comment",
-        ];
+        const ignoredFields = new Set([
+          "id",
+          "createdAt",
+          "updatedAt",
+          "inventoryChangeHistory",
+        ]);
 
-        const changes = trackedFields
+        const comparableFields = Array.from(
+          new Set([
+            ...Object.keys(exists || {}),
+            ...Object.keys(sanitizedAsset || {}),
+          ])
+        ).filter((field) => !ignoredFields.has(field));
+
+        const normalizeComparable = (value) => {
+          if (value === undefined || value === null) return "";
+          if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
+          if (typeof value === "boolean") return value ? "true" : "false";
+          if (Array.isArray(value)) return JSON.stringify(value);
+          if (typeof value === "object") return JSON.stringify(value);
+          return String(value).trim();
+        };
+
+        const changes = comparableFields
           .map((field) => {
             const previousValue = exists?.[field] ?? null;
             const nextValue = sanitizedAsset?.[field] ?? null;
-            if (String(previousValue ?? "") === String(nextValue ?? "")) {
+
+            if (normalizeComparable(previousValue) === normalizeComparable(nextValue)) {
               return null;
             }
+
             return {
               field,
               previousValue,
@@ -1166,9 +1179,13 @@ function App() {
           ];
         }
 
+        const { id: _ignoredId, ...updatePayload } = sanitizedAsset || {};
+
         // Оновлення існуючого активу
-        result = await updateAssetInFirebase(exists.id, sanitizedAsset);
+        result = await updateAssetInFirebase(exists.id, updatePayload);
       } else {
+        const { id: _ignoredId, ...addPayload } = sanitizedAsset || {};
+
         sanitizedAsset.inventoryChangeHistory = [
           {
             changedAt: new Date().toISOString(),
@@ -1188,7 +1205,10 @@ function App() {
         ];
 
         // Додавання нового активу
-        result = await addAssetToFirebase(sanitizedAsset);
+        result = await addAssetToFirebase({
+          ...addPayload,
+          inventoryChangeHistory: sanitizedAsset.inventoryChangeHistory,
+        });
       }
 
       if (result?.success === false) {
@@ -2584,6 +2604,7 @@ function App() {
                 <AssetTable
                   data={assetsToShow}
                   onEdit={setSelected}
+                  mobileCardMode={true}
                   canEdit={isAssetInventorySessionActive}
                   editDisabledReason="Запустіть сесію інвентаризації, щоб редагувати активи"
                   getRowClassName={(assetRow) =>
@@ -2727,6 +2748,7 @@ function App() {
               <AssetTable
                 data={assetsToShow}
                 onEdit={setSelected}
+                mobileCardMode={true}
                 filters={filters}
                 setFilters={setFilters}
                 onExport={handleExport}
@@ -2859,22 +2881,22 @@ function App() {
             isMobile ? "px-2 pb-2 flex-wrap border-t border-slate-800" : "pr-3"
           )}>
             <span className={clsx(
-              "rounded px-2 py-1 text-xs font-semibold border",
-              isMobile && "flex-1 min-w-[170px]",
+              "rounded px-2 py-0.5 text-[11px] font-medium border whitespace-nowrap",
+              isMobile && "max-w-[150px] truncate",
               assetInventorySessionLoading
                 ? "bg-slate-800 text-slate-300 border-slate-600"
                 :
               isAssetInventorySessionActive
-                ? "bg-emerald-900/30 text-emerald-300 border-emerald-700/50"
+                ? "bg-emerald-900/15 text-emerald-200 border-emerald-700/30"
                 : "bg-slate-800 text-slate-300 border-slate-600"
             )}>
               {assetInventorySessionLoading
                 ? "Завантаження статусу сесії..."
                 : isAssetInventorySessionActive
                 ? (isMobile
-                  ? "Сесія інвентаризації активна"
+                  ? "Сесія активна"
                   : `Сесія активна з ${new Date(assetInventorySession?.startedAt || Date.now()).toLocaleString("uk-UA")}`)
-                : "Сесія інвентаризації не активна"}
+                : (isMobile ? "Сесія не активна" : "Сесія інвентаризації не активна")}
             </span>
             {!isAssetInventorySessionActive ? (
               <button

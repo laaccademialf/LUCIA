@@ -8,7 +8,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { ArrowDownZA, ArrowUpAZ, Download, FileDown, Pencil, Trash2, Upload, SlidersHorizontal } from "lucide-react";
+import { ArrowDownZA, ArrowUpAZ, Download, FileDown, Pencil, Trash2, Upload, SlidersHorizontal, X } from "lucide-react";
 import ColumnVisibilityDropdown from "./ColumnVisibilityDropdown";
 import clsx from "clsx";
 import { printAssetQrLabel } from "../utils/printQrLabel";
@@ -23,7 +23,7 @@ const decisionColors = {
 
 const columnHelper = createColumnHelper();
 
-export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, editDisabledReason = "Редагування тимчасово недоступне", getRowClassName = null }) {
+export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, editDisabledReason = "Редагування тимчасово недоступне", getRowClassName = null, mobileCardMode = false }) {
   // Стан для видимих колонок
   // Додаємо всі можливі поля з mockAssets
   const fileInputRef = useRef(null);
@@ -65,10 +65,15 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
   ];
       const defaultVisible = ["invNumber", "name", "category", "businessUnit", "status", "decision", "actions"];
   const [visibleColumns, setVisibleColumns] = useState(defaultVisible);
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
+  const [showDesktopFilters, setShowDesktopFilters] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
   // Фільтрація по ВСІХ активних фільтрах
   const filteredData = useMemo(() => {
+    const normalizedQuery = String(searchQuery || "").trim().toLowerCase();
+
     return data.filter((item) => {
-      return Object.entries(filters).every(([key, val]) => {
+      const byFilters = Object.entries(filters).every(([key, val]) => {
         if (!val) return true;
         // Спеціальна логіка для "location" (businessUnit)
         if (key === "location") return item.businessUnit === val;
@@ -76,8 +81,36 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         if (key === "locationName") return item.locationName === val;
         return item[key] === val;
       });
+
+      if (!byFilters) return false;
+      if (!normalizedQuery) return true;
+
+      const searchPool = [
+        item.invNumber,
+        item.invNumber1C,
+        item.name,
+        item.category,
+        item.subCategory,
+        item.type,
+        item.serialNumber,
+        item.brand,
+        item.businessUnit,
+        item.locationName,
+        item.zone,
+        item.respCenter,
+        item.respPerson,
+        item.status,
+        item.condition,
+        item.decision,
+        item.comment,
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase())
+        .join(" ");
+
+      return searchPool.includes(normalizedQuery);
     });
-  }, [data, filters]);
+  }, [data, filters, searchQuery]);
 
   // Динамічно будуємо всі колонки для таблиці
   const allColumns = allFieldDefs.map((def) => {
@@ -85,59 +118,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
       return columnHelper.display({
         id: "actions",
         header: def.header,
-        cell: (info) => (
-          <div className="flex items-center gap-1 justify-end flex-nowrap">
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  await printAssetQrLabel({
-                    invNumber: info.row.original.invNumber,
-                    name: info.row.original.name,
-                    qrValue: info.row.original.qrCode || info.row.original.invNumber,
-                  });
-                } catch (err) {
-                  alert(err.message || "Не вдалося надрукувати QR код");
-                }
-              }}
-              className="inline-flex items-center gap-1 rounded-md bg-slate-700 border border-slate-600 px-2 py-1 text-xs font-semibold text-white hover:bg-slate-600 transition whitespace-nowrap"
-            >
-              <span className="hidden sm:inline">Друк QR</span><span className="sm:hidden">QR</span>
-            </button>
-            {onEdit && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (!canEdit) return;
-                  onEdit(info.row.original);
-                }}
-                disabled={!canEdit}
-                title={!canEdit ? editDisabledReason : "Редагувати актив"}
-                className={clsx(
-                  "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition whitespace-nowrap",
-                  canEdit
-                    ? "bg-indigo-600 border border-indigo-500 text-white hover:bg-indigo-500"
-                    : "bg-slate-300 border border-slate-300 text-slate-600 cursor-not-allowed"
-                )}
-              >
-                <Pencil size={14} /> <span className="hidden sm:inline">Редагувати</span><span className="sm:hidden">Ред.</span>
-              </button>
-            )}
-            {isAdminOnly && onDelete && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (window.confirm(`Ви впевнені що хочете видалити актив "${info.row.original.name}"?`)) {
-                    onDelete(info.row.original.id);
-                  }
-                }}
-                className="inline-flex items-center gap-1 rounded-md bg-red-600 border border-red-500 px-2 py-1 text-xs font-semibold text-white hover:bg-red-500 transition whitespace-nowrap"
-              >
-                <Trash2 size={14} /> <span className="hidden sm:inline">Видалити</span><span className="sm:hidden">Вид.</span>
-              </button>
-            )}
-          </div>
-        ),
+        cell: (info) => renderActions(info.row.original),
       });
     }
     return columnHelper.accessor(def.key, {
@@ -185,123 +166,314 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     return dir === "asc" ? <ArrowUpAZ size={14} className="text-slate-500" /> : <ArrowDownZA size={14} className="text-slate-500" />;
   };
 
+  const renderActions = (asset) => (
+    <div className="flex items-center gap-1 justify-end flex-nowrap">
+      <button
+        type="button"
+        onClick={async () => {
+          try {
+            await printAssetQrLabel({
+              invNumber: asset.invNumber,
+              name: asset.name,
+              qrValue: asset.qrCode || asset.invNumber,
+            });
+          } catch (err) {
+            alert(err.message || "Не вдалося надрукувати QR код");
+          }
+        }}
+        className="inline-flex items-center gap-1 rounded-md bg-slate-700 border border-slate-600 px-2 py-1 text-xs font-semibold text-white hover:bg-slate-600 transition whitespace-nowrap"
+      >
+        <span className="hidden sm:inline">Друк QR</span><span className="sm:hidden">QR</span>
+      </button>
+      {onEdit && (
+        <button
+          type="button"
+          onClick={() => {
+            if (!canEdit) return;
+            onEdit(asset);
+          }}
+          disabled={!canEdit}
+          title={!canEdit ? editDisabledReason : "Редагувати актив"}
+          className={clsx(
+            "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition whitespace-nowrap",
+            canEdit
+              ? "bg-indigo-600 border border-indigo-500 text-white hover:bg-indigo-500"
+              : "bg-slate-300 border border-slate-300 text-slate-600 cursor-not-allowed"
+          )}
+        >
+          <Pencil size={14} /> <span className="hidden sm:inline">Редагувати</span><span className="sm:hidden">Ред.</span>
+        </button>
+      )}
+      {isAdminOnly && onDelete && (
+        <button
+          type="button"
+          onClick={() => {
+            if (window.confirm(`Ви впевнені що хочете видалити актив "${asset.name}"?`)) {
+              onDelete(asset.id);
+            }
+          }}
+          className="inline-flex items-center gap-1 rounded-md bg-red-600 border border-red-500 px-2 py-1 text-xs font-semibold text-white hover:bg-red-500 transition whitespace-nowrap"
+        >
+          <Trash2 size={14} /> <span className="hidden sm:inline">Видалити</span><span className="sm:hidden">Вид.</span>
+        </button>
+      )}
+    </div>
+  );
+
+  const visibleFilterKeys = visibleColumns.filter((key) => key !== "actions" && key !== "invNumber");
+
+  const renderFilterByKey = (key) => {
+    if (key === "businessUnit") {
+      return (
+        <FilterSelect
+          key={key}
+          label="Локація"
+          value={filters.location || ""}
+          options={["Ресторан", "Кав'ярня", "Кейтеринг", "Офіс", "Склад"]}
+          onChange={(val) => setFilters((f) => ({ ...f, location: val }))}
+        />
+      );
+    }
+
+    if (key === "category") {
+      return (
+        <FilterSelect
+          key={key}
+          label="Категорія"
+          value={filters.category || ""}
+          options={["Кухня", "Бар", "IT", "Меблі", "Транспорт"]}
+          onChange={(val) => setFilters((f) => ({ ...f, category: val }))}
+        />
+      );
+    }
+
+    if (key === "status") {
+      return (
+        <FilterSelect
+          key={key}
+          label="Статус"
+          value={filters.status || ""}
+          options={["В експлуатації", "Не використовується", "Законсервований"]}
+          onChange={(val) => setFilters((f) => ({ ...f, status: val }))}
+        />
+      );
+    }
+
+    if (key === "decision") {
+      return (
+        <FilterSelect
+          key={key}
+          label="Рішення"
+          value={filters.decision || ""}
+          options={["Залишити", "Списати", "Продати", "Перемістити"]}
+          onChange={(val) => setFilters((f) => ({ ...f, decision: val }))}
+        />
+      );
+    }
+
+    const label = allFieldDefs.find((f) => f.key === key)?.header || key;
+    const filterKey = key;
+    const options = Array.from(new Set(data.map((a) => a[key]).filter(Boolean)));
+
+    return (
+      <FilterSelect
+        key={key}
+        label={label}
+        value={filters[filterKey] || ""}
+        options={options}
+        onChange={(val) => setFilters((f) => ({ ...f, [filterKey]: val }))}
+      />
+    );
+  };
+
   return (
     <div className="card p-4 sm:p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-lg sm:text-xl font-semibold text-slate-900">{headerTitle}</h2>
-          <p className="text-xs sm:text-sm text-slate-600">{headerSubtitle}</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {isAdminOnly && onImport && (
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              ref={fileInputRef}
-              style={{ display: "none" }}
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (file) {
-                  await onImport(file);
+      <div className="sticky top-2 z-20 -mx-4 px-4 pb-3 sm:-mx-5 sm:px-5 bg-white/95 backdrop-blur border-b border-slate-200/90">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-lg sm:text-xl font-semibold text-slate-900">{headerTitle}</h2>
+            <p className="text-xs sm:text-sm text-slate-600">{headerSubtitle}</p>
+          </div>
+          <div className="flex flex-nowrap items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            {isAdminOnly && onImport && (
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                ref={fileInputRef}
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    await onImport(file);
+                  }
+                  e.target.value = "";
+                }}
+              />
+            )}
+            <ColumnVisibilityDropdown
+              columns={allFieldDefs}
+              visibleColumns={visibleColumns}
+              setVisibleColumns={setVisibleColumns}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                if (window.innerWidth >= 768) {
+                  setShowDesktopFilters((prev) => !prev);
+                  return;
                 }
-                e.target.value = "";
+                setShowMobileFilters((prev) => !prev);
               }}
-            />
-          )}
-          <ColumnVisibilityDropdown
-            columns={allFieldDefs}
-            visibleColumns={visibleColumns}
-            setVisibleColumns={setVisibleColumns}
-          />
-          {isAdminOnly && onDownloadTemplate && (
-            <button
-              type="button"
-              onClick={onDownloadTemplate}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-slate-600 text-white hover:bg-slate-500 transition-all duration-200 shadow whitespace-nowrap"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs border border-slate-300 bg-white text-slate-700 whitespace-nowrap"
             >
-              <FileDown size={14} /> <span className="hidden sm:inline">Шаблон</span><span className="sm:hidden">Шабл.</span>
+              <SlidersHorizontal size={14} />
+              <span>Фільтри</span>
             </button>
-          )}
-          {isAdminOnly && onImport && (
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-emerald-600 text-white hover:bg-emerald-500 transition-all duration-200 shadow whitespace-nowrap"
-            >
-              <Upload size={14} /> <span className="hidden sm:inline">Імпорт</span><span className="sm:hidden">Імп.</span>
+            {isAdminOnly && onDownloadTemplate && (
+              <button
+                type="button"
+                onClick={onDownloadTemplate}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-slate-600 text-white hover:bg-slate-500 transition-all duration-200 shadow whitespace-nowrap"
+              >
+                <FileDown size={14} /> <span className="hidden sm:inline">Шаблон</span><span className="sm:hidden">Шабл.</span>
+              </button>
+            )}
+            {isAdminOnly && onImport && (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-emerald-600 text-white hover:bg-emerald-500 transition-all duration-200 shadow whitespace-nowrap"
+              >
+                <Upload size={14} /> <span className="hidden sm:inline">Імпорт</span><span className="sm:hidden">Імп.</span>
+              </button>
+            )}
+            <button type="button" onClick={onExport} className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow whitespace-nowrap">
+              <Download size={14} /> <span>Експорт</span>
             </button>
-          )}
-          <button type="button" onClick={onExport} className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow whitespace-nowrap">
-            <Download size={14} /> <span className="hidden sm:inline">Експорт Excel</span><span className="sm:hidden">Експ.</span>
-          </button>
+          </div>
         </div>
-      </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-2 sm:gap-3 md:grid-cols-4">
-        {/* Динамічний фільтр для кожної видимої колонки (крім invNumber, actions) */}
-        {visibleColumns.filter(key => key !== 'actions' && key !== 'invNumber').map(key => {
-          // Кастомні списки для основних полів
-          if (key === 'businessUnit') {
-            return (
-              <FilterSelect
-                key={key}
-                label="Локація"
-                value={filters.location || ""}
-                options={["Ресторан", "Кав'ярня", "Кейтеринг", "Офіс", "Склад"]}
-                onChange={val => setFilters(f => ({ ...f, location: val }))}
-              />
-            );
-          }
-          if (key === 'category') {
-            return (
-              <FilterSelect
-                key={key}
-                label="Категорія"
-                value={filters.category || ""}
-                options={["Кухня", "Бар", "IT", "Меблі", "Транспорт"]}
-                onChange={val => setFilters(f => ({ ...f, category: val }))}
-              />
-            );
-          }
-          if (key === 'status') {
-            return (
-              <FilterSelect
-                key={key}
-                label="Статус"
-                value={filters.status || ""}
-                options={["В експлуатації", "Не використовується", "Законсервований"]}
-                onChange={val => setFilters(f => ({ ...f, status: val }))}
-              />
-            );
-          }
-          if (key === 'decision') {
-            return (
-              <FilterSelect
-                key={key}
-                label="Рішення"
-                value={filters.decision || ""}
-                options={["Залишити", "Списати", "Продати", "Перемістити"]}
-                onChange={val => setFilters(f => ({ ...f, decision: val }))}
-              />
-            );
-          }
-          // Для решти — унікальні значення з data
-          const label = allFieldDefs.find(f => f.key === key)?.header || key;
-          const filterKey = key;
-          const options = Array.from(new Set(data.map(a => a[key]).filter(Boolean)));
-          return (
-            <FilterSelect
-              key={key}
-              label={label}
-              value={filters[filterKey] || ""}
-              options={options}
-              onChange={val => setFilters(f => ({ ...f, [filterKey]: val }))}
+        {mobileCardMode && (
+          <div className="relative mt-3">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Пошук: інв. номер, назва, категорія, локація..."
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-9 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
             />
-          );
-        })}
+            {searchQuery && (
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                onClick={() => setSearchQuery("")}
+                aria-label="Очистити пошук"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        )}
+
+        {showMobileFilters && (
+          <div className="mt-3 grid grid-cols-2 gap-2 md:hidden">
+            {visibleFilterKeys.map(renderFilterByKey)}
+          </div>
+        )}
+
+        {showDesktopFilters && (
+          <div className="mt-3 hidden gap-2.5 md:grid md:grid-cols-5 xl:grid-cols-6">
+            {visibleFilterKeys.map(renderFilterByKey)}
+          </div>
+        )}
       </div>
 
-      <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white -mx-4 sm:-mx-0">
+      {!mobileCardMode && (
+        <div className="relative mt-3">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Пошук: інв. номер, назва, категорія, локація..."
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 pr-9 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              className="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+              onClick={() => setSearchQuery("")}
+              aria-label="Очистити пошук"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      )}
+
+      {mobileCardMode && (
+        <div className="mt-3 md:hidden space-y-2">
+          {filteredData.map((asset) => {
+            const rowClassName = typeof getRowClassName === "function" ? String(getRowClassName(asset) || "") : "";
+            const isSessionHighlighted = /emerald|green/i.test(rowClassName);
+
+            return (
+              <div
+                key={asset.id}
+                className={clsx(
+                  "rounded-lg border bg-white p-2",
+                  isSessionHighlighted
+                    ? "border-emerald-300 bg-emerald-50/80 shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
+                    : "border-slate-200",
+                  rowClassName
+                )}
+              >
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-slate-900 leading-tight truncate">{asset.name || "-"}</p>
+                <div className="flex items-center gap-1">
+                  {isSessionHighlighted && (
+                    <span className="inline-flex items-center rounded-md bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 whitespace-nowrap">
+                      Змінено
+                    </span>
+                  )}
+                  <span className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300 whitespace-nowrap">
+                    {asset.status || "-"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-1 flex items-center justify-between gap-2 text-[11px]">
+                <div className="min-w-0">
+                  <span className="text-slate-500">Інв.: </span>
+                  <span className="font-semibold text-slate-900">{asset.invNumber || "-"}</span>
+                </div>
+                <div className="min-w-0 text-right">
+                  <span className="text-slate-500">Локація: </span>
+                  <span className="font-medium text-slate-800 truncate">{asset.locationName || asset.businessUnit || "-"}</span>
+                </div>
+              </div>
+
+              <div className="mt-1 flex items-center justify-between gap-2 text-[11px]">
+                <div className="min-w-0">
+                  <span className="text-slate-500">Категорія: </span>
+                  <span className="font-medium text-slate-800">{asset.category || "-"}</span>
+                </div>
+                <div className="min-w-0 text-right">
+                  <span className="text-slate-500 mr-1">Рішення:</span>
+                  <span className={clsx("inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-semibold", decisionColors[asset.decision] || "bg-slate-100 text-slate-700 border border-slate-200")}>{asset.decision || "-"}</span>
+                </div>
+              </div>
+
+              <div className="mt-2 flex justify-end">{renderActions(asset)}</div>
+            </div>
+            );
+          })}
+          {filteredData.length === 0 && (
+            <div className="py-6 text-center text-sm text-slate-400">Немає записів за вибраними фільтрами</div>
+          )}
+        </div>
+      )}
+
+      <div className={clsx("mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white -mx-4 sm:-mx-0", mobileCardMode && "hidden md:block") }>
         <div className="inline-block min-w-full sm:min-w-0">
         <table className="min-w-full">
           <thead className="bg-slate-50 border-b border-slate-200">
@@ -354,14 +526,14 @@ function FilterSelect({ label, value, options, onChange }) {
   const mobileLabel = label ? label.slice(0, 3) : '';
   
   return (
-    <label className="flex flex-col gap-1 text-xs sm:text-sm">
-      <span className="inline-flex items-center gap-1 sm:gap-2 text-gray-900 font-semibold uppercase tracking-wide">
+    <label className="flex flex-col gap-1 text-xs">
+      <span className="inline-flex items-center gap-1 text-gray-900 font-semibold uppercase tracking-wide text-[11px]">
         <SlidersHorizontal size={14} className="sm:size-4" />
         <span className="hidden sm:inline">{displayLabel}</span>
         <span className="sm:hidden">{mobileLabel}</span>
       </span>
       <select
-        className="w-full px-2 sm:px-4 py-2 sm:py-3 bg-white border border-gray-300 rounded-lg text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-150 appearance-none cursor-pointer text-xs sm:text-base [&>option]:bg-white [&>option]:text-gray-900"
+        className="w-full px-2.5 py-1.5 sm:py-2 bg-white border border-gray-300 rounded-md text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-150 appearance-none cursor-pointer text-xs sm:text-sm [&>option]:bg-white [&>option]:text-gray-900"
         value={value}
         onChange={(e) => onChange(e.target.value || "")}
       >
