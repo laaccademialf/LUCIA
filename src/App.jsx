@@ -43,8 +43,10 @@ import ProductBookingModule from "./components/ProductBookingModule";
 import ServiceRequestsModule from "./components/ServiceRequestsModule";
 import ChecklistModule from "./components/ChecklistModule";
 import TeamHiringModule from "./components/TeamHiringModule";
+import SecurityAuditModule from "./components/SecurityAuditModule";
 import { useChecklists } from "./hooks/useChecklists";
 import { useServiceRequests } from "./hooks/useServiceRequests";
+import { logAuditEvent } from "./firebase/audit";
 import {
   downloadAssetTemplate,
   downloadRestaurantTemplate,
@@ -274,6 +276,26 @@ function App() {
   const [checklistReminderTick, setChecklistReminderTick] = useState(0);
   const seenMissedChecklistKeysRef = useRef(new Set());
   const userInteractedRef = useRef(false);
+
+  const writeAuditLog = (payload) => {
+    if (!user) return;
+
+    const actorName = user?.displayName || user?.fullName || user?.name || "";
+    const actorEmail = user?.email || "";
+
+    void logAuditEvent({
+      actorId: user?.uid || "",
+      actorName,
+      actorEmail,
+      actorRole: user?.role || "",
+      actorWorkRole: user?.workRole || "",
+      activeNav,
+      topTab,
+      ...payload,
+    }).catch((error) => {
+      console.warn("Audit log write failed:", error);
+    });
+  };
 
   const baseInput =
     "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
@@ -1050,6 +1072,12 @@ function App() {
         startedByName,
         startedForRestaurantId: user?.restaurant || "",
       });
+      writeAuditLog({
+        action: "asset_inventory_session_start",
+        entityType: "asset_inventory_session",
+        entityId: assetInventorySessionScopeId,
+        description: `Запущено сесію інвентаризації ОЗ (${assetInventorySessionScopeId})`,
+      });
     } catch (error) {
       alert(`Не вдалося запустити сесію інвентаризації: ${error?.message || "невідома помилка"}`);
     }
@@ -1062,6 +1090,12 @@ function App() {
       await endAssetInventorySessionInFirestore(assetInventorySession.id, {
         endedById: user?.uid || "",
         endedByName,
+      });
+      writeAuditLog({
+        action: "asset_inventory_session_end",
+        entityType: "asset_inventory_session",
+        entityId: assetInventorySession?.id || assetInventorySessionScopeId,
+        description: `Завершено сесію інвентаризації ОЗ (${assetInventorySession?.id || "-"})`,
       });
       setSelected(null);
     } catch (error) {
@@ -1183,6 +1217,21 @@ function App() {
 
         // Оновлення існуючого активу
         result = await updateAssetInFirebase(exists.id, updatePayload);
+        writeAuditLog({
+          action: "asset_update",
+          entityType: "asset",
+          entityId: exists.id,
+          description: `Оновлено актив ${String(updatePayload?.invNumber || exists?.invNumber || "")}`,
+          details: {
+            changedFieldsCount: (() => {
+              if (!Array.isArray(sanitizedAsset?.inventoryChangeHistory) || sanitizedAsset.inventoryChangeHistory.length === 0) {
+                return 0;
+              }
+              const lastEntry = sanitizedAsset.inventoryChangeHistory[sanitizedAsset.inventoryChangeHistory.length - 1];
+              return Array.isArray(lastEntry?.changes) ? lastEntry.changes.length : 0;
+            })(),
+          },
+        });
       } else {
         const { id: _ignoredId, ...addPayload } = sanitizedAsset || {};
 
@@ -1209,6 +1258,12 @@ function App() {
           ...addPayload,
           inventoryChangeHistory: sanitizedAsset.inventoryChangeHistory,
         });
+        writeAuditLog({
+          action: "asset_create",
+          entityType: "asset",
+          entityId: String(result?.id || ""),
+          description: `Створено актив ${String(addPayload?.invNumber || "")}`,
+        });
       }
 
       if (result?.success === false) {
@@ -1226,8 +1281,15 @@ function App() {
 
   const handleDeleteAsset = async (assetId) => {
     try {
+      const assetToDelete = assets.find((item) => String(item?.id || "") === String(assetId));
       const { success, error } = await deleteAssetFromFirebase(assetId);
       if (success) {
+        writeAuditLog({
+          action: "asset_delete",
+          entityType: "asset",
+          entityId: String(assetId || ""),
+          description: `Видалено актив ${String(assetToDelete?.invNumber || "")}`,
+        });
         setSelected(null);
         alert("Актив успішно видалений!");
       } else {
@@ -2495,6 +2557,19 @@ function App() {
       );
     }
 
+    if (
+      activeNavKey === "security-audit" ||
+      topTabKey === "sitelogtab" ||
+      topTabKey.includes("sitelog") ||
+      topTabKey.includes("audit")
+    ) {
+      return (
+        <div className="grid grid-cols-1">
+          <SecurityAuditModule user={user} />
+        </div>
+      );
+    }
+
     if (activeNav === "menu-admin" && user?.role === 'admin') {
       return (
         <div className="grid grid-cols-1">
@@ -3106,6 +3181,19 @@ function App() {
                 <button
                   onClick={async () => {
                     try {
+                      await logAuditEvent({
+                        actorId: user?.uid || "",
+                        actorName: user?.displayName || user?.fullName || user?.name || "",
+                        actorEmail: user?.email || "",
+                        actorRole: user?.role || "",
+                        actorWorkRole: user?.workRole || "",
+                        action: "logout",
+                        entityType: "auth",
+                        entityId: user?.uid || "",
+                        activeNav,
+                        topTab,
+                        description: "Користувач вийшов з платформи",
+                      });
                       await logoutUser();
                     } catch (error) {
                       console.error("Помилка виходу:", error);

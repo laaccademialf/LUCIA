@@ -12,6 +12,7 @@ import {
   updateJobTitle,
   updateRecruitmentRequest,
 } from "../firebase/staffing";
+import { logAuditEvent } from "../firebase/audit";
 
 const cardClass = "card p-4 sm:p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100";
@@ -252,7 +253,7 @@ export default function TeamHiringModule({ topTab, activeNav, restaurants = [], 
     }
 
     try {
-      await addTeamEmployee({
+      const created = await addTeamEmployee({
         restaurantId: selectedRestaurantId,
         restaurantName: currentRestaurant?.name || "",
         employeeNumber: generateEmployeeNumber(),
@@ -265,6 +266,22 @@ export default function TeamHiringModule({ topTab, activeNav, restaurants = [], 
         createdById: user?.uid || "",
         createdByName: user?.name || user?.email || "",
       });
+
+      void logAuditEvent({
+        actorId: user?.uid || "",
+        actorName: user?.displayName || user?.fullName || user?.name || user?.email || "",
+        actorEmail: user?.email || "",
+        actorRole: user?.role || "",
+        actorWorkRole: user?.workRole || "",
+        action: "team_employee_create",
+        entityType: "team_employee",
+        entityId: String(created?.id || ""),
+        activeNav,
+        topTab,
+        restaurantId: selectedRestaurantId,
+        restaurantName: currentRestaurant?.name || "",
+        description: `Додано співробітника ${lastName} ${firstName}`,
+      }).catch(() => {});
 
       setEmployeeForm({ lastName: "", firstName: "", jobTitleId: "" });
     } catch (error) {
@@ -293,7 +310,7 @@ export default function TeamHiringModule({ topTab, activeNav, restaurants = [], 
     }
 
     try {
-      await addTeamShiftEvent({
+      const event = await addTeamShiftEvent({
         restaurantId: selectedRestaurantId,
         restaurantName: currentRestaurant?.name || "",
         employeeId: keeperEmployee.id,
@@ -304,6 +321,22 @@ export default function TeamHiringModule({ topTab, activeNav, restaurants = [], 
         type: isStart ? "start" : "end",
         eventAt: nowIso,
       });
+
+      void logAuditEvent({
+        actorId: user?.uid || "",
+        actorName: user?.displayName || user?.fullName || user?.name || user?.email || "",
+        actorEmail: user?.email || "",
+        actorRole: user?.role || "",
+        actorWorkRole: user?.workRole || "",
+        action: isStart ? "team_shift_start" : "team_shift_end",
+        entityType: "team_shift_event",
+        entityId: String(event?.id || ""),
+        activeNav,
+        topTab,
+        restaurantId: selectedRestaurantId,
+        restaurantName: currentRestaurant?.name || "",
+        description: `${isStart ? "Початок" : "Кінець"} зміни: ${keeperEmployee.fullName || ""}`,
+      }).catch(() => {});
 
       alert(isStart ? "Початок роботи зафіксовано" : "Кінець роботи зафіксовано");
     } catch (error) {
