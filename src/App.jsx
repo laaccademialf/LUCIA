@@ -2846,7 +2846,7 @@ function App() {
         ))}
         </div>
         {activeNav === "inventory-assets" && (
-          <div className="hidden md:flex items-center gap-2 pr-3 py-1">
+          <div className="flex items-center gap-2 pr-3 py-1">
             <span className={clsx(
               "rounded px-2 py-1 text-xs font-semibold border",
               assetInventorySessionLoading
