@@ -4,7 +4,7 @@ import {
   addBookingSupplier,
   addBookingTypicalField,
   addBookingProduct,
-  addProductInventory,
+  upsertProductInventoryByRestaurantDate,
   addProductOrder,
   deleteBookingSupplier,
   deleteBookingTypicalField,
@@ -229,7 +229,7 @@ export const useProductBooking = (enableRealtime = true) => {
 
   const createInventory = async (inventory) => {
     try {
-      const id = await addProductInventory(inventory);
+      const id = await upsertProductInventoryByRestaurantDate(inventory);
       return { success: true, id };
     } catch (err) {
       setError(err);

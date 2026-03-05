@@ -1,11 +1,94 @@
 import * as XLSX from "xlsx";
 
 const toNumber = (value) => {
-  const parsed = Number(value);
+  const normalized = String(value ?? "")
+    .replace(/\s+/g, "")
+    .replace(/,/g, ".");
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-export const importProductsFromExcel = (file) => {
+export const importProductsFromExcel = (file, defaultRestaurant = null) => {
+  const restaurants = Array.isArray(defaultRestaurant?.restaurants) ? defaultRestaurant.restaurants : [];
+  const forceSingleRestaurant = Boolean(defaultRestaurant?.forceSingleRestaurant);
+
+  const normalize = (value) => String(value || "").trim().toLowerCase();
+
+  const findHeaderRowIndex = (rows = []) => {
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = Array.isArray(rows[i]) ? rows[i] : [];
+      const text = row.map((cell) => normalize(cell)).join("|");
+      const hasName = text.includes("номенклатура") || text.includes("назва") || text.includes("name");
+      const hasCode = text.includes("код") || text.includes("1c");
+      const hasUnit = text.includes("одиниц") || text.includes("единиц") || text.includes("unit");
+      if (hasName && hasCode && hasUnit) {
+        return i;
+      }
+    }
+    return 0;
+  };
+
+  const resolveRestaurant = (row) => {
+    if (forceSingleRestaurant && defaultRestaurant?.id) {
+      return {
+        id: String(defaultRestaurant.id),
+        name: String(defaultRestaurant.name || ""),
+        regNumber: String(defaultRestaurant.regNumber || ""),
+      };
+    }
+
+    const rowId = String(row["ID закладу"] || row["Restaurant ID"] || "").trim();
+    const rowName = String(row["Заклад"] || row["Ресторан"] || row["Restaurant"] || "").trim();
+    const rowRegNumber = String(
+      row["Код закладу"] || row["Обліковий номер"] || row["RegNumber"] || row["Restaurant Code"] || ""
+    ).trim();
+
+    if (!restaurants.length) {
+      if (defaultRestaurant?.id) {
+        return {
+          id: String(defaultRestaurant.id),
+          name: String(defaultRestaurant.name || rowName || ""),
+          regNumber: String(defaultRestaurant.regNumber || rowRegNumber || ""),
+        };
+      }
+
+      if (rowId || rowName || rowRegNumber) {
+        return {
+          id: rowId,
+          name: rowName,
+          regNumber: rowRegNumber,
+        };
+      }
+
+      return null;
+    }
+
+    if (rowId) {
+      const byId = restaurants.find((item) => String(item.id || "") === rowId);
+      if (byId) return { id: String(byId.id), name: String(byId.name || ""), regNumber: String(byId.regNumber || "") };
+    }
+
+    if (rowRegNumber) {
+      const byRegNumber = restaurants.find((item) => normalize(item.regNumber) === normalize(rowRegNumber));
+      if (byRegNumber) return { id: String(byRegNumber.id), name: String(byRegNumber.name || ""), regNumber: String(byRegNumber.regNumber || "") };
+    }
+
+    if (rowName) {
+      const byName = restaurants.find((item) => normalize(item.name) === normalize(rowName));
+      if (byName) return { id: String(byName.id), name: String(byName.name || ""), regNumber: String(byName.regNumber || "") };
+    }
+
+    if (defaultRestaurant?.id) {
+      return {
+        id: String(defaultRestaurant.id),
+        name: String(defaultRestaurant.name || ""),
+        regNumber: String(defaultRestaurant.regNumber || ""),
+      };
+    }
+
+    return null;
+  };
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
@@ -20,15 +103,19 @@ export const importProductsFromExcel = (file) => {
         }
 
         const worksheet = workbook.Sheets[firstSheet];
-        const rows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+        const rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+        const headerRowIndex = findHeaderRowIndex(rawRows);
+        const rows = XLSX.utils.sheet_to_json(worksheet, { defval: "", range: headerRowIndex });
 
         const products = rows
           .map((row) => {
-            const name = String(row["Назва"] || row["Name"] || "").trim();
-            const category = String(row["Категорія"] || row["Category"] || "").trim();
-            const unit = String(row["Одиниця"] || row["Од. вим."] || row["Unit"] || "").trim();
+            const name = String(row["Назва"] || row["Name"] || row["Номенклатура"] || "").trim();
+            const category = String(row["Категорія"] || row["Category"] || row["Категория"] || "").trim() || "Імпорт 1С";
+            const unit = String(row["Одиниця"] || row["Од. вим."] || row["Unit"] || row["Единица измерения"] || "").trim();
             const supplier = String(row["Постачальник"] || row["Supplier"] || "").trim();
-            const unitPrice = toNumber(row["Ціна за одиницю"] || row["Ціна"] || row["Price"] || 0);
+            const code1C = String(row["Код 1С"] || row["Код1С"] || row["1C Code"] || row["Code 1C"] || row["Код"] || "").trim();
+            const unitPrice = toNumber(row["Ціна за одиницю"] || row["Ціна"] || row["Price"] || row["Учетная цена"] || row["Облікова ціна"] || 0);
+            const restaurant = resolveRestaurant(row);
             const activeRaw = String(row["Активний"] || row["Active"] || "так").trim().toLowerCase();
             const isActive = !(activeRaw === "ні" || activeRaw === "no" || activeRaw === "false" || activeRaw === "0");
 
@@ -37,11 +124,15 @@ export const importProductsFromExcel = (file) => {
               category,
               unit,
               supplier,
+              code1C,
               unitPrice,
+              restaurantId: String(restaurant?.id || "").trim(),
+              restaurantName: String(restaurant?.name || "").trim(),
+              restaurantRegNumber: String(restaurant?.regNumber || "").trim(),
               isActive,
             };
           })
-          .filter((item) => item.name && item.category && item.unit);
+          .filter((item) => item.name && item.category && item.unit && item.restaurantId);
 
         resolve(products);
       } catch (error) {
@@ -57,10 +148,10 @@ export const importProductsFromExcel = (file) => {
 export const downloadProductsTemplate = () => {
   const templateRows = [
     {
+      "№": "",
+      "Код 1С": "",
       "Назва": "",
-      "Категорія": "",
       "Одиниця": "",
-      "Постачальник": "",
       "Ціна за одиницю": "",
       "Активний": "Так",
     },
@@ -72,13 +163,33 @@ export const downloadProductsTemplate = () => {
   XLSX.writeFile(wb, "products_template.xlsx");
 };
 
+export const downloadProductsTemplate1C = () => {
+  const templateRows = [
+    {
+      "№": "",
+      "Код": "",
+      "Номенклатура": "",
+      "Единица измерения": "",
+      "Учетная цена": "",
+    },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(templateRows);
+  XLSX.utils.book_append_sheet(wb, ws, "Импорт_1С");
+  XLSX.writeFile(wb, "products_template_1c.xlsx");
+};
+
 export const exportProductsAndInventoriesToExcel = (
   products,
   inventories,
   filename = "products_and_inventories.xlsx"
 ) => {
   const productsData = (products || []).map((item) => ({
+    "Код закладу": item.restaurantRegNumber || "",
+    "Заклад": item.restaurantName || "",
     "Назва": item.name || "",
+    "Код 1С": item.code1C || "",
     "Категорія": item.category || "",
     "Одиниця": item.unit || "",
     "Постачальник": item.supplier || "",
@@ -98,7 +209,9 @@ export const exportProductsAndInventoriesToExcel = (
     const lines = Array.isArray(inventory.items) ? inventory.items : [];
     return lines.map((line) => ({
       ...header,
+      "Код закладу": inventory.restaurantRegNumber || "",
       "Продукт": line.productName || "",
+      "Код 1С": line.code1C || "",
       "Категорія": line.category || "",
       "Одиниця": line.unit || "",
       "Кількість": toNumber(line.qty),
@@ -109,11 +222,15 @@ export const exportProductsAndInventoriesToExcel = (
 
   const wb = XLSX.utils.book_new();
 
-  const productsSheet = XLSX.utils.json_to_sheet(productsData.length > 0 ? productsData : [{ "Назва": "", "Категорія": "", "Одиниця": "", "Постачальник": "", "Ціна за одиницю": "", "Активний": "" }]);
+  const productsSheet = XLSX.utils.json_to_sheet(
+    productsData.length > 0
+      ? productsData
+      : [{ "Код закладу": "", "Заклад": "", "Назва": "", "Код 1С": "", "Категорія": "", "Одиниця": "", "Постачальник": "", "Ціна за одиницю": "", "Активний": "" }]
+  );
   const inventoriesSheet = XLSX.utils.json_to_sheet(
     inventoriesData.length > 0
       ? inventoriesData
-      : [{ "Дата інвентаризації": "", "Створено": "", "Ресторан": "", "Відповідальний": "", "Коментар": "", "Продукт": "", "Категорія": "", "Одиниця": "", "Кількість": "", "Ціна за одиницю": "", "Сума": "" }]
+      : [{ "Дата інвентаризації": "", "Створено": "", "Ресторан": "", "Код закладу": "", "Відповідальний": "", "Коментар": "", "Продукт": "", "Код 1С": "", "Категорія": "", "Одиниця": "", "Кількість": "", "Ціна за одиницю": "", "Сума": "" }]
   );
 
   XLSX.utils.book_append_sheet(wb, productsSheet, "Продукти");
@@ -131,6 +248,7 @@ export const exportInventoriesToExcel = (
       "Дата інвентаризації": inventory.inventoryDate || "",
       "Створено": inventory.createdAt ? new Date(inventory.createdAt).toLocaleString("uk-UA") : "",
       "Ресторан": inventory.restaurantName || "",
+      "Код закладу": inventory.restaurantRegNumber || "",
       "Відповідальний": inventory.createdBy || "",
     };
 
@@ -138,6 +256,7 @@ export const exportInventoriesToExcel = (
     return lines.map((line) => ({
       ...header,
       "Продукт": line.productName || "",
+      "Код 1С": line.code1C || "",
       "Категорія": line.category || "",
       "Одиниця": line.unit || "",
       "Кількість": toNumber(line.qty),
@@ -154,8 +273,10 @@ export const exportInventoriesToExcel = (
           "Дата інвентаризації": "",
           "Створено": "",
           "Ресторан": "",
+          "Код закладу": "",
           "Відповідальний": "",
           "Продукт": "",
+          "Код 1С": "",
           "Категорія": "",
           "Одиниця": "",
           "Кількість": "",
@@ -165,5 +286,47 @@ export const exportInventoriesToExcel = (
   );
 
   XLSX.utils.book_append_sheet(wb, ws, "Інвентаризації");
+  XLSX.writeFile(wb, filename);
+};
+
+export const exportInventoryTo1CExcel = (inventory, filename = "inventory_1c.xlsx") => {
+  const dateRaw = String(inventory?.inventoryDate || "").trim();
+  const dateForTitle = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw)
+    ? `${dateRaw.slice(8, 10)}.${dateRaw.slice(5, 7)}.${dateRaw.slice(0, 4)}`
+    : (dateRaw || new Date().toLocaleDateString("uk-UA"));
+
+  const restaurantLabel = String(inventory?.restaurantName || inventory?.restaurantRegNumber || "складу").trim();
+  const title = `Инвентаризация товаров от ${dateForTitle} по складу ${restaurantLabel}`;
+
+  const header = ["№", "Код", "Номенклатура", "Единица измерения", "Учетная цена", "Количество (факт)"];
+  const lines = Array.isArray(inventory?.items) ? inventory.items : [];
+
+  const rows = lines.map((line, index) => ([
+    index + 1,
+    String(line?.code1C || ""),
+    String(line?.productName || ""),
+    String(line?.unit || ""),
+    toNumber(line?.unitPrice),
+    toNumber(line?.qty),
+  ]));
+
+  const ws = XLSX.utils.aoa_to_sheet([
+    [title],
+    [],
+    header,
+    ...rows,
+  ]);
+
+  ws["!cols"] = [
+    { wch: 6 },
+    { wch: 14 },
+    { wch: 34 },
+    { wch: 20 },
+    { wch: 14 },
+    { wch: 18 },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Инвентаризация");
   XLSX.writeFile(wb, filename);
 };

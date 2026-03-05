@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2, Download, Upload, FileDown, X, Printer } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
-import { downloadProductsTemplate, exportInventoriesToExcel, exportProductsAndInventoriesToExcel, importProductsFromExcel } from "../utils/productInventoryExcel";
+import { downloadProductsTemplate, downloadProductsTemplate1C, exportInventoriesToExcel, exportInventoryTo1CExcel, exportProductsAndInventoriesToExcel, importProductsFromExcel } from "../utils/productInventoryExcel";
+import { endProductInventorySession, startProductInventorySession, subscribeToActiveProductInventorySession } from "../firebase/firestore";
 
 const normalizeTabKind = (tabId = "") => {
   const value = String(tabId).toLowerCase();
+  if (value.includes("journal") || value.includes("журнал")) return "inventoryJournal";
   if (value.includes("vendor") || value.includes("supplier") || value.includes("постач")) return "suppliers";
   if (
     value.includes("inventar") ||
@@ -53,6 +55,12 @@ const formatDateUk = (value) => {
   return raw;
 };
 
+const sameRestaurant = (productRestaurantId, restaurantId) => String(productRestaurantId || "") === String(restaurantId || "");
+
+const getRestaurantNameById = (restaurants = [], restaurantId) => {
+  return restaurants.find((item) => String(item.id) === String(restaurantId || ""))?.name || "";
+};
+
 const hasProcurementAccess = (user) => {
   const roleValue = String(user?.role || "").toLowerCase();
   const workRoleValue = String(user?.workRole || "").toLowerCase();
@@ -60,18 +68,42 @@ const hasProcurementAccess = (user) => {
   return terms.some((term) => roleValue.includes(term) || workRoleValue.includes(term));
 };
 
-function ProductAdminTab({ products, suppliers, categories, units, inventories, canManageProducts, addProduct, updateProduct }) {
-  const [draft, setDraft] = useState({ name: "", category: "", unit: "", supplier: "", unitPrice: "" });
+function ProductAdminTab({ products, suppliers, categories, units, inventories, restaurants, user, canManageProducts, addProduct, updateProduct, deleteProduct }) {
+  const defaultRestaurantId = user?.role === "admin" ? "" : String(user?.restaurant || "");
+  const [draft, setDraft] = useState({
+    restaurantId: defaultRestaurantId,
+    name: "",
+    code1C: "",
+    category: "",
+    unit: "",
+    supplier: "",
+    unitPrice: "",
+  });
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [supplierFilter, setSupplierFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [restaurantFilter, setRestaurantFilter] = useState(defaultRestaurantId);
+  const [importMode, setImportMode] = useState("selected");
+
+  useEffect(() => {
+    if (user?.role === "admin") return;
+    const scopedRestaurant = String(user?.restaurant || "");
+    setRestaurantFilter(scopedRestaurant);
+    setDraft((prev) => ({ ...prev, restaurantId: scopedRestaurant }));
+  }, [user]);
+
+  const availableRestaurants = useMemo(() => {
+    if (user?.role === "admin") return restaurants;
+    return restaurants.filter((item) => String(item.id) === String(user?.restaurant || ""));
+  }, [restaurants, user]);
 
   const filteredProducts = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
     return products.filter((item) => {
+      const byRestaurant = restaurantFilter ? sameRestaurant(item.restaurantId, restaurantFilter) : user?.role === "admin";
       const bySearch = normalizedSearch
-        ? [item.name, item.category, item.unit, item.supplier]
+        ? [item.name, item.code1C, item.category, item.unit, item.supplier, item.restaurantName]
             .filter(Boolean)
             .join(" ")
             .toLowerCase()
@@ -86,18 +118,29 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
             ? item.isActive !== false
             : item.isActive === false;
 
-      return bySearch && byCategory && bySupplier && byStatus;
+      return byRestaurant && bySearch && byCategory && bySupplier && byStatus;
     });
-  }, [products, searchTerm, categoryFilter, supplierFilter, statusFilter]);
+  }, [products, searchTerm, categoryFilter, supplierFilter, statusFilter, restaurantFilter, user]);
 
   const handleAdd = async () => {
+    if (!draft.restaurantId.trim()) {
+      alert("Оберіть заклад для продукту.");
+      return;
+    }
     if (!draft.name.trim() || !draft.category.trim() || !draft.unit.trim() || !draft.supplier.trim()) {
       alert("Заповніть обов'язкові поля: Назва, Категорія, Одиниця, Постачальник.");
       return;
     }
+    const selectedRestaurant = restaurants.find((item) => String(item.id) === String(draft.restaurantId));
+    const restaurantName = selectedRestaurant?.name || "Невідомий ресторан";
+    const restaurantRegNumber = String(selectedRestaurant?.regNumber || "");
     const unitPrice = toNumber(draft.unitPrice);
     const newProduct = {
+      restaurantId: String(draft.restaurantId),
+      restaurantName,
+      restaurantRegNumber,
       name: draft.name.trim(),
+      code1C: draft.code1C.trim(),
       category: draft.category.trim(),
       unit: draft.unit.trim(),
       supplier: draft.supplier.trim(),
@@ -109,7 +152,15 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
       alert("Не вдалося додати продукт у базу.");
       return;
     }
-    setDraft({ name: "", category: "", unit: "", supplier: "", unitPrice: "" });
+    setDraft((prev) => ({
+      ...prev,
+      name: "",
+      code1C: "",
+      category: "",
+      unit: "",
+      supplier: "",
+      unitPrice: "",
+    }));
   };
 
   const toggleActive = async (item) => {
@@ -117,6 +168,18 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
     const result = await updateProduct(id, { ...payload, isActive: !item.isActive });
     if (!result.success) {
       alert("Не вдалося оновити статус продукту.");
+    }
+  };
+
+  const handleDeleteProduct = async (item) => {
+    const confirmed = window.confirm(
+      `Видалити продукт \"${item?.name || "без назви"}\"?\nЦю дію неможливо скасувати.`
+    );
+    if (!confirmed) return;
+
+    const result = await deleteProduct(item.id);
+    if (!result.success) {
+      alert("Не вдалося видалити продукт.");
     }
   };
 
@@ -128,29 +191,67 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const selectedRestaurantId = String(draft.restaurantId || restaurantFilter || user?.restaurant || "");
+    const selectedRestaurant = restaurants.find((item) => String(item.id) === selectedRestaurantId);
+
+    if (importMode === "selected" && !selectedRestaurantId) {
+      alert("Перед імпортом оберіть заклад.");
+      event.target.value = "";
+      return;
+    }
+
     try {
-      const importedProducts = await importProductsFromExcel(file);
+      const importedProducts = await importProductsFromExcel(file, {
+        id: importMode === "selected" ? selectedRestaurantId : "",
+        name: importMode === "selected" ? String(selectedRestaurant?.name || "") : "",
+        regNumber: importMode === "selected" ? String(selectedRestaurant?.regNumber || "") : "",
+        forceSingleRestaurant: importMode === "selected",
+        restaurants,
+      });
       if (importedProducts.length === 0) {
-        alert("У файлі не знайдено валідних продуктів для імпорту.");
+        alert(
+          importMode === "selected"
+            ? "У файлі не знайдено валідних продуктів для імпорту. Перевірте поля: Код(1С), Номенклатура/Назва, Единица измерения/Одиниця, Учетная цена/Ціна."
+            : "У файлі не знайдено валідних продуктів для імпорту. Для мультизакладного імпорту додайте 'Код закладу' (обліковий №, напр. 101КВ) або 'Заклад'."
+        );
         return;
       }
 
       let successCount = 0;
+      let updatedCount = 0;
+      let skippedCount = 0;
       let failCount = 0;
 
       for (const product of importedProducts) {
-        const exists = products.some(
-          (item) => String(item.name || "").trim().toLowerCase() === String(product.name || "").trim().toLowerCase()
+        const normalizedCode1C = String(product.code1C || "").trim().toLowerCase();
+        if (!normalizedCode1C) {
+          skippedCount += 1;
+          continue;
+        }
+
+        const existingItem = products.find(
+          (item) =>
+            sameRestaurant(item.restaurantId, product.restaurantId) &&
+            String(item.code1C || "").trim().toLowerCase() === normalizedCode1C
         );
 
-        if (exists) continue;
+        if (existingItem) {
+          const { id: existingId, ...existingPayload } = existingItem;
+          const result = await updateProduct(existingId, {
+            ...existingPayload,
+            ...product,
+          });
+          if (result.success) updatedCount += 1;
+          else failCount += 1;
+          continue;
+        }
 
         const result = await addProduct(product);
         if (result.success) successCount += 1;
         else failCount += 1;
       }
 
-      alert(`Імпорт завершено. Додано: ${successCount}. Помилок: ${failCount}.`);
+      alert(`Імпорт завершено. Додано: ${successCount}. Оновлено: ${updatedCount}. Пропущено: ${skippedCount}. Помилок: ${failCount}.`);
     } catch (error) {
       console.error("Помилка імпорту продуктів:", error);
       alert("Не вдалося імпортувати файл продуктів.");
@@ -178,12 +279,27 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
         />
         {canManageProducts && (
           <>
+            <select
+              className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900"
+              value={importMode}
+              onChange={(e) => setImportMode(e.target.value)}
+            >
+              <option value="selected">Імпорт у вибраний заклад</option>
+              {user?.role === "admin" && <option value="from-file">Мультизакладний імпорт з файлу</option>}
+            </select>
             <button
               type="button"
               onClick={() => downloadProductsTemplate()}
               className="inline-flex items-center gap-2 rounded-lg bg-slate-600 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-500"
             >
               <FileDown size={15} /> Шаблон
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadProductsTemplate1C()}
+              className="inline-flex items-center gap-2 rounded-lg bg-zinc-700 px-3 py-2 text-sm font-semibold text-white hover:bg-zinc-600"
+            >
+              <FileDown size={15} /> Шаблон 1С
             </button>
             <button
               type="button"
@@ -210,11 +326,32 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
       )}
 
       {canManageProducts && (
-        <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-6">
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          {importMode === "selected"
+            ? "Режим імпорту: всі рядки з Excel будуть прив'язані до обраного закладу. Підтримується формат 1С: №, Код, Номенклатура, Единица измерения, Учетная цена."
+            : "Режим імпорту: заклад береться з колонок 'Код закладу' (обліковий №, напр. 101КВ) або 'Заклад'."}
+        </div>
+      )}
+
+      {canManageProducts && (
+        <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-8">
+            <div>
+              <label className="text-sm font-semibold text-slate-800">Заклад</label>
+              <select className={inputClass} value={draft.restaurantId} onChange={(e) => setDraft((p) => ({ ...p, restaurantId: e.target.value }))}>
+                <option value="">Оберіть заклад</option>
+                {availableRestaurants.map((restaurant) => (
+                  <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
+                ))}
+              </select>
+            </div>
           <div>
             <label className="text-sm font-semibold text-slate-800">Назва</label>
             <input className={inputClass} value={draft.name} onChange={(e) => setDraft((p) => ({ ...p, name: e.target.value }))} />
           </div>
+            <div>
+              <label className="text-sm font-semibold text-slate-800">Код 1С</label>
+              <input className={inputClass} value={draft.code1C} onChange={(e) => setDraft((p) => ({ ...p, code1C: e.target.value }))} />
+            </div>
           <div>
             <label className="text-sm font-semibold text-slate-800">Категорія</label>
             <select className={inputClass} value={draft.category} onChange={(e) => setDraft((p) => ({ ...p, category: e.target.value }))}>
@@ -258,7 +395,21 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
         </div>
       )}
 
-      <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
+      <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-6">
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Фільтр закладу</label>
+          <select
+            className={inputClass}
+            value={restaurantFilter}
+            onChange={(e) => setRestaurantFilter(e.target.value)}
+            disabled={user?.role !== "admin"}
+          >
+            <option value="">{user?.role === "admin" ? "Всі заклади" : "Оберіть заклад"}</option>
+            {availableRestaurants.map((restaurant) => (
+              <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
+            ))}
+          </select>
+        </div>
         <div className="lg:col-span-2">
           <label className="text-sm font-semibold text-slate-800">Пошук по продуктах</label>
           <input
@@ -286,7 +437,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
             ))}
           </select>
         </div>
-        <div className="flex flex-col justify-end gap-2">
+        <div className="flex flex-col justify-end gap-2 lg:col-span-1">
           <select className={inputClass} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="all">Всі статуси</option>
             <option value="active">Активні</option>
@@ -300,6 +451,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
               setCategoryFilter("");
               setSupplierFilter("");
               setStatusFilter("all");
+              setRestaurantFilter(user?.role === "admin" ? "" : String(user?.restaurant || ""));
             }}
           >
             Скинути фільтри
@@ -316,10 +468,12 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
           <thead className="bg-slate-50 text-slate-700">
             <tr>
               <th className="px-3 py-2 text-left">Назва</th>
+              <th className="px-3 py-2 text-left">Код 1С</th>
               <th className="px-3 py-2 text-left">Категорія</th>
               <th className="px-3 py-2 text-left">Одиниця</th>
               <th className="px-3 py-2 text-left">Ціна за од.</th>
               <th className="px-3 py-2 text-left">Постачальник</th>
+              <th className="px-3 py-2 text-left">Заклад</th>
               <th className="px-3 py-2 text-left">Статус</th>
               {canManageProducts && <th className="px-3 py-2 text-left">Дії</th>}
             </tr>
@@ -328,10 +482,12 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
             {filteredProducts.map((item) => (
               <tr key={item.id} className="border-t border-slate-200">
                 <td className="px-3 py-2 font-medium text-slate-900">{item.name}</td>
+                <td className="px-3 py-2">{item.code1C || "-"}</td>
                 <td className="px-3 py-2">{item.category}</td>
                 <td className="px-3 py-2">{item.unit}</td>
                 <td className="px-3 py-2">{formatMoney(item.unitPrice)}</td>
                 <td className="px-3 py-2">{item.supplier || "-"}</td>
+                <td className="px-3 py-2">{item.restaurantName || "-"}</td>
                 <td className="px-3 py-2">
                   <span className={`rounded-full px-2 py-1 text-xs font-semibold ${item.isActive ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"}`}>
                     {item.isActive ? "Активний" : "Вимкнений"}
@@ -343,6 +499,13 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
                       <button type="button" className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold hover:bg-slate-100" onClick={() => toggleActive(item)}>
                         {item.isActive ? "Вимкнути" : "Увімкнути"}
                       </button>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-100"
+                        onClick={() => handleDeleteProduct(item)}
+                      >
+                        Видалити
+                      </button>
                     </div>
                   </td>
                 )}
@@ -350,7 +513,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
             ))}
             {filteredProducts.length === 0 && (
               <tr>
-                <td colSpan={canManageProducts ? 7 : 6} className="px-3 py-6 text-center text-slate-500">
+                <td colSpan={canManageProducts ? 9 : 8} className="px-3 py-6 text-center text-slate-500">
                   За поточними фільтрами продукти не знайдено.
                 </td>
               </tr>
@@ -363,7 +526,6 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
 }
 
 function InventoryTab({ products, inventories, restaurants, user, createInventory, updateInventory }) {
-  const activeProducts = useMemo(() => products.filter((item) => item.isActive !== false), [products]);
   const quantityInputRefs = useRef({});
   const [activeRowProductId, setActiveRowProductId] = useState(null);
   const [restaurantId, setRestaurantId] = useState(user?.role === "admin" ? "" : String(user?.restaurant || ""));
@@ -372,15 +534,48 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const [categoryFilter, setCategoryFilter] = useState("");
   const [editingInventoryId, setEditingInventoryId] = useState("");
   const [inventoryDate, setInventoryDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [activeSession, setActiveSession] = useState(null);
+
+  useEffect(() => {
+    if (user?.role === "admin") return;
+    setRestaurantId(String(user?.restaurant || ""));
+  }, [user]);
+
+  useEffect(() => {
+    const scopeId = String(restaurantId || "");
+    if (!scopeId) {
+      setActiveSession(null);
+      return undefined;
+    }
+
+    const unsubscribe = subscribeToActiveProductInventorySession(scopeId, (session) => {
+      setActiveSession(session || null);
+    });
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [restaurantId]);
+
+  const scopedProducts = useMemo(() => {
+    const selectedRestaurantId = String(restaurantId || "");
+    if (!selectedRestaurantId) return [];
+    return products.filter((item) => item.isActive !== false && sameRestaurant(item.restaurantId, selectedRestaurantId));
+  }, [products, restaurantId]);
 
   const availableCategories = useMemo(() => {
-    return Array.from(new Set(activeProducts.map((item) => item.category).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
-  }, [activeProducts]);
+    return Array.from(new Set(scopedProducts.map((item) => item.category).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
+  }, [scopedProducts]);
+
+  useEffect(() => {
+    setQuantities({});
+    setEditingInventoryId("");
+  }, [restaurantId]);
 
   const keywordSuggestions = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     if (!term) return [];
-    return activeProducts
+    return scopedProducts
       .map((item) => String(item.name || "").trim())
       .filter(Boolean)
       .filter((name) => name.toLowerCase().includes(term))
@@ -391,16 +586,22 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         return a.localeCompare(b, "uk");
       })
       .slice(0, 8);
-  }, [activeProducts, searchTerm]);
+  }, [scopedProducts, searchTerm]);
 
   const filteredProducts = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
-    return activeProducts.filter((item) => {
-      const bySearch = normalizedSearch ? String(item.name || "").toLowerCase().includes(normalizedSearch) : true;
+    return scopedProducts.filter((item) => {
+      const bySearch = normalizedSearch
+        ? [item.name, item.code1C, item.category]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedSearch)
+        : true;
       const byCategory = categoryFilter ? String(item.category || "") === categoryFilter : true;
       return bySearch && byCategory;
     });
-  }, [activeProducts, searchTerm, categoryFilter]);
+  }, [scopedProducts, searchTerm, categoryFilter]);
 
   const adjustQuantity = (productId, delta) => {
     setQuantities((prev) => {
@@ -432,7 +633,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   }, [inventories, user]);
 
   const filledLines = useMemo(() => {
-    return activeProducts
+    return scopedProducts
       .map((product) => {
         const qty = toNumber(quantities[product.id]);
         if (qty <= 0) return null;
@@ -440,6 +641,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         return {
           productId: product.id,
           productName: product.name,
+          code1C: product.code1C || "",
           category: product.category,
           unit: product.unit,
           qty,
@@ -448,11 +650,16 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         };
       })
       .filter(Boolean);
-  }, [activeProducts, quantities]);
+  }, [scopedProducts, quantities]);
 
   const handleSaveInventory = async () => {
     if (!restaurantId) {
       alert("Оберіть ресторан для інвентаризації.");
+      return;
+    }
+
+    if (!activeSession?.id) {
+      alert("Спочатку почніть інвентаризацію кнопкою 'Почати інвентаризацію'.");
       return;
     }
 
@@ -461,14 +668,19 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       return;
     }
 
-    const restaurantName = restaurants.find((item) => String(item.id) === String(restaurantId))?.name || "Невідомий ресторан";
+    const selectedRestaurant = restaurants.find((item) => String(item.id) === String(restaurantId));
+    const restaurantName = selectedRestaurant?.name || "Невідомий ресторан";
+    const restaurantRegNumber = String(selectedRestaurant?.regNumber || "");
     const totalItems = filledLines.reduce((sum, item) => sum + toNumber(item.qty), 0);
     const totalAmount = filledLines.reduce((sum, item) => sum + toNumber(item.amount), 0);
 
     const payload = {
       restaurantId: String(restaurantId),
       restaurantName,
-      inventoryDate,
+      restaurantRegNumber,
+      inventoryDate: String(activeSession?.startedAt || inventoryDate).slice(0, 10),
+      inventorySessionId: String(activeSession?.id || ""),
+      inventorySessionStartedAt: String(activeSession?.startedAt || ""),
       items: filledLines,
       totalItems,
       totalAmount,
@@ -508,9 +720,59 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
 
     setQuantities(restoredQuantities);
     setEditingInventoryId(String(inventory?.id || ""));
-    setInventoryDate(String(inventory?.inventoryDate || new Date().toISOString().slice(0, 10)));
+    setInventoryDate(
+      String(
+        inventory?.inventoryDate ||
+          String(inventory?.inventorySessionStartedAt || "").slice(0, 10) ||
+          new Date().toISOString().slice(0, 10)
+      )
+    );
     if (user?.role === "admin") {
       setRestaurantId(String(inventory?.restaurantId || ""));
+    }
+  };
+
+  const handleStartInventorySession = async () => {
+    if (!restaurantId) {
+      alert("Оберіть заклад перед стартом інвентаризації.");
+      return;
+    }
+    if (activeSession?.id) {
+      alert("Інвентаризація вже активна для цього закладу.");
+      return;
+    }
+
+    try {
+      await startProductInventorySession(String(restaurantId), {
+        restaurantId: String(restaurantId),
+        restaurantName: restaurants.find((item) => String(item.id) === String(restaurantId))?.name || "Невідомий ресторан",
+        startedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+        startedById: user?.uid || "",
+      });
+      setEditingInventoryId("");
+      setQuantities({});
+    } catch (error) {
+      console.error("Помилка старту інвентаризації продуктів:", error);
+      alert("Не вдалося почати інвентаризацію.");
+    }
+  };
+
+  const handleEndInventorySession = async () => {
+    if (!activeSession?.id) {
+      alert("Немає активної інвентаризації для завершення.");
+      return;
+    }
+
+    try {
+      await endProductInventorySession(activeSession.id, {
+        endedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+        endedById: user?.uid || "",
+      });
+      setEditingInventoryId("");
+      setQuantities({});
+    } catch (error) {
+      console.error("Помилка завершення інвентаризації продуктів:", error);
+      alert("Не вдалося завершити інвентаризацію.");
     }
   };
 
@@ -531,6 +793,16 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       .replace(/[^a-zA-Z0-9а-яА-ЯіїєІЇЄґҐ_-]/g, "");
     const fileName = `inventory_${safeDate || "date"}_${safeRestaurant || "restaurant"}.xlsx`;
     exportInventoriesToExcel([inventory], fileName);
+  };
+
+  const handleExportSingleInventory1C = (inventory) => {
+    const safeDate = String(inventory?.inventoryDate || "inventory").replace(/[^0-9-]/g, "");
+    const safeRestaurant = String(inventory?.restaurantName || inventory?.restaurantRegNumber || "restaurant")
+      .trim()
+      .replace(/\s+/g, "_")
+      .replace(/[^a-zA-Z0-9а-яА-ЯіїєІЇЄґҐ_-]/g, "");
+    const fileName = `inventory_1c_${safeDate || "date"}_${safeRestaurant || "restaurant"}.xlsx`;
+    exportInventoryTo1CExcel(inventory, fileName);
   };
 
   const handlePrintSingleInventory = (inventory) => {
@@ -555,6 +827,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         <tr>
           <td>${index + 1}</td>
           <td>${escapeHtml(item?.productName || "-")}</td>
+          <td>${escapeHtml(item?.code1C || "-")}</td>
           <td>${escapeHtml(item?.category || "-")}</td>
           <td>${qty.toFixed(2)}</td>
           <td>${escapeHtml(item?.unit || "-")}</td>
@@ -649,16 +922,17 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
           <tr>
             <th style="width: 32px;">#</th>
             <th>Продукт</th>
+            <th style="width: 90px;">Код 1С</th>
             <th>Категорія</th>
             <th style="width: 70px;">К-сть</th>
             <th style="width: 70px;">Од.</th>
             <th style="width: 90px;">Ціна</th>
             <th style="width: 100px;">Сума</th>
-            <th style="width: 140px;">Ручна примітка</th>
+            <th style="width: 120px;">Ручна примітка</th>
           </tr>
         </thead>
         <tbody>
-          ${rowsHtml || '<tr><td colspan="8">Немає позицій</td></tr>'}
+          ${rowsHtml || '<tr><td colspan="9">Немає позицій</td></tr>'}
         </tbody>
       </table>
 
@@ -717,6 +991,40 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
           </div>
         )}
 
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm">
+              {activeSession?.id ? (
+                <p className="font-semibold text-emerald-700">
+                  Інвентаризація активна з {formatDateUk(String(activeSession.startedAt || "").slice(0, 10))}
+                </p>
+              ) : (
+                <p className="font-semibold text-slate-700">Інвентаризація не активна</p>
+              )}
+              <p className="text-xs text-slate-600">Усі збереження під час активної сесії зливаються в одну інвентаризацію.</p>
+            </div>
+            <div className="flex gap-2">
+              {!activeSession?.id ? (
+                <button
+                  type="button"
+                  onClick={handleStartInventorySession}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+                >
+                  Почати інвентаризацію
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleEndInventorySession}
+                  className="rounded-lg border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100"
+                >
+                  Завершити інвентаризацію
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
         <div className="mb-4 grid grid-cols-2 gap-2 sm:gap-3">
           <div>
             <label className="text-xs sm:text-sm font-semibold text-slate-800">Фільтр по категорії</label>
@@ -770,6 +1078,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
             <thead className="hidden sm:table-header-group bg-slate-50 text-slate-700">
               <tr>
                 <th className="px-2 py-1 text-left">Продукт</th>
+                  <th className="px-2 py-1 text-left">Код 1С</th>
                 <th className="px-2 py-1 text-left">Категорія</th>
                 <th className="px-2 py-1 text-left">Одиниця</th>
                 <th className="px-2 py-1 text-left">Кількість</th>
@@ -788,6 +1097,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                   >
                     {product.name}
                   </td>
+                  <td className="hidden sm:table-cell px-2 py-1 text-xs">{product.code1C || "-"}</td>
                   <td className="hidden sm:table-cell px-2 py-1 text-xs">{product.category || "-"}</td>
                   <td className="hidden sm:table-cell px-2 py-1 text-xs">{product.unit || "-"}</td>
                   <td className="px-2 py-1">
@@ -845,7 +1155,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               ))}
               {filteredProducts.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-3 py-6 text-center text-slate-500">За поточними фільтрами продукти не знайдено.</td>
+                  <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
+                    {restaurantId ? "За поточними фільтрами продукти не знайдено." : "Спочатку оберіть заклад."}
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -857,7 +1169,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
             <p>
               Заповнених позицій: <span className="font-semibold">{filledLines.length}</span>
               <span className="mx-2 text-slate-400">•</span>
-              <span className="font-semibold">Дата: {formatDateUk(inventoryDate)}</span>
+              <span className="font-semibold">Дата: {formatDateUk(activeSession?.startedAt ? String(activeSession.startedAt).slice(0, 10) : inventoryDate)}</span>
             </p>
             {editingInventoryId && <p className="mt-1 text-amber-700 font-semibold">Режим редагування інвентаризації</p>}
           </div>
@@ -915,6 +1227,13 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                       </button>
                       <button
                         type="button"
+                        onClick={() => handleExportSingleInventory1C(inventory)}
+                        className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                      >
+                        <Download size={14} /> Ексель 1С
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => handlePrintSingleInventory(inventory)}
                         className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                       >
@@ -939,6 +1258,198 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function InventoryJournalTab({ inventories, user }) {
+  const visibleInventories = useMemo(() => {
+    if (user?.role === "admin") return inventories;
+    return inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
+  }, [inventories, user]);
+
+  const handleExportSingleInventory = (inventory) => {
+    const safeDate = String(inventory?.inventoryDate || "inventory").replace(/[^0-9-]/g, "");
+    const safeRestaurant = String(inventory?.restaurantName || "restaurant")
+      .trim()
+      .replace(/\s+/g, "_")
+      .replace(/[^a-zA-Z0-9а-яА-ЯіїєІЇЄґҐ_-]/g, "");
+    const fileName = `inventory_${safeDate || "date"}_${safeRestaurant || "restaurant"}.xlsx`;
+    exportInventoriesToExcel([inventory], fileName);
+  };
+
+  const handleExportSingleInventory1C = (inventory) => {
+    const safeDate = String(inventory?.inventoryDate || "inventory").replace(/[^0-9-]/g, "");
+    const safeRestaurant = String(inventory?.restaurantName || inventory?.restaurantRegNumber || "restaurant")
+      .trim()
+      .replace(/\s+/g, "_")
+      .replace(/[^a-zA-Z0-9а-яА-ЯіїєІЇЄґҐ_-]/g, "");
+    const fileName = `inventory_1c_${safeDate || "date"}_${safeRestaurant || "restaurant"}.xlsx`;
+    exportInventoryTo1CExcel(inventory, fileName);
+  };
+
+  const handlePrintSingleInventory = (inventory) => {
+    const printWindow = window.open("", "_blank", "width=980,height=760");
+    if (!printWindow) {
+      alert("Не вдалося відкрити вікно друку. Дозвольте pop-up у браузері.");
+      return;
+    }
+
+    const escapeHtml = (value) => String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
+    const rowsHtml = (inventory?.items || []).map((item, index) => {
+      const qty = toNumber(item?.qty);
+      const unitPrice = toNumber(item?.unitPrice);
+      const amount = toNumber(item?.amount);
+      return `
+        <tr>
+          <td>${index + 1}</td>
+          <td>${escapeHtml(item?.productName || "-")}</td>
+          <td>${escapeHtml(item?.code1C || "-")}</td>
+          <td>${escapeHtml(item?.category || "-")}</td>
+          <td>${qty.toFixed(2)}</td>
+          <td>${escapeHtml(item?.unit || "-")}</td>
+          <td>${unitPrice.toFixed(2)}</td>
+          <td>${amount.toFixed(2)}</td>
+          <td></td>
+        </tr>
+      `;
+    }).join("");
+
+    const html = `
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Інвентаризація продуктів</title>
+    <style>
+      @page { size: A4 portrait; margin: 10mm; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        color: #0f172a;
+        background: #fff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      }
+      .sheet { width: 100%; }
+      .header { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; font-size: 12px; }
+      .title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+      table { width: 100%; border-collapse: collapse; font-size: 11px; }
+      th, td { border: 1px solid #cbd5e1; padding: 4px 6px; vertical-align: top; }
+      th { text-align: left; background: #f8fafc; font-weight: 700; }
+      .summary { margin-top: 10px; display: flex; gap: 16px; font-size: 12px; }
+      .signatures { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; font-size: 12px; }
+      .line { margin-top: 28px; border-bottom: 1px solid #334155; }
+    </style>
+  </head>
+  <body>
+    <div class="sheet">
+      <div class="title">Інвентаризація продуктів</div>
+      <div class="header">
+        <div><strong>Дата:</strong> ${escapeHtml(formatDateUk(inventory?.inventoryDate))}</div>
+        <div><strong>Ресторан:</strong> ${escapeHtml(inventory?.restaurantName || "-")}</div>
+        <div><strong>Хто створив:</strong> ${escapeHtml(inventory?.createdBy || "-")}</div>
+        <div><strong>К-сть позицій:</strong> ${Array.isArray(inventory?.items) ? inventory.items.length : 0}</div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 32px;">#</th>
+            <th>Продукт</th>
+            <th style="width: 90px;">Код 1С</th>
+            <th>Категорія</th>
+            <th style="width: 70px;">К-сть</th>
+            <th style="width: 70px;">Од.</th>
+            <th style="width: 90px;">Ціна</th>
+            <th style="width: 100px;">Сума</th>
+            <th style="width: 120px;">Ручна примітка</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml || '<tr><td colspan="9">Немає позицій</td></tr>'}
+        </tbody>
+      </table>
+      <div class="summary">
+        <div><strong>Всього од.:</strong> ${toNumber(inventory?.totalItems).toFixed(2)}</div>
+        <div><strong>Загальна сума:</strong> ${toNumber(inventory?.totalAmount).toFixed(2)} грн</div>
+      </div>
+      <div class="signatures">
+        <div><div>Відповідальний:</div><div class="line"></div></div>
+        <div><div>Перевірив:</div><div class="line"></div></div>
+      </div>
+    </div>
+    <script>setTimeout(() => { window.focus(); window.print(); }, 150);</script>
+  </body>
+</html>`;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
+  return (
+    <div className={`${cardClass} px-2 sm:px-5`}>
+      <h3 className="mb-3 text-base font-semibold text-slate-900">Журнал інвентаризацій</h3>
+      <div className="-mx-1 sm:mx-0 overflow-x-auto rounded-lg border border-slate-200">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-50 text-slate-700">
+            <tr>
+              <th className="px-3 py-2 text-left">Дата</th>
+              <th className="px-3 py-2 text-left">Ресторан</th>
+              <th className="px-3 py-2 text-left">Позицій</th>
+              <th className="px-3 py-2 text-left">Сума</th>
+              <th className="px-3 py-2 text-left">Хто створив</th>
+              <th className="px-3 py-2 text-left">Дії</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleInventories.map((inventory) => (
+              <tr key={inventory.id} className="border-t border-slate-200">
+                <td className="px-3 py-2">{formatDateUk(inventory.inventoryDate)}</td>
+                <td className="px-3 py-2">{inventory.restaurantName || "-"}</td>
+                <td className="px-3 py-2">{Array.isArray(inventory.items) ? inventory.items.length : 0}</td>
+                <td className="px-3 py-2 font-medium">{formatMoney(inventory.totalAmount)}</td>
+                <td className="px-3 py-2">{inventory.createdBy || "-"}</td>
+                <td className="px-3 py-2">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleExportSingleInventory(inventory)}
+                      className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500"
+                    >
+                      <Download size={14} /> Ексель
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleExportSingleInventory1C(inventory)}
+                      className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                    >
+                      <Download size={14} /> Ексель 1С
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handlePrintSingleInventory(inventory)}
+                      className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                      <Printer size={14} /> Друк
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {visibleInventories.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-3 py-6 text-center text-slate-500">Інвентаризацій поки немає.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -1114,7 +1625,6 @@ function TypicalFieldsTab({ fields, canManage, createTypicalField, updateTypical
 }
 
 function BookingTab({ products, orders, createOrder, restaurants, user }) {
-  const activeProducts = useMemo(() => products.filter((p) => p.isActive), [products]);
   const pageSizeOptions = [12, 25, 50];
   const [restaurantId, setRestaurantId] = useState(user?.role === "admin" ? "" : String(user?.restaurant || ""));
   const [requiredDate, setRequiredDate] = useState("");
@@ -1127,6 +1637,11 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(12);
 
+  useEffect(() => {
+    if (user?.role === "admin") return;
+    setRestaurantId(String(user?.restaurant || ""));
+  }, [user]);
+
   const availableRestaurants = useMemo(() => {
     if (user?.role === "admin") return restaurants;
     return restaurants.filter((r) => String(r.id) === String(user?.restaurant));
@@ -1136,6 +1651,12 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
     if (user?.role === "admin") return orders;
     return orders.filter((order) => String(order.restaurantId) === String(user?.restaurant));
   }, [orders, user]);
+
+  const activeProducts = useMemo(() => {
+    const selectedRestaurantId = String(restaurantId || "");
+    if (!selectedRestaurantId) return [];
+    return products.filter((p) => p.isActive && sameRestaurant(p.restaurantId, selectedRestaurantId));
+  }, [products, restaurantId]);
 
   const availableCategories = useMemo(() => {
     return Array.from(new Set(activeProducts.map((product) => product.category).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
@@ -1207,6 +1728,10 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
     setCurrentPage(1);
   }, [rowsPerPage]);
 
+  useEffect(() => {
+    setQuantities({});
+  }, [restaurantId]);
+
   const selectedItems = useMemo(() => {
     return activeProducts
       .map((product) => {
@@ -1216,6 +1741,7 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
         return {
           id: product.id,
           name: product.name,
+          code1C: product.code1C || "",
           category: product.category,
           supplier: product.supplier,
           unit: product.unit,
@@ -1244,6 +1770,7 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
         return {
           productId: product.id,
           productName: product.name,
+          code1C: product.code1C || "",
           category: product.category,
           unit: product.unit,
           qty,
@@ -1259,7 +1786,9 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
       return;
     }
 
-    const restaurantName = restaurants.find((r) => String(r.id) === String(restaurantId))?.name || "Невідомий ресторан";
+    const selectedRestaurant = restaurants.find((r) => String(r.id) === String(restaurantId));
+    const restaurantName = selectedRestaurant?.name || "Невідомий ресторан";
+    const restaurantRegNumber = String(selectedRestaurant?.regNumber || "");
     const totalItems = orderItems.reduce((sum, item) => sum + item.qty, 0);
     const totalAmount = orderItems.reduce((sum, item) => sum + toNumber(item.amount), 0);
 
@@ -1268,6 +1797,7 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
       createdById: user?.uid || "",
       restaurantId: String(restaurantId),
       restaurantName,
+      restaurantRegNumber,
       requiredDate,
       comment: comment.trim(),
       status: "new",
@@ -1428,7 +1958,7 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
               {filteredProducts.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
-                    За поточними фільтрами продукти не знайдено.
+                    {restaurantId ? "За поточними фільтрами продукти не знайдено." : "Спочатку оберіть заклад."}
                   </td>
                 </tr>
               )}
@@ -2419,9 +2949,12 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
         categories={availableCategories}
         units={availableUnits}
         inventories={inventories}
-          canManageProducts={canManageProducts}
+        restaurants={restaurants}
+        user={user}
+        canManageProducts={canManageProducts}
         addProduct={addProduct}
         updateProduct={updateProduct}
+        deleteProduct={deleteProduct}
       />
     );
   }
@@ -2435,6 +2968,15 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
         user={user}
         createInventory={createInventory}
         updateInventory={updateInventory}
+      />
+    );
+  }
+
+  if (tabKind === "inventoryJournal") {
+    return (
+      <InventoryJournalTab
+        inventories={inventories}
+        user={user}
       />
     );
   }

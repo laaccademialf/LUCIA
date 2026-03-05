@@ -9,6 +9,7 @@ import {
   onSnapshot,
   query,
   orderBy,
+  runTransaction,
 } from "firebase/firestore";
 import { db } from "./config";
 
@@ -573,6 +574,84 @@ export const getProductInventories = async () => {
   }
 };
 
+export const startProductInventorySession = async (scopeId, sessionData = {}) => {
+  try {
+    const sessionsRef = collection(db, "productInventorySessions");
+    const nowIso = new Date().toISOString();
+
+    const activeSnapshot = await getDocs(sessionsRef);
+    await Promise.all(
+      activeSnapshot.docs
+        .map((item) => ({ id: item.id, ...item.data() }))
+        .filter((item) => String(item.scopeId || "") === String(scopeId || "") && item.isActive === true)
+        .map((item) =>
+          updateDoc(doc(db, "productInventorySessions", item.id), {
+            isActive: false,
+            endedAt: nowIso,
+            endedReason: "auto_closed_by_new_session",
+            updatedAt: nowIso,
+          })
+        )
+    );
+
+    const docRef = await addDoc(sessionsRef, {
+      scopeId: String(scopeId || ""),
+      isActive: true,
+      startedAt: nowIso,
+      updatedAt: nowIso,
+      ...sessionData,
+    });
+
+    return docRef.id;
+  } catch (error) {
+    console.error("Помилка старту сесії інвентаризації продуктів:", error);
+    throw error;
+  }
+};
+
+export const endProductInventorySession = async (sessionId, endData = {}) => {
+  try {
+    const nowIso = new Date().toISOString();
+    const sessionRef = doc(db, "productInventorySessions", sessionId);
+    await updateDoc(sessionRef, {
+      isActive: false,
+      endedAt: nowIso,
+      updatedAt: nowIso,
+      ...endData,
+    });
+  } catch (error) {
+    console.error("Помилка завершення сесії інвентаризації продуктів:", error);
+    throw error;
+  }
+};
+
+export const subscribeToActiveProductInventorySession = (scopeId, callback) => {
+  const sessionsRef = collection(db, "productInventorySessions");
+  const q = query(sessionsRef, orderBy("startedAt", "desc"));
+
+  return onSnapshot(q, (snapshot) => {
+    const sessions = snapshot.docs
+      .map((item) => ({ id: item.id, ...item.data() }))
+      .filter((item) => String(item.scopeId || "") === String(scopeId || "") && item.isActive === true)
+      .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
+
+    callback(sessions[0] || null);
+  });
+};
+
+export const subscribeToProductInventorySessions = (scopeId, callback) => {
+  const sessionsRef = collection(db, "productInventorySessions");
+  const q = query(sessionsRef, orderBy("startedAt", "desc"));
+
+  return onSnapshot(q, (snapshot) => {
+    const sessions = snapshot.docs
+      .map((item) => ({ id: item.id, ...item.data() }))
+      .filter((item) => String(item.scopeId || "") === String(scopeId || ""));
+
+    callback(sessions);
+  });
+};
+
 export const addProductInventory = async (inventory) => {
   try {
     const docRef = await addDoc(collection(db, "productInventories"), {
@@ -583,6 +662,122 @@ export const addProductInventory = async (inventory) => {
     return docRef.id;
   } catch (error) {
     console.error("Помилка збереження інвентаризації продуктів:", error);
+    throw error;
+  }
+};
+
+const normalizeInventoryDate = (value) => {
+  const raw = String(value || "").trim();
+  const shortMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (shortMatch) return raw;
+
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "";
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+export const upsertProductInventoryByRestaurantDate = async (inventory) => {
+  try {
+    const restaurantId = String(inventory?.restaurantId || "").trim();
+    const sessionId = String(inventory?.inventorySessionId || "").trim();
+    const inventoryDate = normalizeInventoryDate(inventory?.inventoryDate);
+
+    if (!restaurantId || (!inventoryDate && !sessionId)) {
+      throw new Error("Не вказано restaurantId та inventoryDate/sessionId для інвентаризації.");
+    }
+
+    const docId = sessionId || `${restaurantId}__${inventoryDate}`;
+    const inventoryRef = doc(db, "productInventories", docId);
+
+    await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(inventoryRef);
+      const nowIso = new Date().toISOString();
+
+      const existing = snapshot.exists() ? snapshot.data() : {};
+      const resolvedInventoryDate =
+        inventoryDate ||
+        normalizeInventoryDate(existing.inventoryDate) ||
+        normalizeInventoryDate(inventory?.inventorySessionStartedAt) ||
+        normalizeInventoryDate(nowIso);
+      const existingItems = Array.isArray(existing.items) ? existing.items : [];
+      const incomingItems = Array.isArray(inventory?.items) ? inventory.items : [];
+
+      const mergedByProductId = new Map();
+
+      existingItems.forEach((item) => {
+        const productId = String(item?.productId || "").trim();
+        if (!productId) return;
+        mergedByProductId.set(productId, item);
+      });
+
+      incomingItems.forEach((item) => {
+        const productId = String(item?.productId || "").trim();
+        if (!productId) return;
+        mergedByProductId.set(productId, item);
+      });
+
+      const mergedItems = Array.from(mergedByProductId.values()).sort((a, b) =>
+        String(a?.productName || "").localeCompare(String(b?.productName || ""), "uk")
+      );
+
+      const totalItems = mergedItems.reduce((sum, item) => {
+        const qty = Number(item?.qty);
+        return sum + (Number.isFinite(qty) ? qty : 0);
+      }, 0);
+
+      const totalAmount = mergedItems.reduce((sum, item) => {
+        const amount = Number(item?.amount);
+        return sum + (Number.isFinite(amount) ? amount : 0);
+      }, 0);
+
+      const contributor = {
+        userId: String(inventory?.createdById || inventory?.updatedById || ""),
+        name: String(inventory?.createdBy || inventory?.updatedBy || "Користувач"),
+        at: nowIso,
+      };
+
+      const prevContributors = Array.isArray(existing.contributors) ? existing.contributors : [];
+      const contributorsMap = new Map();
+      prevContributors.forEach((entry) => {
+        const key = String(entry?.userId || entry?.name || "").trim();
+        if (key) contributorsMap.set(key, entry);
+      });
+      const contributorKey = String(contributor.userId || contributor.name || "").trim();
+      if (contributorKey) contributorsMap.set(contributorKey, contributor);
+
+      const payload = {
+        restaurantId,
+        restaurantName: String(inventory?.restaurantName || existing.restaurantName || "Невідомий ресторан"),
+        restaurantRegNumber: String(inventory?.restaurantRegNumber || existing.restaurantRegNumber || ""),
+        inventoryDate: resolvedInventoryDate,
+        inventorySessionId: sessionId || String(existing.inventorySessionId || ""),
+        inventorySessionStartedAt: String(inventory?.inventorySessionStartedAt || existing.inventorySessionStartedAt || ""),
+        items: mergedItems,
+        totalItems,
+        totalAmount,
+        contributors: Array.from(contributorsMap.values()),
+        lastContributorName: contributor.name,
+        lastContributorId: contributor.userId,
+        updatedBy: contributor.name,
+        updatedById: contributor.userId,
+        updatedAt: nowIso,
+      };
+
+      if (!snapshot.exists()) {
+        payload.createdAt = nowIso;
+        payload.createdBy = contributor.name;
+        payload.createdById = contributor.userId;
+      }
+
+      transaction.set(inventoryRef, payload, { merge: true });
+    });
+
+    return docId;
+  } catch (error) {
+    console.error("Помилка upsert інвентаризації продуктів:", error);
     throw error;
   }
 };
