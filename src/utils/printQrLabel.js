@@ -149,7 +149,7 @@ const generateBrotherLabelImage = async ({ invNumber, name, qrValue }) => {
   return { pngDataUrl, pngBlob, fileName };
 };
 
-const generateBrotherLbxFile = async ({ invNumber, name, qrValue }) => {
+const generateBrotherLbxFile = async ({ invNumber, name, qrValue, androidSafe = false }) => {
   const normalizedInvNumber = String(invNumber || "").trim();
   const normalizedName = String(name || "").trim();
   const valueToEncode = String(qrValue || normalizedInvNumber || normalizedName || "").trim();
@@ -173,41 +173,53 @@ const generateBrotherLbxFile = async ({ invNumber, name, qrValue }) => {
     throw new Error("Шаблон LBX пошкоджений");
   }
 
-  const adaptiveLbx = getAdaptiveLbxTitleStyle(normalizedName);
-  const safeName = truncateWithEllipsis(normalizedName, adaptiveLbx.maxChars);
-  const nextLabelXml = labelXml
+  let nextLabelXml = labelXml
     .replace(
       /(<barcode:barcode[\s\S]*?<pt:data>)([\s\S]*?)(<\/pt:data>)/,
       `$1${escapeXml(valueToEncode)}$3`
-    )
-    .replace(
-      /(<barcode:barcode[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
-      `$147pt$330pt$529pt$729pt$9`
-    )
-    .replace(
-      /(<text:text[\s\S]*?<pt:data>)([\s\S]*?)(<\/pt:data>)/,
-      `$1${escapeXml(`${safeName}\nNo ${normalizedInvNumber}`)}$3`
-    )
-    .replace(
-      /(<text:textControl[^>]*\s+autoLF=")([^"]+)("[^>]*>)/,
-      `$1true$3`
-    )
-    .replace(
-      /(<text:text[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
-      `$112.1pt$38.8pt$6106.3pt$722.4pt$9`
-    )
-    .replace(
-      /(<text:textAlign[^>]*\s+verticalAlignment=")([^"]+)("[^>]*>)/,
-      `$1TOP$3`
-    )
-    .replace(
-      /(<text:fontExt[^>]*\s+size=")([^"]+)("[^>]*>)/,
-      `$1${adaptiveLbx.fontPt.toFixed(1)}pt$3`
-    )
-    .replace(
-      /(<text:stringItem[^>]*\s+charLen=")([^"]+)("[^>]*>)/,
-      `$1${adaptiveLbx.charLen}$3`
     );
+
+  if (androidSafe) {
+    // Android Brother app is stricter with LBX text/style internals.
+    // Keep template structure almost intact and inject only short text.
+    const safeAndroidText = truncateWithEllipsis(`No ${normalizedInvNumber}`, 10);
+    nextLabelXml = nextLabelXml.replace(
+      /(<text:text[\s\S]*?<pt:data>)([\s\S]*?)(<\/pt:data>)/,
+      `$1${escapeXml(safeAndroidText)}$3`
+    );
+  } else {
+    const adaptiveLbx = getAdaptiveLbxTitleStyle(normalizedName);
+    const safeName = truncateWithEllipsis(normalizedName, adaptiveLbx.maxChars);
+    nextLabelXml = nextLabelXml
+      .replace(
+        /(<barcode:barcode[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
+        `$147pt$330pt$529pt$729pt$9`
+      )
+      .replace(
+        /(<text:text[\s\S]*?<pt:data>)([\s\S]*?)(<\/pt:data>)/,
+        `$1${escapeXml(`${safeName}\nNo ${normalizedInvNumber}`)}$3`
+      )
+      .replace(
+        /(<text:textControl[^>]*\s+autoLF=")([^"]+)("[^>]*>)/,
+        `$1true$3`
+      )
+      .replace(
+        /(<text:text[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
+        `$112.1pt$38.8pt$6106.3pt$722.4pt$9`
+      )
+      .replace(
+        /(<text:textAlign[^>]*\s+verticalAlignment=")([^"]+)("[^>]*>)/,
+        `$1TOP$3`
+      )
+      .replace(
+        /(<text:fontExt[^>]*\s+size=")([^"]+)("[^>]*>)/,
+        `$1${adaptiveLbx.fontPt.toFixed(1)}pt$3`
+      )
+      .replace(
+        /(<text:stringItem[^>]*\s+charLen=")([^"]+)("[^>]*>)/,
+        `$1${adaptiveLbx.charLen}$3`
+      );
+  }
 
   const nextPropXml = propXml
     .replace(/(<dc:title>)([\s\S]*?)(<\/dc:title>)/, `$1${escapeXml(`LUCIA_${normalizedInvNumber}`)}$3`)
@@ -273,7 +285,7 @@ export const printAssetQrLabel = async ({
     const generated = await generateBrotherLabelImage({ invNumber, name, qrValue });
 
     try {
-      const lbxGenerated = await generateBrotherLbxFile({ invNumber, name, qrValue });
+      const lbxGenerated = await generateBrotherLbxFile({ invNumber, name, qrValue, androidSafe: isAndroid });
 
       if (isAndroid) {
         const lbxShared = await shareBrotherFileDirect({
