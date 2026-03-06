@@ -1,4 +1,5 @@
 import * as QRCode from "qrcode";
+import JSZip from "jszip";
 
 const isMobileDevice = () => {
   if (typeof navigator === "undefined") return false;
@@ -6,17 +7,17 @@ const isMobileDevice = () => {
   return /iphone|ipad|ipod|android|mobile|phone/.test(ua);
 };
 
-const isAndroidDevice = () => {
-  if (typeof navigator === "undefined") return false;
-  return /android/i.test(String(navigator.userAgent || ""));
-};
-
 const isAppleMobileDevice = () => {
   if (typeof navigator === "undefined") return false;
   return /iphone|ipad|ipod/i.test(String(navigator.userAgent || ""));
 };
 
-const BROTHER_STORE_SEARCH_ANDROID = "https://play.google.com/store/search?q=brother%20iprint%20label&c=apps";
+const isAndroidDevice = () => {
+  if (typeof navigator === "undefined") return false;
+  return /android/i.test(String(navigator.userAgent || ""));
+};
+
+const LBX_TEMPLATE_PUBLIC_PATH = "/brother-template.lbx";
 
 const sanitizeFileName = (value) => {
   return String(value || "label")
@@ -31,50 +32,57 @@ const dataUrlToBlob = async (dataUrl) => {
   return response.blob();
 };
 
-const escapeHtml = (value) => {
+const escapeXml = (value) => {
   return String(value || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+    .replace(/'/g, "&apos;");
 };
 
-const drawCenteredWrappedText = ({ ctx, text, x, y, maxWidth, lineHeight, maxLines }) => {
-  const words = String(text || "").split(/\s+/).filter(Boolean);
-  const lines = [];
-  let current = "";
+const truncateWithEllipsis = (value, maxChars) => {
+  const normalized = String(value || "").trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 3))}...`;
+};
 
-  for (const word of words) {
-    const test = current ? `${current} ${word}` : word;
-    if (ctx.measureText(test).width <= maxWidth) {
-      current = test;
-      continue;
-    }
+const getAdaptiveLbxTitleStyle = (name) => {
+  const len = String(name || "").trim().length;
 
-    if (current) {
-      lines.push(current);
-      current = word;
-    } else {
-      lines.push(word);
-      current = "";
-    }
+  if (len <= 18) {
+    return { fontPt: 16.0, maxChars: 26, charLen: 56 };
+  }
+  if (len <= 26) {
+    return { fontPt: 14.5, maxChars: 30, charLen: 60 };
+  }
+  if (len <= 36) {
+    return { fontPt: 13.0, maxChars: 34, charLen: 64 };
+  }
 
-    if (lines.length >= maxLines) {
-      break;
+  return { fontPt: 11.8, maxChars: 38, charLen: 68 };
+};
+
+const fitSingleLineText = ({ ctx, text, maxWidth, startSize, minSize, fontWeight }) => {
+  const normalized = String(text || "").trim();
+  if (!normalized) {
+    return { text: "", size: minSize };
+  }
+
+  for (let size = startSize; size >= minSize; size -= 2) {
+    ctx.font = `${fontWeight} ${size}px Arial`;
+    if (ctx.measureText(normalized).width <= maxWidth) {
+      return { text: normalized, size };
     }
   }
 
-  if (current && lines.length < maxLines) {
-    lines.push(current);
+  ctx.font = `${fontWeight} ${minSize}px Arial`;
+  let next = normalized;
+  while (next.length > 0 && ctx.measureText(`${next}...`).width > maxWidth) {
+    next = next.slice(0, -1);
   }
 
-  const visible = lines.slice(0, maxLines);
-  visible.forEach((line, index) => {
-    ctx.fillText(line, x, y + index * lineHeight);
-  });
-
-  return visible.length;
+  return { text: next ? `${next}...` : "...", size: minSize };
 };
 
 const generateBrotherLabelImage = async ({ invNumber, name, qrValue }) => {
@@ -87,8 +95,8 @@ const generateBrotherLabelImage = async ({ invNumber, name, qrValue }) => {
   }
 
   const qrDataUrl = await QRCode.toDataURL(valueToEncode, {
-    margin: 1,
-    width: 360,
+    margin: 0,
+    width: 900,
     errorCorrectionLevel: "M",
   });
 
@@ -100,8 +108,9 @@ const generateBrotherLabelImage = async ({ invNumber, name, qrValue }) => {
   });
 
   const canvas = document.createElement("canvas");
-  canvas.width = 1200;
-  canvas.height = 860;
+  // 24mm tape-friendly aspect: long horizontal label with minimal side padding.
+  canvas.width = 1600;
+  canvas.height = 620;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
     throw new Error("Не вдалося згенерувати зображення етикетки");
@@ -110,42 +119,107 @@ const generateBrotherLabelImage = async ({ invNumber, name, qrValue }) => {
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  ctx.strokeStyle = "#d1d5db";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(18, 18, canvas.width - 36, canvas.height - 36);
-
   ctx.fillStyle = "#111827";
-  ctx.font = "bold 62px Arial";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  const usedLines = drawCenteredWrappedText({
+  const adaptiveName = fitSingleLineText({
     ctx,
     text: normalizedName,
-    x: canvas.width / 2,
-    y: 44,
-    maxWidth: canvas.width - 120,
-    lineHeight: 72,
-    maxLines: 2,
+    maxWidth: canvas.width - 70,
+    startSize: 54,
+    minSize: 36,
+    fontWeight: 600,
   });
+  ctx.font = `600 ${adaptiveName.size}px Arial`;
+  ctx.fillText(adaptiveName.text, canvas.width / 2, 16);
 
-  const invY = 44 + usedLines * 72 + 20;
-  ctx.font = "bold 56px Arial";
-  ctx.fillText(`Інв. №: ${normalizedInvNumber}`, canvas.width / 2, invY);
+  const invY = 16 + adaptiveName.size + 8;
+  ctx.font = "700 44px Arial";
+  ctx.fillText(`No ${normalizedInvNumber}`, canvas.width / 2, invY);
 
-  const qrSize = 500;
+  const qrSize = 430;
   const qrX = (canvas.width - qrSize) / 2;
-  const qrY = invY + 86;
+  const qrY = invY + 54;
   ctx.drawImage(qrImage, qrX, qrY, qrSize, qrSize);
-
-  ctx.font = "34px Arial";
-  ctx.fillStyle = "#374151";
-  ctx.fillText(valueToEncode.slice(0, 72), canvas.width / 2, qrY + qrSize + 26);
 
   const pngDataUrl = canvas.toDataURL("image/png");
   const pngBlob = await dataUrlToBlob(pngDataUrl);
   const fileName = `${sanitizeFileName(normalizedInvNumber)}-qr-label.png`;
 
   return { pngDataUrl, pngBlob, fileName };
+};
+
+const generateBrotherLbxFile = async ({ invNumber, name, qrValue }) => {
+  const normalizedInvNumber = String(invNumber || "").trim();
+  const normalizedName = String(name || "").trim();
+  const valueToEncode = String(qrValue || normalizedInvNumber || normalizedName || "").trim();
+
+  if (!normalizedInvNumber || !normalizedName || !valueToEncode) {
+    throw new Error("Для LBX потрібні інвентарний номер і назва активу");
+  }
+
+  const response = await fetch(LBX_TEMPLATE_PUBLIC_PATH, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("Не знайдено шаблон brother-template.lbx");
+  }
+
+  const templateBuffer = await response.arrayBuffer();
+  const zip = await JSZip.loadAsync(templateBuffer);
+
+  const labelXml = await zip.file("label.xml")?.async("string");
+  const propXml = await zip.file("prop.xml")?.async("string");
+
+  if (!labelXml || !propXml) {
+    throw new Error("Шаблон LBX пошкоджений");
+  }
+
+  const adaptiveLbx = getAdaptiveLbxTitleStyle(normalizedName);
+  const safeName = truncateWithEllipsis(normalizedName, adaptiveLbx.maxChars);
+  const nextLabelXml = labelXml
+    .replace(
+      /(<barcode:barcode[\s\S]*?<pt:data>)([\s\S]*?)(<\/pt:data>)/,
+      `$1${escapeXml(valueToEncode)}$3`
+    )
+    .replace(
+      /(<barcode:barcode[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
+      `$147pt$330pt$529pt$729pt$9`
+    )
+    .replace(
+      /(<text:text[\s\S]*?<pt:data>)([\s\S]*?)(<\/pt:data>)/,
+      `$1${escapeXml(`${safeName}\nNo ${normalizedInvNumber}`)}$3`
+    )
+    .replace(
+      /(<text:textControl[^>]*\s+autoLF=")([^"]+)("[^>]*>)/,
+      `$1true$3`
+    )
+    .replace(
+      /(<text:text[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
+      `$112.1pt$38.8pt$6106.3pt$722.4pt$9`
+    )
+    .replace(
+      /(<text:textAlign[^>]*\s+verticalAlignment=")([^"]+)("[^>]*>)/,
+      `$1TOP$3`
+    )
+    .replace(
+      /(<text:fontExt[^>]*\s+size=")([^"]+)("[^>]*>)/,
+      `$1${adaptiveLbx.fontPt.toFixed(1)}pt$3`
+    )
+    .replace(
+      /(<text:stringItem[^>]*\s+charLen=")([^"]+)("[^>]*>)/,
+      `$1${adaptiveLbx.charLen}$3`
+    );
+
+  const nextPropXml = propXml
+    .replace(/(<dc:title>)([\s\S]*?)(<\/dc:title>)/, `$1${escapeXml(`LUCIA_${normalizedInvNumber}`)}$3`)
+    .replace(/(<dcterms:modified>)([\s\S]*?)(<\/dcterms:modified>)/, `$1${new Date().toISOString()}$3`);
+
+  zip.file("label.xml", nextLabelXml);
+  zip.file("prop.xml", nextPropXml);
+
+  const lbxBlob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+  const lbxFileName = `${sanitizeFileName(normalizedInvNumber)}-label.lbx`;
+
+  return { lbxBlob, lbxFileName };
 };
 
 const downloadBlob = (blob, fileName) => {
@@ -159,162 +233,32 @@ const downloadBlob = (blob, fileName) => {
   setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 };
 
-const shareBrotherFilesDirect = async ({ pngBlob, fileName }) => {
+const tryOpenBrotherApp = () => {
+  if (isAndroidDevice()) {
+    window.location.href = "intent://open#Intent;scheme=brotheriprintandlabel;package=com.brother.ptouch.iprintandlabel;end";
+    return;
+  }
+
+  window.location.href = "brotheriprintandlabel://";
+};
+
+const shareBrotherFileDirect = async ({ blob, fileName, mimeType }) => {
   if (typeof navigator === "undefined" || typeof navigator.share !== "function") {
     return false;
   }
 
   try {
-    const pngFile = new File([pngBlob], fileName, { type: "image/png" });
-    if (typeof navigator.canShare === "function" && !navigator.canShare({ files: [pngFile] })) {
+    const files = [new File([blob], fileName, { type: mimeType })];
+
+    if (typeof navigator.canShare === "function" && !navigator.canShare({ files })) {
       return false;
     }
 
-    await navigator.share({
-      title: "QR етикетка",
-      text: "Відкрити у Brother iPrint&Label",
-      files: [pngFile],
-    });
+    await navigator.share({ files });
     return true;
   } catch {
     return false;
   }
-};
-
-const openImageInNewTab = (dataUrl) => {
-  const win = window.open("", "_blank");
-  if (!win) return false;
-
-  win.document.open();
-  win.document.write(`<!doctype html><html><head><meta charset="UTF-8"/><title>QR Label</title></head><body style="margin:0;background:#0f172a;display:flex;align-items:center;justify-content:center;min-height:100vh;"><img src="${dataUrl}" alt="QR Label" style="max-width:100%;height:auto;" /></body></html>`);
-  win.document.close();
-  return true;
-};
-
-const openBrotherHelperPage = ({ pngDataUrl, fileName, labelTitle }) => {
-  const win = window.open("", "_blank");
-  if (!win) return false;
-
-  const safeTitle = escapeHtml(labelTitle);
-  const safePngName = escapeHtml(fileName);
-
-  win.document.open();
-  win.document.write(`<!doctype html>
-<html lang="uk">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Brother QR Label</title>
-    <style>
-      body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background: #0f172a; color: #e2e8f0; }
-      .wrap { max-width: 860px; margin: 0 auto; padding: 18px; }
-      h1 { font-size: 20px; margin: 0 0 6px; }
-      p { margin: 0 0 12px; color: #cbd5e1; }
-      .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
-      button, a.btn {
-        border: 1px solid #334155; border-radius: 10px; padding: 12px 10px; text-align: center;
-        background: #1e293b; color: #f8fafc; font-size: 14px; font-weight: 700; text-decoration: none;
-      }
-      button.primary, a.btn.primary { background: #4f46e5; border-color: #6366f1; }
-      img { width: 100%; height: auto; border-radius: 10px; border: 1px solid #334155; background: #fff; }
-      .note { margin-top: 10px; font-size: 13px; color: #94a3b8; }
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <h1>Етикетка: ${safeTitle}</h1>
-      <p>Якщо Brother не видно в системному списку, спочатку натисніть "Відкрити Brother", далі імпортуйте PNG/JPG з Файлів.</p>
-      <div class="actions">
-        <button id="shareBtn" class="primary">Поділитись PNG</button>
-        <button id="openBrotherBtn">Відкрити Brother</button>
-        <a id="downloadPng" class="btn" download="${safePngName}" href="${pngDataUrl}">Завантажити PNG</a>
-        <div class="btn" style="display:flex;align-items:center;justify-content:center;opacity:.6">Lossless формат</div>
-      </div>
-      <img src="${pngDataUrl}" alt="QR label" />
-      <div class="note">Якщо не друкує чітко: у Brother app оберіть режим друку "Actual size / 100%".</div>
-    </div>
-    <script>
-      const pngDataUrl = ${JSON.stringify(pngDataUrl)};
-      const fileName = ${JSON.stringify(fileName)};
-
-      async function dataUrlToFile(dataUrl, name, type) {
-        const res = await fetch(dataUrl);
-        const blob = await res.blob();
-        return new File([blob], name, { type });
-      }
-
-      document.getElementById('shareBtn').addEventListener('click', async () => {
-        try {
-          if (!navigator.share) {
-            alert('Функція Поділитись недоступна в цьому браузері. Скачайте PNG/JPG і відкрийте через Brother app.');
-            return;
-          }
-
-          const pngFile = await dataUrlToFile(pngDataUrl, fileName, 'image/png');
-          if (navigator.canShare && !navigator.canShare({ files: [pngFile] })) {
-            alert('Ваш браузер не підтримує передачу файлів через Поділитись. Використайте кнопки завантаження.');
-            return;
-          }
-
-          await navigator.share({
-            title: 'QR етикетка',
-            text: 'Відкрити у Brother iPrint&Label',
-            files: [pngFile],
-          });
-        } catch (e) {
-          // canceled or failed
-        }
-      });
-
-      document.getElementById('openBrotherBtn').addEventListener('click', () => {
-        const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent || '');
-        const isAndroid = /android/i.test(navigator.userAgent || '');
-        const fallbackUrl = ${JSON.stringify(BROTHER_STORE_SEARCH_ANDROID)};
-
-        if (isIOS) {
-          alert('На iPhone відкрийте Brother iPrint&Label вручну, далі Import -> Files/Photos і оберіть PNG або JPG.');
-          return;
-        }
-
-        if (isAndroid) {
-          const intent = 'intent://open#Intent;scheme=brotheriprintandlabel;package=com.brother.ptouch.iprintandlabel;S.browser_fallback_url=' + encodeURIComponent(fallbackUrl) + ';end';
-          window.location.href = intent;
-          return;
-        }
-
-        const startTs = Date.now();
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = 'brotheriprintandlabel://';
-        document.body.appendChild(iframe);
-
-        setTimeout(() => {
-          iframe.remove();
-          if (Date.now() - startTs < 1700) {
-            alert('Не вдалося відкрити Brother автоматично. Відкрийте Brother iPrint&Label вручну, далі Import -> Files/Photos.');
-          }
-        }, 1200);
-      });
-    </script>
-  </body>
-</html>`);
-  win.document.close();
-  return true;
-};
-
-const openBrotherAppAggressive = () => {
-  if (isAndroidDevice()) {
-    const intentUrl = `intent://open#Intent;scheme=brotheriprintandlabel;package=com.brother.ptouch.iprintandlabel;S.browser_fallback_url=${encodeURIComponent(BROTHER_STORE_SEARCH_ANDROID)};end`;
-    window.location.href = intentUrl;
-    return;
-  }
-
-  // iOS: do not force deep-link open because Safari may show blocking error dialogs.
-  if (isAppleMobileDevice()) {
-    return;
-  }
-
-  window.location.href = "brotheriprintandlabel://";
 };
 
 export const printAssetQrLabel = async ({
@@ -325,36 +269,53 @@ export const printAssetQrLabel = async ({
   if (isMobileDevice()) {
     const generated = await generateBrotherLabelImage({ invNumber, name, qrValue });
 
-    if (isAndroidDevice()) {
-      // Android-first flow without popups: native share from current tab.
-      const shared = await shareBrotherFilesDirect(generated);
-      if (shared) {
+    try {
+      const lbxGenerated = await generateBrotherLbxFile({ invNumber, name, qrValue });
+
+      if (isAndroidDevice()) {
+        downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
+        setTimeout(() => {
+          try {
+            tryOpenBrotherApp();
+          } catch {
+            // noop
+          }
+        }, 200);
         return;
       }
 
-      downloadBlob(generated.pngBlob, generated.fileName);
-      alert("Браузер блокує вікна дій. PNG етикетку завантажено. Відкрийте Brother iPrint&Label -> Import -> Files/Photos.");
+      if (isAppleMobileDevice()) {
+        // iOS often hides Brother in Web Share targets for LBX; Files -> Brother works reliably.
+        downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
+        alert("LBX завантажено. Натисніть файл внизу Safari -> Поділитись -> iPrint&Label. Це найстабільніший сценарій на iPhone.");
+        return;
+      }
+
+      const lbxShared = await shareBrotherFileDirect({
+        blob: lbxGenerated.lbxBlob,
+        fileName: lbxGenerated.lbxFileName,
+        mimeType: "application/octet-stream",
+      });
+      if (lbxShared) {
+        return;
+      }
+
+      downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
+      tryOpenBrotherApp();
+      alert("LBX завантажено. Відкрийте Brother iPrint&Label і імпортуйте файл з Downloads/Files.");
       return;
+    } catch (error) {
+      console.warn("LBX generation/share skipped:", error);
     }
 
-    // First try to open Brother app immediately (same user gesture flow).
-    // If OS/browser blocks it, user still gets helper UI with share/download actions.
-    try {
-      openBrotherAppAggressive();
-    } catch {
-      // Ignore and continue to helper screen.
-    }
-
-    const opened = openBrotherHelperPage({
-      ...generated,
-      labelTitle: `${String(name || "").trim()} · ${String(invNumber || "").trim()}`,
+    const shared = await shareBrotherFileDirect({
+      blob: generated.pngBlob,
+      fileName: generated.fileName,
+      mimeType: "image/png",
     });
 
-    if (!opened) {
-      // Pop-up blocked fallback
-      downloadBlob(generated.pngBlob, generated.fileName);
-      downloadBlob(generated.jpgBlob, generated.jpgFileName);
-      alert("Вікно дій заблоковано браузером. PNG етикетку завантажено. Імпортуйте файл у Brother app.");
+    if (!shared) {
+      alert("Не вдалося відкрити меню Поділитись у браузері. Відкрийте цю сторінку в мобільному Chrome/Safari і натисніть QR ще раз.");
     }
 
     return;
