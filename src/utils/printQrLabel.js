@@ -32,6 +32,8 @@ const dataUrlToBlob = async (dataUrl) => {
   return response.blob();
 };
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const escapeXml = (value) => {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -275,6 +277,12 @@ export const printAssetQrLabel = async ({
         tryOpenBrotherApp();
       } catch {
         // noop
+      }
+
+      // If app switched to foreground, stop web flow to avoid conflicting download behavior.
+      await sleep(650);
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
       }
     }
 
