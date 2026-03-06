@@ -181,12 +181,37 @@ const generateBrotherLbxFile = async ({ invNumber, name, qrValue, androidSafe = 
 
   if (androidSafe) {
     // Android Brother app is stricter with LBX text/style internals.
-    // Keep template structure almost intact and inject only short text.
-    const safeAndroidText = truncateWithEllipsis(`No ${normalizedInvNumber}`, 10);
-    nextLabelXml = nextLabelXml.replace(
-      /(<text:text[\s\S]*?<pt:data>)([\s\S]*?)(<\/pt:data>)/,
-      `$1${escapeXml(safeAndroidText)}$3`
-    );
+    // Keep structure close to template but allocate more room for full name + number.
+    const safeAndroidText = `${String(normalizedName || "").trim()}\n${String(normalizedInvNumber || "").trim()}`;
+    nextLabelXml = nextLabelXml
+      .replace(
+        /(<text:text[\s\S]*?<pt:data>)([\s\S]*?)(<\/pt:data>)/,
+        `$1${escapeXml(safeAndroidText)}$3`
+      )
+      .replace(
+        /(<barcode:barcode[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
+        `$147pt$331pt$529pt$729pt$9`
+      )
+      .replace(
+        /(<text:textControl[^>]*\s+autoLF=")([^"]+)("[^>]*>)/,
+        `$1true$3`
+      )
+      .replace(
+        /(<text:text[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
+        `$112.1pt$37.2pt$6106.3pt$723.6pt$9`
+      )
+      .replace(
+        /(<text:textAlign[^>]*\s+verticalAlignment=")([^"]+)("[^>]*>)/,
+        `$1TOP$3`
+      )
+      .replace(
+        /(<text:fontExt[^>]*\s+size=")([^"]+)("[^>]*>)/,
+        "$1" + "8.2pt" + "$3"
+      )
+      .replace(
+        /(<text:stringItem[^>]*\s+charLen=")([^"]+)("[^>]*>)/,
+        "$1" + "80" + "$3"
+      );
   } else {
     const adaptiveLbx = getAdaptiveLbxTitleStyle(normalizedName);
     const safeName = truncateWithEllipsis(normalizedName, adaptiveLbx.maxChars);
@@ -228,31 +253,31 @@ const generateBrotherLbxFile = async ({ invNumber, name, qrValue, androidSafe = 
   zip.file("label.xml", nextLabelXml);
   zip.file("prop.xml", nextPropXml);
 
-  const lbxBlob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+  const lbxBytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+  const lbxMimeType = "application/octet-stream";
+  const lbxBlob = new Blob([lbxBytes], { type: lbxMimeType });
   const lbxFileName = `${sanitizeFileName(normalizedInvNumber)}-label.lbx`;
 
-  return { lbxBlob, lbxFileName };
+  return { lbxBlob, lbxFileName, lbxMimeType };
 };
 
-const downloadBlob = (blob, fileName) => {
+const downloadBlob = (blob, fileName, options = {}) => {
+  const { revokeDelayMs = 15_000 } = options;
+  const rawName = String(fileName || "label.lbx");
+  const withoutZipSuffix = rawName.replace(/\.lbx\.zip$/i, ".lbx").replace(/\.zip$/i, "");
+  const baseName = withoutZipSuffix.trim() || "label.lbx";
+  const safeFileName = baseName.toLowerCase().endsWith(".lbx")
+    ? baseName
+    : `${baseName}.lbx`;
   const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = objectUrl;
-  link.download = fileName;
+  link.download = safeFileName;
   document.body.appendChild(link);
   link.click();
   link.remove();
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-};
 
-const tryOpenBrotherApp = () => {
-  if (isAndroidDevice()) {
-    // Use direct scheme link to avoid forced Play Store fallback when package/activity matching fails.
-    window.location.href = "brotheriprintandlabel://";
-    return;
-  }
-
-  window.location.href = "brotheriprintandlabel://";
+  setTimeout(() => URL.revokeObjectURL(objectUrl), revokeDelayMs);
 };
 
 const shareBrotherFileDirect = async ({ blob, fileName, mimeType }) => {
@@ -262,11 +287,6 @@ const shareBrotherFileDirect = async ({ blob, fileName, mimeType }) => {
 
   try {
     const files = [new File([blob], fileName, { type: mimeType })];
-
-    if (typeof navigator.canShare === "function" && !navigator.canShare({ files })) {
-      return false;
-    }
-
     await navigator.share({ files });
     return true;
   } catch {
@@ -283,8 +303,16 @@ export const printAssetQrLabel = async ({
     const isAndroid = isAndroidDevice();
 
     if (isAndroid) {
-      // Android mode: open Brother directly without file generation/download.
-      tryOpenBrotherApp();
+      // Android: requested flow - auto-download first, then auto-open app.
+      try {
+        const lbxGenerated = await generateBrotherLbxFile({ invNumber, name, qrValue, androidSafe: true });
+        downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName, { revokeDelayMs: 20_000 });
+        // Keep flow stable: browsers may dismiss download confirmation if we change focus immediately.
+        return;
+      } catch (error) {
+        console.warn("Android auto-download flow failed:", error);
+      }
+
       return;
     }
 
@@ -303,7 +331,7 @@ export const printAssetQrLabel = async ({
       const lbxShared = await shareBrotherFileDirect({
         blob: lbxGenerated.lbxBlob,
         fileName: lbxGenerated.lbxFileName,
-        mimeType: "application/octet-stream",
+        mimeType: lbxGenerated.lbxMimeType || "application/octet-stream",
       });
       if (lbxShared) {
         return;
