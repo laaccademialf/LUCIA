@@ -142,13 +142,10 @@ const generateBrotherLabelImage = async ({ invNumber, name, qrValue }) => {
   ctx.fillText(valueToEncode.slice(0, 72), canvas.width / 2, qrY + qrSize + 26);
 
   const pngDataUrl = canvas.toDataURL("image/png");
-  const jpgDataUrl = canvas.toDataURL("image/jpeg", 0.94);
   const pngBlob = await dataUrlToBlob(pngDataUrl);
-  const jpgBlob = await dataUrlToBlob(jpgDataUrl);
   const fileName = `${sanitizeFileName(normalizedInvNumber)}-qr-label.png`;
-  const jpgFileName = `${sanitizeFileName(normalizedInvNumber)}-qr-label.jpg`;
 
-  return { pngDataUrl, pngBlob, fileName, jpgBlob, jpgFileName };
+  return { pngDataUrl, pngBlob, fileName };
 };
 
 const downloadBlob = (blob, fileName) => {
@@ -162,6 +159,28 @@ const downloadBlob = (blob, fileName) => {
   setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 };
 
+const shareBrotherFilesDirect = async ({ pngBlob, fileName }) => {
+  if (typeof navigator === "undefined" || typeof navigator.share !== "function") {
+    return false;
+  }
+
+  try {
+    const pngFile = new File([pngBlob], fileName, { type: "image/png" });
+    if (typeof navigator.canShare === "function" && !navigator.canShare({ files: [pngFile] })) {
+      return false;
+    }
+
+    await navigator.share({
+      title: "QR етикетка",
+      text: "Відкрити у Brother iPrint&Label",
+      files: [pngFile],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const openImageInNewTab = (dataUrl) => {
   const win = window.open("", "_blank");
   if (!win) return false;
@@ -172,13 +191,12 @@ const openImageInNewTab = (dataUrl) => {
   return true;
 };
 
-const openBrotherHelperPage = ({ pngDataUrl, jpgDataUrl, fileName, jpgFileName, labelTitle }) => {
+const openBrotherHelperPage = ({ pngDataUrl, fileName, labelTitle }) => {
   const win = window.open("", "_blank");
   if (!win) return false;
 
   const safeTitle = escapeHtml(labelTitle);
   const safePngName = escapeHtml(fileName);
-  const safeJpgName = escapeHtml(jpgFileName);
 
   win.document.open();
   win.document.write(`<!doctype html>
@@ -207,19 +225,17 @@ const openBrotherHelperPage = ({ pngDataUrl, jpgDataUrl, fileName, jpgFileName, 
       <h1>Етикетка: ${safeTitle}</h1>
       <p>Якщо Brother не видно в системному списку, спочатку натисніть "Відкрити Brother", далі імпортуйте PNG/JPG з Файлів.</p>
       <div class="actions">
-        <button id="shareBtn" class="primary">Поділитись PNG/JPG</button>
+        <button id="shareBtn" class="primary">Поділитись PNG</button>
         <button id="openBrotherBtn">Відкрити Brother</button>
         <a id="downloadPng" class="btn" download="${safePngName}" href="${pngDataUrl}">Завантажити PNG</a>
-        <a id="downloadJpg" class="btn" download="${safeJpgName}" href="${jpgDataUrl}">Завантажити JPG</a>
+        <div class="btn" style="display:flex;align-items:center;justify-content:center;opacity:.6">Lossless формат</div>
       </div>
       <img src="${pngDataUrl}" alt="QR label" />
       <div class="note">Якщо не друкує чітко: у Brother app оберіть режим друку "Actual size / 100%".</div>
     </div>
     <script>
       const pngDataUrl = ${JSON.stringify(pngDataUrl)};
-      const jpgDataUrl = ${JSON.stringify(jpgDataUrl)};
       const fileName = ${JSON.stringify(fileName)};
-      const jpgFileName = ${JSON.stringify(jpgFileName)};
 
       async function dataUrlToFile(dataUrl, name, type) {
         const res = await fetch(dataUrl);
@@ -235,9 +251,7 @@ const openBrotherHelperPage = ({ pngDataUrl, jpgDataUrl, fileName, jpgFileName, 
           }
 
           const pngFile = await dataUrlToFile(pngDataUrl, fileName, 'image/png');
-          const jpgFile = await dataUrlToFile(jpgDataUrl, jpgFileName, 'image/jpeg');
-
-          if (navigator.canShare && !navigator.canShare({ files: [pngFile, jpgFile] })) {
+          if (navigator.canShare && !navigator.canShare({ files: [pngFile] })) {
             alert('Ваш браузер не підтримує передачу файлів через Поділитись. Використайте кнопки завантаження.');
             return;
           }
@@ -245,7 +259,7 @@ const openBrotherHelperPage = ({ pngDataUrl, jpgDataUrl, fileName, jpgFileName, 
           await navigator.share({
             title: 'QR етикетка',
             text: 'Відкрити у Brother iPrint&Label',
-            files: [pngFile, jpgFile],
+            files: [pngFile],
           });
         } catch (e) {
           // canceled or failed
@@ -311,6 +325,18 @@ export const printAssetQrLabel = async ({
   if (isMobileDevice()) {
     const generated = await generateBrotherLabelImage({ invNumber, name, qrValue });
 
+    if (isAndroidDevice()) {
+      // Android-first flow without popups: native share from current tab.
+      const shared = await shareBrotherFilesDirect(generated);
+      if (shared) {
+        return;
+      }
+
+      downloadBlob(generated.pngBlob, generated.fileName);
+      alert("Браузер блокує вікна дій. PNG етикетку завантажено. Відкрийте Brother iPrint&Label -> Import -> Files/Photos.");
+      return;
+    }
+
     // First try to open Brother app immediately (same user gesture flow).
     // If OS/browser blocks it, user still gets helper UI with share/download actions.
     try {
@@ -328,7 +354,7 @@ export const printAssetQrLabel = async ({
       // Pop-up blocked fallback
       downloadBlob(generated.pngBlob, generated.fileName);
       downloadBlob(generated.jpgBlob, generated.jpgFileName);
-      alert("Вікно дій заблоковано браузером. Файли PNG/JPG завантажено. Імпортуйте їх у Brother app.");
+      alert("Вікно дій заблоковано браузером. PNG етикетку завантажено. Імпортуйте файл у Brother app.");
     }
 
     return;
