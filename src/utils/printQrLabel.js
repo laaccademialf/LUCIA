@@ -303,25 +303,17 @@ export const printAssetQrLabel = async ({
       }
 
       if (isAppleMobileDevice()) {
+    
+          if (isAndroid) {
+            // Step 1 mode: Android button only opens Brother app, without file flow.
+            tryOpenBrotherApp();
+            return;
+          }
         // iOS often hides Brother in Web Share targets for LBX; Files -> Brother works reliably.
         downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
         alert("LBX завантажено. Натисніть файл внизу Safari -> Поділитись -> iPrint&Label. Це найстабільніший сценарій на iPhone.");
         return;
       }
-
-      const lbxShared = await shareBrotherFileDirect({
-        blob: lbxGenerated.lbxBlob,
-        fileName: lbxGenerated.lbxFileName,
-        mimeType: "application/octet-stream",
-      });
-      if (lbxShared) {
-        return;
-      }
-
-      downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
-      tryOpenBrotherApp();
-      alert("LBX завантажено. Відкрийте Brother iPrint&Label і імпортуйте файл з Downloads/Files.");
-      return;
     } catch (error) {
       console.warn("LBX generation/share skipped:", error);
     }
