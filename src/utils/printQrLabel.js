@@ -268,20 +268,23 @@ export const printAssetQrLabel = async ({
   qrValue,
 }) => {
   if (isMobileDevice()) {
+    const isAndroid = isAndroidDevice();
+    if (isAndroid) {
+      try {
+        // Must run in direct user gesture context, before async generation.
+        tryOpenBrotherApp();
+      } catch {
+        // noop
+      }
+    }
+
     const generated = await generateBrotherLabelImage({ invNumber, name, qrValue });
 
     try {
       const lbxGenerated = await generateBrotherLbxFile({ invNumber, name, qrValue });
 
-      if (isAndroidDevice()) {
+      if (isAndroid) {
         downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
-        setTimeout(() => {
-          try {
-            tryOpenBrotherApp();
-          } catch {
-            // noop
-          }
-        }, 200);
         return;
       }
 
