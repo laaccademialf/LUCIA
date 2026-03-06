@@ -282,38 +282,36 @@ export const printAssetQrLabel = async ({
   if (isMobileDevice()) {
     const isAndroid = isAndroidDevice();
 
+    if (isAndroid) {
+      // Android mode: open Brother directly without file generation/download.
+      tryOpenBrotherApp();
+      return;
+    }
+
     const generated = await generateBrotherLabelImage({ invNumber, name, qrValue });
 
     try {
-      const lbxGenerated = await generateBrotherLbxFile({ invNumber, name, qrValue, androidSafe: isAndroid });
-
-      if (isAndroid) {
-        const lbxShared = await shareBrotherFileDirect({
-          blob: lbxGenerated.lbxBlob,
-          fileName: lbxGenerated.lbxFileName,
-          mimeType: "application/octet-stream",
-        });
-        if (lbxShared) {
-          return;
-        }
-
-        downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
-        alert("LBX завантажено. Якщо Brother не з'явився в Поділитись, відкрийте файл у Downloads і поділіться з iPrint&Label.");
-        return;
-      }
+      const lbxGenerated = await generateBrotherLbxFile({ invNumber, name, qrValue, androidSafe: false });
 
       if (isAppleMobileDevice()) {
-    
-          if (isAndroid) {
-            // Step 1 mode: Android button only opens Brother app, without file flow.
-            tryOpenBrotherApp();
-            return;
-          }
         // iOS often hides Brother in Web Share targets for LBX; Files -> Brother works reliably.
         downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
         alert("LBX завантажено. Натисніть файл внизу Safari -> Поділитись -> iPrint&Label. Це найстабільніший сценарій на iPhone.");
         return;
       }
+
+      const lbxShared = await shareBrotherFileDirect({
+        blob: lbxGenerated.lbxBlob,
+        fileName: lbxGenerated.lbxFileName,
+        mimeType: "application/octet-stream",
+      });
+      if (lbxShared) {
+        return;
+      }
+
+      downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
+      alert("LBX завантажено. Відкрийте Brother iPrint&Label і імпортуйте файл з Downloads/Files.");
+      return;
     } catch (error) {
       console.warn("LBX generation/share skipped:", error);
     }
