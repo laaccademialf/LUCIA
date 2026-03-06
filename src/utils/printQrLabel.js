@@ -235,7 +235,8 @@ const downloadBlob = (blob, fileName) => {
 
 const tryOpenBrotherApp = () => {
   if (isAndroidDevice()) {
-    window.location.href = "intent://open#Intent;scheme=brotheriprintandlabel;package=com.brother.ptouch.iprintandlabel;end";
+    // Use direct scheme link to avoid forced Play Store fallback when package/activity matching fails.
+    window.location.href = "brotheriprintandlabel://";
     return;
   }
 
