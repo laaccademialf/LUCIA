@@ -32,8 +32,6 @@ const dataUrlToBlob = async (dataUrl) => {
   return response.blob();
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 const escapeXml = (value) => {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -271,20 +269,6 @@ export const printAssetQrLabel = async ({
 }) => {
   if (isMobileDevice()) {
     const isAndroid = isAndroidDevice();
-    if (isAndroid) {
-      try {
-        // Must run in direct user gesture context, before async generation.
-        tryOpenBrotherApp();
-      } catch {
-        // noop
-      }
-
-      // If app switched to foreground, stop web flow to avoid conflicting download behavior.
-      await sleep(650);
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        return;
-      }
-    }
 
     const generated = await generateBrotherLabelImage({ invNumber, name, qrValue });
 
@@ -292,7 +276,17 @@ export const printAssetQrLabel = async ({
       const lbxGenerated = await generateBrotherLbxFile({ invNumber, name, qrValue });
 
       if (isAndroid) {
+        const lbxShared = await shareBrotherFileDirect({
+          blob: lbxGenerated.lbxBlob,
+          fileName: lbxGenerated.lbxFileName,
+          mimeType: "application/octet-stream",
+        });
+        if (lbxShared) {
+          return;
+        }
+
         downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
+        alert("LBX завантажено. Якщо Brother не з'явився в Поділитись, відкрийте файл у Downloads і поділіться з iPrint&Label.");
         return;
       }
 
