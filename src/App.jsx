@@ -503,8 +503,8 @@ function App() {
     if (!assetsLoading && firebaseAssets.length > 0) {
       setAssets(firebaseAssets);
     } else if (!assetsLoading && firebaseAssets.length === 0) {
-      // Якщо база порожня, використовуємо mockAssets
-      setAssets(mockAssets);
+      // Якщо база порожня, працюємо з порожнім списком без демо-даних.
+      setAssets([]);
     }
   }, [firebaseAssets, assetsLoading]);
 
