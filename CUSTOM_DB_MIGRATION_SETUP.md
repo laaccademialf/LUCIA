@@ -36,6 +36,7 @@ Server endpoints:
 
 - `GET /health`
 - `POST /migration/import`
+- `POST /db/test`
 - `GET /settings/firebase-runtime`
 - `PUT /settings/firebase-runtime`
 - `DELETE /settings/firebase-runtime`
@@ -92,7 +93,13 @@ Open `Database` tab and add connection:
 - API Base URL: `http://localhost:8787`
 - Migration Path: `/migration/import`
 - Health Path: `/health`
+- DB Test Path: `/db/test`
 - API Token: same value as `CUSTOM_MIGRATION_TOKEN` (if used)
+
+For direct DB credentials from UI, fill one of these:
+
+- MariaDB/MySQL: `DB Host`, `DB Port`, `DB User`, `DB Password`, `DB Name`
+- PostgreSQL: `Postgres URL`
 
 Then run migration:
 
@@ -108,7 +115,16 @@ The frontend sends:
 ```json
 {
   "source": { "type": "firebase", "projectId": "your-project" },
-  "target": { "type": "custom", "apiBaseUrl": "https://your-api" },
+  "target": {
+    "type": "custom",
+    "apiBaseUrl": "https://your-api",
+    "dbEngine": "mysql",
+    "dbHost": "127.0.0.1",
+    "dbPort": 3306,
+    "dbUser": "root",
+    "dbPassword": "secret",
+    "dbName": "lucia"
+  },
   "collections": ["assets", "users"],
   "stats": { "assets": 120, "users": 8 },
   "data": {

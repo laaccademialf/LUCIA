@@ -45,7 +45,15 @@ const emptyCustomForm = {
   apiBaseUrl: "",
   migrationPath: "/migration/import",
   healthPath: "/health",
+  testPath: "/db/test",
   token: "",
+  dbEngine: "mysql",
+  dbHost: "",
+  dbPort: "3306",
+  dbUser: "",
+  dbPassword: "",
+  dbName: "",
+  postgresUrl: "",
 };
 
 const Field = ({ label, value, onChange, placeholder }) => (
@@ -113,7 +121,15 @@ export default function DatabaseConnectionsManager() {
             apiBaseUrl: customForm.apiBaseUrl,
             migrationPath: customForm.migrationPath,
             healthPath: customForm.healthPath,
+            testPath: customForm.testPath,
             token: customForm.token,
+            dbEngine: customForm.dbEngine,
+            dbHost: customForm.dbHost,
+            dbPort: Number(customForm.dbPort || 3306),
+            dbUser: customForm.dbUser,
+            dbPassword: customForm.dbPassword,
+            dbName: customForm.dbName,
+            postgresUrl: customForm.postgresUrl,
           },
         });
         setCustomForm(emptyCustomForm);
@@ -303,7 +319,36 @@ export default function DatabaseConnectionsManager() {
             <Field label="API Base URL" value={customForm.apiBaseUrl} onChange={(e) => setCustomForm((prev) => ({ ...prev, apiBaseUrl: e.target.value }))} placeholder="https://my-server.com" />
             <Field label="Migration Path" value={customForm.migrationPath} onChange={(e) => setCustomForm((prev) => ({ ...prev, migrationPath: e.target.value }))} placeholder="/migration/import" />
             <Field label="Health Path" value={customForm.healthPath} onChange={(e) => setCustomForm((prev) => ({ ...prev, healthPath: e.target.value }))} placeholder="/health" />
+            <Field label="DB Test Path" value={customForm.testPath} onChange={(e) => setCustomForm((prev) => ({ ...prev, testPath: e.target.value }))} placeholder="/db/test" />
             <Field label="API Token (optional)" value={customForm.token} onChange={(e) => setCustomForm((prev) => ({ ...prev, token: e.target.value }))} placeholder="Bearer token" />
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-semibold text-slate-600">DB Engine</span>
+              <select
+                value={customForm.dbEngine}
+                onChange={(e) => setCustomForm((prev) => ({ ...prev, dbEngine: e.target.value }))}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="mysql">MariaDB/MySQL</option>
+                <option value="mariadb">MariaDB</option>
+                <option value="postgres">PostgreSQL</option>
+              </select>
+            </label>
+            {(customForm.dbEngine === "postgres") ? (
+              <Field
+                label="Postgres URL"
+                value={customForm.postgresUrl}
+                onChange={(e) => setCustomForm((prev) => ({ ...prev, postgresUrl: e.target.value }))}
+                placeholder="postgres://user:pass@host:5432/db"
+              />
+            ) : (
+              <>
+                <Field label="DB Host" value={customForm.dbHost} onChange={(e) => setCustomForm((prev) => ({ ...prev, dbHost: e.target.value }))} placeholder="127.0.0.1" />
+                <Field label="DB Port" value={customForm.dbPort} onChange={(e) => setCustomForm((prev) => ({ ...prev, dbPort: e.target.value }))} placeholder="3306" />
+                <Field label="DB User" value={customForm.dbUser} onChange={(e) => setCustomForm((prev) => ({ ...prev, dbUser: e.target.value }))} placeholder="root" />
+                <Field label="DB Password" value={customForm.dbPassword} onChange={(e) => setCustomForm((prev) => ({ ...prev, dbPassword: e.target.value }))} placeholder="password" />
+                <Field label="DB Name" value={customForm.dbName} onChange={(e) => setCustomForm((prev) => ({ ...prev, dbName: e.target.value }))} placeholder="lucia" />
+              </>
+            )}
           </div>
         )}
 

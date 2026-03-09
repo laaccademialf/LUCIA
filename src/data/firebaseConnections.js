@@ -52,13 +52,29 @@ const normalizeCustomConfig = (config) => {
   const baseUrl = String(config?.apiBaseUrl || "").trim().replace(/\/+$/, "");
   const migrationPath = String(config?.migrationPath || "/migration/import").trim();
   const healthPath = String(config?.healthPath || "/health").trim();
+  const testPath = String(config?.testPath || "/db/test").trim();
   const token = String(config?.token || "").trim();
+  const dbEngine = String(config?.dbEngine || "mysql").trim().toLowerCase();
+  const dbHost = String(config?.dbHost || "").trim();
+  const dbPort = Number(config?.dbPort || 3306);
+  const dbUser = String(config?.dbUser || "").trim();
+  const dbPassword = String(config?.dbPassword || "");
+  const dbName = String(config?.dbName || "").trim();
+  const postgresUrl = String(config?.postgresUrl || "").trim();
 
   return {
     apiBaseUrl: baseUrl,
     migrationPath: migrationPath || "/migration/import",
     healthPath: healthPath || "/health",
+    testPath: testPath || "/db/test",
     token,
+    dbEngine,
+    dbHost,
+    dbPort,
+    dbUser,
+    dbPassword,
+    dbName,
+    postgresUrl,
   };
 };
 
@@ -298,18 +314,48 @@ export const testCustomConnection = async (config) => {
     throw new Error("Неповний конфіг Custom API");
   }
 
-  const url = customApiUrl(normalized.apiBaseUrl, normalized.healthPath);
+  const hasDbCredentials =
+    Boolean(normalized.postgresUrl) ||
+    (Boolean(normalized.dbHost) && Boolean(normalized.dbUser) && Boolean(normalized.dbName));
+
+  if (!hasDbCredentials) {
+    const url = customApiUrl(normalized.apiBaseUrl, normalized.healthPath);
+    const response = await fetch(url, {
+      method: "GET",
+      headers: normalized.token ? { Authorization: `Bearer ${normalized.token}` } : undefined,
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`Custom API healthcheck failed (${response.status}): ${body || "no body"}`);
+    }
+
+    return { ok: true, status: response.status, mode: "api-health" };
+  }
+
+  const url = customApiUrl(normalized.apiBaseUrl, normalized.testPath);
   const response = await fetch(url, {
-    method: "GET",
-    headers: normalized.token ? { Authorization: `Bearer ${normalized.token}` } : undefined,
+    method: "POST",
+    headers: customHeaders(normalized.token),
+    body: JSON.stringify({
+      target: {
+        dbEngine: normalized.dbEngine,
+        dbHost: normalized.dbHost,
+        dbPort: normalized.dbPort,
+        dbUser: normalized.dbUser,
+        dbPassword: normalized.dbPassword,
+        dbName: normalized.dbName,
+        postgresUrl: normalized.postgresUrl,
+      },
+    }),
   });
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`Custom API healthcheck failed (${response.status}): ${body || "no body"}`);
+    throw new Error(`Custom DB test failed (${response.status}): ${body || "no body"}`);
   }
 
-  return { ok: true, status: response.status };
+  return { ok: true, status: response.status, mode: "db-test" };
 };
 
 const chunk = (items, size) => {
@@ -411,6 +457,13 @@ export const migrateFirebaseToCustomData = async ({ sourceConfig, targetConfig, 
     target: {
       type: "custom",
       apiBaseUrl: target.apiBaseUrl,
+      dbEngine: target.dbEngine,
+      dbHost: target.dbHost,
+      dbPort: target.dbPort,
+      dbUser: target.dbUser,
+      dbPassword: target.dbPassword,
+      dbName: target.dbName,
+      postgresUrl: target.postgresUrl,
     },
     collections: selectedCollections,
     stats,
