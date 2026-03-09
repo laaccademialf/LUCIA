@@ -14,6 +14,7 @@ import {
   getRelevances,
   getReasons,
 } from "../firebase/assetFields";
+import { isCollectionsApiEnabled, listCollectionItemsApi } from "../api/collectionsApi";
 
 export const useAssetFields = () => {
   const [categories, setCategories] = useState([]);
@@ -51,19 +52,19 @@ export const useAssetFields = () => {
           relevancesData,
           reasonsData,
         ] = await Promise.all([
-          getCategories(),
-          getSubcategories(),
-          getAccountingTypes(),
-          getBusinessUnits(),
-          getStatuses(),
-          getConditions(),
-          getDecisions(),
-          getPlacementZones(),
-          getResponsibilityCenters(),
-          getResponsiblePersons(),
-          getFunctionalities(),
-          getRelevances(),
-          getReasons(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetCategories") : getCategories(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetSubcategories") : getSubcategories(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetAccountingTypes") : getAccountingTypes(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetBusinessUnits") : getBusinessUnits(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetStatuses") : getStatuses(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetConditions") : getConditions(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetDecisions") : getDecisions(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetPlacementZones") : getPlacementZones(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetResponsibilityCenters") : getResponsibilityCenters(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetResponsiblePersons") : getResponsiblePersons(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetFunctionalities") : getFunctionalities(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetRelevances") : getRelevances(),
+          isCollectionsApiEnabled() ? listCollectionItemsApi("assetReasons") : getReasons(),
         ]);
 
         setCategories(categoriesData.map((item) => item.name));

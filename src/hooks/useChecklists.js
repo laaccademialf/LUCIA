@@ -11,6 +11,13 @@ import {
   updateChecklistExecution,
   updateChecklistTemplate,
 } from "../firebase/firestore";
+import {
+  createCollectionItemApi,
+  deleteCollectionItemApi,
+  isCollectionsApiEnabled,
+  listCollectionItemsApi,
+  updateCollectionItemApi,
+} from "../api/collectionsApi";
 
 export const useChecklists = (enableRealtime = true) => {
   const [templates, setTemplates] = useState([]);
@@ -21,6 +28,28 @@ export const useChecklists = (enableRealtime = true) => {
   useEffect(() => {
     let unsubscribeTemplates;
     let unsubscribeExecutions;
+    const apiMode = isCollectionsApiEnabled();
+
+    if (apiMode) {
+      const fetchData = async () => {
+        try {
+          const [templatesData, executionsData] = await Promise.all([
+            listCollectionItemsApi("checklistTemplates"),
+            listCollectionItemsApi("checklistExecutions"),
+          ]);
+          setTemplates(templatesData);
+          setExecutions(executionsData);
+        } catch (err) {
+          console.error("Помилка завантаження чек-листів через API:", err);
+          setError(err);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      fetchData();
+      return () => {};
+    }
 
     if (enableRealtime) {
       try {
@@ -65,7 +94,12 @@ export const useChecklists = (enableRealtime = true) => {
 
   const createTemplate = async (payload) => {
     try {
-      const id = await addChecklistTemplate(payload);
+      const id = isCollectionsApiEnabled()
+        ? await createCollectionItemApi("checklistTemplates", payload)
+        : await addChecklistTemplate(payload);
+      if (isCollectionsApiEnabled()) {
+        setTemplates(await listCollectionItemsApi("checklistTemplates"));
+      }
       return { success: true, id };
     } catch (err) {
       setError(err);
@@ -75,7 +109,12 @@ export const useChecklists = (enableRealtime = true) => {
 
   const updateTemplate = async (id, payload) => {
     try {
-      await updateChecklistTemplate(id, payload);
+      if (isCollectionsApiEnabled()) {
+        await updateCollectionItemApi("checklistTemplates", id, payload);
+        setTemplates(await listCollectionItemsApi("checklistTemplates"));
+      } else {
+        await updateChecklistTemplate(id, payload);
+      }
       return { success: true };
     } catch (err) {
       setError(err);
@@ -85,7 +124,12 @@ export const useChecklists = (enableRealtime = true) => {
 
   const removeTemplate = async (id) => {
     try {
-      await deleteChecklistTemplate(id);
+      if (isCollectionsApiEnabled()) {
+        await deleteCollectionItemApi("checklistTemplates", id);
+        setTemplates(await listCollectionItemsApi("checklistTemplates"));
+      } else {
+        await deleteChecklistTemplate(id);
+      }
       return { success: true };
     } catch (err) {
       setError(err);
@@ -95,7 +139,12 @@ export const useChecklists = (enableRealtime = true) => {
 
   const createExecution = async (payload) => {
     try {
-      const id = await addChecklistExecution(payload);
+      const id = isCollectionsApiEnabled()
+        ? await createCollectionItemApi("checklistExecutions", payload)
+        : await addChecklistExecution(payload);
+      if (isCollectionsApiEnabled()) {
+        setExecutions(await listCollectionItemsApi("checklistExecutions"));
+      }
       return { success: true, id };
     } catch (err) {
       setError(err);
@@ -105,7 +154,12 @@ export const useChecklists = (enableRealtime = true) => {
 
   const updateExecution = async (id, payload) => {
     try {
-      await updateChecklistExecution(id, payload);
+      if (isCollectionsApiEnabled()) {
+        await updateCollectionItemApi("checklistExecutions", id, payload);
+        setExecutions(await listCollectionItemsApi("checklistExecutions"));
+      } else {
+        await updateChecklistExecution(id, payload);
+      }
       return { success: true };
     } catch (err) {
       setError(err);
@@ -115,7 +169,12 @@ export const useChecklists = (enableRealtime = true) => {
 
   const removeExecution = async (id) => {
     try {
-      await deleteChecklistExecution(id);
+      if (isCollectionsApiEnabled()) {
+        await deleteCollectionItemApi("checklistExecutions", id);
+        setExecutions(await listCollectionItemsApi("checklistExecutions"));
+      } else {
+        await deleteChecklistExecution(id);
+      }
       return { success: true };
     } catch (err) {
       setError(err);

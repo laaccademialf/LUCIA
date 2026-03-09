@@ -12,6 +12,15 @@ import {
   runTransaction,
 } from "firebase/firestore";
 import { db } from "./config";
+import {
+  createCollectionItemApi,
+  deleteCollectionItemApi,
+  getCollectionItemApi,
+  isApiDataModeEnabled,
+  listCollectionItemsApi,
+  subscribeByPolling,
+  updateCollectionItemApi,
+} from "./collectionsAdapter";
 
 // ==================== РЕСТОРАНИ ====================
 
@@ -20,6 +29,11 @@ import { db } from "./config";
  * @returns {Promise<Array>} Масив ресторанів
  */
 export const getRestaurants = async () => {
+  if (isApiDataModeEnabled()) {
+    const items = await listCollectionItemsApi("restaurants");
+    return items.sort((a, b) => String(a?.regNumber || "").localeCompare(String(b?.regNumber || "")));
+  }
+
   try {
     const restaurantsRef = collection(db, "restaurants");
     const q = query(restaurantsRef, orderBy("regNumber"));
@@ -40,6 +54,10 @@ export const getRestaurants = async () => {
  * @returns {Promise<Object>} Дані ресторану
  */
 export const getRestaurant = async (id) => {
+  if (isApiDataModeEnabled()) {
+    return await getCollectionItemApi("restaurants", id).catch(() => null);
+  }
+
   try {
     const docRef = doc(db, "restaurants", id);
     const docSnap = await getDoc(docRef);
@@ -59,6 +77,15 @@ export const getRestaurant = async (id) => {
  * @returns {Promise<string>} ID створеного документа
  */
 export const addRestaurant = async (restaurant) => {
+  if (isApiDataModeEnabled()) {
+    const { id: _ignoredId, ...restaurantData } = restaurant || {};
+    return await createCollectionItemApi("restaurants", {
+      ...restaurantData,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
   try {
     const { id: _ignoredId, ...restaurantData } = restaurant || {};
     const docRef = await addDoc(collection(db, "restaurants"), {
@@ -80,6 +107,15 @@ export const addRestaurant = async (restaurant) => {
  * @returns {Promise<void>}
  */
 export const updateRestaurant = async (id, data) => {
+  if (isApiDataModeEnabled()) {
+    const { id: _ignoredId, ...restaurantData } = data || {};
+    await updateCollectionItemApi("restaurants", id, {
+      ...restaurantData,
+      updatedAt: new Date().toISOString(),
+    });
+    return;
+  }
+
   try {
     const { id: _ignoredId, ...restaurantData } = data || {};
     const docRef = doc(db, "restaurants", id);
@@ -99,6 +135,11 @@ export const updateRestaurant = async (id, data) => {
  * @returns {Promise<void>}
  */
 export const deleteRestaurant = async (id) => {
+  if (isApiDataModeEnabled()) {
+    await deleteCollectionItemApi("restaurants", id);
+    return;
+  }
+
   try {
     await deleteDoc(doc(db, "restaurants", id));
   } catch (error) {
@@ -113,6 +154,13 @@ export const deleteRestaurant = async (id) => {
  * @returns {Function} Функція відписки
  */
 export const subscribeToRestaurants = (callback) => {
+  if (isApiDataModeEnabled()) {
+    return subscribeByPolling(async () => {
+      const items = await listCollectionItemsApi("restaurants");
+      return items.sort((a, b) => String(a?.regNumber || "").localeCompare(String(b?.regNumber || "")));
+    }, callback, 5000);
+  }
+
   const restaurantsRef = collection(db, "restaurants");
   const q = query(restaurantsRef, orderBy("regNumber"));
   
@@ -219,6 +267,33 @@ export const subscribeToAssets = (callback) => {
 // ==================== СЕСІЇ ІНВЕНТАРИЗАЦІЇ ОЗ ====================
 
 export const startAssetInventorySession = async (scopeId, sessionData = {}) => {
+  if (isApiDataModeEnabled()) {
+    const scope = String(scopeId || "global");
+    const nowIso = new Date().toISOString();
+    const all = await listCollectionItemsApi("assetInventorySessions");
+
+    await Promise.all(
+      all
+        .filter((item) => String(item?.scopeId || "global") === scope && item?.isActive === true)
+        .map((item) =>
+          updateCollectionItemApi("assetInventorySessions", item.id, {
+            isActive: false,
+            endedAt: nowIso,
+            endedReason: "auto_closed_by_new_session",
+            updatedAt: nowIso,
+          })
+        )
+    );
+
+    return await createCollectionItemApi("assetInventorySessions", {
+      scopeId: scope,
+      isActive: true,
+      startedAt: nowIso,
+      updatedAt: nowIso,
+      ...sessionData,
+    });
+  }
+
   try {
     const sessionsRef = collection(db, "assetInventorySessions");
     const nowIso = new Date().toISOString();
@@ -254,6 +329,17 @@ export const startAssetInventorySession = async (scopeId, sessionData = {}) => {
 };
 
 export const endAssetInventorySession = async (sessionId, endData = {}) => {
+  if (isApiDataModeEnabled()) {
+    const nowIso = new Date().toISOString();
+    await updateCollectionItemApi("assetInventorySessions", sessionId, {
+      isActive: false,
+      endedAt: nowIso,
+      updatedAt: nowIso,
+      ...endData,
+    });
+    return;
+  }
+
   try {
     const nowIso = new Date().toISOString();
     const sessionRef = doc(db, "assetInventorySessions", sessionId);
@@ -270,6 +356,17 @@ export const endAssetInventorySession = async (sessionId, endData = {}) => {
 };
 
 export const subscribeToActiveAssetInventorySession = (scopeId, callback) => {
+  if (isApiDataModeEnabled()) {
+    return subscribeByPolling(async () => {
+      const scope = String(scopeId || "global");
+      const sessions = await listCollectionItemsApi("assetInventorySessions");
+      const filtered = sessions
+        .filter((item) => String(item?.scopeId || "global") === scope && item?.isActive === true)
+        .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
+      return filtered.slice(0, 1);
+    }, (items) => callback(items[0] || null), 5000);
+  }
+
   const sessionsRef = collection(db, "assetInventorySessions");
   const q = query(sessionsRef, orderBy("startedAt", "desc"));
 
@@ -284,6 +381,16 @@ export const subscribeToActiveAssetInventorySession = (scopeId, callback) => {
 };
 
 export const subscribeToAssetInventorySessions = (scopeId, callback) => {
+  if (isApiDataModeEnabled()) {
+    return subscribeByPolling(async () => {
+      const scope = String(scopeId || "global");
+      const sessions = await listCollectionItemsApi("assetInventorySessions");
+      return sessions
+        .filter((item) => String(item?.scopeId || "global") === scope)
+        .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
+    }, callback, 5000);
+  }
+
   const sessionsRef = collection(db, "assetInventorySessions");
   const q = query(sessionsRef, orderBy("startedAt", "desc"));
 
@@ -575,6 +682,33 @@ export const getProductInventories = async () => {
 };
 
 export const startProductInventorySession = async (scopeId, sessionData = {}) => {
+  if (isApiDataModeEnabled()) {
+    const scope = String(scopeId || "");
+    const nowIso = new Date().toISOString();
+    const all = await listCollectionItemsApi("productInventorySessions");
+
+    await Promise.all(
+      all
+        .filter((item) => String(item?.scopeId || "") === scope && item?.isActive === true)
+        .map((item) =>
+          updateCollectionItemApi("productInventorySessions", item.id, {
+            isActive: false,
+            endedAt: nowIso,
+            endedReason: "auto_closed_by_new_session",
+            updatedAt: nowIso,
+          })
+        )
+    );
+
+    return await createCollectionItemApi("productInventorySessions", {
+      scopeId: scope,
+      isActive: true,
+      startedAt: nowIso,
+      updatedAt: nowIso,
+      ...sessionData,
+    });
+  }
+
   try {
     const sessionsRef = collection(db, "productInventorySessions");
     const nowIso = new Date().toISOString();
@@ -610,6 +744,17 @@ export const startProductInventorySession = async (scopeId, sessionData = {}) =>
 };
 
 export const endProductInventorySession = async (sessionId, endData = {}) => {
+  if (isApiDataModeEnabled()) {
+    const nowIso = new Date().toISOString();
+    await updateCollectionItemApi("productInventorySessions", sessionId, {
+      isActive: false,
+      endedAt: nowIso,
+      updatedAt: nowIso,
+      ...endData,
+    });
+    return;
+  }
+
   try {
     const nowIso = new Date().toISOString();
     const sessionRef = doc(db, "productInventorySessions", sessionId);
@@ -626,6 +771,17 @@ export const endProductInventorySession = async (sessionId, endData = {}) => {
 };
 
 export const subscribeToActiveProductInventorySession = (scopeId, callback) => {
+  if (isApiDataModeEnabled()) {
+    return subscribeByPolling(async () => {
+      const scope = String(scopeId || "");
+      const sessions = await listCollectionItemsApi("productInventorySessions");
+      const filtered = sessions
+        .filter((item) => String(item?.scopeId || "") === scope && item?.isActive === true)
+        .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
+      return filtered.slice(0, 1);
+    }, (items) => callback(items[0] || null), 5000);
+  }
+
   const sessionsRef = collection(db, "productInventorySessions");
   const q = query(sessionsRef, orderBy("startedAt", "desc"));
 
@@ -640,6 +796,16 @@ export const subscribeToActiveProductInventorySession = (scopeId, callback) => {
 };
 
 export const subscribeToProductInventorySessions = (scopeId, callback) => {
+  if (isApiDataModeEnabled()) {
+    return subscribeByPolling(async () => {
+      const scope = String(scopeId || "");
+      const sessions = await listCollectionItemsApi("productInventorySessions");
+      return sessions
+        .filter((item) => String(item?.scopeId || "") === scope)
+        .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
+    }, callback, 5000);
+  }
+
   const sessionsRef = collection(db, "productInventorySessions");
   const q = query(sessionsRef, orderBy("startedAt", "desc"));
 

@@ -6,14 +6,43 @@ import {
   subscribeToServiceRequests,
   updateServiceRequest,
 } from "../firebase/firestore";
+import {
+  addServiceRequestApi,
+  deleteServiceRequestApi,
+  getServiceRequestsApi,
+  isServiceRequestsApiEnabled,
+  updateServiceRequestApi,
+} from "../api/serviceRequestsApi";
 
 export const useServiceRequests = (enableRealtime = true) => {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const reloadFromApi = async () => {
+    const data = await getServiceRequestsApi();
+    setRequests(data);
+  };
+
   useEffect(() => {
     let unsubscribe;
+    const apiMode = isServiceRequestsApiEnabled();
+
+    if (apiMode) {
+      const fetchData = async () => {
+        try {
+          await reloadFromApi();
+        } catch (err) {
+          console.error("Помилка завантаження сервісних заявок через API:", err);
+          setError(err);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      fetchData();
+      return () => {};
+    }
 
     if (enableRealtime) {
       try {
@@ -48,7 +77,12 @@ export const useServiceRequests = (enableRealtime = true) => {
 
   const createRequest = async (requestData) => {
     try {
-      const id = await addServiceRequest(requestData);
+      const id = isServiceRequestsApiEnabled()
+        ? await addServiceRequestApi(requestData)
+        : await addServiceRequest(requestData);
+      if (isServiceRequestsApiEnabled()) {
+        await reloadFromApi();
+      }
       return { success: true, id };
     } catch (err) {
       setError(err);
@@ -58,7 +92,12 @@ export const useServiceRequests = (enableRealtime = true) => {
 
   const updateRequest = async (id, data) => {
     try {
-      await updateServiceRequest(id, data);
+      if (isServiceRequestsApiEnabled()) {
+        await updateServiceRequestApi(id, data);
+        await reloadFromApi();
+      } else {
+        await updateServiceRequest(id, data);
+      }
       return { success: true };
     } catch (err) {
       setError(err);
@@ -68,7 +107,12 @@ export const useServiceRequests = (enableRealtime = true) => {
 
   const removeRequest = async (id) => {
     try {
-      await deleteServiceRequest(id);
+      if (isServiceRequestsApiEnabled()) {
+        await deleteServiceRequestApi(id);
+        await reloadFromApi();
+      } else {
+        await deleteServiceRequest(id);
+      }
       return { success: true };
     } catch (err) {
       setError(err);

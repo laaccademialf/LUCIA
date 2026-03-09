@@ -6,6 +6,13 @@ import {
   deleteRestaurant,
   subscribeToRestaurants,
 } from "../firebase/firestore";
+import {
+  createCollectionItemApi,
+  deleteCollectionItemApi,
+  isCollectionsApiEnabled,
+  listCollectionItemsApi,
+  updateCollectionItemApi,
+} from "../api/collectionsApi";
 
 /**
  * Хук для роботи з ресторанами з Firestore
@@ -18,6 +25,23 @@ export const useRestaurants = (enableRealtime = true) => {
 
   useEffect(() => {
     let unsubscribe;
+    const apiMode = isCollectionsApiEnabled();
+
+    if (apiMode) {
+      const fetchData = async () => {
+        try {
+          const data = await listCollectionItemsApi("restaurants");
+          setRestaurants(data);
+        } catch (err) {
+          console.error("Помилка завантаження ресторанів через API:", err);
+          setError(err);
+        } finally {
+          setLoading(false);
+        }
+      };
+      fetchData();
+      return () => {};
+    }
     
     if (enableRealtime) {
       // Realtime підписка
@@ -56,7 +80,13 @@ export const useRestaurants = (enableRealtime = true) => {
 
   const add = async (restaurant) => {
     try {
-      const id = await addRestaurant(restaurant);
+      const id = isCollectionsApiEnabled()
+        ? await createCollectionItemApi("restaurants", restaurant)
+        : await addRestaurant(restaurant);
+      if (isCollectionsApiEnabled()) {
+        const data = await listCollectionItemsApi("restaurants");
+        setRestaurants(data);
+      }
       return { success: true, id };
     } catch (err) {
       setError(err);
@@ -66,7 +96,13 @@ export const useRestaurants = (enableRealtime = true) => {
 
   const update = async (id, data) => {
     try {
-      await updateRestaurant(id, data);
+      if (isCollectionsApiEnabled()) {
+        await updateCollectionItemApi("restaurants", id, data);
+        const items = await listCollectionItemsApi("restaurants");
+        setRestaurants(items);
+      } else {
+        await updateRestaurant(id, data);
+      }
       return { success: true };
     } catch (err) {
       setError(err);
@@ -76,7 +112,13 @@ export const useRestaurants = (enableRealtime = true) => {
 
   const remove = async (id) => {
     try {
-      await deleteRestaurant(id);
+      if (isCollectionsApiEnabled()) {
+        await deleteCollectionItemApi("restaurants", id);
+        const items = await listCollectionItemsApi("restaurants");
+        setRestaurants(items);
+      } else {
+        await deleteRestaurant(id);
+      }
       return { success: true };
     } catch (err) {
       setError(err);

@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
 import { getMenuStructure, saveMenuStructure } from "../firebase/menuStructure";
+import {
+  createCollectionItemApi,
+  getCollectionItemApi,
+  isCollectionsApiEnabled,
+  updateCollectionItemApi,
+} from "../api/collectionsApi";
 
 // Хук для роботи зі структурою меню з Firestore
 export function useMenuStructure() {
@@ -12,7 +18,13 @@ export function useMenuStructure() {
     async function fetchMenu() {
       setLoading(true);
       try {
-        const data = await getMenuStructure();
+        let data;
+        if (isCollectionsApiEnabled()) {
+          const doc = await getCollectionItemApi("menuStructure", "main");
+          data = doc?.structure || [];
+        } else {
+          data = await getMenuStructure();
+        }
         if (!unsub) setMenuStructure(Array.isArray(data) ? data : []);
       } catch (e) {
         if (!unsub) setError("Не вдалося завантажити структуру меню");
@@ -28,7 +40,22 @@ export function useMenuStructure() {
   const save = async (newStructure) => {
     setLoading(true);
     try {
-      await saveMenuStructure(newStructure);
+      if (isCollectionsApiEnabled()) {
+        const current = await getCollectionItemApi("menuStructure", "main");
+        if (current) {
+          await updateCollectionItemApi("menuStructure", "main", {
+            ...current,
+            structure: newStructure,
+          });
+        } else {
+          await createCollectionItemApi("menuStructure", {
+            id: "main",
+            structure: newStructure,
+          });
+        }
+      } else {
+        await saveMenuStructure(newStructure);
+      }
       setMenuStructure(newStructure);
       setError("");
     } catch (e) {

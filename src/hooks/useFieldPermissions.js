@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { getFieldPermissions } from "../firebase/permissions";
+import { getCollectionItemApi, isCollectionsApiEnabled } from "../api/collectionsApi";
 
 /**
  * Хук для завантаження прав редагування полів на основі робочої ролі користувача
@@ -20,7 +21,9 @@ export const useFieldPermissions = (workRoleId) => {
       }
 
       try {
-        const doc = await getFieldPermissions(workRoleId);
+        const doc = isCollectionsApiEnabled()
+          ? await getCollectionItemApi("fieldPermissions", workRoleId)
+          : await getFieldPermissions(workRoleId);
 
         if (doc && doc.permissions) {
           console.log("🔐 Дозволи для ролі:", workRoleId, doc.permissions);

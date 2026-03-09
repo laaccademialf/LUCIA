@@ -6,6 +6,13 @@ import {
   deleteAsset,
   subscribeToAssets,
 } from "../firebase/firestore";
+import {
+  addAssetApi,
+  deleteAssetApi,
+  getAssetsApi,
+  isAssetsApiEnabled,
+  updateAssetApi,
+} from "../api/assetsApi";
 
 /**
  * Хук для роботи з активами (основними засобами) з Firestore
@@ -18,6 +25,24 @@ export const useAssets = (enableRealtime = true) => {
 
   useEffect(() => {
     let unsubscribe;
+    const apiMode = isAssetsApiEnabled();
+
+    if (apiMode) {
+      const fetchViaApi = async () => {
+        try {
+          const data = await getAssetsApi();
+          setAssets(data);
+          setLoading(false);
+        } catch (err) {
+          console.error("Помилка завантаження активів через API:", err);
+          setError(err);
+          setLoading(false);
+        }
+      };
+
+      fetchViaApi();
+      return () => {};
+    }
     
     if (enableRealtime) {
       // Realtime підписка
@@ -56,7 +81,7 @@ export const useAssets = (enableRealtime = true) => {
 
   const add = async (asset) => {
     try {
-      const id = await addAsset(asset);
+      const id = isAssetsApiEnabled() ? await addAssetApi(asset) : await addAsset(asset);
       return { success: true, id };
     } catch (err) {
       setError(err);
@@ -66,7 +91,11 @@ export const useAssets = (enableRealtime = true) => {
 
   const update = async (id, data) => {
     try {
-      await updateAsset(id, data);
+      if (isAssetsApiEnabled()) {
+        await updateAssetApi(id, data);
+      } else {
+        await updateAsset(id, data);
+      }
       return { success: true };
     } catch (err) {
       setError(err);
@@ -76,7 +105,11 @@ export const useAssets = (enableRealtime = true) => {
 
   const remove = async (id) => {
     try {
-      await deleteAsset(id);
+      if (isAssetsApiEnabled()) {
+        await deleteAssetApi(id);
+      } else {
+        await deleteAsset(id);
+      }
       return { success: true };
     } catch (err) {
       setError(err);

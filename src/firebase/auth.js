@@ -8,6 +8,92 @@ import {
 import { doc, setDoc, getDoc } from "firebase/firestore";
 import { auth, db } from "./config";
 
+const ENV_AUTH_API_BASE = String(
+  import.meta.env.VITE_AUTH_API_BASE_URL || import.meta.env.VITE_DATA_API_BASE_URL || ""
+)
+  .trim()
+  .replace(/\/+$/, "");
+const ENV_AUTH_API_TOKEN = String(
+  import.meta.env.VITE_AUTH_API_TOKEN || import.meta.env.VITE_DATA_API_TOKEN || ""
+).trim();
+const AUTH_SESSION_KEY = "lucia_auth_session_token";
+
+const readRuntimeCustomConfig = () => {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return null;
+  const raw = localStorage.getItem("lucia_runtime_custom_config");
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const getAuthApiBase = () => {
+  const runtime = readRuntimeCustomConfig();
+  const runtimeBase = String(runtime?.apiBaseUrl || "").trim().replace(/\/+$/, "");
+  return runtimeBase || ENV_AUTH_API_BASE;
+};
+
+const getAuthApiToken = () => {
+  const runtime = readRuntimeCustomConfig();
+  const runtimeToken = String(runtime?.token || "").trim();
+  return runtimeToken || ENV_AUTH_API_TOKEN;
+};
+
+let authApiCurrentUser = null;
+const authApiSubscribers = new Set();
+
+export const isAuthApiEnabled = () => Boolean(getAuthApiBase());
+
+const getAuthSessionToken = () => {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return "";
+  return String(localStorage.getItem(AUTH_SESSION_KEY) || "");
+};
+
+const setAuthSessionToken = (token) => {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return;
+  if (token) {
+    localStorage.setItem(AUTH_SESSION_KEY, token);
+  } else {
+    localStorage.removeItem(AUTH_SESSION_KEY);
+  }
+};
+
+const notifyAuthApiSubscribers = (user) => {
+  authApiCurrentUser = user || null;
+  authApiSubscribers.forEach((callback) => {
+    try {
+      callback(authApiCurrentUser);
+    } catch {
+      // no-op
+    }
+  });
+};
+
+const authApiHeaders = (withJson = true) => {
+  const headers = {};
+  if (withJson) headers["Content-Type"] = "application/json";
+  const sessionToken = getAuthSessionToken();
+  if (sessionToken) headers["x-session-token"] = sessionToken;
+  const apiToken = getAuthApiToken();
+  if (apiToken) headers["x-api-token"] = apiToken;
+  return headers;
+};
+
+const authApiRequest = async (path, options = {}) => {
+  const response = await fetch(`${getAuthApiBase()}${path}`, options);
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    const error = new Error(body || `Auth API error ${response.status}`);
+    error.code = `auth/api-${response.status}`;
+    throw error;
+  }
+  return response.json().catch(() => ({}));
+};
+
 /**
  * Реєстрація нового користувача
  * @param {string} email - Email
@@ -16,6 +102,19 @@ import { auth, db } from "./config";
  * @returns {Promise<Object>} Дані користувача
  */
 export const registerUser = async (email, password, displayName) => {
+  if (isAuthApiEnabled()) {
+    const payload = await authApiRequest("/auth/register", {
+      method: "POST",
+      headers: authApiHeaders(true),
+      body: JSON.stringify({ email, password, displayName }),
+    });
+
+    setAuthSessionToken(String(payload?.token || ""));
+    const user = payload?.user || null;
+    notifyAuthApiSubscribers(user);
+    return user;
+  }
+
   try {
     // Створення користувача в Firebase Auth
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
@@ -59,6 +158,26 @@ export const registerUser = async (email, password, displayName) => {
  * @returns {Promise<Object>} Дані створеного користувача
  */
 export const createUserByAdmin = async (email, password, displayName, currentUser, currentPassword, restaurant, position, workRole, role = "user") => {
+  if (isAuthApiEnabled()) {
+    const payload = await authApiRequest("/auth/admin-create-user", {
+      method: "POST",
+      headers: authApiHeaders(true),
+      body: JSON.stringify({
+        email,
+        password,
+        displayName,
+        restaurant,
+        position,
+        workRole,
+        role,
+        currentPassword,
+        currentUserId: currentUser?.uid || "",
+      }),
+    });
+
+    return payload?.user || null;
+  }
+
   try {
     // Зберігаємо дані поточного користувача
     const adminEmail = currentUser.email;
@@ -110,6 +229,19 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
  * @returns {Promise<Object>} Дані користувача
  */
 export const loginUser = async (email, password) => {
+  if (isAuthApiEnabled()) {
+    const payload = await authApiRequest("/auth/login", {
+      method: "POST",
+      headers: authApiHeaders(true),
+      body: JSON.stringify({ email, password }),
+    });
+
+    setAuthSessionToken(String(payload?.token || ""));
+    const user = payload?.user || null;
+    notifyAuthApiSubscribers(user);
+    return user;
+  }
+
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
@@ -135,6 +267,20 @@ export const loginUser = async (email, password) => {
  * @returns {Promise<void>}
  */
 export const logoutUser = async () => {
+  if (isAuthApiEnabled()) {
+    try {
+      await authApiRequest("/auth/logout", {
+        method: "POST",
+        headers: authApiHeaders(true),
+        body: JSON.stringify({}),
+      });
+    } finally {
+      setAuthSessionToken("");
+      notifyAuthApiSubscribers(null);
+    }
+    return;
+  }
+
   try {
     await signOut(auth);
   } catch (error) {
@@ -148,6 +294,31 @@ export const logoutUser = async () => {
  * @returns {Promise<Object|null>} Дані користувача або null
  */
 export const getCurrentUser = () => {
+  if (isAuthApiEnabled()) {
+    return new Promise(async (resolve) => {
+      const token = getAuthSessionToken();
+      if (!token) {
+        notifyAuthApiSubscribers(null);
+        resolve(null);
+        return;
+      }
+
+      try {
+        const payload = await authApiRequest("/auth/me", {
+          method: "GET",
+          headers: authApiHeaders(false),
+        });
+        const user = payload?.user || null;
+        notifyAuthApiSubscribers(user);
+        resolve(user);
+      } catch {
+        setAuthSessionToken("");
+        notifyAuthApiSubscribers(null);
+        resolve(null);
+      }
+    });
+  }
+
   return new Promise((resolve, reject) => {
     const unsubscribe = onAuthStateChanged(
       auth,
@@ -189,6 +360,20 @@ export const getCurrentUser = () => {
  * @returns {Function} Функція відписки
  */
 export const subscribeToAuthChanges = (callback) => {
+  if (isAuthApiEnabled()) {
+    authApiSubscribers.add(callback);
+
+    if (authApiCurrentUser !== null) {
+      callback(authApiCurrentUser);
+    } else {
+      getCurrentUser().then((user) => callback(user));
+    }
+
+    return () => {
+      authApiSubscribers.delete(callback);
+    };
+  }
+
   try {
     return onAuthStateChanged(auth, async (user) => {
       if (user) {
@@ -237,6 +422,14 @@ export const subscribeToAuthChanges = (callback) => {
  * @returns {Promise<Object>} Дані адміністратора
  */
 export const createAdmin = async (email, password, displayName) => {
+  if (isAuthApiEnabled()) {
+    const user = await registerUser(email, password, displayName);
+    return {
+      ...user,
+      role: "admin",
+    };
+  }
+
   try {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;

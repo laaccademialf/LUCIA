@@ -1,4 +1,5 @@
 import http from "node:http";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -69,7 +70,10 @@ const CORS_ORIGIN = process.env.RUNTIME_SETTINGS_CORS_ORIGIN || "*";
 const setCorsHeaders = (res) => {
   res.setHeader("Access-Control-Allow-Origin", CORS_ORIGIN);
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, x-api-token, x-session-token"
+  );
 };
 
 const sendJson = (res, status, payload) => {
@@ -85,6 +89,10 @@ const sendJson = (res, status, payload) => {
 const isValidFirebaseRuntimeConfig = (config) => {
   const required = ["apiKey", "authDomain", "projectId", "appId"];
   return required.every((key) => Boolean(String(config?.[key] || "").trim()));
+};
+
+const isValidCustomRuntimeConfig = (config) => {
+  return Boolean(String(config?.apiBaseUrl || "").trim());
 };
 
 const parseJsonBody = async (req, maxSize = 20 * 1024 * 1024) => {
@@ -107,8 +115,9 @@ const parseJsonBody = async (req, maxSize = 20 * 1024 * 1024) => {
 const isAuthorized = (req) => {
   if (!TOKEN) return true;
   const authHeader = String(req.headers.authorization || "");
+  const apiTokenHeader = String(req.headers["x-api-token"] || "");
   const expected = `Bearer ${TOKEN}`;
-  return authHeader === expected;
+  return authHeader === expected || apiTokenHeader === TOKEN;
 };
 
 const sanitizeCollection = (name) => {
@@ -121,6 +130,851 @@ const writeCollection = async (collectionName, docs) => {
   const filePath = path.join(DATA_DIR, `${collectionName}.json`);
   const normalized = docs.map((item) => ({ id: item.id, data: item.data }));
   await fs.writeFile(filePath, JSON.stringify(normalized, null, 2), "utf-8");
+};
+
+const readCollectionFile = async (collectionName) => {
+  const filePath = path.join(DATA_DIR, `${collectionName}.json`);
+  try {
+    const raw = await fs.readFile(filePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const writeCollectionFile = async (collectionName, items) => {
+  await ensureDir(DATA_DIR);
+  const filePath = path.join(DATA_DIR, `${collectionName}.json`);
+  await fs.writeFile(filePath, JSON.stringify(items, null, 2), "utf-8");
+};
+
+const normalizeAssetPayload = (payload) => {
+  if (!payload || typeof payload !== "object") return {};
+  const next = { ...payload };
+  delete next.id;
+  return next;
+};
+
+const nowIso = () => new Date().toISOString();
+
+const hashPassword = (password, salt = crypto.randomBytes(16).toString("hex")) => {
+  const hash = crypto.scryptSync(String(password || ""), salt, 64).toString("hex");
+  return { salt, hash };
+};
+
+const verifyPassword = (password, salt, hash) => {
+  const next = crypto.scryptSync(String(password || ""), String(salt || ""), 64).toString("hex");
+  return crypto.timingSafeEqual(Buffer.from(next, "hex"), Buffer.from(String(hash || ""), "hex"));
+};
+
+const createSessionToken = () => crypto.randomBytes(32).toString("hex");
+
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+
+const sessionTokenFromRequest = (req) => {
+  const sessionHeader = String(req.headers["x-session-token"] || "").trim();
+  if (sessionHeader) return sessionHeader;
+
+  const authHeader = String(req.headers.authorization || "").trim();
+  if (authHeader.toLowerCase().startsWith("bearer ")) {
+    const token = authHeader.slice(7).trim();
+    if (TOKEN && token === TOKEN) return "";
+    return token;
+  }
+  return "";
+};
+
+const mapUserProfile = (profile) => ({
+  uid: String(profile?.id || ""),
+  email: String(profile?.email || ""),
+  displayName: String(profile?.displayName || ""),
+  role: String(profile?.role || "user"),
+  restaurant: String(profile?.restaurant || ""),
+  position: String(profile?.position || ""),
+  workRole: String(profile?.workRole || ""),
+});
+
+const getAuthUserByEmail = async (email, dbConfig) => {
+  const normalizedEmail = normalizeEmail(email);
+  const authUsers = await getCollectionItemsData("authUsers", dbConfig);
+  return (
+    authUsers.find((item) => normalizeEmail(item?.email) === normalizedEmail) || null
+  );
+};
+
+const getUserProfileById = async (id, dbConfig) => {
+  return getCollectionItemData("users", id, dbConfig);
+};
+
+const getSessionByToken = async (token, dbConfig) => {
+  if (!token) return null;
+  return getCollectionItemData("authSessions", token, dbConfig);
+};
+
+const createSession = async (userId, dbConfig) => {
+  const token = createSessionToken();
+  await createCollectionItemData(
+    "authSessions",
+    {
+      id: token,
+      userId,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    },
+    dbConfig
+  );
+  return token;
+};
+
+const deleteSession = async (token, dbConfig) => {
+  if (!token) return;
+  await deleteCollectionItemData("authSessions", token, dbConfig);
+};
+
+const resolveAuthContext = async (req, dbConfig) => {
+  const token = sessionTokenFromRequest(req);
+  if (!token) return { token: "", session: null, profile: null };
+  const session = await getSessionByToken(token, dbConfig);
+  if (!session) return { token, session: null, profile: null };
+  const profile = await getUserProfileById(session.userId, dbConfig);
+  return { token, session, profile };
+};
+
+const normalizeCollectionName = (name) => {
+  const cleaned = String(name || "").trim();
+  if (!/^[a-zA-Z0-9_-]+$/.test(cleaned)) {
+    throw new Error(`Invalid collection name: ${name}`);
+  }
+  return cleaned;
+};
+
+const tableNameForCollection = (collectionName) =>
+  `lucia_${String(collectionName || "").replace(/-/g, "_")}`;
+
+const ensureGenericTableMySql = async (conn, collectionName) => {
+  const tableName = tableNameForCollection(collectionName);
+  await conn.execute(`
+    CREATE TABLE IF NOT EXISTS \`${tableName}\` (
+      id VARCHAR(255) PRIMARY KEY,
+      payload JSON NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+  return tableName;
+};
+
+const ensureGenericTablePostgres = async (client, collectionName) => {
+  const tableName = tableNameForCollection(collectionName);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS "${tableName}" (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  return tableName;
+};
+
+const getCollectionItemsData = async (collectionName, dbConfig) => {
+  const collection = normalizeCollectionName(collectionName);
+
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile(collection);
+    return items.map((item) => ({ id: item.id, ...(item.data || {}) }));
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      const tableName = await ensureGenericTableMySql(conn, collection);
+      const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\` ORDER BY created_at DESC`);
+      return rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      const tableName = await ensureGenericTablePostgres(client, collection);
+      const result = await client.query(`SELECT id, payload FROM "${tableName}" ORDER BY created_at DESC`);
+      return result.rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for collection ${collection}: ${dbConfig.dbEngine}`);
+};
+
+const getCollectionItemData = async (collectionName, id, dbConfig) => {
+  const collection = normalizeCollectionName(collectionName);
+  const itemId = String(id || "").trim();
+  if (!itemId) return null;
+
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile(collection);
+    const found = items.find((item) => String(item?.id || "") === itemId);
+    if (!found) return null;
+    return { id: found.id, ...(found.data || {}) };
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      const tableName = await ensureGenericTableMySql(conn, collection);
+      const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\` WHERE id = ? LIMIT 1`, [itemId]);
+      if (!rows.length) return null;
+      return { id: rows[0].id, ...parsePayloadField(rows[0].payload) };
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      const tableName = await ensureGenericTablePostgres(client, collection);
+      const result = await client.query(`SELECT id, payload FROM "${tableName}" WHERE id = $1 LIMIT 1`, [itemId]);
+      if (!result.rows.length) return null;
+      return { id: result.rows[0].id, ...parsePayloadField(result.rows[0].payload) };
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for collection ${collection}: ${dbConfig.dbEngine}`);
+};
+
+const createCollectionItemData = async (collectionName, payload, dbConfig) => {
+  const collection = normalizeCollectionName(collectionName);
+  const nextId = String(payload?.id || "").trim() || randomId();
+  const normalized = {
+    ...(payload && typeof payload === "object" ? payload : {}),
+    createdAt: payload?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  delete normalized.id;
+
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile(collection);
+    const filtered = items.filter((item) => String(item?.id || "") !== nextId);
+    filtered.push({ id: nextId, data: normalized });
+    await writeCollectionFile(collection, filtered);
+    return nextId;
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      const tableName = await ensureGenericTableMySql(conn, collection);
+      await conn.execute(
+        `INSERT INTO \`${tableName}\` (id, payload) VALUES (?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP`,
+        [nextId, JSON.stringify(normalized)]
+      );
+      return nextId;
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      const tableName = await ensureGenericTablePostgres(client, collection);
+      await client.query(
+        `INSERT INTO "${tableName}" (id, payload, updated_at) VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()`,
+        [nextId, JSON.stringify(normalized)]
+      );
+      return nextId;
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for collection ${collection}: ${dbConfig.dbEngine}`);
+};
+
+const updateCollectionItemData = async (collectionName, id, payload, dbConfig) => {
+  const collection = normalizeCollectionName(collectionName);
+  const itemId = String(id || "").trim();
+  if (!itemId) throw new Error("Item id is required");
+
+  const existing = await getCollectionItemData(collection, itemId, dbConfig);
+  if (!existing) throw new Error("Item not found");
+
+  const merged = {
+    ...existing,
+    ...(payload && typeof payload === "object" ? payload : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  delete merged.id;
+
+  return createCollectionItemData(collection, { ...merged, id: itemId }, dbConfig);
+};
+
+const deleteCollectionItemData = async (collectionName, id, dbConfig) => {
+  const collection = normalizeCollectionName(collectionName);
+  const itemId = String(id || "").trim();
+  if (!itemId) throw new Error("Item id is required");
+
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile(collection);
+    await writeCollectionFile(
+      collection,
+      items.filter((item) => String(item?.id || "") !== itemId)
+    );
+    return;
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      const tableName = await ensureGenericTableMySql(conn, collection);
+      await conn.execute(`DELETE FROM \`${tableName}\` WHERE id = ?`, [itemId]);
+      return;
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      const tableName = await ensureGenericTablePostgres(client, collection);
+      await client.query(`DELETE FROM "${tableName}" WHERE id = $1`, [itemId]);
+      return;
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for collection ${collection}: ${dbConfig.dbEngine}`);
+};
+
+const randomId = () =>
+  `asset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+const ensureAssetsTableMySql = async (conn) => {
+  await conn.execute(`
+    CREATE TABLE IF NOT EXISTS lucia_assets (
+      id VARCHAR(255) PRIMARY KEY,
+      payload JSON NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+};
+
+const ensureAssetsTablePostgres = async (client) => {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS lucia_assets (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+};
+
+const parsePayloadField = (value) => {
+  if (value && typeof value === "object") return value;
+  if (typeof value !== "string") return {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+};
+
+const getAssetsRuntimeConfig = () => {
+  const targetDb = parseTargetDbConfig({});
+  if (targetDb.dbEngine === "postgres" && !targetDb.postgresUrl) {
+    return { ...targetDb, dbEngine: "file" };
+  }
+  if (
+    targetDb.dbEngine === "mysql" &&
+    (!targetDb.mysqlConfig.host || !targetDb.mysqlConfig.user || !targetDb.mysqlConfig.database)
+  ) {
+    return { ...targetDb, dbEngine: "file" };
+  }
+  return targetDb;
+};
+
+const getAssetsData = async (dbConfig) => {
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile("assets");
+    return items.map((item) => ({ id: item.id, ...(item.data || {}) }));
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      await ensureAssetsTableMySql(conn);
+      const [rows] = await conn.execute("SELECT id, payload FROM lucia_assets ORDER BY id ASC");
+      return rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      await ensureAssetsTablePostgres(client);
+      const result = await client.query("SELECT id, payload FROM lucia_assets ORDER BY id ASC");
+      return result.rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for assets: ${dbConfig.dbEngine}`);
+};
+
+const createAssetData = async (payload, dbConfig) => {
+  const nextId = String(payload?.id || "").trim() || randomId();
+  const normalized = {
+    ...normalizeAssetPayload(payload),
+    createdAt: payload?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile("assets");
+    const filtered = items.filter((item) => String(item?.id || "") !== nextId);
+    filtered.push({ id: nextId, data: normalized });
+    await writeCollectionFile("assets", filtered);
+    return nextId;
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      await ensureAssetsTableMySql(conn);
+      await conn.execute(
+        `
+          INSERT INTO lucia_assets (id, payload)
+          VALUES (?, ?)
+          ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP
+        `,
+        [nextId, JSON.stringify(normalized)]
+      );
+      return nextId;
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      await ensureAssetsTablePostgres(client);
+      await client.query(
+        `
+          INSERT INTO lucia_assets (id, payload, updated_at)
+          VALUES ($1, $2::jsonb, NOW())
+          ON CONFLICT (id)
+          DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+        `,
+        [nextId, JSON.stringify(normalized)]
+      );
+      return nextId;
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for assets: ${dbConfig.dbEngine}`);
+};
+
+const updateAssetData = async (id, payload, dbConfig) => {
+  const assetId = String(id || "").trim();
+  if (!assetId) throw new Error("Asset id is required");
+
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile("assets");
+    const idx = items.findIndex((item) => String(item?.id || "") === assetId);
+    if (idx === -1) throw new Error("Asset not found");
+    const prev = items[idx]?.data || {};
+    items[idx] = {
+      id: assetId,
+      data: {
+        ...prev,
+        ...normalizeAssetPayload(payload),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    await writeCollectionFile("assets", items);
+    return;
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      await ensureAssetsTableMySql(conn);
+      const [rows] = await conn.execute("SELECT payload FROM lucia_assets WHERE id = ? LIMIT 1", [
+        assetId,
+      ]);
+      if (!rows.length) throw new Error("Asset not found");
+      const prev = parsePayloadField(rows[0].payload);
+      const merged = {
+        ...prev,
+        ...normalizeAssetPayload(payload),
+        updatedAt: new Date().toISOString(),
+      };
+      await conn.execute("UPDATE lucia_assets SET payload = ? WHERE id = ?", [
+        JSON.stringify(merged),
+        assetId,
+      ]);
+      return;
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      await ensureAssetsTablePostgres(client);
+      const existing = await client.query("SELECT payload FROM lucia_assets WHERE id = $1 LIMIT 1", [
+        assetId,
+      ]);
+      if (!existing.rows.length) throw new Error("Asset not found");
+      const prev = parsePayloadField(existing.rows[0].payload);
+      const merged = {
+        ...prev,
+        ...normalizeAssetPayload(payload),
+        updatedAt: new Date().toISOString(),
+      };
+      await client.query("UPDATE lucia_assets SET payload = $1::jsonb, updated_at = NOW() WHERE id = $2", [
+        JSON.stringify(merged),
+        assetId,
+      ]);
+      return;
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for assets: ${dbConfig.dbEngine}`);
+};
+
+const deleteAssetData = async (id, dbConfig) => {
+  const assetId = String(id || "").trim();
+  if (!assetId) throw new Error("Asset id is required");
+
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile("assets");
+    await writeCollectionFile(
+      "assets",
+      items.filter((item) => String(item?.id || "") !== assetId)
+    );
+    return;
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      await ensureAssetsTableMySql(conn);
+      await conn.execute("DELETE FROM lucia_assets WHERE id = ?", [assetId]);
+      return;
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      await ensureAssetsTablePostgres(client);
+      await client.query("DELETE FROM lucia_assets WHERE id = $1", [assetId]);
+      return;
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for assets: ${dbConfig.dbEngine}`);
+};
+
+const ensureServiceRequestsTableMySql = async (conn) => {
+  const tableName = tableNameForCollection("serviceRequests");
+  await conn.execute(`
+    CREATE TABLE IF NOT EXISTS \`${tableName}\` (
+      id VARCHAR(255) PRIMARY KEY,
+      payload JSON NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+  return tableName;
+};
+
+const ensureServiceRequestsTablePostgres = async (client) => {
+  const tableName = tableNameForCollection("serviceRequests");
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS "${tableName}" (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  return tableName;
+};
+
+const normalizeServiceRequestPayload = (payload) => {
+  if (!payload || typeof payload !== "object") return {};
+  const next = { ...payload };
+  delete next.id;
+  return next;
+};
+
+const getServiceRequestsData = async (dbConfig) => {
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile("serviceRequests");
+    return items
+      .map((item) => ({ id: item.id, ...(item.data || {}) }))
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      const tableName = await ensureServiceRequestsTableMySql(conn);
+      const [rows] = await conn.execute(
+        `SELECT id, payload FROM \`${tableName}\` ORDER BY created_at DESC`
+      );
+      return rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      const tableName = await ensureServiceRequestsTablePostgres(client);
+      const result = await client.query(
+        `SELECT id, payload FROM "${tableName}" ORDER BY created_at DESC`
+      );
+      return result.rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for service requests: ${dbConfig.dbEngine}`);
+};
+
+const createServiceRequestData = async (payload, dbConfig) => {
+  const nextId = String(payload?.id || "").trim() || randomId();
+  const now = new Date().toISOString();
+  const normalized = {
+    ...normalizeServiceRequestPayload(payload),
+    createdAt: payload?.createdAt || now,
+    updatedAt: now,
+  };
+
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile("serviceRequests");
+    const filtered = items.filter((item) => String(item?.id || "") !== nextId);
+    filtered.push({ id: nextId, data: normalized });
+    await writeCollectionFile("serviceRequests", filtered);
+    return nextId;
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      const tableName = await ensureServiceRequestsTableMySql(conn);
+      await conn.execute(
+        `
+          INSERT INTO \`${tableName}\` (id, payload)
+          VALUES (?, ?)
+          ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP
+        `,
+        [nextId, JSON.stringify(normalized)]
+      );
+      return nextId;
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      const tableName = await ensureServiceRequestsTablePostgres(client);
+      await client.query(
+        `
+          INSERT INTO "${tableName}" (id, payload, updated_at)
+          VALUES ($1, $2::jsonb, NOW())
+          ON CONFLICT (id)
+          DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()
+        `,
+        [nextId, JSON.stringify(normalized)]
+      );
+      return nextId;
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for service requests: ${dbConfig.dbEngine}`);
+};
+
+const updateServiceRequestData = async (id, payload, dbConfig) => {
+  const requestId = String(id || "").trim();
+  if (!requestId) throw new Error("Service request id is required");
+
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile("serviceRequests");
+    const idx = items.findIndex((item) => String(item?.id || "") === requestId);
+    if (idx === -1) throw new Error("Service request not found");
+    const prev = items[idx]?.data || {};
+    items[idx] = {
+      id: requestId,
+      data: {
+        ...prev,
+        ...normalizeServiceRequestPayload(payload),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+    await writeCollectionFile("serviceRequests", items);
+    return;
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      const tableName = await ensureServiceRequestsTableMySql(conn);
+      const [rows] = await conn.execute(
+        `SELECT payload FROM \`${tableName}\` WHERE id = ? LIMIT 1`,
+        [requestId]
+      );
+      if (!rows.length) throw new Error("Service request not found");
+      const prev = parsePayloadField(rows[0].payload);
+      const merged = {
+        ...prev,
+        ...normalizeServiceRequestPayload(payload),
+        updatedAt: new Date().toISOString(),
+      };
+      await conn.execute(`UPDATE \`${tableName}\` SET payload = ? WHERE id = ?`, [
+        JSON.stringify(merged),
+        requestId,
+      ]);
+      return;
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      const tableName = await ensureServiceRequestsTablePostgres(client);
+      const existing = await client.query(
+        `SELECT payload FROM "${tableName}" WHERE id = $1 LIMIT 1`,
+        [requestId]
+      );
+      if (!existing.rows.length) throw new Error("Service request not found");
+      const prev = parsePayloadField(existing.rows[0].payload);
+      const merged = {
+        ...prev,
+        ...normalizeServiceRequestPayload(payload),
+        updatedAt: new Date().toISOString(),
+      };
+      await client.query(
+        `UPDATE "${tableName}" SET payload = $1::jsonb, updated_at = NOW() WHERE id = $2`,
+        [JSON.stringify(merged), requestId]
+      );
+      return;
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for service requests: ${dbConfig.dbEngine}`);
+};
+
+const deleteServiceRequestData = async (id, dbConfig) => {
+  const requestId = String(id || "").trim();
+  if (!requestId) throw new Error("Service request id is required");
+
+  if (dbConfig.dbEngine === "file") {
+    const items = await readCollectionFile("serviceRequests");
+    await writeCollectionFile(
+      "serviceRequests",
+      items.filter((item) => String(item?.id || "") !== requestId)
+    );
+    return;
+  }
+
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      const tableName = await ensureServiceRequestsTableMySql(conn);
+      await conn.execute(`DELETE FROM \`${tableName}\` WHERE id = ?`, [requestId]);
+      return;
+    } finally {
+      await conn.end();
+    }
+  }
+
+  if (dbConfig.dbEngine === "postgres") {
+    const { Client } = await import("pg");
+    const client = new Client({ connectionString: dbConfig.postgresUrl });
+    await client.connect();
+    try {
+      const tableName = await ensureServiceRequestsTablePostgres(client);
+      await client.query(`DELETE FROM "${tableName}" WHERE id = $1`, [requestId]);
+      return;
+    } finally {
+      await client.end();
+    }
+  }
+
+  throw new Error(`Unsupported engine for service requests: ${dbConfig.dbEngine}`);
 };
 
 const collectCollectionsData = (collections, data) => {
@@ -305,6 +1159,329 @@ const handleDbTest = async (req, res) => {
   }
 };
 
+const handleAuthRegister = async (req, res) => {
+  let payload;
+  try {
+    payload = await parseJsonBody(req);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  const email = normalizeEmail(payload?.email);
+  const password = String(payload?.password || "");
+  const displayName = String(payload?.displayName || "").trim();
+
+  if (!email || !password || password.length < 6) {
+    return sendJson(res, 400, { ok: false, error: "email and password(min 6) are required" });
+  }
+
+  const dbConfig = getAssetsRuntimeConfig();
+  const existing = await getAuthUserByEmail(email, dbConfig);
+  if (existing) {
+    return sendJson(res, 409, { ok: false, error: "Email already in use" });
+  }
+
+  const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const { salt, hash } = hashPassword(password);
+
+  await createCollectionItemData(
+    "authUsers",
+    {
+      id: userId,
+      email,
+      passwordHash: hash,
+      passwordSalt: salt,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    },
+    dbConfig
+  );
+
+  const profilePayload = {
+    id: userId,
+    email,
+    displayName: displayName || email,
+    role: "user",
+    restaurant: "",
+    position: "",
+    workRole: "",
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+
+  await createCollectionItemData("users", profilePayload, dbConfig);
+
+  const token = await createSession(userId, dbConfig);
+  return sendJson(res, 200, {
+    ok: true,
+    token,
+    user: mapUserProfile(profilePayload),
+  });
+};
+
+const handleAuthLogin = async (req, res) => {
+  let payload;
+  try {
+    payload = await parseJsonBody(req);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  const email = normalizeEmail(payload?.email);
+  const password = String(payload?.password || "");
+  if (!email || !password) {
+    return sendJson(res, 400, { ok: false, error: "email and password are required" });
+  }
+
+  const dbConfig = getAssetsRuntimeConfig();
+  const authUser = await getAuthUserByEmail(email, dbConfig);
+  if (!authUser) {
+    return sendJson(res, 401, { ok: false, error: "Invalid credentials" });
+  }
+
+  const valid = verifyPassword(password, authUser.passwordSalt, authUser.passwordHash);
+  if (!valid) {
+    return sendJson(res, 401, { ok: false, error: "Invalid credentials" });
+  }
+
+  const profile = await getUserProfileById(authUser.id, dbConfig);
+  if (!profile) {
+    return sendJson(res, 404, { ok: false, error: "User profile not found" });
+  }
+
+  const token = await createSession(authUser.id, dbConfig);
+  return sendJson(res, 200, {
+    ok: true,
+    token,
+    user: mapUserProfile(profile),
+  });
+};
+
+const handleAuthMe = async (req, res) => {
+  const dbConfig = getAssetsRuntimeConfig();
+  const { profile } = await resolveAuthContext(req, dbConfig);
+  if (!profile) {
+    return sendJson(res, 200, { ok: true, user: null });
+  }
+  return sendJson(res, 200, { ok: true, user: mapUserProfile(profile) });
+};
+
+const handleAuthLogout = async (req, res) => {
+  const dbConfig = getAssetsRuntimeConfig();
+  const token = sessionTokenFromRequest(req);
+  if (token) {
+    await deleteSession(token, dbConfig);
+  }
+  return sendJson(res, 200, { ok: true });
+};
+
+const handleAuthAdminCreateUser = async (req, res) => {
+  const dbConfig = getAssetsRuntimeConfig();
+  const { profile } = await resolveAuthContext(req, dbConfig);
+  if (!profile || String(profile.role || "") !== "admin") {
+    return sendJson(res, 403, { ok: false, error: "Admin role required" });
+  }
+
+  let payload;
+  try {
+    payload = await parseJsonBody(req);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  const email = normalizeEmail(payload?.email);
+  const password = String(payload?.password || "");
+  const displayName = String(payload?.displayName || "").trim();
+  const role = String(payload?.role || "user").trim() || "user";
+  const restaurant = String(payload?.restaurant || "").trim();
+  const position = String(payload?.position || "").trim();
+  const workRole = String(payload?.workRole || "").trim();
+
+  if (!email || !password || password.length < 6) {
+    return sendJson(res, 400, { ok: false, error: "email and password(min 6) are required" });
+  }
+
+  const existing = await getAuthUserByEmail(email, dbConfig);
+  if (existing) {
+    return sendJson(res, 409, { ok: false, error: "Email already in use" });
+  }
+
+  const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const { salt, hash } = hashPassword(password);
+
+  await createCollectionItemData(
+    "authUsers",
+    {
+      id: userId,
+      email,
+      passwordHash: hash,
+      passwordSalt: salt,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    },
+    dbConfig
+  );
+
+  const profilePayload = {
+    id: userId,
+    email,
+    displayName: displayName || email,
+    role,
+    restaurant,
+    position,
+    workRole,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+
+  await createCollectionItemData("users", profilePayload, dbConfig);
+
+  return sendJson(res, 200, {
+    ok: true,
+    user: mapUserProfile(profilePayload),
+  });
+};
+
+const handleAssetsApi = async (req, res, assetId) => {
+  if (!isAuthorized(req)) {
+    return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+  }
+
+  const dbConfig = getAssetsRuntimeConfig();
+  const method = req.method || "GET";
+
+  if (method === "GET" && !assetId) {
+    const assets = await getAssetsData(dbConfig);
+    return sendJson(res, 200, { ok: true, data: assets });
+  }
+
+  if (method === "POST" && !assetId) {
+    let payload;
+    try {
+      payload = await parseJsonBody(req);
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+    }
+
+    const id = await createAssetData(payload, dbConfig);
+    return sendJson(res, 200, { ok: true, id });
+  }
+
+  if (method === "PUT" && assetId) {
+    let payload;
+    try {
+      payload = await parseJsonBody(req);
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+    }
+
+    await updateAssetData(assetId, payload, dbConfig);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (method === "DELETE" && assetId) {
+    await deleteAssetData(assetId, dbConfig);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  return sendJson(res, 405, { ok: false, error: "Method not allowed" });
+};
+
+const handleServiceRequestsApi = async (req, res, requestId) => {
+  if (!isAuthorized(req)) {
+    return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+  }
+
+  const dbConfig = getAssetsRuntimeConfig();
+  const method = req.method || "GET";
+
+  if (method === "GET" && !requestId) {
+    const requests = await getServiceRequestsData(dbConfig);
+    return sendJson(res, 200, { ok: true, data: requests });
+  }
+
+  if (method === "POST" && !requestId) {
+    let payload;
+    try {
+      payload = await parseJsonBody(req);
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+    }
+
+    const id = await createServiceRequestData(payload, dbConfig);
+    return sendJson(res, 200, { ok: true, id });
+  }
+
+  if (method === "PUT" && requestId) {
+    let payload;
+    try {
+      payload = await parseJsonBody(req);
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+    }
+
+    await updateServiceRequestData(requestId, payload, dbConfig);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (method === "DELETE" && requestId) {
+    await deleteServiceRequestData(requestId, dbConfig);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  return sendJson(res, 405, { ok: false, error: "Method not allowed" });
+};
+
+const handleCollectionsApi = async (req, res, collectionName, itemId) => {
+  if (!isAuthorized(req)) {
+    return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+  }
+
+  const dbConfig = getAssetsRuntimeConfig();
+  const method = req.method || "GET";
+
+  if (method === "GET" && !itemId) {
+    const items = await getCollectionItemsData(collectionName, dbConfig);
+    return sendJson(res, 200, { ok: true, data: items });
+  }
+
+  if (method === "GET" && itemId) {
+    const item = await getCollectionItemData(collectionName, itemId, dbConfig);
+    return sendJson(res, 200, { ok: true, data: item });
+  }
+
+  if (method === "POST" && !itemId) {
+    let payload;
+    try {
+      payload = await parseJsonBody(req);
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+    }
+
+    const id = await createCollectionItemData(collectionName, payload, dbConfig);
+    return sendJson(res, 200, { ok: true, id });
+  }
+
+  if (method === "PUT" && itemId) {
+    let payload;
+    try {
+      payload = await parseJsonBody(req);
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+    }
+
+    await updateCollectionItemData(collectionName, itemId, payload, dbConfig);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (method === "DELETE" && itemId) {
+    await deleteCollectionItemData(collectionName, itemId, dbConfig);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  return sendJson(res, 405, { ok: false, error: "Method not allowed" });
+};
+
 const handleGetRuntimeSettings = async (req, res) => {
   if (!isAuthorized(req)) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
@@ -333,7 +1510,11 @@ const handlePutRuntimeSettings = async (req, res) => {
   const primaryConnectionId = String(payload?.primaryConnectionId || "");
   const runtimeConfig = payload?.runtimeConfig || null;
 
-  if (runtimeConfig && !isValidFirebaseRuntimeConfig(runtimeConfig)) {
+  if (
+    runtimeConfig &&
+    !isValidFirebaseRuntimeConfig(runtimeConfig) &&
+    !isValidCustomRuntimeConfig(runtimeConfig)
+  ) {
     return sendJson(res, 400, { ok: false, error: "Invalid runtimeConfig" });
   }
 
@@ -363,6 +1544,8 @@ const handleDeleteRuntimeSettings = async (req, res) => {
 const server = http.createServer(async (req, res) => {
   const method = req.method || "GET";
   const url = req.url || "/";
+  const requestUrl = new URL(url, `http://${HOST}:${PORT}`);
+  const pathname = requestUrl.pathname;
 
   if (method === "OPTIONS") {
     setCorsHeaders(res);
@@ -371,7 +1554,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (method === "GET" && url === "/health") {
+  if (method === "GET" && pathname === "/health") {
     if (!ALLOWED_ENGINES.has(ENGINE)) {
       return sendJson(res, 500, {
         ok: false,
@@ -389,7 +1572,7 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
-  if (method === "POST" && url === "/migration/import") {
+  if (method === "POST" && pathname === "/migration/import") {
     try {
       return await handleMigrationImport(req, res);
     } catch (error) {
@@ -397,7 +1580,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (method === "POST" && url === "/db/test") {
+  if (method === "POST" && pathname === "/db/test") {
     try {
       return await handleDbTest(req, res);
     } catch (error) {
@@ -405,16 +1588,93 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (url === "/settings/firebase-runtime" && method === "GET") {
+  if (method === "POST" && pathname === "/auth/register") {
+    return handleAuthRegister(req, res);
+  }
+
+  if (method === "POST" && pathname === "/auth/login") {
+    return handleAuthLogin(req, res);
+  }
+
+  if (method === "GET" && pathname === "/auth/me") {
+    return handleAuthMe(req, res);
+  }
+
+  if (method === "POST" && pathname === "/auth/logout") {
+    return handleAuthLogout(req, res);
+  }
+
+  if (method === "POST" && pathname === "/auth/admin-create-user") {
+    return handleAuthAdminCreateUser(req, res);
+  }
+
+  if (pathname === "/settings/firebase-runtime" && method === "GET") {
     return handleGetRuntimeSettings(req, res);
   }
 
-  if (url === "/settings/firebase-runtime" && method === "PUT") {
+  if (pathname === "/settings/firebase-runtime" && method === "PUT") {
     return handlePutRuntimeSettings(req, res);
   }
 
-  if (url === "/settings/firebase-runtime" && method === "DELETE") {
+  if (pathname === "/settings/firebase-runtime" && method === "DELETE") {
     return handleDeleteRuntimeSettings(req, res);
+  }
+
+  if (pathname === "/api/assets") {
+    try {
+      return await handleAssetsApi(req, res, "");
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  const assetsByIdMatch = pathname.match(/^\/api\/assets\/([^/]+)$/);
+  if (assetsByIdMatch) {
+    try {
+      const assetId = decodeURIComponent(assetsByIdMatch[1]);
+      return await handleAssetsApi(req, res, assetId);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  if (pathname === "/api/service-requests") {
+    try {
+      return await handleServiceRequestsApi(req, res, "");
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  const serviceRequestsByIdMatch = pathname.match(/^\/api\/service-requests\/([^/]+)$/);
+  if (serviceRequestsByIdMatch) {
+    try {
+      const requestId = decodeURIComponent(serviceRequestsByIdMatch[1]);
+      return await handleServiceRequestsApi(req, res, requestId);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  const collectionsByIdMatch = pathname.match(/^\/api\/collections\/([^/]+)\/([^/]+)$/);
+  if (collectionsByIdMatch) {
+    try {
+      const collectionName = decodeURIComponent(collectionsByIdMatch[1]);
+      const itemId = decodeURIComponent(collectionsByIdMatch[2]);
+      return await handleCollectionsApi(req, res, collectionName, itemId);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  const collectionsMatch = pathname.match(/^\/api\/collections\/([^/]+)$/);
+  if (collectionsMatch) {
+    try {
+      const collectionName = decodeURIComponent(collectionsMatch[1]);
+      return await handleCollectionsApi(req, res, collectionName, "");
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
   }
 
   return sendJson(res, 404, { ok: false, error: "Not found" });

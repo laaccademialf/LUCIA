@@ -12,6 +12,7 @@ import {
 const CONNECTIONS_KEY = "lucia_db_connections";
 const PRIMARY_ID_KEY = "lucia_primary_connection_id";
 const RUNTIME_CONFIG_KEY = "lucia_runtime_firebase_config";
+const RUNTIME_CUSTOM_CONFIG_KEY = "lucia_runtime_custom_config";
 const SETTINGS_API_BASE_URL = String(import.meta.env.VITE_RUNTIME_SETTINGS_API_BASE_URL || "").trim().replace(/\/+$/, "");
 const SETTINGS_API_TOKEN = String(import.meta.env.VITE_RUNTIME_SETTINGS_API_TOKEN || "").trim();
 
@@ -164,13 +165,24 @@ export const syncRuntimeConfigFromServer = async () => {
 
     if (runtimeConfig && isValidFirebaseConfig(runtimeConfig)) {
       localStorage.setItem(RUNTIME_CONFIG_KEY, JSON.stringify(normalizeFirebaseConfig(runtimeConfig)));
+      localStorage.removeItem(RUNTIME_CUSTOM_CONFIG_KEY);
       if (primaryConnectionId) {
         localStorage.setItem(PRIMARY_ID_KEY, primaryConnectionId);
       }
       return { synced: true, source: "server", hasRuntimeConfig: true };
     }
 
+    if (runtimeConfig && isValidCustomConfig(runtimeConfig)) {
+      localStorage.setItem(RUNTIME_CUSTOM_CONFIG_KEY, JSON.stringify(normalizeCustomConfig(runtimeConfig)));
+      localStorage.removeItem(RUNTIME_CONFIG_KEY);
+      if (primaryConnectionId) {
+        localStorage.setItem(PRIMARY_ID_KEY, primaryConnectionId);
+      }
+      return { synced: true, source: "server", hasRuntimeConfig: true, type: "custom" };
+    }
+
     localStorage.removeItem(RUNTIME_CONFIG_KEY);
+    localStorage.removeItem(RUNTIME_CUSTOM_CONFIG_KEY);
     localStorage.removeItem(PRIMARY_ID_KEY);
     return { synced: true, source: "server", hasRuntimeConfig: false };
   } catch {
@@ -264,18 +276,38 @@ export const getCurrentRuntimeConfig = () => {
   return isValidFirebaseConfig(DEFAULT_ENV_CONFIG) ? DEFAULT_ENV_CONFIG : null;
 };
 
+export const getCurrentRuntimeCustomConfig = () => {
+  if (!isBrowser()) return null;
+
+  const raw = localStorage.getItem(RUNTIME_CUSTOM_CONFIG_KEY);
+  if (!raw) return null;
+
+  const parsed = safeParse(raw, null);
+  if (parsed && isValidCustomConfig(parsed)) {
+    return normalizeCustomConfig(parsed);
+  }
+
+  return null;
+};
+
 export const setPrimaryConnectionById = async (id) => {
   const connection = getConnections().find((item) => item.id === id);
   if (!connection) {
     throw new Error("Підключення не знайдено");
   }
-  if (connection.type !== "firebase") {
-    throw new Error("Основною можна зробити тільки Firebase БД");
-  }
 
   if (!isBrowser()) return;
+
   localStorage.setItem(PRIMARY_ID_KEY, id);
-  localStorage.setItem(RUNTIME_CONFIG_KEY, JSON.stringify(connection.config));
+
+  if (connection.type === "firebase") {
+    localStorage.setItem(RUNTIME_CONFIG_KEY, JSON.stringify(normalizeFirebaseConfig(connection.config)));
+    localStorage.removeItem(RUNTIME_CUSTOM_CONFIG_KEY);
+  } else if (connection.type === "custom") {
+    localStorage.setItem(RUNTIME_CUSTOM_CONFIG_KEY, JSON.stringify(normalizeCustomConfig(connection.config)));
+    localStorage.removeItem(RUNTIME_CONFIG_KEY);
+  }
+
   await persistRuntimeConfigToServer({
     primaryConnectionId: id,
     runtimeConfig: connection.config,
@@ -286,6 +318,7 @@ export const clearPrimaryConnection = async () => {
   if (!isBrowser()) return;
   localStorage.removeItem(PRIMARY_ID_KEY);
   localStorage.removeItem(RUNTIME_CONFIG_KEY);
+  localStorage.removeItem(RUNTIME_CUSTOM_CONFIG_KEY);
   await clearRuntimeConfigOnServer();
 };
 
@@ -549,3 +582,4 @@ export const bootstrapFirebaseConnection = async ({ targetConfig, sourceConfig }
 };
 
 export const RUNTIME_FIREBASE_CONFIG_KEY = RUNTIME_CONFIG_KEY;
+export const RUNTIME_CUSTOM_CONFIG_STORAGE_KEY = RUNTIME_CUSTOM_CONFIG_KEY;

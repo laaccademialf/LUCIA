@@ -87,6 +87,71 @@ Optional if endpoint requires auth:
 VITE_RUNTIME_SETTINGS_API_TOKEN=your-token
 ```
 
+To enable non-Firebase authentication mode (backend auth):
+
+```bash
+VITE_AUTH_API_BASE_URL=http://localhost:8787
+```
+
+Optional token for protected API:
+
+```bash
+VITE_AUTH_API_TOKEN=your-token
+```
+
+Auth API endpoints:
+
+- `POST /auth/register`
+- `POST /auth/login`
+- `GET /auth/me`
+- `POST /auth/logout`
+- `POST /auth/admin-create-user` (admin session required)
+
+To run assets module through backend API (MariaDB/Postgres) instead of Firebase realtime:
+
+```bash
+VITE_DATA_API_BASE_URL=http://localhost:8787
+```
+
+Optional auth token:
+
+```bash
+VITE_DATA_API_TOKEN=your-token
+```
+
+When this env is set, `useAssets` calls:
+
+- `GET /api/assets`
+- `POST /api/assets`
+- `PUT /api/assets/:id`
+- `DELETE /api/assets/:id`
+
+`useServiceRequests` also switches to API mode and calls:
+
+- `GET /api/service-requests`
+- `POST /api/service-requests`
+- `PUT /api/service-requests/:id`
+- `DELETE /api/service-requests/:id`
+
+Generic API for broad module migration:
+
+- `GET /api/collections/:collection`
+- `GET /api/collections/:collection/:id`
+- `POST /api/collections/:collection`
+- `PUT /api/collections/:collection/:id`
+- `DELETE /api/collections/:collection/:id`
+
+Currently switched to API mode when `VITE_DATA_API_BASE_URL` is set:
+
+- `useAssets`
+- `useServiceRequests`
+- `useRestaurants`
+- `useChecklists`
+- `useProductBooking`
+- `useMenuStructure`
+- `useAssetFields`
+- `useFieldPermissions`
+
 Open `Database` tab and add connection:
 
 - Type: `Custom Server DB (API)`

@@ -1,590 +1,208 @@
 import {
-  collection,
-  getDocs,
   addDoc,
+  collection,
   deleteDoc,
   doc,
-  updateDoc,
-  query,
+  getDocs,
   orderBy,
+  query,
+  updateDoc,
 } from "firebase/firestore";
 import { db } from "./config";
+import {
+  createCollectionItemApi,
+  deleteCollectionItemApi,
+  isApiDataModeEnabled,
+  listCollectionItemsApi,
+  updateCollectionItemApi,
+} from "./collectionsAdapter";
+
+const byNameAsc = (a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), "uk");
+
+const listNamedItems = async (collectionName, errorLabel) => {
+  if (isApiDataModeEnabled()) {
+    const items = await listCollectionItemsApi(collectionName);
+    return items.sort(byNameAsc);
+  }
+
+  try {
+    const q = query(collection(db, collectionName), orderBy("name"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+  } catch (error) {
+    console.error(errorLabel, error);
+    throw error;
+  }
+};
+
+const addNamedItem = async (collectionName, name, errorLabel, extraPayload = {}) => {
+  const payload = {
+    name,
+    ...extraPayload,
+    createdAt: new Date().toISOString(),
+  };
+
+  if (isApiDataModeEnabled()) {
+    const id = await createCollectionItemApi(collectionName, payload);
+    return { id, ...payload };
+  }
+
+  try {
+    const docRef = await addDoc(collection(db, collectionName), payload);
+    return { id: docRef.id, ...payload };
+  } catch (error) {
+    console.error(errorLabel, error);
+    throw error;
+  }
+};
+
+const updateNamedItem = async (collectionName, id, payload, errorLabel) => {
+  const next = {
+    ...(payload || {}),
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (isApiDataModeEnabled()) {
+    await updateCollectionItemApi(collectionName, id, next);
+    return;
+  }
+
+  try {
+    await updateDoc(doc(db, collectionName, id), next);
+  } catch (error) {
+    console.error(errorLabel, error);
+    throw error;
+  }
+};
+
+const deleteItem = async (collectionName, id, errorLabel) => {
+  if (isApiDataModeEnabled()) {
+    await deleteCollectionItemApi(collectionName, id);
+    return;
+  }
+
+  try {
+    await deleteDoc(doc(db, collectionName, id));
+  } catch (error) {
+    console.error(errorLabel, error);
+    throw error;
+  }
+};
 
 // ==================== КАТЕГОРІЇ ====================
-export const getCategories = async () => {
-  try {
-    const q = query(collection(db, "assetCategories"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання категорій:", error);
-    throw error;
-  }
-};
-
-export const addCategory = async (name) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetCategories"), {
-      name,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name };
-  } catch (error) {
-    console.error("Помилка додавання категорії:", error);
-    throw error;
-  }
-};
-
-export const deleteCategory = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetCategories", id));
-  } catch (error) {
-    console.error("Помилка видалення категорії:", error);
-    throw error;
-  }
-};
-
-export const updateCategory = async (id, name) => {
-  try {
-    await updateDoc(doc(db, "assetCategories", id), {
-      name,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Помилка редагування категорії:", error);
-    throw error;
-  }
-};
+export const getCategories = async () => listNamedItems("assetCategories", "Помилка отримання категорій:");
+export const addCategory = async (name) => addNamedItem("assetCategories", name, "Помилка додавання категорії:");
+export const deleteCategory = async (id) => deleteItem("assetCategories", id, "Помилка видалення категорії:");
+export const updateCategory = async (id, name) =>
+  updateNamedItem("assetCategories", id, { name }, "Помилка редагування категорії:");
 
 // ==================== ПІДКАТЕГОРІЇ ====================
-export const getSubcategories = async () => {
-  try {
-    const q = query(collection(db, "assetSubcategories"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання підкатегорій:", error);
-    throw error;
-  }
-};
-
-export const addSubcategory = async (name, categoryId = "", categoryName = "") => {
-  try {
-    const docRef = await addDoc(collection(db, "assetSubcategories"), {
-      name,
-      categoryId,
-      categoryName,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name, categoryId, categoryName };
-  } catch (error) {
-    console.error("Помилка додавання підкатегорії:", error);
-    throw error;
-  }
-};
-
-export const deleteSubcategory = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetSubcategories", id));
-  } catch (error) {
-    console.error("Помилка видалення підкатегорії:", error);
-    throw error;
-  }
-};
-
-export const updateSubcategory = async (id, name, categoryId = "", categoryName = "") => {
-  try {
-    await updateDoc(doc(db, "assetSubcategories", id), {
-      name,
-      categoryId,
-      categoryName,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Помилка редагування підкатегорії:", error);
-    throw error;
-  }
-};
+export const getSubcategories = async () =>
+  listNamedItems("assetSubcategories", "Помилка отримання підкатегорій:");
+export const addSubcategory = async (name, categoryId = "", categoryName = "") =>
+  addNamedItem("assetSubcategories", name, "Помилка додавання підкатегорії:", { categoryId, categoryName });
+export const deleteSubcategory = async (id) =>
+  deleteItem("assetSubcategories", id, "Помилка видалення підкатегорії:");
+export const updateSubcategory = async (id, name, categoryId = "", categoryName = "") =>
+  updateNamedItem(
+    "assetSubcategories",
+    id,
+    { name, categoryId, categoryName },
+    "Помилка редагування підкатегорії:"
+  );
 
 // ==================== ТИПИ ОБЛІКУ ====================
-export const getAccountingTypes = async () => {
-  try {
-    const q = query(collection(db, "assetAccountingTypes"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання типів обліку:", error);
-    throw error;
-  }
-};
-
-export const addAccountingType = async (name) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetAccountingTypes"), {
-      name,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name };
-  } catch (error) {
-    console.error("Помилка додавання типу обліку:", error);
-    throw error;
-  }
-};
-
-export const deleteAccountingType = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetAccountingTypes", id));
-  } catch (error) {
-    console.error("Помилка видалення типу обліку:", error);
-    throw error;
-  }
-};
-
-export const updateAccountingType = async (id, name) => {
-  try {
-    await updateDoc(doc(db, "assetAccountingTypes", id), {
-      name,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Помилка редагування типу обліку:", error);
-    throw error;
-  }
-};
+export const getAccountingTypes = async () =>
+  listNamedItems("assetAccountingTypes", "Помилка отримання типів обліку:");
+export const addAccountingType = async (name) =>
+  addNamedItem("assetAccountingTypes", name, "Помилка додавання типу обліку:");
+export const deleteAccountingType = async (id) =>
+  deleteItem("assetAccountingTypes", id, "Помилка видалення типу обліку:");
+export const updateAccountingType = async (id, name) =>
+  updateNamedItem("assetAccountingTypes", id, { name }, "Помилка редагування типу обліку:");
 
 // ==================== БІЗНЕС НАПРЯМИ ====================
-export const getBusinessUnits = async () => {
-  try {
-    const q = query(collection(db, "assetBusinessUnits"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання бізнес напрямів:", error);
-    throw error;
-  }
-};
-
-export const addBusinessUnit = async (name) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetBusinessUnits"), {
-      name,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name };
-  } catch (error) {
-    console.error("Помилка додавання бізнес напряму:", error);
-    throw error;
-  }
-};
-
-export const deleteBusinessUnit = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetBusinessUnits", id));
-  } catch (error) {
-    console.error("Помилка видалення бізнес напряму:", error);
-    throw error;
-  }
-};
-
-export const updateBusinessUnit = async (id, name) => {
-  try {
-    await updateDoc(doc(db, "assetBusinessUnits", id), {
-      name,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Помилка редагування бізнес напряму:", error);
-    throw error;
-  }
-};
+export const getBusinessUnits = async () =>
+  listNamedItems("assetBusinessUnits", "Помилка отримання бізнес напрямів:");
+export const addBusinessUnit = async (name) =>
+  addNamedItem("assetBusinessUnits", name, "Помилка додавання бізнес напряму:");
+export const deleteBusinessUnit = async (id) =>
+  deleteItem("assetBusinessUnits", id, "Помилка видалення бізнес напряму:");
+export const updateBusinessUnit = async (id, name) =>
+  updateNamedItem("assetBusinessUnits", id, { name }, "Помилка редагування бізнес напряму:");
 
 // ==================== СТАТУСИ ====================
-export const getStatuses = async () => {
-  try {
-    const q = query(collection(db, "assetStatuses"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання статусів:", error);
-    throw error;
-  }
-};
-
-export const addStatus = async (name) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetStatuses"), {
-      name,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name };
-  } catch (error) {
-    console.error("Помилка додавання статусу:", error);
-    throw error;
-  }
-};
-
-export const deleteStatus = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetStatuses", id));
-  } catch (error) {
-    console.error("Помилка видалення статусу:", error);
-    throw error;
-  }
-};
-
-export const updateStatus = async (id, name) => {
-  try {
-    await updateDoc(doc(db, "assetStatuses", id), {
-      name,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Помилка редагування статусу:", error);
-    throw error;
-  }
-};
+export const getStatuses = async () => listNamedItems("assetStatuses", "Помилка отримання статусів:");
+export const addStatus = async (name) => addNamedItem("assetStatuses", name, "Помилка додавання статусу:");
+export const deleteStatus = async (id) => deleteItem("assetStatuses", id, "Помилка видалення статусу:");
+export const updateStatus = async (id, name) =>
+  updateNamedItem("assetStatuses", id, { name }, "Помилка редагування статусу:");
 
 // ==================== СТАН ====================
-export const getConditions = async () => {
-  try {
-    const q = query(collection(db, "assetConditions"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання станів:", error);
-    throw error;
-  }
-};
-
-export const addCondition = async (name) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetConditions"), {
-      name,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name };
-  } catch (error) {
-    console.error("Помилка додавання стану:", error);
-    throw error;
-  }
-};
-
-export const deleteCondition = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetConditions", id));
-  } catch (error) {
-    console.error("Помилка видалення стану:", error);
-    throw error;
-  }
-};
-
-export const updateCondition = async (id, name) => {
-  try {
-    await updateDoc(doc(db, "assetConditions", id), {
-      name,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Помилка редагування стану:", error);
-    throw error;
-  }
-};
+export const getConditions = async () => listNamedItems("assetConditions", "Помилка отримання станів:");
+export const addCondition = async (name) => addNamedItem("assetConditions", name, "Помилка додавання стану:");
+export const deleteCondition = async (id) => deleteItem("assetConditions", id, "Помилка видалення стану:");
+export const updateCondition = async (id, name) =>
+  updateNamedItem("assetConditions", id, { name }, "Помилка редагування стану:");
 
 // ==================== РІШЕННЯ ====================
-export const getDecisions = async () => {
-  try {
-    const q = query(collection(db, "assetDecisions"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання рішень:", error);
-    throw error;
-  }
-};
-
-export const addDecision = async (name) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetDecisions"), {
-      name,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name };
-  } catch (error) {
-    console.error("Помилка додавання рішення:", error);
-    throw error;
-  }
-};
-
-export const deleteDecision = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetDecisions", id));
-  } catch (error) {
-    console.error("Помилка видалення рішення:", error);
-    throw error;
-  }
-};
-
-export const updateDecision = async (id, name) => {
-  try {
-    await updateDoc(doc(db, "assetDecisions", id), {
-      name,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Помилка редагування рішення:", error);
-    throw error;
-  }
-};
+export const getDecisions = async () => listNamedItems("assetDecisions", "Помилка отримання рішень:");
+export const addDecision = async (name) => addNamedItem("assetDecisions", name, "Помилка додавання рішення:");
+export const deleteDecision = async (id) => deleteItem("assetDecisions", id, "Помилка видалення рішення:");
+export const updateDecision = async (id, name) =>
+  updateNamedItem("assetDecisions", id, { name }, "Помилка редагування рішення:");
 
 // ==================== ЗОНИ РОЗМІЩЕННЯ ====================
-export const getPlacementZones = async () => {
-  try {
-    const q = query(collection(db, "assetPlacementZones"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання зон розміщення:", error);
-    throw error;
-  }
-};
-
-export const addPlacementZone = async (name) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetPlacementZones"), {
-      name,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name };
-  } catch (error) {
-    console.error("Помилка додавання зони розміщення:", error);
-    throw error;
-  }
-};
-
-export const deletePlacementZone = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetPlacementZones", id));
-  } catch (error) {
-    console.error("Помилка видалення зони розміщення:", error);
-    throw error;
-  }
-};
-
-export const updatePlacementZone = async (id, name) => {
-  try {
-    await updateDoc(doc(db, "assetPlacementZones", id), {
-      name,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Помилка редагування зони розміщення:", error);
-    throw error;
-  }
-};
+export const getPlacementZones = async () =>
+  listNamedItems("assetPlacementZones", "Помилка отримання зон розміщення:");
+export const addPlacementZone = async (name) =>
+  addNamedItem("assetPlacementZones", name, "Помилка додавання зони розміщення:");
+export const deletePlacementZone = async (id) =>
+  deleteItem("assetPlacementZones", id, "Помилка видалення зони розміщення:");
+export const updatePlacementZone = async (id, name) =>
+  updateNamedItem("assetPlacementZones", id, { name }, "Помилка редагування зони розміщення:");
 
 // ==================== ЦЕНТРИ ВІДПОВІДАЛЬНОСТІ ====================
-export const getResponsibilityCenters = async () => {
-  try {
-    const q = query(collection(db, "assetResponsibilityCenters"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання центрів відповідальності:", error);
-    throw error;
-  }
-};
-
-export const addResponsibilityCenter = async (name) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetResponsibilityCenters"), {
-      name,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name };
-  } catch (error) {
-    console.error("Помилка додавання центру відповідальності:", error);
-    throw error;
-  }
-};
-
-export const deleteResponsibilityCenter = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetResponsibilityCenters", id));
-  } catch (error) {
-    console.error("Помилка видалення центру відповідальності:", error);
-    throw error;
-  }
-};
+export const getResponsibilityCenters = async () =>
+  listNamedItems("assetResponsibilityCenters", "Помилка отримання центрів відповідальності:");
+export const addResponsibilityCenter = async (name) =>
+  addNamedItem("assetResponsibilityCenters", name, "Помилка додавання центру відповідальності:");
+export const deleteResponsibilityCenter = async (id) =>
+  deleteItem("assetResponsibilityCenters", id, "Помилка видалення центру відповідальності:");
 
 // ==================== МАТЕРІАЛЬНО ВІДПОВІДАЛЬНІ ОСОБИ ====================
-export const getResponsiblePersons = async () => {
-  try {
-    const q = query(collection(db, "assetResponsiblePersons"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання матеріально відповідальних осіб:", error);
-    throw error;
-  }
-};
-
-export const addResponsiblePerson = async (name, centerId) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetResponsiblePersons"), {
-      name,
-      centerId,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name, centerId };
-  } catch (error) {
-    console.error("Помилка додавання матеріально відповідальної особи:", error);
-    throw error;
-  }
-};
-
-export const deleteResponsiblePerson = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetResponsiblePersons", id));
-  } catch (error) {
-    console.error("Помилка видалення матеріально відповідальної особи:", error);
-    throw error;
-  }
-};
+export const getResponsiblePersons = async () =>
+  listNamedItems("assetResponsiblePersons", "Помилка отримання матеріально відповідальних осіб:");
+export const addResponsiblePerson = async (name, centerId) =>
+  addNamedItem("assetResponsiblePersons", name, "Помилка додавання матеріально відповідальної особи:", {
+    centerId,
+  });
+export const deleteResponsiblePerson = async (id) =>
+  deleteItem("assetResponsiblePersons", id, "Помилка видалення матеріально відповідальної особи:");
 
 // ==================== ПРАЦЕЗДАТНІСТЬ ====================
-export const getFunctionalities = async () => {
-  try {
-    const q = query(collection(db, "assetFunctionalities"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання працездатностей:", error);
-    throw error;
-  }
-};
-
-export const addFunctionality = async (name) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetFunctionalities"), {
-      name,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name };
-  } catch (error) {
-    console.error("Помилка додавання працездатності:", error);
-    throw error;
-  }
-};
-
-export const deleteFunctionality = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetFunctionalities", id));
-  } catch (error) {
-    console.error("Помилка видалення працездатності:", error);
-    throw error;
-  }
-};
-
-export const updateFunctionality = async (id, name) => {
-  try {
-    await updateDoc(doc(db, "assetFunctionalities", id), {
-      name,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Помилка редагування працездатності:", error);
-    throw error;
-  }
-};
+export const getFunctionalities = async () =>
+  listNamedItems("assetFunctionalities", "Помилка отримання працездатностей:");
+export const addFunctionality = async (name) =>
+  addNamedItem("assetFunctionalities", name, "Помилка додавання працездатності:");
+export const deleteFunctionality = async (id) =>
+  deleteItem("assetFunctionalities", id, "Помилка видалення працездатності:");
+export const updateFunctionality = async (id, name) =>
+  updateNamedItem("assetFunctionalities", id, { name }, "Помилка редагування працездатності:");
 
 // ==================== МОРАЛЬНА АКТУАЛЬНІСТЬ ====================
-export const getRelevances = async () => {
-  try {
-    const q = query(collection(db, "assetRelevances"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання моральних актуальностей:", error);
-    throw error;
-  }
-};
-
-export const addRelevance = async (name) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetRelevances"), {
-      name,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name };
-  } catch (error) {
-    console.error("Помилка додавання моральної актуальності:", error);
-    throw error;
-  }
-};
-
-export const deleteRelevance = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetRelevances", id));
-  } catch (error) {
-    console.error("Помилка видалення моральної актуальності:", error);
-    throw error;
-  }
-};
-
-export const updateRelevance = async (id, name) => {
-  try {
-    await updateDoc(doc(db, "assetRelevances", id), {
-      name,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Помилка редагування моральної актуальності:", error);
-    throw error;
-  }
-};
+export const getRelevances = async () =>
+  listNamedItems("assetRelevances", "Помилка отримання моральних актуальностей:");
+export const addRelevance = async (name) =>
+  addNamedItem("assetRelevances", name, "Помилка додавання моральної актуальності:");
+export const deleteRelevance = async (id) =>
+  deleteItem("assetRelevances", id, "Помилка видалення моральної актуальності:");
+export const updateRelevance = async (id, name) =>
+  updateNamedItem("assetRelevances", id, { name }, "Помилка редагування моральної актуальності:");
 
 // ==================== ПРИЧИНИ ====================
-export const getReasons = async () => {
-  try {
-    const q = query(collection(db, "assetReasons"), orderBy("name"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error("Помилка отримання причин:", error);
-    throw error;
-  }
-};
-
-export const addReason = async (name) => {
-  try {
-    const docRef = await addDoc(collection(db, "assetReasons"), {
-      name,
-      createdAt: new Date().toISOString(),
-    });
-    return { id: docRef.id, name };
-  } catch (error) {
-    console.error("Помилка додавання причини:", error);
-    throw error;
-  }
-};
-
-export const deleteReason = async (id) => {
-  try {
-    await deleteDoc(doc(db, "assetReasons", id));
-  } catch (error) {
-    console.error("Помилка видалення причини:", error);
-    throw error;
-  }
-};
-
-export const updateReason = async (id, name) => {
-  try {
-    await updateDoc(doc(db, "assetReasons", id), {
-      name,
-      updatedAt: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Помилка редагування причини:", error);
-    throw error;
-  }
-};
+export const getReasons = async () => listNamedItems("assetReasons", "Помилка отримання причин:");
+export const addReason = async (name) => addNamedItem("assetReasons", name, "Помилка додавання причини:");
+export const deleteReason = async (id) => deleteItem("assetReasons", id, "Помилка видалення причини:");
+export const updateReason = async (id, name) =>
+  updateNamedItem("assetReasons", id, { name }, "Помилка редагування причини:");

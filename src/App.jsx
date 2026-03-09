@@ -12,7 +12,7 @@ import { RolesPositionsManager } from "./components/RolesPositionsManager";
 import { RolePermissionsManager } from "./components/RolePermissionsManager";
 import { FieldPermissionsManager } from "./components/FieldPermissionsManager";
 import UtilityMetersManager from "./components/UtilityMetersManager";
-import ElectricityForm from "./components/ElectricityForm";
+import ElectricityTab from "./components/ElectricityTab";
 import { MaterialResponsibilityManager } from "./components/MaterialResponsibilityManager";
 import AssetTransferWriteoffManager from "./components/AssetTransferWriteoffManager";
 import { AssetFieldsManager } from "./components/AssetFieldsManager";
@@ -1878,23 +1878,9 @@ function App() {
 
     // Вкладка електроенергії
     if (activeNav === "inventory-utilities" && topTab === "electricityinv") {
-      // TODO: meters, history, onSubmit — заглушки, замінити на реальні дані
-      const meters = [
-        { id: "meter1", number: "№0131882", prevValue: "499989" },
-      ];
-      const history = [];
-      const handleElectricitySubmit = (data) => {
-        // TODO: інтеграція з Firestore
-        alert("Збережено показники електроенергії: " + JSON.stringify(data));
-      };
       return (
         <div className="grid grid-cols-1">
-          <ElectricityForm
-            meters={meters}
-            history={history}
-            onSubmit={handleElectricitySubmit}
-            responsible={user?.displayName || user?.fullName || ""}
-          />
+          <ElectricityTab user={user} restaurants={restaurants} utilityMeters={utilityMeters} />
         </div>
       );
     }

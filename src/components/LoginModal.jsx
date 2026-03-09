@@ -28,6 +28,10 @@ export const LoginModal = ({ onClose, onSwitchToRegister, onLoginSuccess }) => {
       console.error("Помилка входу:", error);
       if (error.code === "auth/operation-not-allowed") {
         setError("⚠️ Authentication не активовано у Firebase Console. Будь ласка, активуйте Email/Password провайдер.");
+      } else if (error.code === "auth/api-401") {
+        setError("Невірний email або пароль");
+      } else if (error.code === "auth/api-404") {
+        setError("Користувача не знайдено");
       } else if (error.code === "auth/invalid-credential") {
         setError("Невірний email або пароль");
       } else if (error.code === "auth/user-not-found") {

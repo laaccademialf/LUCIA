@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X } from "lucide-react";
-import { registerUser } from "../firebase/auth";
+import { isAuthApiEnabled, registerUser } from "../firebase/auth";
 
 export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
   const [email, setEmail] = useState("");
@@ -14,12 +14,13 @@ export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
     setError("");
     setLoading(true);
 
-    // Перевірка чи змінні завантажені
+    // Перевірка Firebase змінних потрібна лише коли не використовується Auth API backend
+    const apiMode = isAuthApiEnabled();
     const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
-    console.log("API Key check:", apiKey ? "✅ Loaded" : "❌ Missing");
+    console.log("Auth mode:", apiMode ? "Auth API" : "Firebase");
     console.log("Environment:", import.meta.env.MODE);
-    
-    if (!apiKey || apiKey === "YOUR_API_KEY") {
+
+    if (!apiMode && (!apiKey || apiKey === "YOUR_API_KEY")) {
       setError("⚠️ Firebase змінні НЕ завантажені!\n\n" + 
         (import.meta.env.PROD 
           ? "🌐 Ви на Production (Vercel):\n\n1. Vercel Dashboard → Settings → Environment Variables\n2. Додайте всі VITE_FIREBASE_* змінні\n3. Deployments → Redeploy\n\n4. Firebase Console → Authentication → Settings → Authorized domains\n5. Додайте домен: " + window.location.hostname
@@ -39,6 +40,10 @@ export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
       
       if (error.code === "auth/operation-not-allowed") {
         setError("⚠️ Email/Password authentication не активовано у Firebase Console.\n\nЩоб активувати:\n1. Відкрийте Firebase Console\n2. Authentication → Sign-in method\n3. Увімкніть Email/Password");
+      } else if (error.code === "auth/api-409" || String(error.message || "").toLowerCase().includes("already")) {
+        setError("Цей email вже використовується");
+      } else if (error.code === "auth/api-401") {
+        setError("Невірні дані для реєстрації");
       } else if (error.code === "auth/email-already-in-use") {
         setError("Цей email вже використовується");
       } else if (error.code === "auth/weak-password") {

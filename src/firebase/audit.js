@@ -1,5 +1,11 @@
 import { addDoc, collection, limit, onSnapshot, orderBy, query } from "firebase/firestore";
 import { db } from "./config";
+import {
+  createCollectionItemApi,
+  isApiDataModeEnabled,
+  listCollectionItemsApi,
+  subscribeByPolling,
+} from "./collectionsAdapter";
 
 const AUDIT_COLLECTION = "platformAuditLogs";
 const AUDIT_LOGGING_ENABLED = false;
@@ -46,10 +52,24 @@ export const logAuditEvent = async (payload) => {
     month: createdAt.slice(0, 7),
   });
 
+  if (isApiDataModeEnabled()) {
+    await createCollectionItemApi(AUDIT_COLLECTION, normalized);
+    return;
+  }
+
   await addDoc(collection(db, AUDIT_COLLECTION), normalized);
 };
 
 export const subscribeToAuditLogs = (callback) => {
+  if (isApiDataModeEnabled()) {
+    return subscribeByPolling(async () => {
+      const items = await listCollectionItemsApi(AUDIT_COLLECTION);
+      return items
+        .sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")))
+        .slice(0, 300);
+    }, callback, 5000);
+  }
+
   const q = query(collection(db, AUDIT_COLLECTION), orderBy("createdAt", "desc"), limit(300));
   return onSnapshot(q, (snapshot) => {
     const items = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));

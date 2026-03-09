@@ -1,11 +1,23 @@
 import { collection, getDocs, getDoc, doc, updateDoc, deleteDoc, query, orderBy } from "firebase/firestore";
 import { db } from "./config";
+import {
+  deleteCollectionItemApi,
+  getCollectionItemApi,
+  isApiDataModeEnabled,
+  listCollectionItemsApi,
+  updateCollectionItemApi,
+} from "./collectionsAdapter";
 
 /**
  * Отримати всіх користувачів
  * @returns {Promise<Array>} Масив користувачів
  */
 export const getUsers = async () => {
+  if (isApiDataModeEnabled()) {
+    const users = await listCollectionItemsApi("users");
+    return users.sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")));
+  }
+
   try {
     const usersRef = collection(db, "users");
     const q = query(usersRef, orderBy("createdAt", "desc"));
@@ -26,6 +38,10 @@ export const getUsers = async () => {
  * @returns {Promise<Object>} Дані користувача
  */
 export const getUser = async (id) => {
+  if (isApiDataModeEnabled()) {
+    return await getCollectionItemApi("users", id).catch(() => null);
+  }
+
   try {
     const docRef = doc(db, "users", id);
     const docSnap = await getDoc(docRef);
@@ -46,6 +62,14 @@ export const getUser = async (id) => {
  * @returns {Promise<void>}
  */
 export const updateUserRole = async (id, role) => {
+  if (isApiDataModeEnabled()) {
+    await updateCollectionItemApi("users", id, {
+      role,
+      updatedAt: new Date().toISOString(),
+    });
+    return;
+  }
+
   try {
     const docRef = doc(db, "users", id);
     await updateDoc(docRef, {
@@ -65,6 +89,14 @@ export const updateUserRole = async (id, role) => {
  * @returns {Promise<void>}
  */
 export const updateUser = async (id, data) => {
+  if (isApiDataModeEnabled()) {
+    await updateCollectionItemApi("users", id, {
+      ...(data || {}),
+      updatedAt: new Date().toISOString(),
+    });
+    return;
+  }
+
   try {
     const docRef = doc(db, "users", id);
     await updateDoc(docRef, {
@@ -83,6 +115,11 @@ export const updateUser = async (id, data) => {
  * @returns {Promise<void>}
  */
 export const deleteUser = async (id) => {
+  if (isApiDataModeEnabled()) {
+    await deleteCollectionItemApi("users", id);
+    return;
+  }
+
   try {
     await deleteDoc(doc(db, "users", id));
   } catch (error) {
