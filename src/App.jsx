@@ -29,6 +29,7 @@ import {
   subscribeToActiveAssetInventorySession,
   subscribeToAssetInventorySessions,
 } from "./firebase/firestore";
+import { activeFirebaseConfig, isRuntimeFirebaseConfig } from "./firebase/config";
 import { useRestaurants } from "./hooks/useRestaurants";
 import { useAssets } from "./hooks/useAssets";
 import { useAssetFields } from "./hooks/useAssetFields";
@@ -44,6 +45,7 @@ import ServiceRequestsModule from "./components/ServiceRequestsModule";
 import ChecklistModule from "./components/ChecklistModule";
 import TeamHiringModule from "./components/TeamHiringModule";
 import SecurityAuditModule from "./components/SecurityAuditModule";
+import DatabaseConnectionsManager from "./components/DatabaseConnectionsManager";
 import { useChecklists } from "./hooks/useChecklists";
 import { useServiceRequests } from "./hooks/useServiceRequests";
 import { logAuditEvent } from "./firebase/audit";
@@ -1699,6 +1701,10 @@ function App() {
           );
         }
 
+        if (activeNav === "database") {
+          return <DatabaseConnectionsManager />;
+        }
+
         // Вкладка управління утилітами
         if (activeNav === "inventory-utilities" && topTab === "utilityservice") {
           console.log("DEBUG renderContent: activeNav:", activeNav, "topTab:", topTab);
@@ -3140,6 +3146,15 @@ function App() {
               
               {/* Користувач, сповіщення та вихід - праворуч */}
               <div className="flex items-center gap-2 sm:gap-4">
+                <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300">
+                  <LucideIcons.Database size={16} />
+                  <span className="text-xs font-semibold">
+                    БД: {activeFirebaseConfig?.projectId || "default"}
+                  </span>
+                  {isRuntimeFirebaseConfig && (
+                    <span className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">custom</span>
+                  )}
+                </div>
                 <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300">
                   <LucideIcons.Clock3 size={16} />
                   <span className="text-sm font-medium tabular-nums">
