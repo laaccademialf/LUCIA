@@ -169,6 +169,157 @@ export default function DatabaseConnectionsManager() {
     }
   };
 
+  const buildDraftConnectionPayload = () => {
+    if (connectionType === "firebase") {
+      return {
+        type: "firebase",
+        name: firebaseForm.name,
+        config: {
+          apiKey: firebaseForm.apiKey,
+          authDomain: firebaseForm.authDomain,
+          projectId: firebaseForm.projectId,
+          storageBucket: firebaseForm.storageBucket,
+          messagingSenderId: firebaseForm.messagingSenderId,
+          appId: firebaseForm.appId,
+        },
+      };
+    }
+
+    return {
+      type: "custom",
+      name: customForm.name,
+      config: {
+        apiBaseUrl: customForm.apiBaseUrl,
+        migrationPath: customForm.migrationPath,
+        healthPath: customForm.healthPath,
+        testPath: customForm.testPath,
+        token: customForm.token,
+        dbEngine: customForm.dbEngine,
+        dbHost: customForm.dbHost,
+        dbPort: Number(customForm.dbPort || 3306),
+        dbUser: customForm.dbUser,
+        dbPassword: customForm.dbPassword,
+        dbName: customForm.dbName,
+        postgresUrl: customForm.postgresUrl,
+      },
+    };
+  };
+
+  const onTestCustomHealthOnly = async () => {
+    if (connectionType !== "custom") return;
+
+    setBusy(true);
+    setStatus("Крок 1/3: перевіряємо доступність API (/health)...");
+
+    try {
+      const payload = buildDraftConnectionPayload();
+      await testCustomConnection({
+        ...payload.config,
+        postgresUrl: "",
+        dbHost: "",
+        dbUser: "",
+        dbName: "",
+      });
+      setStatus("Крок 1/3 успішно: API доступний.");
+    } catch (error) {
+      setStatus(`Крок 1/3 не пройшов: ${error?.message || error}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onTestCustomDbOnly = async () => {
+    if (connectionType !== "custom") return;
+
+    setBusy(true);
+    setStatus("Крок 2/3: перевіряємо з'єднання з цільовою БД (/db/test)...");
+
+    try {
+      const payload = buildDraftConnectionPayload();
+      await testCustomConnection(payload.config);
+      setStatus("Крок 2/3 успішно: підключення до БД валідне.");
+    } catch (error) {
+      setStatus(`Крок 2/3 не пройшов: ${error?.message || error}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onQuickSetupCustom = async () => {
+    if (connectionType !== "custom") return;
+
+    setBusy(true);
+    setStatus("Майстер: крок 1/4 health check...");
+
+    try {
+      const payload = buildDraftConnectionPayload();
+
+      await testCustomConnection({
+        ...payload.config,
+        postgresUrl: "",
+        dbHost: "",
+        dbUser: "",
+        dbName: "",
+      });
+
+      setStatus("Майстер: крок 2/4 db test...");
+      await testCustomConnection(payload.config);
+
+      setStatus("Майстер: крок 3/4 зберігаємо підключення...");
+      const record = addConnection(payload);
+
+      setStatus("Майстер: крок 4/4 встановлюємо як основну БД...");
+      await setPrimaryConnectionById(record.id);
+
+      setCustomForm(emptyCustomForm);
+      refresh();
+      setStatus("Майстер завершено: Custom підключення протестовано, збережено і встановлено як основне.");
+    } catch (error) {
+      setStatus(`Майстер зупинено: ${error?.message || error}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onTestDraftConnection = async () => {
+    setBusy(true);
+    setStatus("Тестуємо введені параметри підключення...");
+
+    try {
+      if (connectionType === "custom") {
+        await testCustomConnection({
+          apiBaseUrl: customForm.apiBaseUrl,
+          migrationPath: customForm.migrationPath,
+          healthPath: customForm.healthPath,
+          testPath: customForm.testPath,
+          token: customForm.token,
+          dbEngine: customForm.dbEngine,
+          dbHost: customForm.dbHost,
+          dbPort: Number(customForm.dbPort || 3306),
+          dbUser: customForm.dbUser,
+          dbPassword: customForm.dbPassword,
+          dbName: customForm.dbName,
+          postgresUrl: customForm.postgresUrl,
+        });
+      } else {
+        await testFirebaseConnection({
+          apiKey: firebaseForm.apiKey,
+          authDomain: firebaseForm.authDomain,
+          projectId: firebaseForm.projectId,
+          storageBucket: firebaseForm.storageBucket,
+          messagingSenderId: firebaseForm.messagingSenderId,
+          appId: firebaseForm.appId,
+        });
+      }
+
+      setStatus("Тест введених параметрів пройшов успішно.");
+    } catch (error) {
+      setStatus(`Тест введених параметрів не пройшов: ${error?.message || error}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onSetPrimary = async (id) => {
     setBusy(true);
     try {
@@ -380,8 +531,16 @@ export default function DatabaseConnectionsManager() {
         )}
 
         <div className="mt-4 flex flex-wrap gap-2">
-          <button onClick={onSaveConnection} className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500">Додати підключення</button>
-          <button onClick={onClearPrimary} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Скинути основну БД (.env)</button>
+          <button disabled={busy} onClick={onTestDraftConnection} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">Тестувати введені параметри</button>
+          {connectionType === "custom" && (
+            <>
+              <button disabled={busy} onClick={onTestCustomHealthOnly} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">Крок 1: Health</button>
+              <button disabled={busy} onClick={onTestCustomDbOnly} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">Крок 2: DB Test</button>
+              <button disabled={busy} onClick={onQuickSetupCustom} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60">Швидко підключити (3-4 кліки)</button>
+            </>
+          )}
+          <button disabled={busy} onClick={onSaveConnection} className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-60">Додати підключення</button>
+          <button disabled={busy} onClick={onClearPrimary} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">Скинути основну БД (.env)</button>
         </div>
       </div>
 
@@ -404,11 +563,9 @@ export default function DatabaseConnectionsManager() {
               <div className="flex flex-wrap gap-2">
                 <button disabled={busy} onClick={() => onTest(item.id)} className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">Тест</button>
                 {item.type === "firebase" && (
-                  <>
-                    <button disabled={busy} onClick={() => onBootstrap(item.id)} className="rounded border border-indigo-300 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50">Bootstrap</button>
-                    <button disabled={busy} onClick={() => onSetPrimary(item.id)} className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-500">Зробити основною</button>
-                  </>
+                  <button disabled={busy} onClick={() => onBootstrap(item.id)} className="rounded border border-indigo-300 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50">Bootstrap</button>
                 )}
+                <button disabled={busy} onClick={() => onSetPrimary(item.id)} className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-500">Зробити основною</button>
                 <button disabled={busy} onClick={() => onDelete(item.id)} className="rounded bg-rose-600 px-2 py-1 text-xs font-semibold text-white hover:bg-rose-500">Видалити</button>
               </div>
             </div>
