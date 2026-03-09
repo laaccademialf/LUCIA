@@ -13,6 +13,11 @@ import {
   testCustomConnection,
   testFirebaseConnection,
 } from "../data/firebaseConnections";
+import {
+  addRuntimePlatformAdminEmail,
+  getRuntimePlatformAdminEmails,
+  removeRuntimePlatformAdminEmail,
+} from "../data/platformAdminSettings";
 
 const DEFAULT_COLLECTIONS = [
   "assets",
@@ -103,6 +108,8 @@ export default function DatabaseConnectionsManager() {
   const [customForm, setCustomForm] = useState(emptyCustomForm);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [platformAdminEmail, setPlatformAdminEmail] = useState("");
+  const [runtimePlatformAdmins, setRuntimePlatformAdmins] = useState(() => getRuntimePlatformAdminEmails());
 
   const [sourceId, setSourceId] = useState("");
   const [targetId, setTargetId] = useState("");
@@ -346,6 +353,32 @@ export default function DatabaseConnectionsManager() {
     }
   };
 
+  const onAddPlatformAdminEmail = () => {
+    const next = addRuntimePlatformAdminEmail(platformAdminEmail);
+    setRuntimePlatformAdmins(next);
+    setPlatformAdminEmail("");
+    setStatus("Platform admin email додано. Для поточної сесії може знадобитись перелогін або перезавантаження сторінки.");
+  };
+
+  const onRemovePlatformAdminEmail = (email) => {
+    const next = removeRuntimePlatformAdminEmail(email);
+    setRuntimePlatformAdmins(next);
+    setStatus("Platform admin email видалено.");
+  };
+
+  const onClearRuntimeConfigAndReload = async () => {
+    setBusy(true);
+    try {
+      await clearPrimaryConnection();
+      setStatus("Runtime-конфіг очищено. Перезавантажуємо сторінку...");
+      setTimeout(() => window.location.reload(), 250);
+    } catch (error) {
+      setStatus(`Не вдалося очистити runtime-конфіг: ${error?.message || error}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onTest = async (id) => {
     const connection = connectionMap.get(id);
     if (!connection) return;
@@ -570,6 +603,58 @@ export default function DatabaseConnectionsManager() {
               </div>
             </div>
           ))}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow space-y-3">
+        <h3 className="text-base font-semibold text-slate-900">Platform Admin та Runtime Reset</h3>
+        <p className="text-sm text-slate-600">Додавайте email-адміністраторів через UI без змін у .env. Список зберігається у localStorage цього браузера.</p>
+
+        <div className="flex flex-col md:flex-row gap-2 md:items-center">
+          <input
+            value={platformAdminEmail}
+            onChange={(e) => setPlatformAdminEmail(e.target.value)}
+            placeholder="admin@example.com"
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={onAddPlatformAdminEmail}
+            className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-60"
+            disabled={busy || !platformAdminEmail.trim()}
+          >
+            Додати platform admin email
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {runtimePlatformAdmins.length === 0 && (
+            <span className="text-xs text-slate-500">Runtime platform-admin email поки немає.</span>
+          )}
+          {runtimePlatformAdmins.map((email) => (
+            <div key={email} className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs text-slate-700">
+              <span>{email}</span>
+              <button
+                type="button"
+                onClick={() => onRemovePlatformAdminEmail(email)}
+                className="font-semibold text-rose-600 hover:text-rose-500"
+                disabled={busy}
+              >
+                Видалити
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <button
+            type="button"
+            onClick={onClearRuntimeConfigAndReload}
+            className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            disabled={busy}
+          >
+            Очистити runtime-конфіг БД і перезавантажити
+          </button>
         </div>
       </div>
 

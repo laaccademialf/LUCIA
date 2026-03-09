@@ -7,6 +7,7 @@ import {
 } from "firebase/auth";
 import { doc, setDoc, getDoc } from "firebase/firestore";
 import { auth, db } from "./config";
+import { getRuntimePlatformAdminEmails } from "../data/platformAdminSettings";
 
 const ENV_AUTH_API_BASE = String(
   import.meta.env.VITE_AUTH_API_BASE_URL || import.meta.env.VITE_DATA_API_BASE_URL || ""
@@ -17,6 +18,91 @@ const ENV_AUTH_API_TOKEN = String(
   import.meta.env.VITE_AUTH_API_TOKEN || import.meta.env.VITE_DATA_API_TOKEN || ""
 ).trim();
 const AUTH_SESSION_KEY = "lucia_auth_session_token";
+const DEFAULT_PLATFORM_ADMIN_EMAILS = ["andrii.disha@gmail.com"];
+const ENV_PLATFORM_ADMIN_EMAILS = String(import.meta.env.VITE_PLATFORM_ADMIN_EMAILS || "")
+  .split(",")
+  .map((item) => item.trim().toLowerCase())
+  .filter(Boolean);
+
+const getConfiguredPlatformAdminEmails = () => {
+  return Array.from(
+    new Set([
+      ...DEFAULT_PLATFORM_ADMIN_EMAILS,
+      ...ENV_PLATFORM_ADMIN_EMAILS,
+      ...getRuntimePlatformAdminEmails(),
+    ])
+  );
+};
+
+const isPlatformAdminEmail = (email) => {
+  const normalized = String(email || "").trim().toLowerCase();
+  return Boolean(normalized) && getConfiguredPlatformAdminEmails().includes(normalized);
+};
+
+const applyPlatformAdminOverride = (user) => {
+  if (!user) return null;
+  if (!isPlatformAdminEmail(user.email)) return user;
+  return {
+    ...user,
+    role: "admin",
+    isPlatformAdmin: true,
+  };
+};
+
+const resolveFirebaseUserProfile = async (firebaseUser) => {
+  const fallback = {
+    uid: firebaseUser?.uid || "",
+    email: firebaseUser?.email || "",
+    displayName: firebaseUser?.displayName || "",
+    role: isPlatformAdminEmail(firebaseUser?.email) ? "admin" : "user",
+    restaurant: "",
+    position: "",
+    workRole: "",
+  };
+
+  if (!firebaseUser?.uid) {
+    return applyPlatformAdminOverride(fallback);
+  }
+
+  try {
+    const userRef = doc(db, "users", firebaseUser.uid);
+    const userDoc = await getDoc(userRef);
+    const userData = userDoc.exists() ? userDoc.data() : {};
+    const shouldForceAdmin = isPlatformAdminEmail(firebaseUser.email);
+    const resolvedRole = shouldForceAdmin ? "admin" : userData.role || "user";
+    const shouldUpsertProfile = !userDoc.exists() || (shouldForceAdmin && userData.role !== "admin");
+
+    if (shouldUpsertProfile) {
+      await setDoc(
+        userRef,
+        {
+          email: firebaseUser.email || "",
+          displayName: firebaseUser.displayName || userData.displayName || "",
+          role: resolvedRole,
+          restaurant: userData.restaurant || "",
+          position: userData.position || "",
+          workRole: userData.workRole || "",
+          ...(userDoc.exists() ? {} : { createdAt: new Date().toISOString() }),
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    }
+
+    return applyPlatformAdminOverride({
+      uid: firebaseUser.uid,
+      email: firebaseUser.email,
+      displayName: firebaseUser.displayName || userData.displayName || "",
+      role: resolvedRole,
+      restaurant: userData.restaurant || "",
+      position: userData.position || "",
+      workRole: userData.workRole || "",
+    });
+  } catch (error) {
+    console.error("Помилка отримання профілю користувача:", error);
+    return applyPlatformAdminOverride(fallback);
+  }
+};
 
 const readRuntimeCustomConfig = () => {
   if (typeof window === "undefined" || typeof localStorage === "undefined") return null;
@@ -110,7 +196,7 @@ export const registerUser = async (email, password, displayName) => {
     });
 
     setAuthSessionToken(String(payload?.token || ""));
-    const user = payload?.user || null;
+    const user = applyPlatformAdminOverride(payload?.user || null);
     notifyAuthApiSubscribers(user);
     return user;
   }
@@ -127,17 +213,17 @@ export const registerUser = async (email, password, displayName) => {
     await setDoc(doc(db, "users", user.uid), {
       email: user.email,
       displayName: displayName,
-      role: "user", // За замовчуванням - звичайний користувач
+      role: isPlatformAdminEmail(user.email) ? "admin" : "user",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
 
-    return {
+    return applyPlatformAdminOverride({
       uid: user.uid,
       email: user.email,
       displayName: displayName,
       role: "user",
-    };
+    });
   } catch (error) {
     console.error("Помилка реєстрації:", error);
     throw error;
@@ -175,7 +261,7 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
       }),
     });
 
-    return payload?.user || null;
+    return applyPlatformAdminOverride(payload?.user || null);
   }
 
   try {
@@ -193,7 +279,7 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
     await setDoc(doc(db, "users", newUser.uid), {
       email: newUser.email,
       displayName: displayName,
-      role: role || "user",
+      role: isPlatformAdminEmail(newUser.email) ? "admin" : role || "user",
       restaurant: restaurant || "",
       position: position || "",
       workRole: workRole || "",
@@ -207,7 +293,7 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
     // Повертаємось до адміністраторського облікового запису
     await signInWithEmailAndPassword(auth, adminEmail, currentPassword);
 
-    return {
+    return applyPlatformAdminOverride({
       uid: newUser.uid,
       email: newUser.email,
       displayName: displayName,
@@ -215,7 +301,7 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
       restaurant: restaurant || "",
       position: position || "",
       workRole: workRole || "",
-    };
+    });
   } catch (error) {
     console.error("Помилка створення користувача:", error);
     throw error;
@@ -237,25 +323,14 @@ export const loginUser = async (email, password) => {
     });
 
     setAuthSessionToken(String(payload?.token || ""));
-    const user = payload?.user || null;
+    const user = applyPlatformAdminOverride(payload?.user || null);
     notifyAuthApiSubscribers(user);
     return user;
   }
 
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
-    const user = userCredential.user;
-
-    // Отримання додаткових даних з Firestore
-    const userDoc = await getDoc(doc(db, "users", user.uid));
-    const userData = userDoc.exists() ? userDoc.data() : {};
-
-    return {
-      uid: user.uid,
-      email: user.email,
-      displayName: user.displayName || userData.displayName || "",
-      role: userData.role || "user",
-    };
+    return await resolveFirebaseUserProfile(userCredential.user);
   } catch (error) {
     console.error("Помилка входу:", error);
     throw error;
@@ -308,7 +383,7 @@ export const getCurrentUser = () => {
           method: "GET",
           headers: authApiHeaders(false),
         });
-        const user = payload?.user || null;
+        const user = applyPlatformAdminOverride(payload?.user || null);
         notifyAuthApiSubscribers(user);
         resolve(user);
       } catch {
@@ -325,26 +400,7 @@ export const getCurrentUser = () => {
       async (user) => {
         unsubscribe();
         if (user) {
-          // Отримання додаткових даних з Firestore
-          try {
-            const userDoc = await getDoc(doc(db, "users", user.uid));
-            const userData = userDoc.exists() ? userDoc.data() : {};
-
-            resolve({
-              uid: user.uid,
-              email: user.email,
-              displayName: user.displayName || userData.displayName || "",
-              role: userData.role || "user",
-            });
-          } catch (error) {
-            console.error("Помилка отримання даних користувача:", error);
-            resolve({
-              uid: user.uid,
-              email: user.email,
-              displayName: user.displayName || "",
-              role: "user",
-            });
-          }
+          resolve(await resolveFirebaseUserProfile(user));
         } else {
           resolve(null);
         }
@@ -377,31 +433,7 @@ export const subscribeToAuthChanges = (callback) => {
   try {
     return onAuthStateChanged(auth, async (user) => {
       if (user) {
-        try {
-          const userDoc = await getDoc(doc(db, "users", user.uid));
-          const userData = userDoc.exists() ? userDoc.data() : {};
-
-          callback({
-            uid: user.uid,
-            email: user.email,
-            displayName: user.displayName || userData.displayName || "",
-            role: userData.role || "user",
-            restaurant: userData.restaurant || "",
-            position: userData.position || "",
-            workRole: userData.workRole || "",
-          });
-        } catch (error) {
-          console.error("Помилка отримання даних користувача:", error);
-          callback({
-            uid: user.uid,
-            email: user.email,
-            displayName: user.displayName || "",
-            role: "user",
-            restaurant: "",
-            position: "",
-            workRole: "",
-          });
-        }
+        callback(await resolveFirebaseUserProfile(user));
       } else {
         callback(null);
       }
