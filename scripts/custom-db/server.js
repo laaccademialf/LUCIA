@@ -252,6 +252,31 @@ const normalizeCollectionName = (name) => {
 const tableNameForCollection = (collectionName) =>
   `lucia_${String(collectionName || "").replace(/-/g, "_")}`;
 
+const sortByPayloadTimestampsDesc = (items) => {
+  const toTimestamp = (value) => {
+    const parsed = Date.parse(String(value || ""));
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
+
+  return [...items].sort((a, b) => {
+    const bTime = Math.max(
+      toTimestamp(b?.updatedAt),
+      toTimestamp(b?.createdAt),
+      toTimestamp(b?.updated_at),
+      toTimestamp(b?.created_at)
+    );
+    const aTime = Math.max(
+      toTimestamp(a?.updatedAt),
+      toTimestamp(a?.createdAt),
+      toTimestamp(a?.updated_at),
+      toTimestamp(a?.created_at)
+    );
+
+    if (bTime !== aTime) return bTime - aTime;
+    return String(b?.id || "").localeCompare(String(a?.id || ""));
+  });
+};
+
 const ensureGenericTableMySql = async (conn, collectionName) => {
   const tableName = tableNameForCollection(collectionName);
   await conn.execute(`
@@ -291,8 +316,10 @@ const getCollectionItemsData = async (collectionName, dbConfig) => {
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
       const tableName = await ensureGenericTableMySql(conn, collection);
-      const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\` ORDER BY updated_at DESC`);
-      return rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
+      const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\``);
+      return sortByPayloadTimestampsDesc(
+        rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }))
+      );
     } finally {
       await conn.end();
     }
@@ -304,8 +331,10 @@ const getCollectionItemsData = async (collectionName, dbConfig) => {
     await client.connect();
     try {
       const tableName = await ensureGenericTablePostgres(client, collection);
-      const result = await client.query(`SELECT id, payload FROM "${tableName}" ORDER BY updated_at DESC`);
-      return result.rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
+      const result = await client.query(`SELECT id, payload FROM "${tableName}"`);
+      return sortByPayloadTimestampsDesc(
+        result.rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }))
+      );
     } finally {
       await client.end();
     }
@@ -772,10 +801,10 @@ const getServiceRequestsData = async (dbConfig) => {
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
       const tableName = await ensureServiceRequestsTableMySql(conn);
-      const [rows] = await conn.execute(
-        `SELECT id, payload FROM \`${tableName}\` ORDER BY updated_at DESC`
+      const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\``);
+      return sortByPayloadTimestampsDesc(
+        rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }))
       );
-      return rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
     } finally {
       await conn.end();
     }
@@ -787,10 +816,10 @@ const getServiceRequestsData = async (dbConfig) => {
     await client.connect();
     try {
       const tableName = await ensureServiceRequestsTablePostgres(client);
-      const result = await client.query(
-        `SELECT id, payload FROM "${tableName}" ORDER BY updated_at DESC`
+      const result = await client.query(`SELECT id, payload FROM "${tableName}"`);
+      return sortByPayloadTimestampsDesc(
+        result.rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }))
       );
-      return result.rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
     } finally {
       await client.end();
     }

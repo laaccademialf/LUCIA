@@ -19,6 +19,7 @@ export async function importCollectionsToPostgres({ collectionsData, connectionS
         CREATE TABLE IF NOT EXISTS ${table} (
           id TEXT PRIMARY KEY,
           payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);

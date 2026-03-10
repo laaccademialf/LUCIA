@@ -18,6 +18,7 @@ export async function importCollectionsToMySql({ collectionsData, mysqlConfig })
         CREATE TABLE IF NOT EXISTS ${table} (
           id VARCHAR(255) PRIMARY KEY,
           payload JSON NOT NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
       `);
