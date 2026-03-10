@@ -60,6 +60,72 @@ import {
 
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const ADMIN_ONLY_NAV_IDS = new Set(["settings-permissions", "menu-admin", "security-audit"]);
+const DEFAULT_FALLBACK_MENU_STRUCTURE = [
+  {
+    id: "dashboard",
+    label: "Дашборд",
+    icon: "LayoutDashboard",
+    children: [{ id: "dashboard-ops", label: "Операційний огляд" }],
+  },
+  {
+    id: "settings",
+    label: "Налаштування",
+    icon: "Settings",
+    children: [
+      { id: "settings-restaurant", label: "Дані ресторану" },
+      { id: "settings-accounts", label: "Облікові записи" },
+      { id: "settings-permissions", label: "Права доступу" },
+      { id: "database", label: "Підключення до БД" },
+    ],
+  },
+  {
+    id: "operations",
+    label: "Операції",
+    icon: "ClipboardList",
+    children: [
+      { id: "ops-checklists", label: "Чек-листи" },
+      { id: "ops-haccp", label: "HACCP журнали" },
+      { id: "ops-maintenance", label: "Сервісні заявки" },
+    ],
+  },
+  {
+    id: "inventory",
+    label: "Облік",
+    icon: "Archive",
+    children: [
+      { id: "inventory-products", label: "Продукти" },
+      { id: "inventory-utilities", label: "Утиліти" },
+      { id: "inventory-assets", label: "Основні засоби" },
+    ],
+  },
+  {
+    id: "reports",
+    label: "Звіти",
+    icon: "BarChart3",
+    children: [
+      { id: "reports-products", label: "Інвентаризація продуктів" },
+      { id: "reports-assets", label: "Основні засоби" },
+    ],
+  },
+  {
+    id: "security",
+    label: "Безпека",
+    icon: "Shield",
+    children: [{ id: "security-audit", label: "Аудит дій" }],
+  },
+  {
+    id: "team",
+    label: "Команда",
+    icon: "Users",
+    children: [{ id: "team-roles", label: "Ролі та доступи" }],
+  },
+  {
+    id: "maintenance",
+    label: "Сервіс",
+    icon: "Wrench",
+    children: [{ id: "maintenance-plan", label: "Планові роботи" }],
+  },
+];
 
 const isManagerLikeUser = (user) => {
   const roleValue = String(user?.role || "").toLowerCase();
@@ -1480,10 +1546,7 @@ function App() {
     // Якщо menuStructure порожній, fallback на стандартну структуру
     const structure = (Array.isArray(menuStructure) && menuStructure.length > 0)
       ? menuStructure
-      : [
-        // fallback: мінімальна структура
-        { id: "dashboard", label: "Дашборд", icon: "LayoutDashboard", children: [{ id: "dashboard-ops", label: "Операційний огляд" }] }
-      ];
+      : DEFAULT_FALLBACK_MENU_STRUCTURE;
 
     // Додаємо пункт "Управління меню" для адміна
     const structureWithAdmin = structure.map(section => {

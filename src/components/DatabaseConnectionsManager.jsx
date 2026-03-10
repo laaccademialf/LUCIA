@@ -62,6 +62,8 @@ const DEFAULT_COLLECTIONS = [
   "platformAuditLogs",
 ];
 
+const CURRENT_RUNTIME_SOURCE_ID = "__current_runtime_firebase__";
+
 const emptyFirebaseForm = {
   name: "",
   apiKey: "",
@@ -119,6 +121,24 @@ export default function DatabaseConnectionsManager() {
     () => connections.filter((item) => item.type === "firebase"),
     [connections]
   );
+
+  const runtimeFirebaseSource = useMemo(() => {
+    const runtimeConfig = getCurrentRuntimeConfig();
+    if (!runtimeConfig) return null;
+
+    return {
+      id: CURRENT_RUNTIME_SOURCE_ID,
+      name: `Поточна база (runtime/.env) · ${runtimeConfig.projectId || "без projectId"}`,
+      type: "firebase",
+      config: runtimeConfig,
+      isRuntimeSource: true,
+    };
+  }, [connections, primaryId]);
+
+  const migrationSourceOptions = useMemo(() => {
+    if (!runtimeFirebaseSource) return firebaseConnections;
+    return [runtimeFirebaseSource, ...firebaseConnections];
+  }, [firebaseConnections, runtimeFirebaseSource]);
 
   const connectionMap = useMemo(() => {
     const map = new Map();
@@ -448,7 +468,9 @@ export default function DatabaseConnectionsManager() {
       return;
     }
 
-    const source = connectionMap.get(sourceId);
+    const source = sourceId === CURRENT_RUNTIME_SOURCE_ID
+      ? runtimeFirebaseSource
+      : connectionMap.get(sourceId);
     const target = connectionMap.get(targetId);
     if (!source || !target) {
       setStatus("Не знайдено вибрані підключення.");
@@ -667,7 +689,7 @@ export default function DatabaseConnectionsManager() {
             <span className="text-xs font-semibold text-slate-600">Джерело (Firebase)</span>
             <select value={sourceId} onChange={(e) => setSourceId(e.target.value)} className="rounded-md border border-slate-300 px-3 py-2 text-sm">
               <option value="">Оберіть джерело</option>
-              {firebaseConnections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              {migrationSourceOptions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1">
