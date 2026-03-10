@@ -79,9 +79,18 @@ export const useAssets = (enableRealtime = true) => {
     };
   }, [enableRealtime]);
 
+  const refreshAssetsFromApi = async () => {
+    if (!isAssetsApiEnabled()) return;
+    const data = await getAssetsApi();
+    setAssets(data);
+  };
+
   const add = async (asset) => {
     try {
       const id = isAssetsApiEnabled() ? await addAssetApi(asset) : await addAsset(asset);
+      if (isAssetsApiEnabled()) {
+        await refreshAssetsFromApi();
+      }
       return { success: true, id };
     } catch (err) {
       setError(err);
@@ -93,6 +102,7 @@ export const useAssets = (enableRealtime = true) => {
     try {
       if (isAssetsApiEnabled()) {
         await updateAssetApi(id, data);
+        await refreshAssetsFromApi();
       } else {
         await updateAsset(id, data);
       }
@@ -107,6 +117,7 @@ export const useAssets = (enableRealtime = true) => {
     try {
       if (isAssetsApiEnabled()) {
         await deleteAssetApi(id);
+        await refreshAssetsFromApi();
       } else {
         await deleteAsset(id);
       }

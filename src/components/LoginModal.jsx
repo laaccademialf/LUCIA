@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 import { loginUser } from "../firebase/auth";
 import { useAuth } from "../hooks/useAuth";
 
-export const LoginModal = ({ onClose, onSwitchToRegister, onLoginSuccess }) => {
+export const LoginModal = ({ onClose, onLoginSuccess }) => {
   const { isAuthenticated } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -106,16 +106,6 @@ export const LoginModal = ({ onClose, onSwitchToRegister, onLoginSuccess }) => {
             {loading ? "Вхід..." : "Увійти"}
           </button>
         </form>
-
-        <div className="mt-4 text-center text-sm text-slate-600">
-          Немає акаунту?{" "}
-          <button
-            onClick={onSwitchToRegister}
-            className="text-indigo-600 font-semibold hover:text-indigo-500"
-          >
-            Зареєструватися
-          </button>
-        </div>
       </div>
     </div>
   );

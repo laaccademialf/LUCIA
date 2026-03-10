@@ -6,7 +6,6 @@ import AssetSearch from "./components/AssetSearch";
 import { AssetForm } from "./components/AssetForm";
 import { AddUserForm } from "./components/AddUserForm";
 import { LoginModal } from "./components/LoginModal";
-import { RegisterModal } from "./components/RegisterModal";
 import { UsersTable } from "./components/UsersTable";
 import { RolesPositionsManager } from "./components/RolesPositionsManager";
 import { RolePermissionsManager } from "./components/RolePermissionsManager";
@@ -267,8 +266,6 @@ function App() {
                                   team: false,
                                   maintenance: false,
                                 });
-                              // Модальне вікно реєстрації
-                              const [showRegisterModal, setShowRegisterModal] = useState(false);
                             // Модальне вікно логіну
                             const [showLoginModal, setShowLoginModal] = useState(false);
                           // Стан бокового меню
@@ -3089,27 +3086,13 @@ function App() {
     </div>
   ) : null;
 
-  const handleSwitchToRegister = () => {
-    setShowLoginModal(false);
-    setShowRegisterModal(true);
-  };
-
-  const handleSwitchToLogin = () => {
-    setShowRegisterModal(false);
-    setShowLoginModal(true);
-  };
-
   const handleLoginSuccess = () => {
     // на момент закриття модалки user ще не встановлений, тому переходимо у useEffect нижче
     console.log("DEBUG: handleLoginSuccess invoked");
   };
 
   const loginModalElement = showLoginModal ? (
-    <LoginModal onClose={() => setShowLoginModal(false)} onSwitchToRegister={handleSwitchToRegister} onLoginSuccess={handleLoginSuccess} />
-  ) : null;
-
-  const registerModalElement = showRegisterModal ? (
-    <RegisterModal onClose={() => setShowRegisterModal(false)} onSwitchToLogin={handleSwitchToLogin} />
+    <LoginModal onClose={() => setShowLoginModal(false)} onLoginSuccess={handleLoginSuccess} />
   ) : null;
 
   // -- side effects for layout / navigation helpers --
@@ -3165,12 +3148,6 @@ function App() {
                   className="w-full px-6 py-3 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition text-base sm:text-lg font-semibold"
                 >
                   Увійти
-                </button>
-                <button
-                  onClick={() => setShowRegisterModal(true)}
-                  className="w-full px-6 py-3 rounded-lg bg-slate-700 text-slate-300 hover:bg-slate-600 transition text-base sm:text-lg font-medium"
-                >
-                  Зареєструватися
                 </button>
               </div>
             </div>
@@ -3310,14 +3287,6 @@ function App() {
               >
                 Увійти
               </button>
-              <button
-                onClick={() => {
-                  setShowRegisterModal(true);
-                }}
-                className="px-2 sm:px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 transition text-xs sm:text-sm font-semibold"
-              >
-                Реєстрація
-              </button>
             </div>
           )}
         </div>
@@ -3354,7 +3323,6 @@ function App() {
 
       {/* Auth Modals */}
       {loginModalElement}
-      {registerModalElement}
     </div>
   );
 }
