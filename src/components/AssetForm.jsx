@@ -580,6 +580,19 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       }
     }
 
+    // Конвертація числової дати (Excel serial) у dd.mm.yyyy
+    const excelSerialToDate = (serial) => {
+      const n = Number(serial);
+      if (!Number.isFinite(n) || n < 10000) return String(serial);
+      // Excel: 1 = 1900-01-01
+      const excelEpoch = new Date(1899, 11, 30);
+      const date = new Date(excelEpoch.getTime() + n * 86400000);
+      const dd = String(date.getDate()).padStart(2, '0');
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const yyyy = date.getFullYear();
+      return `${dd}.${mm}.${yyyy}`;
+    };
+
     const payload = {
       id: selectedAsset?.id,
       invNumber: safeString(values.invNumber).trim(),
@@ -598,6 +611,8 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       respPerson: typeof values.respPerson === "string" ? values.respPerson : "",
       status: safeString(values.status).trim(),
       condition: safeString(values.condition).trim(),
+      purchaseYear: excelSerialToDate(values.purchaseYear),
+      commissionDate: excelSerialToDate(values.commissionDate),
       functionality: safeString(values.functionality).trim(),
       relevance: safeString(values.relevance).trim(),
       comment: safeString(values.comment).trim(),
