@@ -10,6 +10,8 @@ const ENGINE = String(process.env.MIGRATION_DB_ENGINE || "file").trim().toLowerC
 const DATA_DIR = process.env.CUSTOM_MIGRATION_DATA_DIR || "./tmp/custom-db";
 const SETTINGS_FILE = process.env.RUNTIME_SETTINGS_FILE || "./tmp/custom-db/runtime-settings.json";
 const POSTGRES_URL = String(process.env.POSTGRES_URL || "").trim();
+const ASSET_IMAGE_DIR = String(process.env.ASSET_IMAGE_DIR || "/var/www/luci.lafamiglia.ua/app/img/assets").trim();
+const ASSET_IMAGE_PUBLIC_BASE = String(process.env.ASSET_IMAGE_PUBLIC_BASE || "/app/img/assets").trim().replace(/\/+$/, "");
 
 const MYSQL_CONFIG = {
   host: String(process.env.MYSQL_HOST || "").trim(),
@@ -153,7 +155,70 @@ const normalizeAssetPayload = (payload) => {
   if (!payload || typeof payload !== "object") return {};
   const next = { ...payload };
   delete next.id;
+
+  if (Array.isArray(next.photos)) {
+    next.photos = next.photos
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter((url) => Boolean(url) && !url.startsWith("data:image/"))
+      .slice(0, 10);
+  }
+
   return next;
+};
+
+const IMAGE_EXT_BY_MIME = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
+
+const decodeDataUrlImage = (dataUrl) => {
+  const raw = String(dataUrl || "").trim();
+  const match = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) {
+    throw new Error("Invalid image data URL");
+  }
+
+  const mimeType = String(match[1] || "").toLowerCase();
+  const base64Payload = String(match[2] || "");
+  const ext = IMAGE_EXT_BY_MIME[mimeType];
+  if (!ext) {
+    throw new Error(`Unsupported image mime type: ${mimeType}`);
+  }
+
+  const buffer = Buffer.from(base64Payload, "base64");
+  if (!buffer.length) {
+    throw new Error("Empty image payload");
+  }
+
+  return { mimeType, ext, buffer };
+};
+
+const sanitizeFileBaseName = (name) => {
+  const raw = String(name || "photo").trim().toLowerCase();
+  const cleaned = raw
+    .replace(/\.[a-z0-9]{1,5}$/i, "")
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return cleaned || "photo";
+};
+
+const saveAssetPhoto = async ({ fileName, dataUrl }) => {
+  const { ext, buffer } = decodeDataUrlImage(dataUrl);
+  const safeName = sanitizeFileBaseName(fileName);
+  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}_${safeName}.${ext}`;
+
+  await ensureDir(ASSET_IMAGE_DIR);
+  const absolutePath = path.join(ASSET_IMAGE_DIR, uniqueName);
+  await fs.writeFile(absolutePath, buffer);
+
+  return {
+    name: String(fileName || "photo"),
+    url: `${ASSET_IMAGE_PUBLIC_BASE}/${uniqueName}`,
+  };
 };
 
 const nowIso = () => new Date().toISOString();
@@ -1416,6 +1481,29 @@ const handleAssetsApi = async (req, res, assetId) => {
   return sendJson(res, 405, { ok: false, error: "Method not allowed" });
 };
 
+const handleAssetPhotoUploadApi = async (req, res) => {
+  if (!isAuthorized(req)) {
+    return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+  }
+
+  let payload;
+  try {
+    payload = await parseJsonBody(req, 25 * 1024 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  try {
+    const saved = await saveAssetPhoto({
+      fileName: payload?.fileName,
+      dataUrl: payload?.dataUrl,
+    });
+    return sendJson(res, 200, { ok: true, ...saved });
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: error.message || "Photo upload failed" });
+  }
+};
+
 const handleServiceRequestsApi = async (req, res, requestId) => {
   if (!isAuthorized(req)) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
@@ -1652,6 +1740,14 @@ const server = http.createServer(async (req, res) => {
   if (pathname === "/api/assets") {
     try {
       return await handleAssetsApi(req, res, "");
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  if (pathname === "/api/assets/photos") {
+    try {
+      return await handleAssetPhotoUploadApi(req, res);
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
     }

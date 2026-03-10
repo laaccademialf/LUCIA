@@ -9,6 +9,7 @@ import CurrencyInput from "./CurrencyInput";
 import MultiSelect from "./MultiSelect";
 import AssetNameAutocomplete from "./AssetNameAutocomplete";
 import { printAssetQrLabel } from "../utils/printQrLabel";
+import { isAssetsApiEnabled, uploadAssetPhotoApi } from "../api/assetsApi";
 
 const tabs = [
   { id: "identification", label: "Ідентифікація", requiredFields: ["invNumber", "name"] },
@@ -545,6 +546,40 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
 
     const { urls: safePhotoUrls, droppedCount } = sanitizePhotoUrls(photos);
 
+    let resolvedPhotoUrls = safePhotoUrls;
+    if (isAssetsApiEnabled()) {
+      const uploadResults = [];
+      let uploadFailed = 0;
+
+      for (let index = 0; index < safePhotoUrls.length; index += 1) {
+        const photoUrl = String(safePhotoUrls[index] || "");
+
+        if (!photoUrl.startsWith("data:image/")) {
+          uploadResults.push(photoUrl);
+          continue;
+        }
+
+        try {
+          const sourceName = photos[index]?.name || `asset-photo-${index + 1}.jpg`;
+          const uploaded = await uploadAssetPhotoApi({ fileName: sourceName, dataUrl: photoUrl });
+          if (uploaded.url) {
+            uploadResults.push(uploaded.url);
+          } else {
+            uploadFailed += 1;
+          }
+        } catch (error) {
+          console.error("Помилка аплоаду фото активу:", error);
+          uploadFailed += 1;
+        }
+      }
+
+      resolvedPhotoUrls = uploadResults;
+
+      if (uploadFailed > 0) {
+        alert(`Не вдалося зберегти ${uploadFailed} фото на сервері. Збереження продовжено для решти.`);
+      }
+    }
+
     const payload = {
       id: selectedAsset?.id,
       invNumber: safeString(values.invNumber).trim(),
@@ -555,7 +590,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       type: safeString(values.type).trim(),
       serialNumber: safeString(values.serialNumber).trim(),
       brand: safeString(values.brand).trim(),
-      photos: safePhotoUrls,
+      photos: resolvedPhotoUrls,
       businessUnit: safeString(values.businessUnit).trim(),
       locationName: safeString(values.locationName).trim(),
       zone: safeString(values.zone).trim(),

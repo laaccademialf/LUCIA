@@ -88,3 +88,22 @@ export const deleteAssetApi = async (id) => {
     throw new Error(`Assets API DELETE failed (${response.status}): ${body || "no body"}`);
   }
 };
+
+export const uploadAssetPhotoApi = async ({ fileName, dataUrl }) => {
+  const response = await fetch(endpoint("/api/assets/photos"), {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ fileName, dataUrl }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Assets API PHOTO upload failed (${response.status}): ${body || "no body"}`);
+  }
+
+  const payload = await response.json().catch(() => null);
+  return {
+    url: String(payload?.url || ""),
+    name: String(payload?.name || fileName || "photo"),
+  };
+};

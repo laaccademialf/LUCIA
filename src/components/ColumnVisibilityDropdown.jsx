@@ -3,6 +3,12 @@ import React, { useState, useRef, useEffect } from "react";
 export default function ColumnVisibilityDropdown({ columns, visibleColumns, setVisibleColumns }) {
   const [open, setOpen] = useState(false);
   const ref = useRef();
+  const allCheckboxRef = useRef(null);
+
+  const columnKeys = columns.map((col) => col.key).filter(Boolean);
+  const selectedCount = columnKeys.filter((key) => visibleColumns.includes(key)).length;
+  const isAllSelected = columnKeys.length > 0 && selectedCount === columnKeys.length;
+  const isPartiallySelected = selectedCount > 0 && selectedCount < columnKeys.length;
 
   useEffect(() => {
     function handleClickOutside(event) {
@@ -14,11 +20,14 @@ export default function ColumnVisibilityDropdown({ columns, visibleColumns, setV
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (!allCheckboxRef.current) return;
+    allCheckboxRef.current.indeterminate = isPartiallySelected;
+  }, [isPartiallySelected]);
+
   const handleToggle = (col) => {
     setVisibleColumns((prev) =>
-      prev.includes(col)
-        ? prev.filter((c) => c !== col)
-        : [...prev, col]
+      prev.includes(col) ? (prev.length > 1 ? prev.filter((c) => c !== col) : prev) : [...prev, col]
     );
   };
 
@@ -40,14 +49,15 @@ export default function ColumnVisibilityDropdown({ columns, visibleColumns, setV
             {/* Чекбокс "Всі" */}
             <label className="flex items-center px-4 py-2 text-xs font-semibold text-gray-900 cursor-pointer border-b border-gray-100">
               <input
+                ref={allCheckboxRef}
                 type="checkbox"
-                checked={visibleColumns.length === columns.length}
-                indeterminate={visibleColumns.length > 0 && visibleColumns.length < columns.length ? 'indeterminate' : undefined}
-                onChange={e => {
-                  if (visibleColumns.length === columns.length) {
-                    setVisibleColumns([]);
+                checked={isAllSelected}
+                onChange={() => {
+                  if (isAllSelected) {
+                    // Не дозволяємо порожній набір колонок.
+                    setVisibleColumns(columnKeys.slice(0, 1));
                   } else {
-                    setVisibleColumns(columns.map(col => col.key));
+                    setVisibleColumns(columnKeys);
                   }
                 }}
                 className="mr-2"
