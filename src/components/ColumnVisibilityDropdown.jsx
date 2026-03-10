@@ -32,7 +32,7 @@ export default function ColumnVisibilityDropdown({ columns, visibleColumns, setV
   };
 
   return (
-    <div className="relative inline-block text-left" ref={ref}>
+    <div className="relative inline-block text-left z-40" ref={ref}>
       <button
         type="button"
         className="inline-flex items-center px-2 py-1 border border-gray-300 bg-white rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-50 focus:outline-none"
@@ -44,7 +44,7 @@ export default function ColumnVisibilityDropdown({ columns, visibleColumns, setV
         </svg>
       </button>
       {open && (
-        <div className="origin-top-right absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-10 max-h-96 overflow-y-auto">
+        <div className="origin-top-right absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-[120] max-h-96 overflow-y-auto">
           <div className="py-1">
             {/* Чекбокс "Всі" */}
             <label className="flex items-center px-4 py-2 text-xs font-semibold text-gray-900 cursor-pointer border-b border-gray-100">
@@ -55,7 +55,10 @@ export default function ColumnVisibilityDropdown({ columns, visibleColumns, setV
                 onChange={() => {
                   if (isAllSelected) {
                     // Не дозволяємо порожній набір колонок.
-                    setVisibleColumns(columnKeys.slice(0, 1));
+                    const safeFallback = columnKeys.includes("name")
+                      ? ["name"]
+                      : columnKeys.slice(0, 1);
+                    setVisibleColumns(safeFallback);
                   } else {
                     setVisibleColumns(columnKeys);
                   }

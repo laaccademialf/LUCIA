@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import QRCodeImport from "react-qr-code";
 const QRCode = QRCodeImport?.default || QRCodeImport;
 import {
@@ -220,7 +220,49 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     </div>
   );
 
-  const visibleFilterKeys = visibleColumns.filter((key) => key !== "actions" && key !== "invNumber");
+  const filterKeyMap = {
+    businessUnit: "location",
+  };
+
+  const filterableColumnKeys = new Set([
+    "name",
+    "category",
+    "subCategory",
+    "type",
+    "serialNumber",
+    "brand",
+    "businessUnit",
+    "locationName",
+    "zone",
+    "respCenter",
+    "respPerson",
+    "status",
+    "condition",
+    "functionality",
+    "relevance",
+    "decision",
+    "reason",
+  ]);
+
+  const visibleFilterKeys = visibleColumns.filter((key) => filterableColumnKeys.has(key));
+
+  useEffect(() => {
+    const allowedFilterKeys = new Set(
+      visibleFilterKeys.map((key) => filterKeyMap[key] || key)
+    );
+
+    setFilters((prev) => {
+      const next = Object.entries(prev || {}).reduce((acc, [key, value]) => {
+        if (!allowedFilterKeys.has(key)) return acc;
+        acc[key] = value;
+        return acc;
+      }, {});
+
+      const sameKeys = Object.keys(next).length === Object.keys(prev || {}).length;
+      if (sameKeys) return prev;
+      return next;
+    });
+  }, [setFilters, visibleFilterKeys]);
 
   const renderFilterByKey = (key) => {
     if (key === "businessUnit") {
@@ -294,7 +336,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
             <h2 className="text-lg sm:text-xl font-semibold text-slate-900">{headerTitle}</h2>
             <p className="text-xs sm:text-sm text-slate-600">{headerSubtitle}</p>
           </div>
-          <div className="flex flex-nowrap items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+          <div className="relative z-30 flex flex-nowrap items-center gap-2 overflow-x-auto pb-1 md:overflow-visible [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
             {isAdminOnly && onImport && (
               <input
                 type="file"
