@@ -291,7 +291,7 @@ const getCollectionItemsData = async (collectionName, dbConfig) => {
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
       const tableName = await ensureGenericTableMySql(conn, collection);
-      const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\` ORDER BY created_at DESC`);
+      const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\` ORDER BY updated_at DESC`);
       return rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
     } finally {
       await conn.end();
@@ -304,7 +304,7 @@ const getCollectionItemsData = async (collectionName, dbConfig) => {
     await client.connect();
     try {
       const tableName = await ensureGenericTablePostgres(client, collection);
-      const result = await client.query(`SELECT id, payload FROM "${tableName}" ORDER BY created_at DESC`);
+      const result = await client.query(`SELECT id, payload FROM "${tableName}" ORDER BY updated_at DESC`);
       return result.rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
     } finally {
       await client.end();
@@ -773,7 +773,7 @@ const getServiceRequestsData = async (dbConfig) => {
     try {
       const tableName = await ensureServiceRequestsTableMySql(conn);
       const [rows] = await conn.execute(
-        `SELECT id, payload FROM \`${tableName}\` ORDER BY created_at DESC`
+        `SELECT id, payload FROM \`${tableName}\` ORDER BY updated_at DESC`
       );
       return rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
     } finally {
@@ -788,7 +788,7 @@ const getServiceRequestsData = async (dbConfig) => {
     try {
       const tableName = await ensureServiceRequestsTablePostgres(client);
       const result = await client.query(
-        `SELECT id, payload FROM "${tableName}" ORDER BY created_at DESC`
+        `SELECT id, payload FROM "${tableName}" ORDER BY updated_at DESC`
       );
       return result.rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
     } finally {
