@@ -916,8 +916,54 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
 
         {activeTab === "dates" && (
           <FieldGrid>
-            <Input type="date" label="Дата придбання" {...register("purchaseYear")}/>
-            <Input type="date" label="Дата введення в експлуатацію" {...register("commissionDate")}/>
+            <Input
+              type="date"
+              label="Дата придбання"
+              {...register("purchaseYear")}
+              value={(() => {
+                const v = watch("purchaseYear");
+                if (!v) return "";
+                if (/^\d{2}\.\d{2}\.\d{4}$/.test(v)) {
+                  const [d, m, y] = v.split(".");
+                  return `${y}-${m}-${d}`;
+                }
+                // Excel serial number
+                const n = Number(v);
+                if (Number.isFinite(n) && n > 10000) {
+                  const excelEpoch = new Date(1899, 11, 30);
+                  const date = new Date(excelEpoch.getTime() + n * 86400000);
+                  const yyyy = date.getFullYear();
+                  const mm = String(date.getMonth() + 1).padStart(2, '0');
+                  const dd = String(date.getDate()).padStart(2, '0');
+                  return `${yyyy}-${mm}-${dd}`;
+                }
+                return v;
+              })()}
+            />
+            <Input
+              type="date"
+              label="Дата введення в експлуатацію"
+              {...register("commissionDate")}
+              value={(() => {
+                const v = watch("commissionDate");
+                if (!v) return "";
+                if (/^\d{2}\.\d{2}\.\d{4}$/.test(v)) {
+                  const [d, m, y] = v.split(".");
+                  return `${y}-${m}-${d}`;
+                }
+                // Excel serial number
+                const n = Number(v);
+                if (Number.isFinite(n) && n > 10000) {
+                  const excelEpoch = new Date(1899, 11, 30);
+                  const date = new Date(excelEpoch.getTime() + n * 86400000);
+                  const yyyy = date.getFullYear();
+                  const mm = String(date.getMonth() + 1).padStart(2, '0');
+                  const dd = String(date.getDate()).padStart(2, '0');
+                  return `${yyyy}-${mm}-${dd}`;
+                }
+                return v;
+              })()}
+            />
             <Input type="number" label="Нормативний строк, років" {...register("normativeTerm")}/>
           </FieldGrid>
         )}
