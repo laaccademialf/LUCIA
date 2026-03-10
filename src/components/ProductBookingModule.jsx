@@ -80,7 +80,7 @@ const hasProcurementAccess = (user) => {
 
 const isGlobalAdminUser = (user) => String(user?.role || "").toLowerCase() === "admin" && !user?.restaurant;
 
-function ProductAdminTab({ products, suppliers, categories, units, inventories, restaurants, user, canManageProducts, addProduct, updateProduct, deleteProduct }) {
+function ProductAdminTab({ products, suppliers, categories, subcategoriesByCategory, units, inventories, restaurants, user, canManageProducts, addProduct, updateProduct, deleteProduct }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const defaultRestaurantId = isGlobalAdmin ? "" : String(user?.restaurant || "");
   const [draft, setDraft] = useState({
@@ -88,6 +88,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
     name: "",
     code1C: "",
     category: "",
+    subcategory: "",
     unit: "",
     supplier: "",
     unitPrice: "",
@@ -95,9 +96,15 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [supplierFilter, setSupplierFilter] = useState("");
+  const [subcategoryFilter, setSubcategoryFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [restaurantFilter, setRestaurantFilter] = useState(defaultRestaurantId);
   const [importMode, setImportMode] = useState("selected");
+
+  const availableSubcategories = useMemo(() => {
+    if (!draft.category) return [];
+    return subcategoriesByCategory?.[draft.category] || [];
+  }, [draft.category, subcategoriesByCategory]);
 
   useEffect(() => {
     if (isGlobalAdmin) return;
@@ -116,13 +123,14 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
     return products.filter((item) => {
       const byRestaurant = restaurantFilter ? sameRestaurant(item.restaurantId, restaurantFilter) : isGlobalAdmin;
       const bySearch = normalizedSearch
-        ? [item.name, item.code1C, item.category, item.unit, item.supplier, item.restaurantName]
+        ? [item.name, item.code1C, item.category, item.subcategory, item.unit, item.supplier, item.restaurantName]
             .filter(Boolean)
             .join(" ")
             .toLowerCase()
             .includes(normalizedSearch)
         : true;
       const byCategory = categoryFilter ? item.category === categoryFilter : true;
+      const bySubcategory = subcategoryFilter ? String(item.subcategory || "") === subcategoryFilter : true;
       const bySupplier = supplierFilter ? item.supplier === supplierFilter : true;
       const byStatus =
         statusFilter === "all"
@@ -131,9 +139,9 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
             ? item.isActive !== false
             : item.isActive === false;
 
-      return byRestaurant && bySearch && byCategory && bySupplier && byStatus;
+      return byRestaurant && bySearch && byCategory && bySubcategory && bySupplier && byStatus;
     });
-  }, [products, searchTerm, categoryFilter, supplierFilter, statusFilter, restaurantFilter, isGlobalAdmin]);
+  }, [products, searchTerm, categoryFilter, subcategoryFilter, supplierFilter, statusFilter, restaurantFilter, isGlobalAdmin]);
 
   const handleAdd = async () => {
     if (!draft.restaurantId.trim()) {
@@ -155,6 +163,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
       name: draft.name.trim(),
       code1C: draft.code1C.trim(),
       category: draft.category.trim(),
+      subcategory: String(draft.subcategory || "").trim(),
       unit: draft.unit.trim(),
       supplier: draft.supplier.trim(),
       unitPrice,
@@ -170,6 +179,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
       name: "",
       code1C: "",
       category: "",
+      subcategory: "",
       unit: "",
       supplier: "",
       unitPrice: "",
@@ -367,10 +377,34 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
             </div>
           <div>
             <label className="text-sm font-semibold text-slate-800">Категорія</label>
-            <select className={inputClass} value={draft.category} onChange={(e) => setDraft((p) => ({ ...p, category: e.target.value }))}>
+            <select
+              className={inputClass}
+              value={draft.category}
+              onChange={(e) =>
+                setDraft((p) => ({
+                  ...p,
+                  category: e.target.value,
+                  subcategory: "",
+                }))
+              }
+            >
               <option value="">Оберіть категорію</option>
               {categories.map((category) => (
                 <option key={category} value={category}>{category}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Підкатегорія</label>
+            <select
+              className={inputClass}
+              value={draft.subcategory}
+              onChange={(e) => setDraft((p) => ({ ...p, subcategory: e.target.value }))}
+              disabled={!draft.category}
+            >
+              <option value="">{draft.category ? "Оберіть підкатегорію" : "Спочатку оберіть категорію"}</option>
+              {availableSubcategories.map((subcategory) => (
+                <option key={subcategory} value={subcategory}>{subcategory}</option>
               ))}
             </select>
           </div>
@@ -442,6 +476,17 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
           </select>
         </div>
         <div>
+          <label className="text-sm font-semibold text-slate-800">Фільтр підкатегорії</label>
+          <select className={inputClass} value={subcategoryFilter} onChange={(e) => setSubcategoryFilter(e.target.value)}>
+            <option value="">Всі підкатегорії</option>
+            {(categoryFilter ? (subcategoriesByCategory?.[categoryFilter] || []) : Object.values(subcategoriesByCategory || {}).flat())
+              .filter((value, index, arr) => arr.indexOf(value) === index)
+              .map((subcategory) => (
+                <option key={subcategory} value={subcategory}>{subcategory}</option>
+              ))}
+          </select>
+        </div>
+        <div>
           <label className="text-sm font-semibold text-slate-800">Фільтр постачальника</label>
           <select className={inputClass} value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)}>
             <option value="">Всі постачальники</option>
@@ -462,6 +507,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
             onClick={() => {
               setSearchTerm("");
               setCategoryFilter("");
+              setSubcategoryFilter("");
               setSupplierFilter("");
               setStatusFilter("all");
               setRestaurantFilter(isGlobalAdmin ? "" : String(user?.restaurant || ""));
@@ -483,6 +529,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
               <th className="px-3 py-2 text-left">Назва</th>
               <th className="px-3 py-2 text-left">Код 1С</th>
               <th className="px-3 py-2 text-left">Категорія</th>
+              <th className="px-3 py-2 text-left">Підкатегорія</th>
               <th className="px-3 py-2 text-left">Одиниця</th>
               <th className="px-3 py-2 text-left">Ціна за од.</th>
               <th className="px-3 py-2 text-left">Постачальник</th>
@@ -497,6 +544,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
                 <td className="px-3 py-2 font-medium text-slate-900">{item.name}</td>
                 <td className="px-3 py-2">{item.code1C || "-"}</td>
                 <td className="px-3 py-2">{item.category}</td>
+                <td className="px-3 py-2">{item.subcategory || "-"}</td>
                 <td className="px-3 py-2">{item.unit}</td>
                 <td className="px-3 py-2">{formatMoney(item.unitPrice)}</td>
                 <td className="px-3 py-2">{item.supplier || "-"}</td>
@@ -526,7 +574,7 @@ function ProductAdminTab({ products, suppliers, categories, units, inventories, 
             ))}
             {filteredProducts.length === 0 && (
               <tr>
-                <td colSpan={canManageProducts ? 9 : 8} className="px-3 py-6 text-center text-slate-500">
+                <td colSpan={canManageProducts ? 10 : 9} className="px-3 py-6 text-center text-slate-500">
                   За поточними фільтрами продукти не знайдено.
                 </td>
               </tr>
@@ -1556,28 +1604,58 @@ function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplie
 function TypicalFieldsTab({ fields, canManage, createTypicalField, updateTypicalField, removeTypicalField }) {
   const [type, setType] = useState("category");
   const [name, setName] = useState("");
+  const [subcategoryCategory, setSubcategoryCategory] = useState("");
+
+  const availableCategories = useMemo(() => {
+    return fields
+      .filter((item) => item.type === "category" && item.isActive !== false)
+      .map((item) => String(item.name || "").trim())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, "uk"));
+  }, [fields]);
 
   const addField = async () => {
     const value = name.trim();
     if (!value) return;
+
+    if (type === "subcategory" && !subcategoryCategory.trim()) {
+      alert("Оберіть категорію для підкатегорії.");
+      return;
+    }
+
     const exists = fields.some(
-      (item) => item.type === type && String(item.name || "").trim().toLowerCase() === value.toLowerCase()
+      (item) => {
+        const sameType = item.type === type;
+        const sameName = String(item.name || "").trim().toLowerCase() === value.toLowerCase();
+        if (!sameType || !sameName) return false;
+        if (type !== "subcategory") return true;
+        return String(item.categoryName || "").trim() === subcategoryCategory.trim();
+      }
     );
     if (exists) {
       alert("Таке типове поле вже існує.");
       return;
     }
-    const result = await createTypicalField({ type, name: value, isActive: true });
+    const result = await createTypicalField({
+      type,
+      name: value,
+      categoryName: type === "subcategory" ? subcategoryCategory.trim() : "",
+      isActive: true,
+    });
     if (!result.success) {
       alert(`Не вдалося додати типове поле: ${result?.error?.message || "невідома помилка"}`);
       return;
     }
     setName("");
+    if (type === "subcategory") {
+      setSubcategoryCategory("");
+    }
   };
 
   const grouped = useMemo(() => {
     return {
       category: fields.filter((item) => item.type === "category"),
+      subcategory: fields.filter((item) => item.type === "subcategory"),
       unit: fields.filter((item) => item.type === "unit"),
     };
   }, [fields]);
@@ -1601,8 +1679,17 @@ function TypicalFieldsTab({ fields, canManage, createTypicalField, updateTypical
         <div className="mb-4 flex flex-col gap-2 md:flex-row">
           <select className={inputClass} value={type} onChange={(e) => setType(e.target.value)}>
             <option value="category">Категорія</option>
+            <option value="subcategory">Підкатегорія</option>
             <option value="unit">Одиниця вимірювання</option>
           </select>
+          {type === "subcategory" && (
+            <select className={inputClass} value={subcategoryCategory} onChange={(e) => setSubcategoryCategory(e.target.value)}>
+              <option value="">Оберіть категорію</option>
+              {availableCategories.map((category) => (
+                <option key={category} value={category}>{category}</option>
+              ))}
+            </select>
+          )}
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} placeholder="Напр. Овочі або кг" />
           <button type="button" onClick={addField} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">
             Додати
@@ -1610,14 +1697,17 @@ function TypicalFieldsTab({ fields, canManage, createTypicalField, updateTypical
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {[{ key: "category", label: "Категорії" }, { key: "unit", label: "Одиниці вимірювання" }].map((group) => (
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        {[{ key: "category", label: "Категорії" }, { key: "subcategory", label: "Підкатегорії" }, { key: "unit", label: "Одиниці вимірювання" }].map((group) => (
           <div key={group.key} className="rounded-lg border border-slate-200 p-3">
             <p className="mb-2 font-semibold text-slate-900">{group.label}</p>
             <div className="space-y-2">
               {grouped[group.key].map((item) => (
                 <div key={item.id} className="flex items-center justify-between rounded border border-slate-200 px-2 py-1">
-                  <span className="text-sm">{item.name}</span>
+                  <span className="text-sm">
+                    {item.name}
+                    {item.type === "subcategory" && item.categoryName ? ` (${item.categoryName})` : ""}
+                  </span>
                   {canManage && (
                     <div className="flex items-center gap-2">
                       <button type="button" className="rounded border border-slate-300 px-2 py-0.5 text-xs font-semibold" onClick={() => toggleActive(item)}>
@@ -2936,6 +3026,34 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     return Array.from(new Set([...fromDirectory, ...fromProducts])).sort((a, b) => a.localeCompare(b, "uk"));
   }, [typicalFields, products]);
 
+  const availableSubcategoriesByCategory = useMemo(() => {
+    const map = {};
+
+    typicalFields
+      .filter((item) => item.type === "subcategory" && item.isActive !== false)
+      .forEach((item) => {
+        const category = String(item.categoryName || "").trim();
+        const subcategory = String(item.name || "").trim();
+        if (!category || !subcategory) return;
+        if (!map[category]) map[category] = [];
+        map[category].push(subcategory);
+      });
+
+    products.forEach((item) => {
+      const category = String(item.category || "").trim();
+      const subcategory = String(item.subcategory || "").trim();
+      if (!category || !subcategory) return;
+      if (!map[category]) map[category] = [];
+      map[category].push(subcategory);
+    });
+
+    Object.keys(map).forEach((key) => {
+      map[key] = Array.from(new Set(map[key])).sort((a, b) => a.localeCompare(b, "uk"));
+    });
+
+    return map;
+  }, [typicalFields, products]);
+
   const availableUnits = useMemo(() => {
     const fromDirectory = typicalFields
       .filter((item) => item.type === "unit" && item.isActive !== false)
@@ -2963,6 +3081,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
         products={products}
         suppliers={availableSuppliers}
         categories={availableCategories}
+        subcategoriesByCategory={availableSubcategoriesByCategory}
         units={availableUnits}
         inventories={inventories}
         restaurants={restaurants}

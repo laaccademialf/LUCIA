@@ -59,6 +59,13 @@ import {
 } from "./utils/excelHelpers";
 
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const ADMIN_ONLY_NAV_IDS = new Set(["settings-permissions", "menu-admin", "security-audit"]);
+
+const isManagerLikeUser = (user) => {
+  const roleValue = String(user?.role || "").toLowerCase();
+  const workRoleValue = String(user?.workRole || "").toLowerCase();
+  return roleValue.includes("manager") || roleValue.includes("керуюч") || workRoleValue.includes("manager") || workRoleValue.includes("керуюч");
+};
 
 const toMinutes = (value) => {
   if (!value || typeof value !== "string" || !value.includes(":")) return null;
@@ -575,6 +582,10 @@ function App() {
     if (allowed === true) return allTabs;
     if (Array.isArray(allowed)) {
       return allTabs.filter(tab => allowed.includes(tab.id));
+    }
+    // Fallback: для ролі керуючого не блокуємо вкладки повністю, якщо права не знайшлись/застаріли.
+    if (isManagerLikeUser(user) && !ADMIN_ONLY_NAV_IDS.has(activeNav)) {
+      return allTabs;
     }
     // Якщо доступу немає — не показувати вкладки
     return [];
@@ -1491,7 +1502,9 @@ function App() {
     // Фільтрація за правами
     const filtered = structureWithAdmin.map(group => {
       const filteredChildren = group.children.filter(child => {
-        const hasAccess = isAdmin || userPermissions[child.id] !== undefined && userPermissions[child.id] !== false;
+        const hasExplicitAccess = userPermissions[child.id] !== undefined && userPermissions[child.id] !== false;
+        const hasManagerFallbackAccess = !isAdmin && isManagerLikeUser(user) && !ADMIN_ONLY_NAV_IDS.has(child.id);
+        const hasAccess = isAdmin || hasExplicitAccess || hasManagerFallbackAccess;
         return hasAccess;
       });
       return { ...group, children: filteredChildren };
