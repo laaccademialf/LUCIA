@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2, Download, Upload, FileDown, X, Printer } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
-import { downloadProductsTemplate, downloadProductsTemplate1C, exportInventoriesToExcel, exportInventoryTo1CExcel, exportProductsAndInventoriesToExcel, importProductsFromExcel } from "../utils/productInventoryExcel";
+import {
+  downloadProductsTemplate,
+  downloadProductsTemplate1C,
+  exportInventoriesToExcel,
+  exportInventoryTo1CExcel,
+  exportProductsAndInventoriesToExcel,
+  importProductsFromExcel,
+  exportSuppliersToExcel,
+  importSuppliersFromExcel,
+} from "../utils/productInventoryExcel";
 import { endProductInventorySession, startProductInventorySession, subscribeToActiveProductInventorySession } from "../firebase/firestore";
 
 const normalizeTabKind = (tabId = "") => {
@@ -1520,6 +1529,34 @@ function InventoryJournalTab({ inventories, user }) {
 
 function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplier, removeSupplier }) {
   const [newSupplierName, setNewSupplierName] = useState("");
+  const [legalEntityDrafts, setLegalEntityDrafts] = useState({});
+  const [minimumOrderDrafts, setMinimumOrderDrafts] = useState({});
+  const importInputRef = useRef(null);
+
+  const getLegalEntities = (supplier) => {
+    const fromArray = Array.isArray(supplier?.legalEntities) ? supplier.legalEntities : [];
+    const fromSingle = String(supplier?.legalEntity || "").trim();
+    const combined = [
+      ...fromArray.map((item) => String(item || "").trim()).filter(Boolean),
+      ...(fromSingle ? [fromSingle] : []),
+    ];
+    return Array.from(new Set(combined));
+  };
+
+  const updateSupplierLegalEntities = async (supplier, nextEntities) => {
+    const normalized = Array.from(new Set((nextEntities || []).map((item) => String(item || "").trim()).filter(Boolean)));
+    const { id, ...payload } = supplier;
+    const result = await updateSupplier(id, {
+      ...payload,
+      legalEntities: normalized,
+      legalEntity: "",
+    });
+    if (!result.success) {
+      alert("Не вдалося оновити список юридичних осіб.");
+      return false;
+    }
+    return true;
+  };
 
   const addSupplier = async () => {
     const name = newSupplierName.trim();
@@ -1529,12 +1566,98 @@ function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplie
       alert("Такий постачальник вже існує.");
       return;
     }
-    const result = await createSupplier({ name, isActive: true });
+    const result = await createSupplier({ name, isActive: true, legalEntities: [], minimumOrderAmount: 0 });
     if (!result.success) {
       alert(`Не вдалося додати постачальника: ${result?.error?.message || "невідома помилка"}`);
       return;
     }
     setNewSupplierName("");
+  };
+
+  const exportSuppliers = () => {
+    exportSuppliersToExcel(suppliers, `suppliers_export_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
+
+  const handleImportSuppliers = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const imported = await importSuppliersFromExcel(file);
+
+      if (imported.length === 0) {
+        alert("Файл не містить валідних постачальників для імпорту.");
+        return;
+      }
+
+      let created = 0;
+      let updated = 0;
+      let failed = 0;
+
+      for (const candidate of imported) {
+        try {
+          const existing = suppliers.find(
+            (item) => String(item?.name || "").trim().toLowerCase() === candidate.name.toLowerCase()
+          );
+
+          if (existing) {
+            const mergedLegalEntities = Array.from(
+              new Set([...getLegalEntities(existing), ...candidate.legalEntities])
+            );
+            const { id, ...payload } = existing;
+            const result = await updateSupplier(id, {
+              ...payload,
+              isActive: candidate.isActive,
+              minimumOrderAmount: toNumber(candidate.minimumOrderAmount || 0),
+              legalEntities: mergedLegalEntities,
+              legalEntity: "",
+            });
+            if (result.success) updated += 1;
+            else failed += 1;
+          } else {
+            const result = await createSupplier({
+              name: candidate.name,
+              isActive: candidate.isActive,
+              minimumOrderAmount: toNumber(candidate.minimumOrderAmount || 0),
+              legalEntities: candidate.legalEntities,
+            });
+            if (result.success) created += 1;
+            else failed += 1;
+          }
+        } catch {
+          failed += 1;
+        }
+      }
+
+      alert(`Імпорт завершено. Додано: ${created}. Оновлено: ${updated}. Помилок: ${failed}.`);
+    } catch (error) {
+      alert(`Не вдалося імпортувати файл: ${error?.message || "невідома помилка"}`);
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const addLegalEntity = async (supplier) => {
+    const draftValue = String(legalEntityDrafts[supplier.id] || "").trim();
+    if (!draftValue) return;
+
+    const current = getLegalEntities(supplier);
+    const exists = current.some((item) => item.toLowerCase() === draftValue.toLowerCase());
+    if (exists) {
+      alert("Така юридична особа вже додана.");
+      return;
+    }
+
+    const updated = await updateSupplierLegalEntities(supplier, [...current, draftValue]);
+    if (updated) {
+      setLegalEntityDrafts((prev) => ({ ...prev, [supplier.id]: "" }));
+    }
+  };
+
+  const removeLegalEntity = async (supplier, legalEntity) => {
+    const current = getLegalEntities(supplier);
+    const next = current.filter((item) => item !== legalEntity);
+    await updateSupplierLegalEntities(supplier, next);
   };
 
   const toggleActive = async (item) => {
@@ -1543,6 +1666,20 @@ function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplie
     if (!result.success) {
       alert("Не вдалося оновити статус постачальника.");
     }
+  };
+
+  const saveMinimumOrderAmount = async (supplier) => {
+    const raw = Object.prototype.hasOwnProperty.call(minimumOrderDrafts, supplier.id)
+      ? minimumOrderDrafts[supplier.id]
+      : supplier.minimumOrderAmount;
+    const nextValue = Math.max(0, toNumber(raw));
+    const { id, ...payload } = supplier;
+    const result = await updateSupplier(id, { ...payload, minimumOrderAmount: nextValue });
+    if (!result.success) {
+      alert("Не вдалося зберегти мінімальну суму замовлення.");
+      return;
+    }
+    setMinimumOrderDrafts((prev) => ({ ...prev, [supplier.id]: String(nextValue) }));
   };
 
   return (
@@ -1554,9 +1691,26 @@ function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplie
 
       {canManage && (
         <div className="mb-4 flex flex-col gap-2 md:flex-row">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            style={{ display: "none" }}
+            onChange={handleImportSuppliers}
+          />
           <input className={inputClass} value={newSupplierName} onChange={(e) => setNewSupplierName(e.target.value)} placeholder="Назва постачальника" />
           <button type="button" onClick={addSupplier} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">
             Додати
+          </button>
+          <button type="button" onClick={exportSuppliers} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100">
+            Експорт
+          </button>
+          <button
+            type="button"
+            onClick={() => importInputRef.current?.click()}
+            className="rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100"
+          >
+            Імпорт
           </button>
         </div>
       )}
@@ -1566,14 +1720,72 @@ function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplie
           <thead className="bg-slate-50 text-slate-700">
             <tr>
               <th className="px-3 py-2 text-left">Назва</th>
+              <th className="px-3 py-2 text-left">Мін. сума замовлення</th>
+              <th className="px-3 py-2 text-left">Юридичні особи</th>
               <th className="px-3 py-2 text-left">Статус</th>
               {canManage && <th className="px-3 py-2 text-left">Дії</th>}
             </tr>
           </thead>
           <tbody>
-            {suppliers.map((item) => (
+            {suppliers.map((item) => {
+              const legalEntities = getLegalEntities(item);
+              return (
               <tr key={item.id} className="border-t border-slate-200">
                 <td className="px-3 py-2 font-medium text-slate-900">{item.name}</td>
+                <td className="px-3 py-2">
+                  {canManage ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className="w-28 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                        value={Object.prototype.hasOwnProperty.call(minimumOrderDrafts, item.id) ? minimumOrderDrafts[item.id] : String(toNumber(item.minimumOrderAmount || 0))}
+                        onChange={(e) => setMinimumOrderDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                        onBlur={() => saveMinimumOrderAmount(item)}
+                      />
+                      <span className="text-xs text-slate-500">грн</span>
+                    </div>
+                  ) : (
+                    <span>{formatMoney(item.minimumOrderAmount || 0)}</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {legalEntities.map((entity) => (
+                      <span key={`${item.id}_${entity}`} className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-xs text-slate-700">
+                        {entity}
+                        {canManage && (
+                          <button
+                            type="button"
+                            className="font-semibold text-rose-600 hover:text-rose-500"
+                            onClick={() => removeLegalEntity(item, entity)}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </span>
+                    ))}
+                    {legalEntities.length === 0 && <span className="text-xs text-slate-500">Не додано</span>}
+                  </div>
+                  {canManage && (
+                    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                      <input
+                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                        value={legalEntityDrafts[item.id] || ""}
+                        onChange={(e) => setLegalEntityDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                        placeholder="Додати юрособу: ТОВ/ФОП..."
+                      />
+                      <button
+                        type="button"
+                        className="rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                        onClick={() => addLegalEntity(item)}
+                      >
+                        Додати юрособу
+                      </button>
+                    </div>
+                  )}
+                </td>
                 <td className="px-3 py-2">{item.isActive ? "Активний" : "Вимкнений"}</td>
                 {canManage && (
                   <td className="px-3 py-2">
@@ -1588,10 +1800,11 @@ function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplie
                   </td>
                 )}
               </tr>
-            ))}
+              );
+            })}
             {suppliers.length === 0 && (
               <tr>
-                <td colSpan={canManage ? 3 : 2} className="px-3 py-6 text-center text-slate-500">Постачальники ще не додані.</td>
+                <td colSpan={canManage ? 5 : 4} className="px-3 py-6 text-center text-slate-500">Постачальники ще не додані.</td>
               </tr>
             )}
           </tbody>
@@ -1729,7 +1942,7 @@ function TypicalFieldsTab({ fields, canManage, createTypicalField, updateTypical
   );
 }
 
-function BookingTab({ products, orders, createOrder, restaurants, user }) {
+function BookingTab({ products, orders, createOrder, restaurants, user, suppliersDirectory = [] }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const pageSizeOptions = [12, 25, 50];
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
@@ -1859,6 +2072,36 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
       .filter(Boolean);
   }, [activeProducts, quantities]);
 
+  const supplierMinimumMap = useMemo(() => {
+    const map = new Map();
+    (suppliersDirectory || []).forEach((supplier) => {
+      const key = String(supplier?.name || "").trim().toLowerCase();
+      if (!key) return;
+      map.set(key, Math.max(0, toNumber(supplier?.minimumOrderAmount || 0)));
+    });
+    return map;
+  }, [suppliersDirectory]);
+
+  const supplierTotals = useMemo(() => {
+    const totals = new Map();
+    selectedItems.forEach((item) => {
+      const supplierName = String(item?.supplier || "").trim();
+      if (!supplierName) return;
+      const current = totals.get(supplierName) || 0;
+      totals.set(supplierName, current + toNumber(item.amount));
+    });
+    return Array.from(totals.entries()).map(([supplier, amount]) => ({
+      supplier,
+      amount,
+      minimum: supplierMinimumMap.get(String(supplier).toLowerCase()) || 0,
+    }));
+  }, [selectedItems, supplierMinimumMap]);
+
+  const minimumOrderWarnings = useMemo(() => {
+    return supplierTotals.filter((item) => item.minimum > 0 && item.amount < item.minimum);
+  }, [supplierTotals]);
+  const hasMinimumOrderViolation = minimumOrderWarnings.length > 0;
+
   const draftTotalAmount = useMemo(() => {
     return activeProducts.reduce((sum, product) => {
       const qty = toNumber(quantities[product.id]);
@@ -1889,6 +2132,14 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
 
     if (!restaurantId || !requiredDate || orderItems.length === 0) {
       alert("Оберіть ресторан, дату поставки та введіть хоча б одну кількість.");
+      return;
+    }
+
+    if (hasMinimumOrderViolation) {
+      const details = minimumOrderWarnings
+        .map((warning) => `${warning.supplier}: ${formatMoney(warning.amount)} з мінімуму ${formatMoney(warning.minimum)}`)
+        .join("\n");
+      alert(`Неможливо відправити заявку: не досягнуто мінімальної суми замовлення по постачальниках.\n\n${details}`);
       return;
     }
 
@@ -2166,12 +2417,30 @@ function BookingTab({ products, orders, createOrder, restaurants, user }) {
           </div>
         </div>
 
+        {minimumOrderWarnings.length > 0 && (
+          <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            <p className="font-semibold">Увага: мінімальна сума замовлення не виконана</p>
+            <ul className="mt-1 list-disc pl-5">
+              {minimumOrderWarnings.map((warning) => (
+                <li key={warning.supplier}>
+                  {warning.supplier}: {formatMoney(warning.amount)} з мінімуму {formatMoney(warning.minimum)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <div className="mt-3 flex justify-end text-sm font-semibold text-slate-800">
           Загальна сума заявки: {formatMoney(draftTotalAmount)}
         </div>
 
         <div className="mt-4 flex justify-end">
-          <button type="button" onClick={handleSubmitOrder} className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
+          <button
+            type="button"
+            onClick={handleSubmitOrder}
+            disabled={hasMinimumOrderViolation}
+            className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-indigo-300"
+          >
             Сформувати заявку
           </button>
         </div>
@@ -3152,5 +3421,5 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     );
   }
 
-  return <BookingTab products={products} orders={orders} createOrder={createOrder} restaurants={restaurants} user={user} />;
+  return <BookingTab products={products} orders={orders} createOrder={createOrder} restaurants={restaurants} user={user} suppliersDirectory={suppliers} />;
 }

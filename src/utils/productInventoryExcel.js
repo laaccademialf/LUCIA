@@ -330,3 +330,91 @@ export const exportInventoryTo1CExcel = (inventory, filename = "inventory_1c.xls
   XLSX.utils.book_append_sheet(wb, ws, "Инвентаризация");
   XLSX.writeFile(wb, filename);
 };
+
+export const exportSuppliersToExcel = (suppliers, filename = "suppliers.xlsx") => {
+  const rows = (suppliers || []).map((item) => ({
+    "Назва": String(item?.name || "").trim(),
+    "Активний": item?.isActive === false ? "Ні" : "Так",
+    "Мінімальна сума замовлення": toNumber(item?.minimumOrderAmount || 0),
+    "Юридичні особи": Array.from(
+      new Set([
+        ...(Array.isArray(item?.legalEntities) ? item.legalEntities : []),
+        ...((String(item?.legalEntity || "").trim() ? [String(item.legalEntity).trim()] : [])),
+      ].map((entry) => String(entry || "").trim()).filter(Boolean))
+    ).join(" | "),
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(
+    rows.length > 0
+      ? rows
+      : [{ "Назва": "", "Активний": "Так", "Мінімальна сума замовлення": 0, "Юридичні особи": "" }]
+  );
+
+  XLSX.utils.book_append_sheet(wb, ws, "Постачальники");
+  XLSX.writeFile(wb, filename);
+};
+
+export const importSuppliersFromExcel = (file) => {
+  const normalize = (value) => String(value || "").trim();
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = (event) => {
+      try {
+        const data = event.target?.result;
+        const workbook = XLSX.read(data, { type: "array" });
+        const firstSheet = workbook.SheetNames?.[0];
+        if (!firstSheet) {
+          reject(new Error("Файл не містить аркушів"));
+          return;
+        }
+
+        const worksheet = workbook.Sheets[firstSheet];
+        const rows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+
+        const result = rows
+          .map((row) => {
+            const name = normalize(row["Назва"] || row["Постачальник"] || row["Supplier"] || row["name"]);
+            if (!name) return null;
+
+            const activeRaw = normalize(row["Активний"] || row["Active"] || "Так").toLowerCase();
+            const isActive = !["ні", "no", "false", "0"].includes(activeRaw);
+
+            const minimumOrderAmount = toNumber(
+              row["Мінімальна сума замовлення"] ||
+              row["Мінімальне замовлення"] ||
+              row["Minimum Order Amount"] ||
+              row["minimumOrderAmount"] ||
+              0
+            );
+
+            const legalRaw = normalize(
+              row["Юридичні особи"] || row["Юрособи"] || row["Legal Entities"] || row["legalEntities"] || ""
+            );
+
+            const legalEntities = legalRaw
+              .split("|")
+              .map((entry) => normalize(entry))
+              .filter(Boolean);
+
+            return {
+              name,
+              isActive,
+              minimumOrderAmount,
+              legalEntities: Array.from(new Set(legalEntities)),
+            };
+          })
+          .filter(Boolean);
+
+        resolve(result);
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    reader.onerror = () => reject(new Error("Не вдалося прочитати Excel файл"));
+    reader.readAsArrayBuffer(file);
+  });
+};
