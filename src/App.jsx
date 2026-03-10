@@ -49,6 +49,7 @@ import DatabaseConnectionsManager from "./components/DatabaseConnectionsManager"
 import { useChecklists } from "./hooks/useChecklists";
 import { useServiceRequests } from "./hooks/useServiceRequests";
 import { logAuditEvent } from "./firebase/audit";
+import { getCurrentRuntimeCustomConfig, getPrimaryConnection } from "./data/firebaseConnections";
 import {
   downloadAssetTemplate,
   downloadRestaurantTemplate,
@@ -214,6 +215,22 @@ const playChecklistAlertTone = () => {
 
 function App() {
   const [currentTime, setCurrentTime] = useState(() => new Date());
+  const runtimeCustomConfig = useMemo(() => getCurrentRuntimeCustomConfig(), []);
+  const primaryConnection = useMemo(() => getPrimaryConnection(), []);
+
+  const activeDbBadge = useMemo(() => {
+    if (runtimeCustomConfig) {
+      return {
+        label: primaryConnection?.name || runtimeCustomConfig.apiBaseUrl || "custom-api",
+        tag: "custom",
+      };
+    }
+
+    return {
+      label: activeFirebaseConfig?.projectId || "default",
+      tag: isRuntimeFirebaseConfig ? "runtime" : "firebase",
+    };
+  }, [runtimeCustomConfig, primaryConnection]);
 
   useEffect(() => {
     const timerId = setInterval(() => {
@@ -3211,9 +3228,9 @@ function App() {
                 <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300">
                   <LucideIcons.Database size={16} />
                   <span className="text-xs font-semibold">
-                    БД: {activeFirebaseConfig?.projectId || "default"}
+                    БД: {activeDbBadge.label}
                   </span>
-                  {isRuntimeFirebaseConfig && (
+                  {(isRuntimeFirebaseConfig || runtimeCustomConfig) && (
                     <span className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">custom</span>
                   )}
                 </div>
