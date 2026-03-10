@@ -34,8 +34,8 @@ const ENGINE = String(process.env.MIGRATION_DB_ENGINE || "file").trim().toLowerC
 const DATA_DIR = process.env.CUSTOM_MIGRATION_DATA_DIR || "./tmp/custom-db";
 const SETTINGS_FILE = process.env.RUNTIME_SETTINGS_FILE || "./tmp/custom-db/runtime-settings.json";
 const POSTGRES_URL = String(process.env.POSTGRES_URL || "").trim();
-const ASSET_IMAGE_DIR = String(process.env.ASSET_IMAGE_DIR || "/var/www/luci.lafamiglia.ua/app/img/assets").trim();
-const ASSET_IMAGE_PUBLIC_BASE = String(process.env.ASSET_IMAGE_PUBLIC_BASE || "/app/img/assets").trim().replace(/\/+$/, "");
+const ASSET_IMAGE_DIR = String(process.env.ASSET_IMAGE_DIR || "/var/www/luci.lafamiglia.ua/app/img").trim();
+const ASSET_IMAGE_PUBLIC_BASE = String(process.env.ASSET_IMAGE_PUBLIC_BASE || "/app/img").trim().replace(/\/+$/, "");
 
 const MYSQL_CONFIG = {
   host: String(process.env.MYSQL_HOST || "").trim(),
