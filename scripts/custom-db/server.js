@@ -1444,6 +1444,12 @@ const handleAssetsApi = async (req, res, assetId) => {
   const dbConfig = getAssetsRuntimeConfig();
   const method = req.method || "GET";
 
+  // Backward-compatible upload route: some deployments may route
+  // POST /api/assets/photos as /api/assets/:id with id="photos".
+  if (method === "POST" && assetId === "photos") {
+    return handleAssetPhotoUploadApi(req, res);
+  }
+
   if (method === "GET" && !assetId) {
     const assets = await getAssetsData(dbConfig);
     return sendJson(res, 200, { ok: true, data: assets });
