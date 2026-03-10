@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from "react";
+import DeployInfo from "./components/DeployInfo";
 import * as LucideIcons from "lucide-react";
 import clsx from "clsx";
 import { AssetTable } from "./components/AssetTable";
@@ -2988,13 +2989,14 @@ function App() {
           }}
         />
       )}
-      <aside style={{position: "fixed", left: 0, top: 0, height: "100vh", overflowY: "auto", borderRight: "1px solid #334155", backgroundColor: "rgba(15, 23, 42, 0.95)", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)", transition: "all 300ms", zIndex: isMobile ? 50 : 40, width: "288px", transform: isMobile && !sidebarOpen ? "translateX(-100%)" : "translateX(0)", ...(sidebarCollapsed && !isMobile && {width: "80px"})}}>
-        <div style={{padding: "1rem", position: "relative"}}>
+      <aside style={{position: "fixed", left: 0, top: 0, height: "100vh", overflowY: "auto", borderRight: "1px solid #334155", backgroundColor: "rgba(15, 23, 42, 0.95)", boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)", transition: "all 300ms", zIndex: isMobile ? 50 : 40, width: "288px", transform: isMobile && !sidebarOpen ? "translateX(-100%)" : "translateX(0)", display: "flex", flexDirection: "column", justifyContent: "space-between", ...(sidebarCollapsed && !isMobile && {width: "80px"})}}>
+        <div style={{padding: "1rem", position: "relative", flex: 1, minHeight: 0}}>
           {mobileMenuButton}
           {desktopCollapseButton}
           {sidebarHeader}
           {(isMobile || !sidebarCollapsed) && SidebarNav()}
         </div>
+        <DeployInfo />
       </aside>
     </>
   );
