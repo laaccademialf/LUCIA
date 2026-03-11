@@ -453,6 +453,50 @@ export default function DatabaseConnectionsManager() {
     }
   };
 
+  const onUseCustomConnection = (id) => {
+    const connection = connectionMap.get(id);
+    if (!connection || connection.type !== "custom") return;
+
+    const cfg = connection.config || {};
+    setConnectionType("custom");
+    setCustomForm({
+      name: connection.name || "",
+      apiBaseUrl: String(cfg.apiBaseUrl || ""),
+      migrationPath: String(cfg.migrationPath || "/migration/import"),
+      healthPath: String(cfg.healthPath || "/health"),
+      testPath: String(cfg.testPath || "/db/test"),
+      token: String(cfg.token || ""),
+      dbEngine: String(cfg.dbEngine || "mysql"),
+      dbHost: String(cfg.dbHost || ""),
+      dbPort: String(cfg.dbPort || 3306),
+      dbUser: String(cfg.dbUser || ""),
+      dbPassword: String(cfg.dbPassword || ""),
+      dbName: String(cfg.dbName || ""),
+      postgresUrl: String(cfg.postgresUrl || ""),
+    });
+    setStatus(`Параметри підключення "${connection.name}" перенесено у форму.`);
+  };
+
+  const onNormalizeFromConnection = async (id) => {
+    const connection = connectionMap.get(id);
+    if (!connection || connection.type !== "custom") return;
+
+    setBusy(true);
+    setStatus(`Запускаємо JSON to SQL для "${connection.name}"...`);
+    try {
+      const result = await normalizeCustomMySqlData({ targetConfig: connection.config || {} });
+      const stats = result?.serverResponse?.stats || {};
+      const statText = Object.entries(stats)
+        .map(([name, count]) => `${name}: ${count}`)
+        .join(" | ");
+      setStatus(`Нормалізацію завершено для "${connection.name}". ${statText}`);
+    } catch (error) {
+      setStatus(`Нормалізація для "${connection.name}" не пройшла: ${error?.message || error}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onBootstrap = async (id) => {
     const target = connectionMap.get(id);
     if (!target || target.type !== "firebase") return;
@@ -642,6 +686,12 @@ export default function DatabaseConnectionsManager() {
                 <button disabled={busy} onClick={() => onTest(item.id)} className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">Тест</button>
                 {item.type === "firebase" && (
                   <button disabled={busy} onClick={() => onBootstrap(item.id)} className="rounded border border-indigo-300 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50">Bootstrap</button>
+                )}
+                {item.type === "custom" && (
+                  <>
+                    <button disabled={busy} onClick={() => onUseCustomConnection(item.id)} className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">У форму</button>
+                    <button disabled={busy} onClick={() => onNormalizeFromConnection(item.id)} className="rounded border border-amber-300 px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50">JSON to SQL</button>
+                  </>
                 )}
                 <button disabled={busy} onClick={() => onSetPrimary(item.id)} className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-500">Зробити основною</button>
                 <button disabled={busy} onClick={() => onDelete(item.id)} className="rounded bg-rose-600 px-2 py-1 text-xs font-semibold text-white hover:bg-rose-500">Видалити</button>
