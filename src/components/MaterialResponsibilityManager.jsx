@@ -22,6 +22,30 @@ export const MaterialResponsibilityManager = () => {
     loadData();
   }, []);
 
+  const normalizeCenter = (item) => {
+    if (!item || typeof item !== "object") return { id: "", name: "" };
+    return {
+      ...item,
+      id: String(item.id || item.centerId || item.center_id || "").trim(),
+      name: String(item.name || item.centerName || item.center_name || "").trim(),
+    };
+  };
+
+  const normalizePerson = (item, centerIdByName) => {
+    if (!item || typeof item !== "object") return { id: "", name: "", centerId: "" };
+    const rawCenterId = String(item.centerId || item.center_id || "").trim();
+    const rawCenterName = String(item.centerName || item.center_name || "").trim();
+    const resolvedCenterId = rawCenterId || String(centerIdByName.get(rawCenterName) || "").trim();
+
+    return {
+      ...item,
+      id: String(item.id || item.personId || item.person_id || "").trim(),
+      name: String(item.name || item.personName || item.person_name || "").trim(),
+      centerId: resolvedCenterId,
+      centerName: rawCenterName,
+    };
+  };
+
   const loadData = async () => {
     try {
       setLoading(true);
@@ -30,8 +54,18 @@ export const MaterialResponsibilityManager = () => {
         getResponsibilityCenters(),
         getResponsiblePersons(),
       ]);
-      setCenters(centersData);
-      setPersons(personsData);
+      const normalizedCenters = (Array.isArray(centersData) ? centersData : [])
+        .map(normalizeCenter)
+        .filter((item) => item.id || item.name);
+      const centerIdByName = new Map(
+        normalizedCenters.map((item) => [String(item.name || "").trim(), String(item.id || "").trim()])
+      );
+      const normalizedPersons = (Array.isArray(personsData) ? personsData : [])
+        .map((item) => normalizePerson(item, centerIdByName))
+        .filter((item) => item.id || item.name);
+
+      setCenters(normalizedCenters);
+      setPersons(normalizedPersons);
     } catch (error) {
       console.error("Помилка завантаження даних:", error);
       setError("Не вдалося завантажити дані");
@@ -102,7 +136,8 @@ export const MaterialResponsibilityManager = () => {
   };
 
   const getPersonsForCenter = (centerId) => {
-    return persons.filter(p => p.centerId === centerId);
+    const normalizedCenterId = String(centerId || "").trim();
+    return persons.filter((p) => String(p?.centerId || p?.center_id || "").trim() === normalizedCenterId);
   };
 
   if (loading) {

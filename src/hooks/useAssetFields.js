@@ -60,6 +60,31 @@ export const useAssetFields = () => {
     };
   };
 
+  const normalizeResponsibilityCenter = (item) => {
+    if (!item || typeof item !== "object") return { id: "", name: "" };
+    return {
+      ...item,
+      id: String(item.id || item.centerId || item.center_id || "").trim(),
+      name: String(item.name || item.centerName || item.center_name || "").trim(),
+    };
+  };
+
+  const normalizeResponsiblePerson = (item, centerIdByName) => {
+    if (!item || typeof item !== "object") return { id: "", name: "", centerId: "" };
+
+    const rawCenterId = String(item.centerId || item.center_id || "").trim();
+    const rawCenterName = String(item.centerName || item.center_name || "").trim();
+    const resolvedCenterId = rawCenterId || String(centerIdByName.get(rawCenterName) || "").trim();
+
+    return {
+      ...item,
+      id: String(item.id || item.personId || item.person_id || "").trim(),
+      name: String(item.name || item.personName || item.person_name || "").trim(),
+      centerId: resolvedCenterId,
+      centerName: rawCenterName,
+    };
+  };
+
   useEffect(() => {
     const loadFields = async () => {
       try {
@@ -113,8 +138,18 @@ export const useAssetFields = () => {
         setConditions(conditionsData.map((item) => item.name));
         setDecisions(decisionsData.map((item) => item.name));
         setPlacementZones(placementZonesData.map((item) => item.name));
-        setResponsibilityCenters(responsibilityCentersData);
-        setResponsiblePersons(responsiblePersonsData);
+        const normalizedCenters = (Array.isArray(responsibilityCentersData) ? responsibilityCentersData : [])
+          .map(normalizeResponsibilityCenter)
+          .filter((item) => item.id || item.name);
+        const centerIdByName = new Map(
+          normalizedCenters.map((item) => [String(item.name || "").trim(), String(item.id || "").trim()])
+        );
+        const normalizedPersons = (Array.isArray(responsiblePersonsData) ? responsiblePersonsData : [])
+          .map((item) => normalizeResponsiblePerson(item, centerIdByName))
+          .filter((item) => item.id || item.name);
+
+        setResponsibilityCenters(normalizedCenters);
+        setResponsiblePersons(normalizedPersons);
         setFunctionalities(functionalitiesData.map((item) => item.name));
         setRelevances(relevancesData.map((item) => item.name));
         setReasons(reasonsData.map((item) => item.name));

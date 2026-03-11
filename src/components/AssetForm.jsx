@@ -137,12 +137,20 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     if (!selectedRespCenter || !responsibilityCenters.length || !responsiblePersons.length) {
       return [];
     }
-    const centerObj = responsibilityCenters.find(c => c.name === selectedRespCenter);
+    const centerObj = responsibilityCenters.find(
+      (c) => String(c?.name || c?.centerName || c?.center_name || "").trim() === String(selectedRespCenter || "").trim()
+    );
     if (!centerObj) return [];
-    
+
+    const centerId = String(centerObj?.id || centerObj?.centerId || centerObj?.center_id || "").trim();
+    if (!centerId) return [];
+
     return responsiblePersons
-      .filter(p => p.centerId === centerObj.id)
-      .map(p => p.name);
+      .filter(
+        (p) => String(p?.centerId || p?.center_id || "").trim() === centerId
+      )
+      .map((p) => String(p?.name || p?.personName || p?.person_name || "").trim())
+      .filter(Boolean);
   }, [selectedRespCenter, responsibilityCenters, responsiblePersons]);
 
   const ensureCurrentOption = (options = [], currentValue = "") => {
