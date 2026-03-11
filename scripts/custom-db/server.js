@@ -229,8 +229,22 @@ const hashPassword = (password, salt = crypto.randomBytes(16).toString("hex")) =
 };
 
 const verifyPassword = (password, salt, hash) => {
-  const next = crypto.scryptSync(String(password || ""), String(salt || ""), 64).toString("hex");
-  return crypto.timingSafeEqual(Buffer.from(next, "hex"), Buffer.from(String(hash || ""), "hex"));
+  try {
+    const normalizedSalt = String(salt || "").trim();
+    const normalizedHash = String(hash || "").trim().toLowerCase();
+    if (!normalizedSalt || !normalizedHash) return false;
+    if (!/^[a-f0-9]+$/.test(normalizedHash)) return false;
+
+    const next = crypto.scryptSync(String(password || ""), normalizedSalt, 64).toString("hex");
+    const left = Buffer.from(next, "hex");
+    const right = Buffer.from(normalizedHash, "hex");
+    if (left.length === 0 || right.length === 0) return false;
+    if (left.length !== right.length) return false;
+
+    return crypto.timingSafeEqual(left, right);
+  } catch {
+    return false;
+  }
 };
 
 const createSessionToken = () => crypto.randomBytes(32).toString("hex");
@@ -1705,7 +1719,9 @@ const handleAuthLogin = async (req, res) => {
     return sendJson(res, 401, { ok: false, error: "Invalid credentials" });
   }
 
-  const valid = verifyPassword(password, authUser.passwordSalt, authUser.passwordHash);
+  const passwordSalt = authUser.passwordSalt || authUser.password_salt || "";
+  const passwordHash = authUser.passwordHash || authUser.password_hash || "";
+  const valid = verifyPassword(password, passwordSalt, passwordHash);
   if (!valid) {
     return sendJson(res, 401, { ok: false, error: "Invalid credentials" });
   }
