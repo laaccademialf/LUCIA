@@ -321,6 +321,7 @@ function App() {
                     // Права користувача
                     const [userPermissions, setUserPermissions] = useState({});
                     const [roleRestaurantIds, setRoleRestaurantIds] = useState([]);
+                    const [roleRestaurantsConfigured, setRoleRestaurantsConfigured] = useState(false);
                   // Структура меню
                   const { menuStructure, save, loading: menuLoading, error: menuError } = useMenuStructure();
                 // Firebase активи
@@ -545,6 +546,10 @@ function App() {
         // Якщо у ролі є масив ресторанів
         const allowed = firebaseRestaurants.filter((r) => roleRestaurantIds.includes(String(r.id)));
         setRestaurants(allowed);
+      } else if (roleRestaurantsConfigured) {
+        // Якщо у ролі явно налаштовано доступи до ресторанів, але список порожній,
+        // НЕ застосовуємо fallback на профіль користувача.
+        setRestaurants([]);
       } else if (user?.restaurant) {
         // Якщо у користувача є один ресторан
         let matched = firebaseRestaurants.filter(isRestaurantMatchedByProfile);
@@ -567,7 +572,7 @@ function App() {
         setRestaurants([]);
       }
     }
-  }, [firebaseRestaurants, restaurantsLoading, user, roleRestaurantIds]);
+  }, [firebaseRestaurants, restaurantsLoading, user, roleRestaurantIds, roleRestaurantsConfigured]);
 
   useEffect(() => {
     const normalizedFromDictionary = Array.isArray(assetBusinessUnits)
@@ -590,6 +595,7 @@ function App() {
       if (!user) {
         setUserPermissions({});
         setRoleRestaurantIds([]);
+        setRoleRestaurantsConfigured(false);
         return;
       }
 
@@ -597,6 +603,7 @@ function App() {
       if (user.role === 'admin') {
         setUserPermissions({});
         setRoleRestaurantIds([]);
+        setRoleRestaurantsConfigured(false);
         return;
       }
 
@@ -605,6 +612,7 @@ function App() {
       if (!roleIdOrName) {
         setUserPermissions({});
         setRoleRestaurantIds([]);
+        setRoleRestaurantsConfigured(false);
         return;
       }
 
@@ -612,6 +620,8 @@ function App() {
         const rolePerms = await getRolePermissions(roleIdOrName);
         console.log("DEBUG завантажено дозволи для ролі/робочої ролі:", roleIdOrName, rolePerms);
         setUserPermissions(rolePerms.permissions || {});
+        const restaurantsExplicitlyConfigured = Object.prototype.hasOwnProperty.call(rolePerms || {}, "restaurants");
+        setRoleRestaurantsConfigured(restaurantsExplicitlyConfigured);
         const normalizedRestaurantIds = Array.isArray(rolePerms?.restaurants)
           ? rolePerms.restaurants.map((id) => String(id))
           : [];
@@ -620,6 +630,7 @@ function App() {
         console.error("Помилка отримання прав доступу для користувача:", err);
         setUserPermissions({});
         setRoleRestaurantIds([]);
+        setRoleRestaurantsConfigured(false);
       }
     };
     loadPermissions();
@@ -647,6 +658,8 @@ function App() {
       const effectiveRestaurantId =
         roleRestaurantIds.length === 1
           ? roleRestaurantIds[0]
+          : roleRestaurantsConfigured
+            ? ""
           : (user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name)
             ? String(user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name)
             : "";
@@ -681,7 +694,7 @@ function App() {
         }
       }
     }
-  }, [restaurantsLoading, user, firebaseRestaurants, roleRestaurantIds]);
+  }, [restaurantsLoading, user, firebaseRestaurants, roleRestaurantIds, roleRestaurantsConfigured]);
 
   // Допоміжна функція для отримання вкладок для конкретного підрозділу з menuStructure
   const getTabsForSection = (navId) => {
