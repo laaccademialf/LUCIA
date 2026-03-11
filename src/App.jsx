@@ -1687,9 +1687,62 @@ function App() {
         const userRestaurantName = user?.restaurant
           ? restaurants.find((r) => r.id === user.restaurant)?.name
           : "";
-        const allowedRestaurantNames = new Set((restaurants || []).map((r) => String(r?.name || "")));
+
+        const normalizeText = (value) => String(value || "").trim().toLowerCase();
+        const allowedRestaurantNames = new Set(
+          (restaurants || [])
+            .map((r) => normalizeText(r?.name))
+            .filter(Boolean)
+        );
+        const allowedRestaurantIds = new Set(
+          (restaurants || [])
+            .map((r) => String(r?.id || "").trim())
+            .filter(Boolean)
+        );
+
+        const isAssetVisibleForCurrentRestaurants = (asset) => {
+          if (isGlobalAdmin || restaurants.length === 0) return true;
+
+          const assetRestaurantIds = [
+            asset?.restaurantId,
+            asset?.restaurant_id,
+            asset?.locationId,
+            asset?.location_id,
+            asset?.restaurant,
+            asset?.location,
+          ]
+            .map((value) => String(value || "").trim())
+            .filter(Boolean);
+
+          if (assetRestaurantIds.some((id) => allowedRestaurantIds.has(id))) {
+            return true;
+          }
+
+          const assetRestaurantNames = [
+            asset?.locationName,
+            asset?.location_name,
+            asset?.restaurantName,
+            asset?.restaurant_name,
+            asset?.restaurant,
+            asset?.location,
+          ]
+            .map((value) => normalizeText(value))
+            .filter(Boolean);
+
+          for (const candidate of assetRestaurantNames) {
+            if (allowedRestaurantNames.has(candidate)) return true;
+            for (const allowedName of allowedRestaurantNames) {
+              if (candidate.includes(allowedName) || allowedName.includes(candidate)) {
+                return true;
+              }
+            }
+          }
+
+          return false;
+        };
+
         const assetsForReports = !isGlobalAdmin && restaurants.length > 0
-          ? assets.filter((asset) => allowedRestaurantNames.has(String(asset?.locationName || "")))
+          ? assets.filter((asset) => isAssetVisibleForCurrentRestaurants(asset))
           : assets;
 
         // ...existing code...
@@ -2701,8 +2754,7 @@ function App() {
               let assetsToShow = assets;
               if (user?.role !== 'admin' && restaurants.length > 0) {
                 // Не-адмін бачить активи лише дозволених ресторанів (може бути декілька)
-                const allowedRestaurantNames = new Set((restaurants || []).map((r) => String(r?.name || "")));
-                assetsToShow = assets.filter((a) => allowedRestaurantNames.has(String(a?.locationName || "")));
+                assetsToShow = assets.filter((a) => isAssetVisibleForCurrentRestaurants(a));
               }
               
               return (
@@ -2845,8 +2897,7 @@ function App() {
             let assetsToShow = assets;
             if (user?.role !== 'admin' && restaurants.length > 0) {
               // Не-адмін бачить активи лише дозволених ресторанів (може бути декілька)
-              const allowedRestaurantNames = new Set((restaurants || []).map((r) => String(r?.name || "")));
-              assetsToShow = assets.filter((a) => allowedRestaurantNames.has(String(a?.locationName || "")));
+              assetsToShow = assets.filter((a) => isAssetVisibleForCurrentRestaurants(a));
             }
             
             return (
