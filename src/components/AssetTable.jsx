@@ -24,6 +24,20 @@ const decisionColors = {
 
 const columnHelper = createColumnHelper();
 
+const readAssetField = (asset, key) => {
+  if (!asset || typeof asset !== "object") return "";
+
+  if (key === "invNumber") {
+    return asset.invNumber ?? asset.inv_number ?? "";
+  }
+
+  if (key === "invNumber1C") {
+    return asset.invNumber1C ?? asset.inv_number_1c ?? "";
+  }
+
+  return asset[key] ?? "";
+};
+
 const ALL_FIELD_DEFS = [
   { key: "invNumber", header: "Інв. номер" },
   { key: "invNumber1C", header: "Інв. номер 1С" },
@@ -79,8 +93,6 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     pageSize: mobileCardMode ? 50 : 100,
   });
 
-  const shouldRenderInlineQr = data.length <= 120;
-
   useEffect(() => {
     setPagination((prev) => ({ ...prev, pageIndex: 0 }));
   }, [filters, deferredSearchQuery, data.length]);
@@ -98,11 +110,12 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
       <button
         type="button"
         onClick={async () => {
+          const normalizedInvNumber = String(readAssetField(asset, "invNumber") || "").trim();
           try {
             await printAssetQrLabel({
-              invNumber: asset.invNumber,
+              invNumber: normalizedInvNumber,
               name: asset.name,
-              qrValue: asset.qrCode || asset.invNumber,
+              qrValue: asset.qrCode || normalizedInvNumber,
             });
           } catch (err) {
             alert(err.message || "Не вдалося надрукувати QR код");
@@ -155,18 +168,20 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         cell: (info) => renderActions(info.row.original),
       });
     }
-    return columnHelper.accessor(def.key, {
+    return columnHelper.accessor((row) => readAssetField(row, def.key), {
+      id: def.key,
       header: def.header,
       cell: (info) => {
         if (def.key === "invNumber") {
+          const invNumberValue = String(info.getValue() || "").trim();
           return (
             <div className="flex items-center gap-2">
-              {shouldRenderInlineQr && (
+              {invNumberValue && (
                 <div className="bg-white p-1 rounded border border-slate-200">
-                  {QRCode && <QRCode value={info.getValue() || ''} size={32} level="L" />}
+                  {QRCode && <QRCode value={invNumberValue} size={32} level="L" />}
                 </div>
               )}
-              <div className="font-semibold text-slate-800">{info.getValue()}</div>
+              <div className="font-semibold text-slate-800">{invNumberValue || "-"}</div>
             </div>
           );
         }
@@ -182,12 +197,12 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         return <span className="text-sm">{info.getValue() ?? ""}</span>;
       },
     });
-  }), [renderActions, shouldRenderInlineQr]);
+  }), [renderActions]);
   const searchableData = useMemo(() => {
     return data.map((item) => {
       const searchPool = [
-        item.invNumber,
-        item.invNumber1C,
+        readAssetField(item, "invNumber"),
+        readAssetField(item, "invNumber1C"),
         item.name,
         item.category,
         item.subCategory,
