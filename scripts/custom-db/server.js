@@ -355,6 +355,31 @@ const ensureGenericTableMySql = async (conn, collectionName) => {
   return tableName;
 };
 
+const tableExistsMySql = async (conn, tableName) => {
+  const [rows] = await conn.execute(
+    `SELECT 1 AS ok FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1`,
+    [tableName]
+  );
+  return rows.length > 0;
+};
+
+const resolveCollectionTableMySql = async (conn, collectionName, { preferFlat = true } = {}) => {
+  const baseTable = tableNameForCollection(collectionName);
+  const flatTable = `${baseTable}_flat`;
+
+  if (preferFlat && (await tableExistsMySql(conn, flatTable))) {
+    return flatTable;
+  }
+
+  if (await tableExistsMySql(conn, baseTable)) {
+    return baseTable;
+  }
+
+  // fallback: create base table for backward compatibility
+  await ensureGenericTableMySql(conn, collectionName);
+  return baseTable;
+};
+
 const ensureGenericTablePostgres = async (client, collectionName) => {
   const tableName = tableNameForCollection(collectionName);
   await client.query(`
@@ -380,7 +405,7 @@ const getCollectionItemsData = async (collectionName, dbConfig) => {
     const mysql = await import("mysql2/promise");
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
-      const tableName = await ensureGenericTableMySql(conn, collection);
+      const tableName = await resolveCollectionTableMySql(conn, collection);
       const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\``);
       return sortByPayloadTimestampsDesc(
         rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }))
@@ -424,7 +449,7 @@ const getCollectionItemData = async (collectionName, id, dbConfig) => {
     const mysql = await import("mysql2/promise");
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
-      const tableName = await ensureGenericTableMySql(conn, collection);
+      const tableName = await resolveCollectionTableMySql(conn, collection);
       const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\` WHERE id = ? LIMIT 1`, [itemId]);
       if (!rows.length) return null;
       return { id: rows[0].id, ...parsePayloadField(rows[0].payload) };
@@ -472,7 +497,7 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
     const mysql = await import("mysql2/promise");
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
-      const tableName = await ensureGenericTableMySql(conn, collection);
+      const tableName = await resolveCollectionTableMySql(conn, collection);
       await conn.execute(
         `INSERT INTO \`${tableName}\` (id, payload) VALUES (?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP`,
         [nextId, JSON.stringify(normalized)]
@@ -538,7 +563,7 @@ const deleteCollectionItemData = async (collectionName, id, dbConfig) => {
     const mysql = await import("mysql2/promise");
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
-      const tableName = await ensureGenericTableMySql(conn, collection);
+      const tableName = await resolveCollectionTableMySql(conn, collection);
       await conn.execute(`DELETE FROM \`${tableName}\` WHERE id = ?`, [itemId]);
       return;
     } finally {
@@ -564,17 +589,6 @@ const deleteCollectionItemData = async (collectionName, id, dbConfig) => {
 
 const randomId = () =>
   `asset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-const ensureAssetsTableMySql = async (conn) => {
-  await conn.execute(`
-    CREATE TABLE IF NOT EXISTS lucia_assets (
-      id VARCHAR(255) PRIMARY KEY,
-      payload JSON NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    )
-  `);
-};
 
 const ensureAssetsTablePostgres = async (client) => {
   await client.query(`
@@ -618,15 +632,7 @@ const getAssetsData = async (dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
-      await ensureAssetsTableMySql(conn);
-      const [rows] = await conn.execute("SELECT id, payload FROM lucia_assets ORDER BY id ASC");
-      return rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }));
-    } finally {
-      await conn.end();
-    }
+    return getCollectionItemsData("assets", dbConfig);
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -662,22 +668,7 @@ const createAssetData = async (payload, dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
-      await ensureAssetsTableMySql(conn);
-      await conn.execute(
-        `
-          INSERT INTO lucia_assets (id, payload)
-          VALUES (?, ?)
-          ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP
-        `,
-        [nextId, JSON.stringify(normalized)]
-      );
-      return nextId;
-    } finally {
-      await conn.end();
-    }
+    return createCollectionItemData("assets", { ...normalized, id: nextId }, dbConfig);
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -726,28 +717,8 @@ const updateAssetData = async (id, payload, dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
-      await ensureAssetsTableMySql(conn);
-      const [rows] = await conn.execute("SELECT payload FROM lucia_assets WHERE id = ? LIMIT 1", [
-        assetId,
-      ]);
-      if (!rows.length) throw new Error("Asset not found");
-      const prev = parsePayloadField(rows[0].payload);
-      const merged = {
-        ...prev,
-        ...normalizeAssetPayload(payload),
-        updatedAt: new Date().toISOString(),
-      };
-      await conn.execute("UPDATE lucia_assets SET payload = ? WHERE id = ?", [
-        JSON.stringify(merged),
-        assetId,
-      ]);
-      return;
-    } finally {
-      await conn.end();
-    }
+    await updateCollectionItemData("assets", assetId, normalizeAssetPayload(payload), dbConfig);
+    return;
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -793,15 +764,8 @@ const deleteAssetData = async (id, dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
-      await ensureAssetsTableMySql(conn);
-      await conn.execute("DELETE FROM lucia_assets WHERE id = ?", [assetId]);
-      return;
-    } finally {
-      await conn.end();
-    }
+    await deleteCollectionItemData("assets", assetId, dbConfig);
+    return;
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -818,19 +782,6 @@ const deleteAssetData = async (id, dbConfig) => {
   }
 
   throw new Error(`Unsupported engine for assets: ${dbConfig.dbEngine}`);
-};
-
-const ensureServiceRequestsTableMySql = async (conn) => {
-  const tableName = tableNameForCollection("serviceRequests");
-  await conn.execute(`
-    CREATE TABLE IF NOT EXISTS \`${tableName}\` (
-      id VARCHAR(255) PRIMARY KEY,
-      payload JSON NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    )
-  `);
-  return tableName;
 };
 
 const ensureServiceRequestsTablePostgres = async (client) => {
@@ -862,17 +813,7 @@ const getServiceRequestsData = async (dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
-      const tableName = await ensureServiceRequestsTableMySql(conn);
-      const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\``);
-      return sortByPayloadTimestampsDesc(
-        rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }))
-      );
-    } finally {
-      await conn.end();
-    }
+    return getCollectionItemsData("serviceRequests", dbConfig);
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -911,22 +852,7 @@ const createServiceRequestData = async (payload, dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
-      const tableName = await ensureServiceRequestsTableMySql(conn);
-      await conn.execute(
-        `
-          INSERT INTO \`${tableName}\` (id, payload)
-          VALUES (?, ?)
-          ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP
-        `,
-        [nextId, JSON.stringify(normalized)]
-      );
-      return nextId;
-    } finally {
-      await conn.end();
-    }
+    return createCollectionItemData("serviceRequests", { ...normalized, id: nextId }, dbConfig);
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -975,29 +901,8 @@ const updateServiceRequestData = async (id, payload, dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
-      const tableName = await ensureServiceRequestsTableMySql(conn);
-      const [rows] = await conn.execute(
-        `SELECT payload FROM \`${tableName}\` WHERE id = ? LIMIT 1`,
-        [requestId]
-      );
-      if (!rows.length) throw new Error("Service request not found");
-      const prev = parsePayloadField(rows[0].payload);
-      const merged = {
-        ...prev,
-        ...normalizeServiceRequestPayload(payload),
-        updatedAt: new Date().toISOString(),
-      };
-      await conn.execute(`UPDATE \`${tableName}\` SET payload = ? WHERE id = ?`, [
-        JSON.stringify(merged),
-        requestId,
-      ]);
-      return;
-    } finally {
-      await conn.end();
-    }
+    await updateCollectionItemData("serviceRequests", requestId, normalizeServiceRequestPayload(payload), dbConfig);
+    return;
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -1044,15 +949,8 @@ const deleteServiceRequestData = async (id, dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
-      const tableName = await ensureServiceRequestsTableMySql(conn);
-      await conn.execute(`DELETE FROM \`${tableName}\` WHERE id = ?`, [requestId]);
-      return;
-    } finally {
-      await conn.end();
-    }
+    await deleteCollectionItemData("serviceRequests", requestId, dbConfig);
+    return;
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -1253,182 +1151,202 @@ const handleDbTest = async (req, res) => {
   }
 };
 
-const ensureNormalizedTablesMySql = async (conn) => {
-  await conn.execute(`
-    CREATE TABLE IF NOT EXISTS lucia_assets_flat (
-      id VARCHAR(255) PRIMARY KEY,
-      inv_number VARCHAR(128) NULL,
-      asset_name VARCHAR(512) NULL,
-      business_unit VARCHAR(255) NULL,
-      location_name VARCHAR(255) NULL,
-      resp_center VARCHAR(255) NULL,
-      status VARCHAR(128) NULL,
-      asset_condition VARCHAR(128) NULL,
-      decision VARCHAR(128) NULL,
-      initial_cost DECIMAL(15,2) NULL,
-      residual_value DECIMAL(15,2) NULL,
-      market_value_new DECIMAL(15,2) NULL,
-      market_value_used DECIMAL(15,2) NULL,
-      audit_date DATE NULL,
-      created_at_raw VARCHAR(64) NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      KEY idx_assets_flat_location (location_name),
-      KEY idx_assets_flat_status (status),
-      KEY idx_assets_flat_business_unit (business_unit),
-      KEY idx_assets_flat_inv_number (inv_number)
-    )
-  `);
-
-  await conn.execute(`
-    CREATE TABLE IF NOT EXISTS lucia_restaurants_flat (
-      id VARCHAR(255) PRIMARY KEY,
-      reg_number VARCHAR(128) NULL,
-      restaurant_name VARCHAR(255) NULL,
-      business_unit VARCHAR(255) NULL,
-      country VARCHAR(128) NULL,
-      region VARCHAR(128) NULL,
-      city VARCHAR(128) NULL,
-      street VARCHAR(255) NULL,
-      address VARCHAR(512) NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      KEY idx_restaurants_flat_name (restaurant_name),
-      KEY idx_restaurants_flat_reg (reg_number)
-    )
-  `);
-
-  await conn.execute(`
-    CREATE TABLE IF NOT EXISTS lucia_users_flat (
-      id VARCHAR(255) PRIMARY KEY,
-      email VARCHAR(255) NULL,
-      display_name VARCHAR(255) NULL,
-      role VARCHAR(64) NULL,
-      restaurant_id VARCHAR(255) NULL,
-      position_name VARCHAR(255) NULL,
-      work_role VARCHAR(255) NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      KEY idx_users_flat_email (email),
-      KEY idx_users_flat_role (role),
-      KEY idx_users_flat_restaurant (restaurant_id)
-    )
-  `);
-
-  await conn.execute(`
-    CREATE TABLE IF NOT EXISTS lucia_service_requests_flat (
-      id VARCHAR(255) PRIMARY KEY,
-      title VARCHAR(512) NULL,
-      status VARCHAR(128) NULL,
-      priority VARCHAR(64) NULL,
-      restaurant_id VARCHAR(255) NULL,
-      restaurant_name VARCHAR(255) NULL,
-      created_by VARCHAR(255) NULL,
-      created_at_raw VARCHAR(64) NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      KEY idx_sr_flat_status (status),
-      KEY idx_sr_flat_restaurant (restaurant_id),
-      KEY idx_sr_flat_priority (priority)
-    )
-  `);
+const quoteIdentMySql = (name) => {
+  if (!/^[a-zA-Z0-9_]+$/.test(String(name || ""))) {
+    throw new Error(`Unsafe SQL identifier: ${name}`);
+  }
+  return `\`${name}\``;
 };
 
-const normalizeCollectionsToMySqlFlat = async (mysqlConfig) => {
+const sanitizeColumnName = (raw) => {
+  const normalized = String(raw || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9_]/g, "_")
+    .toLowerCase()
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!normalized) return "field_value";
+  if (/^[0-9]/.test(normalized)) return `f_${normalized}`;
+  if (normalized === "id" || normalized === "payload" || normalized === "updated_at") {
+    return `f_${normalized}`;
+  }
+  return normalized;
+};
+
+const flattenScalarFields = (input, prefix = "", out = {}) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return out;
+
+  for (const [key, value] of Object.entries(input)) {
+    const nextKey = prefix ? `${prefix}_${key}` : key;
+    if (value === null || value === undefined) {
+      out[sanitizeColumnName(nextKey)] = null;
+      continue;
+    }
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[sanitizeColumnName(nextKey)] = value;
+      continue;
+    }
+    if (value instanceof Date) {
+      out[sanitizeColumnName(nextKey)] = value.toISOString();
+      continue;
+    }
+    if (Array.isArray(value)) {
+      out[sanitizeColumnName(nextKey)] = JSON.stringify(value);
+      continue;
+    }
+    if (typeof value === "object") {
+      // Підтримуємо вкладені об'єкти (рекурсія)
+      flattenScalarFields(value, nextKey, out);
+    }
+  }
+  return out;
+};
+
+const detectValueType = (value) => {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "boolean") return "boolean";
+  if (typeof value === "number") return Number.isInteger(value) ? "integer" : "number";
+  if (typeof value === "string") {
+    const isoDateLike = /^\d{4}-\d{2}-\d{2}(?:[ T].*)?$/.test(value);
+    if (isoDateLike) return "date";
+    return "string";
+  }
+  return "string";
+};
+
+const mergeTypes = (current, next) => {
+  if (!current || current === "null") return next;
+  if (!next || next === "null") return current;
+  if (current === next) return current;
+  if ((current === "integer" && next === "number") || (current === "number" && next === "integer")) {
+    return "number";
+  }
+  if ((current === "date" && next === "string") || (current === "string" && next === "date")) {
+    return "string";
+  }
+  return "string";
+};
+
+const sqlTypeFor = (type) => {
+  if (type === "boolean") return "TINYINT(1) NULL";
+  if (type === "integer") return "BIGINT NULL";
+  if (type === "number") return "DOUBLE NULL";
+  if (type === "date") return "DATETIME NULL";
+  return "TEXT NULL";
+};
+
+const getMySqlColumns = async (conn, tableName) => {
+  const [rows] = await conn.execute(
+    `SELECT COLUMN_NAME AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`,
+    [tableName]
+  );
+  return new Set(rows.map((row) => String(row.column_name || "")));
+};
+
+const listMySqlLuciaCollections = async (conn) => {
+  const [rows] = await conn.execute(
+    `SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name LIKE 'lucia\\_%' ESCAPE '\\'`
+  );
+  return rows
+    .map((row) => String(row.table_name || ""))
+    .filter((name) => name.startsWith("lucia_"))
+    .filter((name) => !name.endsWith("_flat"))
+    .map((name) => name.slice("lucia_".length))
+    .filter((name) => /^[a-zA-Z0-9_]+$/.test(name));
+};
+
+const ensureCollectionFlatTableMySql = async (conn, collectionName) => {
+  const flatTable = `lucia_${collectionName}_flat`;
+  await conn.execute(`
+    CREATE TABLE IF NOT EXISTS ${quoteIdentMySql(flatTable)} (
+      id VARCHAR(255) PRIMARY KEY,
+      payload JSON NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+  return flatTable;
+};
+
+const ensureFlatColumnsMySql = async (conn, flatTable, typeMap) => {
+  const existing = await getMySqlColumns(conn, flatTable);
+  for (const [columnName, mergedType] of Object.entries(typeMap)) {
+    if (!columnName || existing.has(columnName)) continue;
+    await conn.execute(
+      `ALTER TABLE ${quoteIdentMySql(flatTable)} ADD COLUMN ${quoteIdentMySql(columnName)} ${sqlTypeFor(mergedType)}`
+    );
+  }
+};
+
+const normalizeOneCollectionToFlatMySql = async (conn, collectionName) => {
+  const sourceTable = `lucia_${collectionName}`;
+  const flatTable = await ensureCollectionFlatTableMySql(conn, collectionName);
+
+  // Гарантуємо існування джерела як JSON-таблиці колекції
+  await ensureGenericTableMySql(conn, collectionName);
+
+  const [rows] = await conn.execute(`SELECT id, payload FROM ${quoteIdentMySql(sourceTable)}`);
+  const parsedRows = rows.map((row) => ({
+    id: String(row.id || ""),
+    payload: parsePayloadField(row.payload),
+  }));
+
+  const typeMap = {};
+  const flattenedRows = parsedRows.map((row) => {
+    const flat = flattenScalarFields(row.payload);
+    Object.entries(flat).forEach(([col, value]) => {
+      typeMap[col] = mergeTypes(typeMap[col], detectValueType(value));
+    });
+    return { id: row.id, payload: row.payload, flat };
+  });
+
+  await ensureFlatColumnsMySql(conn, flatTable, typeMap);
+
+  await conn.execute(`DELETE FROM ${quoteIdentMySql(flatTable)}`);
+
+  const scalarColumns = Object.keys(typeMap);
+  for (const row of flattenedRows) {
+    if (!row.id) continue;
+    const insertColumns = ["id", "payload", ...scalarColumns];
+    const insertValues = [
+      row.id,
+      JSON.stringify(row.payload || {}),
+      ...scalarColumns.map((col) => {
+        const value = row.flat[col];
+        if (typeof value === "boolean") return value ? 1 : 0;
+        return value ?? null;
+      }),
+    ];
+
+    const placeholders = insertColumns.map(() => "?").join(", ");
+    const updates = ["payload = VALUES(payload)", ...scalarColumns.map((col) => `${quoteIdentMySql(col)} = VALUES(${quoteIdentMySql(col)})`), "updated_at = CURRENT_TIMESTAMP"].join(", ");
+
+    await conn.execute(
+      `INSERT INTO ${quoteIdentMySql(flatTable)} (${insertColumns.map((col) => quoteIdentMySql(col)).join(", ")}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updates}`,
+      insertValues
+    );
+  }
+
+  return {
+    rows: flattenedRows.length,
+    columns: scalarColumns.length,
+    table: flatTable,
+  };
+};
+
+const normalizeCollectionsToMySqlFlat = async (mysqlConfig, collections = []) => {
   const mysql = await import("mysql2/promise");
   const conn = await mysql.default.createConnection(mysqlConfig);
 
   try {
-    await ensureGenericTableMySql(conn, "assets");
-    await ensureGenericTableMySql(conn, "restaurants");
-    await ensureGenericTableMySql(conn, "users");
-    await ensureGenericTableMySql(conn, "serviceRequests");
-    await ensureNormalizedTablesMySql(conn);
+    const targetCollections = Array.isArray(collections) && collections.length > 0
+      ? collections.map((name) => normalizeCollectionName(name))
+      : await listMySqlLuciaCollections(conn);
 
-    await conn.execute("DELETE FROM lucia_assets_flat");
-    await conn.execute(`
-      INSERT INTO lucia_assets_flat (
-        id, inv_number, asset_name, business_unit, location_name, resp_center, status,
-        asset_condition, decision, initial_cost, residual_value, market_value_new,
-        market_value_used, audit_date, created_at_raw
-      )
-      SELECT
-        id,
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.invNumber')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.name')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.businessUnit')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.locationName')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.respCenter')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.status')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.condition')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.decision')),
-        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.initialCost')), '') AS DECIMAL(15,2)),
-        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.residualValue')), '') AS DECIMAL(15,2)),
-        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.marketValueNew')), '') AS DECIMAL(15,2)),
-        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.marketValueUsed')), '') AS DECIMAL(15,2)),
-        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.auditDate')), '') AS DATE),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.created'))
-      FROM lucia_assets
-    `);
-
-    await conn.execute("DELETE FROM lucia_restaurants_flat");
-    await conn.execute(`
-      INSERT INTO lucia_restaurants_flat (
-        id, reg_number, restaurant_name, business_unit, country, region, city, street, address
-      )
-      SELECT
-        id,
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.regNumber')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.name')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.businessUnit')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.country')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.region')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.city')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.street')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.address'))
-      FROM lucia_restaurants
-    `);
-
-    await conn.execute("DELETE FROM lucia_users_flat");
-    await conn.execute(`
-      INSERT INTO lucia_users_flat (
-        id, email, display_name, role, restaurant_id, position_name, work_role
-      )
-      SELECT
-        id,
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.email')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.displayName')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.role')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.restaurant')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.position')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.workRole'))
-      FROM lucia_users
-    `);
-
-    await conn.execute("DELETE FROM lucia_service_requests_flat");
-    await conn.execute(`
-      INSERT INTO lucia_service_requests_flat (
-        id, title, status, priority, restaurant_id, restaurant_name, created_by, created_at_raw
-      )
-      SELECT
-        id,
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.title')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.status')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.priority')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.restaurantId')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.restaurantName')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.createdByName')),
-        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.createdAt'))
-      FROM lucia_serviceRequests
-    `);
-
-    const [assetsCountRows] = await conn.execute("SELECT COUNT(*) AS total FROM lucia_assets_flat");
-    const [restaurantsCountRows] = await conn.execute("SELECT COUNT(*) AS total FROM lucia_restaurants_flat");
-    const [usersCountRows] = await conn.execute("SELECT COUNT(*) AS total FROM lucia_users_flat");
-    const [srCountRows] = await conn.execute("SELECT COUNT(*) AS total FROM lucia_service_requests_flat");
-
-    return {
-      assets: Number(assetsCountRows?.[0]?.total || 0),
-      restaurants: Number(restaurantsCountRows?.[0]?.total || 0),
-      users: Number(usersCountRows?.[0]?.total || 0),
-      serviceRequests: Number(srCountRows?.[0]?.total || 0),
-    };
+    const stats = {};
+    for (const collectionName of targetCollections) {
+      stats[collectionName] = await normalizeOneCollectionToFlatMySql(conn, collectionName);
+    }
+    return stats;
   } finally {
     await conn.end();
   }
@@ -1455,7 +1373,8 @@ const handleMigrationNormalize = async (req, res) => {
   }
 
   try {
-    const stats = await normalizeCollectionsToMySqlFlat(targetDb.mysqlConfig);
+    const collections = Array.isArray(payload?.collections) ? payload.collections : [];
+    const stats = await normalizeCollectionsToMySqlFlat(targetDb.mysqlConfig, collections);
     return sendJson(res, 200, {
       ok: true,
       engine: targetDb.dbEngine,
