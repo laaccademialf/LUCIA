@@ -23,8 +23,33 @@ export const useRestaurants = (enableRealtime = true) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const normalizeRestaurant = (item) => {
+    if (!item || typeof item !== "object") return item;
+
+    const id = String(item.id || item.restaurant_id || "").trim();
+    const regNumber = String(item.regNumber || item.reg_number || "").trim();
+    const name = String(item.name || item.restaurant_name || "").trim();
+
+    return {
+      ...item,
+      id,
+      regNumber,
+      name,
+      businessUnit: String(item.businessUnit || item.business_unit || "").trim(),
+      address: String(item.address || item.full_address || "").trim(),
+      country: String(item.country || "").trim(),
+      region: String(item.region || "").trim(),
+      city: String(item.city || "").trim(),
+      street: String(item.street || "").trim(),
+      postalCode: String(item.postalCode || item.postal_code || "").trim(),
+      notes: String(item.notes || item.note || "").trim(),
+      createdAt: item.createdAt || item.created_at || "",
+      updatedAt: item.updatedAt || item.updated_at || "",
+    };
+  };
+
   const dedupeRestaurants = (items) => {
-    const list = Array.isArray(items) ? items : [];
+    const list = (Array.isArray(items) ? items : []).map(normalizeRestaurant);
     const pickTimestamp = (item) => {
       const updated = Date.parse(String(item?.updatedAt || item?.updated_at || ""));
       const created = Date.parse(String(item?.createdAt || item?.created_at || ""));
