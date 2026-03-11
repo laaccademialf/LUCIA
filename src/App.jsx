@@ -61,7 +61,7 @@ import {
 } from "./utils/excelHelpers";
 
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.0.1";
 const ADMIN_ONLY_NAV_IDS = new Set(["settings-permissions", "menu-admin", "security-audit"]);
 const DEFAULT_FALLBACK_MENU_STRUCTURE = [
   {
