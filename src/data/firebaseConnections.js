@@ -537,7 +537,15 @@ export const normalizeCustomMySqlData = async ({ targetConfig }) => {
     throw new Error("Для нормалізації потрібен валідний API Base URL");
   }
 
-  const endpoint = customApiUrl(target.apiBaseUrl, "/migration/normalize");
+  const migrationPath = String(target.migrationPath || "/migration/import").trim();
+  const normalizeFromMigrationPath = migrationPath.endsWith("/import")
+    ? `${migrationPath.slice(0, -"/import".length)}/normalize`
+    : "/migration/normalize";
+
+  const endpoints = Array.from(new Set([
+    customApiUrl(target.apiBaseUrl, normalizeFromMigrationPath),
+    customApiUrl(target.apiBaseUrl, "/migration/normalize"),
+  ]));
   const payload = {
     target: {
       type: "custom",
@@ -553,15 +561,32 @@ export const normalizeCustomMySqlData = async ({ targetConfig }) => {
     normalizedAt: new Date().toISOString(),
   };
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: customHeaders(target.token),
-    body: JSON.stringify(payload),
-  });
+  let response = null;
+  let endpoint = endpoints[0];
+  let lastError = "";
 
-  if (!response.ok) {
+  for (const candidate of endpoints) {
+    endpoint = candidate;
+    response = await fetch(candidate, {
+      method: "POST",
+      headers: customHeaders(target.token),
+      body: JSON.stringify(payload),
+    });
+
+    if (response.ok) {
+      break;
+    }
+
     const body = await response.text().catch(() => "");
-    throw new Error(`Custom normalization failed (${response.status}): ${body || "no body"}`);
+    lastError = `Custom normalization failed (${response.status}) on ${candidate}: ${body || "no body"}`;
+
+    if (response.status !== 404) {
+      throw new Error(lastError);
+    }
+  }
+
+  if (!response || !response.ok) {
+    throw new Error(lastError || "Custom normalization failed: endpoint not found");
   }
 
   const serverResponse = await response.json().catch(() => null);
