@@ -285,9 +285,12 @@ const normalizeInventorySession = (item) => {
   const startedForRestaurantId =
     item.startedForRestaurantId || item.started_for_restaurant_id || item.restaurantId || item.restaurant_id || "";
 
+  const hasEndedAt = Boolean(String(endedAt || "").trim());
+  const activeFlag = normalizeSessionActive(item.isActive ?? item.is_active);
+
   return {
     ...item,
-    isActive: normalizeSessionActive(item.isActive ?? item.is_active),
+    isActive: hasEndedAt ? false : activeFlag,
     scopeId,
     startedAt,
     endedAt,
