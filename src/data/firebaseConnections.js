@@ -530,7 +530,7 @@ export const migrateFirebaseToCustomData = async ({ sourceConfig, targetConfig, 
   };
 };
 
-export const normalizeCustomMySqlData = async ({ targetConfig }) => {
+export const normalizeCustomMySqlData = async ({ targetConfig, collections = [] }) => {
   const target = normalizeCustomConfig(targetConfig);
 
   if (!isValidCustomConfig(target)) {
@@ -558,6 +558,7 @@ export const normalizeCustomMySqlData = async ({ targetConfig }) => {
       dbName: target.dbName,
       postgresUrl: target.postgresUrl,
     },
+    collections: Array.isArray(collections) ? collections.filter(Boolean) : [],
     normalizedAt: new Date().toISOString(),
   };
 

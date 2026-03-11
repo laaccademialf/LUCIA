@@ -61,6 +61,7 @@ import {
 } from "./utils/excelHelpers";
 
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const APP_VERSION = "1.0.0";
 const ADMIN_ONLY_NAV_IDS = new Set(["settings-permissions", "menu-admin", "security-audit"]);
 const DEFAULT_FALLBACK_MENU_STRUCTURE = [
   {
@@ -2958,6 +2959,11 @@ function App() {
           {sidebarHeader}
           {(isMobile || !sidebarCollapsed) && SidebarNav()}
         </div>
+        {!sidebarCollapsed && (
+          <div style={{padding: "0 1rem 0.5rem 1rem", fontSize: "0.75rem", color: "#94a3b8"}}>
+            Версія {APP_VERSION}
+          </div>
+        )}
         <DeployInfo />
       </aside>
     </>

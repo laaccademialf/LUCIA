@@ -317,7 +317,10 @@ export default function DatabaseConnectionsManager() {
 
     try {
       const payload = buildDraftConnectionPayload();
-      const result = await normalizeCustomMySqlData({ targetConfig: payload.config });
+      const result = await normalizeCustomMySqlData({
+        targetConfig: payload.config,
+        collections: selectedCollections,
+      });
       const stats = result?.serverResponse?.stats || {};
       const statText = Object.entries(stats)
         .map(([name, count]) => `${name}: ${count}`)
@@ -484,7 +487,10 @@ export default function DatabaseConnectionsManager() {
     setBusy(true);
     setStatus(`Запускаємо JSON to SQL для "${connection.name}"...`);
     try {
-      const result = await normalizeCustomMySqlData({ targetConfig: connection.config || {} });
+      const result = await normalizeCustomMySqlData({
+        targetConfig: connection.config || {},
+        collections: selectedCollections.length > 0 ? selectedCollections : DEFAULT_COLLECTIONS,
+      });
       const stats = result?.serverResponse?.stats || {};
       const statText = Object.entries(stats)
         .map(([name, count]) => `${name}: ${count}`)
