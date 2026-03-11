@@ -522,19 +522,33 @@ function App() {
       console.log("- firebaseRestaurants:", firebaseRestaurants);
       
       const normalizeText = (value) => String(value || "").trim().toLowerCase();
-      const userRestaurantKey = String(
-        user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name || ""
-      ).trim();
+      const profileRestaurantCandidates = Array.from(
+        new Set(
+          [
+            user?.restaurant,
+            user?.restaurantId,
+            user?.restaurant_id,
+            user?.restaurantName,
+            user?.restaurant_name,
+          ]
+            .map((value) => String(value || "").trim())
+            .filter(Boolean)
+        )
+      );
+      const userRestaurantKey = String(profileRestaurantCandidates[0] || "").trim();
       const isRestaurantMatchedByProfile = (restaurant) => {
         const candidateId = String(restaurant?.id || "").trim();
         const candidateName = normalizeText(restaurant?.name);
         const candidateRegNumber = String(restaurant?.regNumber || restaurant?.reg_number || "").trim();
-        const target = normalizeText(userRestaurantKey);
 
-        if (!target) return false;
-        if (candidateId && candidateId === userRestaurantKey) return true;
-        if (candidateRegNumber && candidateRegNumber === userRestaurantKey) return true;
-        if (candidateName && candidateName === target) return true;
+        if (profileRestaurantCandidates.length === 0) return false;
+        for (const rawTarget of profileRestaurantCandidates) {
+          const target = normalizeText(rawTarget);
+          if (!target) continue;
+          if (candidateId && candidateId === rawTarget) return true;
+          if (candidateRegNumber && candidateRegNumber === rawTarget) return true;
+          if (candidateName && candidateName === target) return true;
+        }
         return false;
       };
 
@@ -544,23 +558,29 @@ function App() {
         // Conservative fallback: if exact match failed, allow a fuzzy name match
         // only when there is exactly one candidate.
         if (matched.length === 0) {
-          const target = normalizeText(userRestaurantKey);
-          const fuzzyCandidates = firebaseRestaurants.filter((r) => {
-            const name = normalizeText(r?.name);
-            return Boolean(name) && Boolean(target) && (name.includes(target) || target.includes(name));
-          });
-          if (fuzzyCandidates.length === 1) {
-            matched = fuzzyCandidates;
+          for (const rawTarget of profileRestaurantCandidates) {
+            const target = normalizeText(rawTarget);
+            const fuzzyCandidates = firebaseRestaurants.filter((r) => {
+              const name = normalizeText(r?.name);
+              return Boolean(name) && Boolean(target) && (name.includes(target) || target.includes(name));
+            });
+            if (fuzzyCandidates.length === 1) {
+              matched = fuzzyCandidates;
+              break;
+            }
           }
         }
 
-        if (matched.length === 0 && userRestaurantKey) {
+        if (matched.length === 0 && profileRestaurantCandidates.length > 0) {
+          const preferredProfileLabel = String(
+            user?.restaurantName || user?.restaurant_name || userRestaurantKey
+          ).trim();
           // Last fallback for migrated profiles: keep profile restaurant value visible/usable
           // even if it is not found in restaurant dictionary by id/name/regNumber.
           matched = [
             {
-              id: userRestaurantKey,
-              name: userRestaurantKey,
+              id: userRestaurantKey || preferredProfileLabel,
+              name: preferredProfileLabel || userRestaurantKey,
               regNumber: "",
             },
           ];
@@ -581,7 +601,7 @@ function App() {
         // Якщо у ролі явно налаштовано доступи, але список порожній,
         // використовуємо ресторан з профілю користувача як fallback.
         setRestaurants(matchRestaurantsByProfile());
-      } else if (user?.restaurant) {
+      } else if (profileRestaurantCandidates.length > 0) {
         // Якщо у користувача є один ресторан
         setRestaurants(matchRestaurantsByProfile());
       } else {
@@ -3264,6 +3284,9 @@ function App() {
                           user?.restaurant_name ||
                           ""
                         ).trim();
+                        const profileDisplayName = String(
+                          user?.restaurantName || user?.restaurant_name || profileKey
+                        ).trim();
 
                         const effectiveKey =
                           roleRestaurantIds.length === 1
@@ -3283,7 +3306,7 @@ function App() {
 
                         if (matched?.name) return matched.name;
                         if (restaurants.length === 1) return String(restaurants[0]?.name || "").trim() || "Невідомий ресторан";
-                        if (profileKey) return profileKey;
+                        if (profileDisplayName) return profileDisplayName;
                         return "Невідомий ресторан";
                       })()}
                     </span>
