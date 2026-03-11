@@ -34,6 +34,8 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     { key: "category", header: "Категорія" },
     { key: "subCategory", header: "Підкатегорія" },
     { key: "type", header: "Тип" },
+    { key: "inventoryQuantity", header: "Первинна інв. к-сть" },
+    { key: "nextInventoryQuantity", header: "Наступна інв. к-сть" },
     { key: "serialNumber", header: "Серійний номер" },
     { key: "brand", header: "Бренд" },
     { key: "businessUnit", header: "Локація" },
@@ -55,6 +57,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     { key: "initialCost", header: "Початкова вартість" },
     { key: "marketValueNew", header: "Ринкова вартість (нова)" },
     { key: "marketValueUsed", header: "Ринкова вартість (бу)" },
+    { key: "residualValuePerUnit", header: "Залишкова за 1 шт" },
     { key: "residualValue", header: "Залишкова вартість" },
     { key: "decision", header: "Рішення" },
     { key: "reason", header: "Причина" },
@@ -92,6 +95,8 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         item.category,
         item.subCategory,
         item.type,
+        item.inventoryQuantity,
+        item.nextInventoryQuantity,
         item.serialNumber,
         item.brand,
         item.businessUnit,
@@ -101,6 +106,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         item.respPerson,
         item.status,
         item.condition,
+        item.residualValuePerUnit,
         item.decision,
         item.comment,
       ]
@@ -141,7 +147,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         if (def.key === "decision") {
           return <span className={clsx("badge whitespace-nowrap text-xs", decisionColors[info.getValue()] || "bg-slate-100 text-slate-700")}>{info.getValue()}</span>;
         }
-        if (def.key === "initialCost" || def.key === "marketValueNew" || def.key === "marketValueUsed" || def.key === "residualValue") {
+        if (def.key === "initialCost" || def.key === "marketValueNew" || def.key === "marketValueUsed" || def.key === "residualValuePerUnit" || def.key === "residualValue") {
           return info.getValue() ? info.getValue().toLocaleString("uk-UA") + " ₴" : "";
         }
         return <span className="text-sm">{info.getValue() ?? ""}</span>;

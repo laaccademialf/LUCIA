@@ -17,7 +17,7 @@ const tabs = [
   { id: "status", label: "Статус", requiredFields: [] },
   { id: "dates", label: "Дати", requiredFields: [] },
   { id: "depreciation", label: "Знос", requiredFields: [] },
-  { id: "value", label: "Вартість", requiredFields: ["residualValue"] },
+  { id: "value", label: "Вартість", requiredFields: ["residualValuePerUnit"] },
   { id: "decision", label: "Рішення", requiredFields: ["decision"] },
   { id: "audit", label: "Аудит", requiredFields: [] },
 ];
@@ -29,6 +29,8 @@ const defaultAsset = {
   category: "",
   subCategory: "",
   type: "ОС",
+  inventoryQuantity: "",
+  nextInventoryQuantity: "",
   serialNumber: "",
   brand: "",
   photos: [],
@@ -51,6 +53,7 @@ const defaultAsset = {
   initialCost: "",
   marketValueNew: "",
   marketValueUsed: "",
+  residualValuePerUnit: "",
   residualValue: "",
   decision: "Залишити",
   reason: "Знос",
@@ -123,6 +126,9 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   const selectedRelevance = watch("relevance");
   const selectedDecision = watch("decision");
   const selectedReason = watch("reason");
+  const inventoryQuantityValue = watch("inventoryQuantity");
+  const residualValuePerUnitValue = watch("residualValuePerUnit");
+  const nextInventoryQuantityValue = watch("nextInventoryQuantity");
   const previousCategoryRef = useRef("");
   const subcategoryGuardInitializedRef = useRef(false);
 
@@ -223,7 +229,25 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
 
   useEffect(() => {
     if (selectedAsset) {
-      reset({ ...defaultAsset, ...selectedAsset });
+      const normalizedInventoryQty = Number(selectedAsset?.inventoryQuantity);
+      const normalizedResidualTotal = Number(selectedAsset?.residualValue);
+      const derivedResidualPerUnit =
+        Number.isFinite(normalizedInventoryQty) &&
+        normalizedInventoryQty > 0 &&
+        Number.isFinite(normalizedResidualTotal)
+          ? normalizedResidualTotal / normalizedInventoryQty
+          : "";
+
+      reset({
+        ...defaultAsset,
+        ...selectedAsset,
+        residualValuePerUnit:
+          selectedAsset?.residualValuePerUnit !== undefined &&
+          selectedAsset?.residualValuePerUnit !== null &&
+          String(selectedAsset?.residualValuePerUnit).trim() !== ""
+            ? selectedAsset.residualValuePerUnit
+            : derivedResidualPerUnit,
+      });
       setPhotos(normalizePhotosForState(selectedAsset.photos));
     } else {
       // При створенні нового активу підставляємо ресторан користувача
@@ -302,6 +326,49 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     printedQrFingerprint === currentQrFingerprint
   );
   const requiresQrPrintBeforeSave = isNameChangedInEdit;
+  const hasSavedPrimaryInventoryQuantity =
+    isEdit &&
+    selectedAsset?.inventoryQuantity !== undefined &&
+    selectedAsset?.inventoryQuantity !== null &&
+    String(selectedAsset?.inventoryQuantity).trim() !== "";
+
+  const inventoryDifference = useMemo(() => {
+    if (!hasSavedPrimaryInventoryQuantity) return "";
+    const baseQty = Number(selectedAsset?.inventoryQuantity);
+    const nextQtyRaw = String(nextInventoryQuantityValue ?? "").trim();
+    if (!nextQtyRaw) return "";
+    const nextQty = Number(nextQtyRaw);
+    if (!Number.isFinite(baseQty) || !Number.isFinite(nextQty)) return "";
+    return nextQty - baseQty;
+  }, [hasSavedPrimaryInventoryQuantity, nextInventoryQuantityValue, selectedAsset?.inventoryQuantity]);
+
+  const effectiveQuantityForValue = useMemo(() => {
+    if (hasSavedPrimaryInventoryQuantity) {
+      const nextRaw = String(nextInventoryQuantityValue ?? "").trim();
+      if (nextRaw) {
+        const next = Number(nextRaw);
+        if (Number.isFinite(next)) return next;
+      }
+      const current = Number(selectedAsset?.inventoryQuantity);
+      return Number.isFinite(current) ? current : 0;
+    }
+
+    const primaryRaw = String(inventoryQuantityValue ?? "").trim();
+    if (!primaryRaw) return 0;
+    const primary = Number(primaryRaw);
+    return Number.isFinite(primary) ? primary : 0;
+  }, [hasSavedPrimaryInventoryQuantity, nextInventoryQuantityValue, selectedAsset?.inventoryQuantity, inventoryQuantityValue]);
+
+  const residualValueTotalComputed = useMemo(() => {
+    const perUnit = Number(String(residualValuePerUnitValue ?? "").trim());
+    if (!Number.isFinite(perUnit) || perUnit < 0) return 0;
+    if (!Number.isFinite(effectiveQuantityForValue) || effectiveQuantityForValue <= 0) return 0;
+    return Math.round(perUnit * effectiveQuantityForValue * 100) / 100;
+  }, [residualValuePerUnitValue, effectiveQuantityForValue]);
+
+  useEffect(() => {
+    setValue("residualValue", residualValueTotalComputed);
+  }, [residualValueTotalComputed, setValue]);
 
   useEffect(() => {
     setPrintedQrFingerprint("");
@@ -485,6 +552,13 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       return Number.isFinite(parsed) ? parsed : fallback;
     };
 
+    const toOptionalNumber = (input) => {
+      const normalized = String(input ?? "").trim();
+      if (!normalized) return null;
+      const parsed = Number(normalized);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+
     const sanitizePhotoUrls = (items) => {
       const MAX_PHOTOS = 5;
       const MAX_SINGLE_PHOTO_CHARS = 220000;
@@ -593,6 +667,21 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       return `${dd}.${mm}.${yyyy}`;
     };
 
+    const currentPrimaryQuantity = hasSavedPrimaryInventoryQuantity
+      ? toOptionalNumber(selectedAsset?.inventoryQuantity)
+      : toOptionalNumber(values.inventoryQuantity);
+    const nextInventoryQuantity = toOptionalNumber(values.nextInventoryQuantity);
+    const effectiveInventoryQuantity =
+      hasSavedPrimaryInventoryQuantity && nextInventoryQuantity !== null
+        ? nextInventoryQuantity
+        : currentPrimaryQuantity;
+
+    const residualValuePerUnit = toSafeNumber(values.residualValuePerUnit, 0);
+    const residualValueTotal =
+      Number.isFinite(residualValuePerUnit) && Number.isFinite(effectiveInventoryQuantity) && effectiveInventoryQuantity > 0
+        ? Math.round(residualValuePerUnit * effectiveInventoryQuantity * 100) / 100
+        : 0;
+
     const payload = {
       id: selectedAsset?.id,
       invNumber: safeString(values.invNumber).trim(),
@@ -601,6 +690,8 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       category: safeString(values.category).trim(),
       subCategory: safeString(values.subCategory).trim(),
       type: safeString(values.type).trim(),
+      inventoryQuantity: effectiveInventoryQuantity ?? "",
+      nextInventoryQuantity: "",
       serialNumber: safeString(values.serialNumber).trim(),
       brand: safeString(values.brand).trim(),
       photos: resolvedPhotoUrls,
@@ -625,7 +716,8 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       initialCost: toSafeNumber(values.initialCost, 0),
       marketValueNew: toSafeNumber(values.marketValueNew, 0),
       marketValueUsed: toSafeNumber(values.marketValueUsed, 0),
-      residualValue: toSafeNumber(values.residualValue, 0),
+      residualValuePerUnit,
+      residualValue: residualValueTotal,
       decision: safeString(values.decision).trim(),
       reason: safeString(values.reason).trim(),
       reasonComment: safeString(values.reasonComment).trim(),
@@ -757,6 +849,41 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                 {...register("type")}
                 options={ensureCurrentOption(accountingTypes.length > 0 ? accountingTypes : ["ОС", "МШП"], selectedType)}
               />
+              <Input
+                label="Первинна інвентаризаційна кількість"
+                type="number"
+                min="0"
+                step="1"
+                {...register("inventoryQuantity")}
+                disabled={hasSavedPrimaryInventoryQuantity}
+              />
+              <div className="flex min-w-0 items-center gap-2.5 text-sm">
+                <span className="w-40 lg:w-44 shrink-0 text-[13px] leading-tight font-semibold text-slate-800">
+                  Інвентаризаційна кількість (наступна)
+                </span>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    className={clsx(
+                      baseInput,
+                      "min-w-0 max-w-full w-full",
+                      !hasSavedPrimaryInventoryQuantity && "bg-gray-100 text-gray-400 cursor-not-allowed border-gray-200"
+                    )}
+                    disabled={!hasSavedPrimaryInventoryQuantity}
+                    {...register("nextInventoryQuantity")}
+                  />
+                  {hasSavedPrimaryInventoryQuantity && inventoryDifference !== "" && (
+                    <div className={clsx("text-xs font-semibold", inventoryDifference > 0 ? "text-emerald-700" : inventoryDifference < 0 ? "text-rose-700" : "text-slate-600")}>
+                      Різниця: {inventoryDifference > 0 ? "+" : ""}{inventoryDifference}
+                    </div>
+                  )}
+                  {!hasSavedPrimaryInventoryQuantity && (
+                    <div className="text-xs text-slate-500">Доступно після збереження первинної кількості.</div>
+                  )}
+                </div>
+              </div>
               <Input label="Серійний номер" {...register("serialNumber")}/>
               <Input label="Виробник / бренд" {...register("brand")}/>
             </FieldGrid>
@@ -1007,17 +1134,33 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
               )}
             />
             <Controller
-              name="residualValue"
+              name="residualValuePerUnit"
               control={control}
               rules={{ required: true }}
               render={({ field }) => (
                 <CurrencyInput
-                  label={<>Управлінська залишкова вартість {requiredMark}</>}
+                  label={<>Управлінська залишкова вартість за 1 шт {requiredMark}</>}
                   {...field}
-                  error={errors.residualValue}
+                  error={errors.residualValuePerUnit}
                 />
               )}
             />
+            <Controller
+              name="residualValue"
+              control={control}
+              render={({ field }) => (
+                <CurrencyInput
+                  label={<>Сума по актуальній кількості (авто)</>}
+                  {...field}
+                  value={residualValueTotalComputed}
+                  disabled
+                  readOnly
+                />
+              )}
+            />
+            <div className="md:col-span-2 lg:col-span-3 text-xs text-slate-600">
+              Актуальна кількість для розрахунку: <span className="font-semibold">{effectiveQuantityForValue}</span>
+            </div>
           </FieldGrid>
         )}
 
