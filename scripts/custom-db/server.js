@@ -593,6 +593,8 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
       const tableName = await resolveCollectionTableMySql(conn, collection);
       const existingColumns = await getMySqlColumns(conn, tableName);
       const hasPayloadColumn = existingColumns.has("payload");
+      const isFlatTable = String(tableName || "").endsWith("_flat");
+      const shouldPersistPayload = hasPayloadColumn && !isFlatTable;
 
       // Compatibility mode: some flat tables were created without payload column.
       const flat = flattenScalarFields(normalized);
@@ -606,10 +608,10 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
       const columnTypes = await getMySqlColumnTypes(conn, tableName);
       const scalarColumns = Object.keys(flat).filter((col) => columnsAfterEnsure.has(col));
 
-      const insertColumns = ["id", ...(hasPayloadColumn ? ["payload"] : []), ...scalarColumns];
+      const insertColumns = ["id", ...(shouldPersistPayload ? ["payload"] : []), ...scalarColumns];
       const insertValues = [
         nextId,
-        ...(hasPayloadColumn ? [JSON.stringify(normalized)] : []),
+        ...(shouldPersistPayload ? [JSON.stringify(normalized)] : []),
         ...scalarColumns.map((col) => {
           const value = flat[col];
           return normalizeValueForMySqlColumnType(value, columnTypes[col], typeMap[col]);
@@ -618,7 +620,7 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
 
       const placeholders = insertColumns.map(() => "?").join(", ");
       const updates = [
-        ...(hasPayloadColumn ? ["payload = VALUES(payload)"] : []),
+        ...(shouldPersistPayload ? ["payload = VALUES(payload)"] : []),
         ...scalarColumns.map((col) => `${quoteIdentMySql(col)} = VALUES(${quoteIdentMySql(col)})`),
         ...(columnsAfterEnsure.has("updated_at") ? ["updated_at = CURRENT_TIMESTAMP"] : []),
       ].join(", ");
