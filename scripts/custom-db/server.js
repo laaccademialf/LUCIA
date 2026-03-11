@@ -413,19 +413,49 @@ const mapMySqlRowToDocument = (row) => {
   const safeRow = row && typeof row === "object" ? row : {};
   const normalizedId = String(safeRow.id || "");
 
+  const normalizeScalarValue = (value) => {
+    if (typeof value !== "string") return value;
+    const text = value.trim();
+    if (!text) return value;
+    if (!(text.startsWith("{") || text.startsWith("["))) return value;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return value;
+    }
+  };
+
   if (Object.prototype.hasOwnProperty.call(safeRow, "payload")) {
     const parsed = parsePayloadField(safeRow.payload);
     const scalar = Object.entries(safeRow).reduce((acc, [key, value]) => {
       if (key === "id" || key === "payload") return acc;
       if (value === undefined) return acc;
-      // In flat-first mode scalar columns are source of truth.
-      acc[key] = value;
+
+      const normalizedValue = normalizeScalarValue(value);
+      const parsedValue = parsed[key];
+
+      // Keep source-of-truth from scalar columns, but avoid degrading arrays/objects
+      // from payload when scalar value is an empty string.
+      if (
+        normalizedValue === "" &&
+        parsedValue !== null &&
+        typeof parsedValue === "object"
+      ) {
+        acc[key] = parsedValue;
+        return acc;
+      }
+
+      acc[key] = normalizedValue;
       return acc;
     }, {});
     return { id: normalizedId, ...parsed, ...scalar };
   }
 
-  return { ...safeRow, id: normalizedId };
+  const normalizedRow = Object.entries(safeRow).reduce((acc, [key, value]) => {
+    acc[key] = normalizeScalarValue(value);
+    return acc;
+  }, {});
+  return { ...normalizedRow, id: normalizedId };
 };
 
 const getCollectionItemsData = async (collectionName, dbConfig) => {
