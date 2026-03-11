@@ -1208,10 +1208,21 @@ function App() {
   };
 
   const startAssetInventorySession = async () => {
-    if (isAssetInventorySessionActive || !user) return;
+    if (assetInventorySessionLoading || isAssetInventorySessionActive || !user) return;
     const startedByName = user?.displayName || user?.fullName || user?.email || "Користувач";
+    const nowIso = new Date().toISOString();
     try {
-      await startAssetInventorySessionInFirestore(assetInventorySessionScopeId, {
+      setAssetInventorySessionLoading(true);
+      const sessionId = await startAssetInventorySessionInFirestore(assetInventorySessionScopeId, {
+        startedById: user?.uid || "",
+        startedByName,
+        startedForRestaurantId: user?.restaurant || "",
+      });
+      setAssetInventorySession({
+        id: String(sessionId || ""),
+        scopeId: assetInventorySessionScopeId,
+        isActive: true,
+        startedAt: nowIso,
         startedById: user?.uid || "",
         startedByName,
         startedForRestaurantId: user?.restaurant || "",
@@ -1224,17 +1235,28 @@ function App() {
       });
     } catch (error) {
       alert(`Не вдалося запустити сесію інвентаризації: ${error?.message || "невідома помилка"}`);
+    } finally {
+      setAssetInventorySessionLoading(false);
     }
   };
 
   const endAssetInventorySession = async () => {
-    if (!isAssetInventorySessionActive || !assetInventorySession?.id || !user) return;
+    if (assetInventorySessionLoading || !isAssetInventorySessionActive || !assetInventorySession?.id || !user) return;
     const endedByName = user?.displayName || user?.fullName || user?.email || "Користувач";
+    const nowIso = new Date().toISOString();
     try {
+      setAssetInventorySessionLoading(true);
       await endAssetInventorySessionInFirestore(assetInventorySession.id, {
         endedById: user?.uid || "",
         endedByName,
       });
+      setAssetInventorySession((prev) => ({
+        ...(prev || {}),
+        isActive: false,
+        endedAt: nowIso,
+        endedById: user?.uid || "",
+        endedByName,
+      }));
       writeAuditLog({
         action: "asset_inventory_session_end",
         entityType: "asset_inventory_session",
@@ -1244,6 +1266,8 @@ function App() {
       setSelected(null);
     } catch (error) {
       alert(`Не вдалося завершити сесію інвентаризації: ${error?.message || "невідома помилка"}`);
+    } finally {
+      setAssetInventorySessionLoading(false);
     }
   };
 

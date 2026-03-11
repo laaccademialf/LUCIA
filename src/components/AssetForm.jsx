@@ -821,19 +821,6 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       }
     }
 
-    // Конвертація числової дати (Excel serial) у dd.mm.yyyy
-    const excelSerialToDate = (serial) => {
-      const n = Number(serial);
-      if (!Number.isFinite(n) || n < 10000) return String(serial);
-      // Excel: 1 = 1900-01-01
-      const excelEpoch = new Date(1899, 11, 30);
-      const date = new Date(excelEpoch.getTime() + n * 86400000);
-      const dd = String(date.getDate()).padStart(2, '0');
-      const mm = String(date.getMonth() + 1).padStart(2, '0');
-      const yyyy = date.getFullYear();
-      return `${dd}.${mm}.${yyyy}`;
-    };
-
     const currentPrimaryQuantity = hasSavedPrimaryInventoryQuantity
       ? toOptionalNumber(savedPrimaryInventoryQuantityRaw)
       : toOptionalNumber(values.inventoryQuantity);
@@ -869,13 +856,11 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       respPerson: typeof values.respPerson === "string" ? values.respPerson : "",
       status: safeString(values.status).trim(),
       condition: safeString(values.condition).trim(),
-      purchaseYear: excelSerialToDate(values.purchaseYear),
-      commissionDate: excelSerialToDate(values.commissionDate),
+      purchaseYear: safeString(values.purchaseYear).trim(),
+      commissionDate: safeString(values.commissionDate).trim(),
       functionality: safeString(values.functionality).trim(),
       relevance: safeString(values.relevance).trim(),
       comment: safeString(values.comment).trim(),
-      purchaseYear: safeString(values.purchaseYear).trim(),
-      commissionDate: safeString(values.commissionDate).trim(),
       normativeTerm: values.normativeTerm === "" ? "" : toSafeNumber(values.normativeTerm, ""),
       physicalWear: toSafeNumber(values.physicalWear, 0),
       moralWear: toSafeNumber(values.moralWear, 0),
@@ -911,6 +896,56 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   const currentTabIndex = tabs.findIndex((t) => t.id === activeTab);
   const isFirstTab = currentTabIndex === 0;
   const isLastTab = currentTabIndex === tabs.length - 1;
+
+  const normalizeDateForInput = (rawValue) => {
+    if (!rawValue) return "";
+
+    if (rawValue instanceof Date) {
+      if (Number.isNaN(rawValue.getTime())) return "";
+      const yyyy = rawValue.getFullYear();
+      const mm = String(rawValue.getMonth() + 1).padStart(2, "0");
+      const dd = String(rawValue.getDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    const value = String(rawValue || "").trim();
+    if (!value) return "";
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return value;
+    }
+
+    // MySQL DATETIME: 2026-03-11 00:00:00
+    const mysqlDateTimeMatch = value.match(/^(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}$/);
+    if (mysqlDateTimeMatch) {
+      return mysqlDateTimeMatch[1];
+    }
+
+    if (/^\d{2}\.\d{2}\.\d{4}$/.test(value)) {
+      const [d, m, y] = value.split(".");
+      return `${y}-${m}-${d}`;
+    }
+
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 10000) {
+      const excelEpoch = new Date(1899, 11, 30);
+      const date = new Date(excelEpoch.getTime() + numeric * 86400000);
+      const yyyy = date.getFullYear();
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const dd = String(date.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      const yyyy = parsed.getFullYear();
+      const mm = String(parsed.getMonth() + 1).padStart(2, "0");
+      const dd = String(parsed.getDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    return "";
+  };
 
   return (
     <div className="card p-3 sm:p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
@@ -1214,49 +1249,13 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
               type="date"
               label="Дата придбання"
               {...register("purchaseYear")}
-              value={(() => {
-                const v = watch("purchaseYear");
-                if (!v) return "";
-                if (/^\d{2}\.\d{2}\.\d{4}$/.test(v)) {
-                  const [d, m, y] = v.split(".");
-                  return `${y}-${m}-${d}`;
-                }
-                // Excel serial number
-                const n = Number(v);
-                if (Number.isFinite(n) && n > 10000) {
-                  const excelEpoch = new Date(1899, 11, 30);
-                  const date = new Date(excelEpoch.getTime() + n * 86400000);
-                  const yyyy = date.getFullYear();
-                  const mm = String(date.getMonth() + 1).padStart(2, '0');
-                  const dd = String(date.getDate()).padStart(2, '0');
-                  return `${yyyy}-${mm}-${dd}`;
-                }
-                return v;
-              })()}
+              value={normalizeDateForInput(watch("purchaseYear"))}
             />
             <Input
               type="date"
               label="Дата введення в експлуатацію"
               {...register("commissionDate")}
-              value={(() => {
-                const v = watch("commissionDate");
-                if (!v) return "";
-                if (/^\d{2}\.\d{2}\.\d{4}$/.test(v)) {
-                  const [d, m, y] = v.split(".");
-                  return `${y}-${m}-${d}`;
-                }
-                // Excel serial number
-                const n = Number(v);
-                if (Number.isFinite(n) && n > 10000) {
-                  const excelEpoch = new Date(1899, 11, 30);
-                  const date = new Date(excelEpoch.getTime() + n * 86400000);
-                  const yyyy = date.getFullYear();
-                  const mm = String(date.getMonth() + 1).padStart(2, '0');
-                  const dd = String(date.getDate()).padStart(2, '0');
-                  return `${yyyy}-${mm}-${dd}`;
-                }
-                return v;
-              })()}
+              value={normalizeDateForInput(watch("commissionDate"))}
             />
             <Input type="number" label="Нормативний строк, років" {...register("normativeTerm")}/>
           </FieldGrid>
