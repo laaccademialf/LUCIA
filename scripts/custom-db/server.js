@@ -607,7 +607,9 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
       const existingColumns = await getMySqlColumns(conn, tableName);
       const hasPayloadColumn = existingColumns.has("payload");
       const isFlatTable = String(tableName || "").endsWith("_flat");
-      const shouldPersistPayload = hasPayloadColumn && !isFlatTable;
+      const forcePayloadCollections = new Set(["rolePermissions", "fieldPermissions"]);
+      const shouldPersistPayload =
+        hasPayloadColumn && (!isFlatTable || forcePayloadCollections.has(collection));
 
       // Compatibility mode: some flat tables were created without payload column.
       const flat = flattenScalarFields(normalized);
