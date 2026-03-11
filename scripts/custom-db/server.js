@@ -1836,6 +1836,36 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
   }
 
   if (method === "DELETE" && itemId) {
+    if (collectionName === "users") {
+      const user = await getCollectionItemData("users", itemId, dbConfig);
+      const userEmail = normalizeEmail(user?.email);
+
+      // 1) Видаляємо auth-користувача за тим самим id (основний сценарій)
+      await deleteCollectionItemData("authUsers", itemId, dbConfig).catch(() => {});
+
+      // 2) Додатковий fallback: видаляємо authUsers з таким email (на випадок legacy id)
+      if (userEmail) {
+        const authUsers = await getCollectionItemsData("authUsers", dbConfig);
+        const matchedAuthUsers = authUsers.filter(
+          (authUser) => normalizeEmail(authUser?.email) === userEmail
+        );
+        for (const authUser of matchedAuthUsers) {
+          if (!authUser?.id) continue;
+          await deleteCollectionItemData("authUsers", authUser.id, dbConfig).catch(() => {});
+        }
+      }
+
+      // 3) Чистимо всі сесії користувача
+      const sessions = await getCollectionItemsData("authSessions", dbConfig);
+      const matchedSessions = sessions.filter(
+        (session) => String(session?.userId || "") === String(itemId)
+      );
+      for (const session of matchedSessions) {
+        if (!session?.id) continue;
+        await deleteCollectionItemData("authSessions", session.id, dbConfig).catch(() => {});
+      }
+    }
+
     await deleteCollectionItemData(collectionName, itemId, dbConfig);
     return sendJson(res, 200, { ok: true });
   }
