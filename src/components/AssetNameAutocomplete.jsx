@@ -55,17 +55,19 @@ const AssetNameAutocomplete = forwardRef(({
   };
 
   const getUniqueSimilarAssets = (searchTerm) => {
-    const lowerSearch = searchTerm.toLowerCase();
+    const normalizeText = (value) => String(value || "").trim().toLowerCase();
+    const lowerSearch = normalizeText(searchTerm);
     
     // Групуємо активи по назві
     const assetsByName = {};
     
     assets.forEach(asset => {
-      if (asset.name && asset.name.toLowerCase().includes(lowerSearch)) {
-        const key = asset.name.toLowerCase();
+      const assetName = String(asset?.name || asset?.assetName || asset?.asset_name || "").trim();
+      if (assetName && normalizeText(assetName).includes(lowerSearch)) {
+        const key = normalizeText(assetName);
         if (!assetsByName[key]) {
           assetsByName[key] = {
-            name: asset.name,
+            name: assetName,
             category: asset.category,
             subCategory: asset.subCategory,
             type: asset.type,

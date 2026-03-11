@@ -172,7 +172,9 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       restaurants.find((r) => {
         const byName = normalizeText(r?.name) === target;
         const byId = String(r?.id || "").trim().toLowerCase() === target;
-        return byName || byId;
+        const byRegNumber = String(r?.regNumber || r?.reg_number || "").trim().toLowerCase() === target;
+        const fuzzyName = normalizeText(r?.name).includes(target) || target.includes(normalizeText(r?.name));
+        return byName || byId || byRegNumber || fuzzyName;
       }) || null
     );
   };
@@ -266,13 +268,15 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       setPhotos(normalizePhotosForState(selectedAsset.photos));
     } else {
       // При створенні нового активу підставляємо ресторан користувача
-      const userRestaurant = currentUser?.restaurant
-        ? findRestaurantByLocation(currentUser.restaurant)
+      const userRestaurantKey = currentUser?.restaurant || currentUser?.restaurantId || currentUser?.restaurant_id || "";
+      const userRestaurant = userRestaurantKey
+        ? findRestaurantByLocation(userRestaurantKey)
         : null;
       
       reset({
         ...defaultAsset,
-        locationName: userRestaurant?.name || "",
+        locationName: userRestaurant?.name || String(userRestaurantKey || ""),
+        businessUnit: String(userRestaurant?.businessUnit || "").trim(),
       });
       setPhotos([]);
     }
