@@ -538,20 +538,7 @@ function App() {
         return false;
       };
 
-      // Фільтрація ресторанів на основі ролі користувача
-      if (user?.role === 'admin') {
-        // Адмін бачить всі ресторани
-        setRestaurants(firebaseRestaurants);
-      } else if (Array.isArray(roleRestaurantIds) && roleRestaurantIds.length > 0) {
-        // Якщо у ролі є масив ресторанів
-        const allowed = firebaseRestaurants.filter((r) => roleRestaurantIds.includes(String(r.id)));
-        setRestaurants(allowed);
-      } else if (roleRestaurantsConfigured) {
-        // Якщо у ролі явно налаштовано доступи до ресторанів, але список порожній,
-        // НЕ застосовуємо fallback на профіль користувача.
-        setRestaurants([]);
-      } else if (user?.restaurant) {
-        // Якщо у користувача є один ресторан
+      const matchRestaurantsByProfile = () => {
         let matched = firebaseRestaurants.filter(isRestaurantMatchedByProfile);
 
         // Conservative fallback: if exact match failed, allow a fuzzy name match
@@ -567,7 +554,24 @@ function App() {
           }
         }
 
-        setRestaurants(matched);
+        return matched;
+      };
+
+      // Фільтрація ресторанів на основі ролі користувача
+      if (user?.role === 'admin') {
+        // Адмін бачить всі ресторани
+        setRestaurants(firebaseRestaurants);
+      } else if (Array.isArray(roleRestaurantIds) && roleRestaurantIds.length > 0) {
+        // Якщо у ролі є масив ресторанів
+        const allowed = firebaseRestaurants.filter((r) => roleRestaurantIds.includes(String(r.id)));
+        setRestaurants(allowed);
+      } else if (roleRestaurantsConfigured) {
+        // Якщо у ролі явно налаштовано доступи, але список порожній,
+        // використовуємо ресторан з профілю користувача як fallback.
+        setRestaurants(matchRestaurantsByProfile());
+      } else if (user?.restaurant) {
+        // Якщо у користувача є один ресторан
+        setRestaurants(matchRestaurantsByProfile());
       } else {
         setRestaurants([]);
       }
@@ -658,11 +662,11 @@ function App() {
       const effectiveRestaurantId =
         roleRestaurantIds.length === 1
           ? roleRestaurantIds[0]
-          : roleRestaurantsConfigured
+          : roleRestaurantsConfigured && roleRestaurantIds.length > 1
             ? ""
-          : (user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name)
-            ? String(user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name)
-            : "";
+            : (user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name)
+              ? String(user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name)
+              : "";
       if (!effectiveRestaurantId) return;
       const normalizedEffectiveRestaurant = String(effectiveRestaurantId || "").trim().toLowerCase();
       const userRestaurant = firebaseRestaurants.find((r) => {

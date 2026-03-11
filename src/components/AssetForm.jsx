@@ -455,21 +455,25 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     printedQrFingerprint === currentQrFingerprint
   );
   const requiresQrPrintBeforeSave = isNameChangedInEdit;
+  const savedPrimaryInventoryQuantityRaw =
+    selectedAsset?.inventoryQuantity ??
+    selectedAsset?.inventory_quantity ??
+    "";
   const hasSavedPrimaryInventoryQuantity =
     isEdit &&
-    selectedAsset?.inventoryQuantity !== undefined &&
-    selectedAsset?.inventoryQuantity !== null &&
-    String(selectedAsset?.inventoryQuantity).trim() !== "";
+    savedPrimaryInventoryQuantityRaw !== undefined &&
+    savedPrimaryInventoryQuantityRaw !== null &&
+    String(savedPrimaryInventoryQuantityRaw).trim() !== "";
 
   const inventoryDifference = useMemo(() => {
     if (!hasSavedPrimaryInventoryQuantity) return "";
-    const baseQty = Number(selectedAsset?.inventoryQuantity);
+    const baseQty = Number(savedPrimaryInventoryQuantityRaw);
     const nextQtyRaw = String(nextInventoryQuantityValue ?? "").trim();
     if (!nextQtyRaw) return "";
     const nextQty = Number(nextQtyRaw);
     if (!Number.isFinite(baseQty) || !Number.isFinite(nextQty)) return "";
     return nextQty - baseQty;
-  }, [hasSavedPrimaryInventoryQuantity, nextInventoryQuantityValue, selectedAsset?.inventoryQuantity]);
+  }, [hasSavedPrimaryInventoryQuantity, nextInventoryQuantityValue, savedPrimaryInventoryQuantityRaw]);
 
   const effectiveQuantityForValue = useMemo(() => {
     if (hasSavedPrimaryInventoryQuantity) {
@@ -478,7 +482,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
         const next = Number(nextRaw);
         if (Number.isFinite(next)) return next;
       }
-      const current = Number(selectedAsset?.inventoryQuantity);
+      const current = Number(savedPrimaryInventoryQuantityRaw);
       return Number.isFinite(current) ? current : 0;
     }
 
@@ -486,7 +490,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     if (!primaryRaw) return 0;
     const primary = Number(primaryRaw);
     return Number.isFinite(primary) ? primary : 0;
-  }, [hasSavedPrimaryInventoryQuantity, nextInventoryQuantityValue, selectedAsset?.inventoryQuantity, inventoryQuantityValue]);
+  }, [hasSavedPrimaryInventoryQuantity, nextInventoryQuantityValue, savedPrimaryInventoryQuantityRaw, inventoryQuantityValue]);
 
   const residualValueTotalComputed = useMemo(() => {
     const perUnit = Number(String(residualValuePerUnitValue ?? "").trim());
@@ -820,7 +824,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     };
 
     const currentPrimaryQuantity = hasSavedPrimaryInventoryQuantity
-      ? toOptionalNumber(selectedAsset?.inventoryQuantity)
+      ? toOptionalNumber(savedPrimaryInventoryQuantityRaw)
       : toOptionalNumber(values.inventoryQuantity);
     const nextInventoryQuantity = toOptionalNumber(values.nextInventoryQuantity);
     const effectiveInventoryQuantity =
