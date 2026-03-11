@@ -2122,23 +2122,43 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (method === "POST" && pathname === "/auth/register") {
-    return handleAuthRegister(req, res);
+    try {
+      return await handleAuthRegister(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
   }
 
   if (method === "POST" && pathname === "/auth/login") {
-    return handleAuthLogin(req, res);
+    try {
+      return await handleAuthLogin(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
   }
 
   if (method === "GET" && pathname === "/auth/me") {
-    return handleAuthMe(req, res);
+    try {
+      return await handleAuthMe(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
   }
 
   if (method === "POST" && pathname === "/auth/logout") {
-    return handleAuthLogout(req, res);
+    try {
+      return await handleAuthLogout(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
   }
 
   if (method === "POST" && pathname === "/auth/admin-create-user") {
-    return handleAuthAdminCreateUser(req, res);
+    try {
+      return await handleAuthAdminCreateUser(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
   }
 
   if (pathname === "/settings/firebase-runtime" && method === "GET") {
