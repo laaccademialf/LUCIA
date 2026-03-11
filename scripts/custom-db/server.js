@@ -1314,6 +1314,39 @@ const sqlTypeFor = (type) => {
   return "TEXT NULL";
 };
 
+const toMySqlDateTime = (value) => {
+  if (value === null || value === undefined) return null;
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const yyyy = value.getFullYear();
+    const mm = String(value.getMonth() + 1).padStart(2, "0");
+    const dd = String(value.getDate()).padStart(2, "0");
+    const hh = String(value.getHours()).padStart(2, "0");
+    const mi = String(value.getMinutes()).padStart(2, "0");
+    const ss = String(value.getSeconds()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+  }
+
+  const text = String(value).trim();
+  if (!text) return null;
+
+  // Already in MySQL DATETIME format.
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)) {
+    return text;
+  }
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const yyyy = parsed.getFullYear();
+  const mm = String(parsed.getMonth() + 1).padStart(2, "0");
+  const dd = String(parsed.getDate()).padStart(2, "0");
+  const hh = String(parsed.getHours()).padStart(2, "0");
+  const mi = String(parsed.getMinutes()).padStart(2, "0");
+  const ss = String(parsed.getSeconds()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+};
+
 const getMySqlColumns = async (conn, tableName) => {
   const [rows] = await conn.execute(
     `SELECT COLUMN_NAME AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`,
@@ -1405,6 +1438,9 @@ const normalizeOneCollectionToFlatMySql = async (conn, collectionName) => {
       JSON.stringify(row.payload || {}),
       ...scalarColumns.map((col) => {
         const value = row.flat[col];
+        if (typeMap[col] === "date") {
+          return toMySqlDateTime(value);
+        }
         if (typeof value === "boolean") return value ? 1 : 0;
         return value ?? null;
       }),
