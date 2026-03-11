@@ -105,8 +105,15 @@ export const getFieldPermissions = async (roleIdOrName) => {
       return byId;
     }
 
+    const normalizedRole = String(roleIdOrName || "").trim().toLowerCase();
     const all = await listCollectionItemsApi("fieldPermissions");
-    return all.find((item) => item?.roleName === roleIdOrName) || null;
+    return (
+      all.find((item) => {
+        const roleName = String(item?.roleName || item?.role_name || "").trim().toLowerCase();
+        const roleId = String(item?.roleId || item?.role_id || item?.id || "").trim().toLowerCase();
+        return Boolean(normalizedRole) && (roleName === normalizedRole || roleId === normalizedRole);
+      }) || null
+    );
   }
 
   try {
@@ -119,7 +126,11 @@ export const getFieldPermissions = async (roleIdOrName) => {
 
     // fallback: search by roleName
     const querySnapshot = await getDocs(collection(db, "fieldPermissions"));
-    const byName = querySnapshot.docs.find((d) => d.data().roleName === roleIdOrName);
+    const normalizedRole = String(roleIdOrName || "").trim().toLowerCase();
+    const byName = querySnapshot.docs.find((d) => {
+      const roleName = String(d.data().roleName || "").trim().toLowerCase();
+      return roleName === normalizedRole;
+    });
     if (byName) {
       return { id: byName.id, ...byName.data() };
     }

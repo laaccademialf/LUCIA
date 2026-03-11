@@ -378,7 +378,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       
       reset({
         ...defaultAsset,
-        locationName: userRestaurant?.name || String(userRestaurantKey || ""),
+        locationName: userRestaurant?.name || "",
         businessUnit: String(userRestaurant?.businessUnit || "").trim(),
       });
       setPhotos([]);
