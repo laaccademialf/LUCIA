@@ -10,13 +10,32 @@ import {
 
 const byNameAsc = (a, b) => String(a?.name || "").localeCompare(String(b?.name || ""));
 
+const normalizeHierarchyItem = (item) => {
+  if (!item || typeof item !== "object") return item;
+
+  const parentIdRaw = item.parentId ?? item.parent_id ?? null;
+  const parentId =
+    parentIdRaw === null || parentIdRaw === undefined || String(parentIdRaw).trim() === ""
+      ? null
+      : String(parentIdRaw).trim();
+
+  return {
+    ...item,
+    id: String(item.id || "").trim(),
+    name: String(item.name || item.position_name || item.role_name || "").trim(),
+    parentId,
+    createdAt: item.createdAt || item.created_at || "",
+    updatedAt: item.updatedAt || item.updated_at || "",
+  };
+};
+
 /**
  * Отримати всі посади
  */
 export const getPositions = async () => {
   if (isApiDataModeEnabled()) {
     const items = await listCollectionItemsApi("positions");
-    return items.sort(byNameAsc);
+    return items.map(normalizeHierarchyItem).sort(byNameAsc);
   }
 
   try {
@@ -36,9 +55,11 @@ export const getPositions = async () => {
  */
 export const addPosition = async (positionData) => {
   if (isApiDataModeEnabled()) {
+    const parentId = positionData.parentId || null;
     return await createCollectionItemApi("positions", {
       ...positionData,
-      parentId: positionData.parentId || null,
+      parentId,
+      parent_id: parentId,
       createdAt: new Date().toISOString(),
     });
   }
@@ -79,7 +100,7 @@ export const deletePosition = async (positionId) => {
 export const getWorkRoles = async () => {
   if (isApiDataModeEnabled()) {
     const items = await listCollectionItemsApi("workRoles");
-    return items.sort(byNameAsc);
+    return items.map(normalizeHierarchyItem).sort(byNameAsc);
   }
 
   try {
@@ -99,9 +120,11 @@ export const getWorkRoles = async () => {
  */
 export const addWorkRole = async (roleData) => {
   if (isApiDataModeEnabled()) {
+    const parentId = roleData.parentId || null;
     return await createCollectionItemApi("workRoles", {
       ...roleData,
-      parentId: roleData.parentId || null,
+      parentId,
+      parent_id: parentId,
       createdAt: new Date().toISOString(),
     });
   }
@@ -141,9 +164,11 @@ export const deleteWorkRole = async (roleId) => {
  */
 export const updatePosition = async (positionId, positionData) => {
   if (isApiDataModeEnabled()) {
+    const parentId = positionData.parentId || null;
     await updateCollectionItemApi("positions", positionId, {
       ...positionData,
-      parentId: positionData.parentId || null,
+      parentId,
+      parent_id: parentId,
       updatedAt: new Date().toISOString(),
     });
     return;
@@ -165,9 +190,11 @@ export const updatePosition = async (positionId, positionData) => {
  */
 export const updateWorkRole = async (roleId, roleData) => {
   if (isApiDataModeEnabled()) {
+    const parentId = roleData.parentId || null;
     await updateCollectionItemApi("workRoles", roleId, {
       ...roleData,
-      parentId: roleData.parentId || null,
+      parentId,
+      parent_id: parentId,
       updatedAt: new Date().toISOString(),
     });
     return;

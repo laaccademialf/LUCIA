@@ -150,12 +150,16 @@ export const RolesPositionsManager = () => {
     const [updating, setUpdating] = useState(false);
     const [selectedParent, setSelectedParent] = useState(parentId);
 
+    useEffect(() => {
+      setSelectedParent(parentId);
+    }, [parentId]);
+
     const handleChangeParent = async (e) => {
       const newParentId = e.target.value || null;
       setSelectedParent(e.target.value);
       setUpdating(true);
       try {
-        await onChangeParent(node, newParentId, type, setUpdating);
+        await onChangeParent(node, newParentId, type);
       } catch (err) {
         setError("Не вдалося змінити батьківську");
       } finally {
@@ -253,7 +257,7 @@ export const RolesPositionsManager = () => {
   }
 
   // Оновлення parentId для вузла
-  const handleChangeParentUniversal = async (node, newParentId, type, setUpdating) => {
+  const handleChangeParentUniversal = async (node, newParentId, type) => {
     if (type === "position") {
       await updatePosition(node.id, { ...node, parentId: newParentId });
       setPositions(positions => positions.map(p => p.id === node.id ? { ...p, parentId: newParentId } : p));
@@ -261,7 +265,6 @@ export const RolesPositionsManager = () => {
       await updateWorkRole(node.id, { ...node, parentId: newParentId });
       setRoles(roles => roles.map(r => r.id === node.id ? { ...r, parentId: newParentId } : r));
     }
-    setUpdating(false);
   };
 
   // Видалення вузла
