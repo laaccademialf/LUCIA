@@ -551,6 +551,7 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
 
       await ensureFlatColumnsMySql(conn, tableName, typeMap);
       const columnsAfterEnsure = await getMySqlColumns(conn, tableName);
+      const columnTypes = await getMySqlColumnTypes(conn, tableName);
       const scalarColumns = Object.keys(flat).filter((col) => columnsAfterEnsure.has(col));
 
       const insertColumns = ["id", ...scalarColumns];
@@ -558,8 +559,7 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
         nextId,
         ...scalarColumns.map((col) => {
           const value = flat[col];
-          if (typeof value === "boolean") return value ? 1 : 0;
-          return value ?? null;
+          return normalizeValueForMySqlColumnType(value, columnTypes[col], typeMap[col]);
         }),
       ];
 
@@ -1365,6 +1365,59 @@ const toMySqlDate = (value) => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
+const MYSQL_INTEGER_TYPES = new Set(["tinyint", "smallint", "mediumint", "int", "integer", "bigint", "bit", "year"]);
+const MYSQL_DECIMAL_TYPES = new Set(["decimal", "numeric", "float", "double", "real", "dec"]);
+const MYSQL_DATE_TYPES = new Set(["date"]);
+const MYSQL_DATETIME_TYPES = new Set(["datetime", "timestamp"]);
+
+const toMySqlNumber = (value, { integer = false } = {}) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return null;
+    return integer ? Math.trunc(value) : value;
+  }
+
+  const text = String(value).trim();
+  if (!text) return null;
+  const normalized = text.replace(/\s+/g, "").replace(/,/g, ".");
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) return null;
+  return integer ? Math.trunc(parsed) : parsed;
+};
+
+const toMySqlBoolean = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return null;
+    return value ? 1 : 0;
+  }
+
+  const text = String(value).trim().toLowerCase();
+  if (!text) return null;
+  if (["1", "true", "yes", "y", "on", "так"].includes(text)) return 1;
+  if (["0", "false", "no", "n", "off", "ні"].includes(text)) return 0;
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) return numeric ? 1 : 0;
+  return null;
+};
+
+const normalizeValueForMySqlColumnType = (value, declaredType, inferredType = "") => {
+  const type = String(declaredType || "").toLowerCase();
+
+  if (MYSQL_DATE_TYPES.has(type)) return toMySqlDate(value);
+  if (MYSQL_DATETIME_TYPES.has(type)) return toMySqlDateTime(value);
+  if (MYSQL_INTEGER_TYPES.has(type)) return toMySqlNumber(value, { integer: true });
+  if (MYSQL_DECIMAL_TYPES.has(type)) return toMySqlNumber(value, { integer: false });
+  if (type === "boolean") return toMySqlBoolean(value);
+
+  if (inferredType === "date") return toMySqlDateTime(value);
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (value === undefined) return null;
+  return value ?? null;
+};
+
 const getMySqlColumns = async (conn, tableName) => {
   const [rows] = await conn.execute(
     `SELECT COLUMN_NAME AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`,
@@ -1473,19 +1526,7 @@ const normalizeOneCollectionToFlatMySql = async (conn, collectionName) => {
       ...scalarColumns.map((col) => {
         const value = row.flat[col];
         const declaredType = String(columnTypes[col] || "").toLowerCase();
-
-        if (declaredType === "date") {
-          return toMySqlDate(value);
-        }
-        if (declaredType === "datetime" || declaredType === "timestamp") {
-          return toMySqlDateTime(value);
-        }
-
-        if (typeMap[col] === "date") {
-          return toMySqlDateTime(value);
-        }
-        if (typeof value === "boolean") return value ? 1 : 0;
-        return value ?? null;
+        return normalizeValueForMySqlColumnType(value, declaredType, typeMap[col]);
       }),
     ];
 
