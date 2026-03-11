@@ -3243,14 +3243,33 @@ function App() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                     </svg>
                     <span className={clsx("font-semibold truncate", isMobile ? "text-xs" : "text-sm")}>
-                      {restaurants.find((r) => {
-                        const key = String(user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name || "").trim();
-                        const target = String(key || "").trim().toLowerCase();
-                        const id = String(r?.id || "").trim();
-                        const name = String(r?.name || "").trim().toLowerCase();
-                        const reg = String(r?.regNumber || r?.reg_number || "").trim();
-                        return id === key || reg === key || name === target;
-                      })?.name || 'Невідомий ресторан'}
+                      {(() => {
+                        const profileKey = String(
+                          user?.restaurant ||
+                          user?.restaurantId ||
+                          user?.restaurant_id ||
+                          user?.restaurantName ||
+                          user?.restaurant_name ||
+                          ""
+                        ).trim();
+
+                        const effectiveKey =
+                          roleRestaurantIds.length === 1
+                            ? String(roleRestaurantIds[0] || "").trim()
+                            : profileKey;
+
+                        const target = String(effectiveKey || "").trim().toLowerCase();
+                        const matched = restaurants.find((r) => {
+                          const id = String(r?.id || "").trim();
+                          const name = String(r?.name || "").trim().toLowerCase();
+                          const reg = String(r?.regNumber || r?.reg_number || "").trim();
+                          return id === effectiveKey || reg === effectiveKey || name === target;
+                        });
+
+                        if (matched?.name) return matched.name;
+                        if (restaurants.length === 1) return String(restaurants[0]?.name || "").trim() || "Невідомий ресторан";
+                        return "Невідомий ресторан";
+                      })()}
                     </span>
                   </div>
                 )}

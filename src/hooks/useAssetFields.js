@@ -34,6 +34,32 @@ export const useAssetFields = () => {
   const [reasons, setReasons] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const normalizeCategoryItem = (item) => {
+    if (!item || typeof item !== "object") return { id: "", name: "" };
+    return {
+      ...item,
+      id: String(item.id || item.categoryId || item.category_id || "").trim(),
+      name: String(item.name || item.categoryName || item.category_name || "").trim(),
+    };
+  };
+
+  const normalizeSubcategoryItem = (item, categoryNameById) => {
+    if (!item || typeof item !== "object") {
+      return { id: "", name: "", categoryId: "", categoryName: "" };
+    }
+
+    const categoryId = String(item.categoryId || item.category_id || "").trim();
+    const fallbackCategoryName = categoryId ? String(categoryNameById.get(categoryId) || "").trim() : "";
+
+    return {
+      ...item,
+      id: String(item.id || item.subcategoryId || item.subcategory_id || "").trim(),
+      name: String(item.name || item.subCategory || item.sub_category || "").trim(),
+      categoryId,
+      categoryName: String(item.categoryName || item.category_name || fallbackCategoryName || "").trim(),
+    };
+  };
+
   useEffect(() => {
     const loadFields = async () => {
       try {
@@ -67,10 +93,20 @@ export const useAssetFields = () => {
           isCollectionsApiEnabled() ? listCollectionItemsApi("assetReasons") : getReasons(),
         ]);
 
-        setCategories(categoriesData.map((item) => item.name));
-        setCategoryItems(categoriesData);
-        setSubcategories(subcategoriesData.map((item) => item.name));
-        setSubcategoryItems(subcategoriesData);
+        const normalizedCategories = (Array.isArray(categoriesData) ? categoriesData : [])
+          .map(normalizeCategoryItem)
+          .filter((item) => item.id || item.name);
+        const categoryNameById = new Map(
+          normalizedCategories.map((item) => [String(item.id || "").trim(), String(item.name || "").trim()])
+        );
+        const normalizedSubcategories = (Array.isArray(subcategoriesData) ? subcategoriesData : [])
+          .map((item) => normalizeSubcategoryItem(item, categoryNameById))
+          .filter((item) => item.id || item.name);
+
+        setCategories(normalizedCategories.map((item) => item.name));
+        setCategoryItems(normalizedCategories);
+        setSubcategories(normalizedSubcategories.map((item) => item.name));
+        setSubcategoryItems(normalizedSubcategories);
         setAccountingTypes(accountingTypesData.map((item) => item.name));
         setBusinessUnits(businessUnitsData.map((item) => item.name));
         setStatuses(statusesData.map((item) => item.name));

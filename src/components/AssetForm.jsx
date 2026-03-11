@@ -378,9 +378,12 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
         currentUser?.restaurantName ||
         currentUser?.restaurant_name ||
         "";
-      const userRestaurant = userRestaurantKey
-        ? findRestaurantByLocation(userRestaurantKey)
-        : null;
+      const userRestaurant =
+        Array.isArray(restaurants) && restaurants.length === 1
+          ? restaurants[0]
+          : userRestaurantKey
+            ? findRestaurantByLocation(userRestaurantKey)
+            : null;
       
       reset({
         ...defaultAsset,

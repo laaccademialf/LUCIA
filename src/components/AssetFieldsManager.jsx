@@ -290,9 +290,17 @@ const SubcategorySection = ({ items, categories, onAdd, onDelete, onEdit }) => {
   };
 
   const startEdit = (item) => {
+    const normalizedCategoryId =
+      String(item.categoryId || item.category_id || "").trim() ||
+      String(
+        categories.find((category) =>
+          String(category?.name || "").trim() === String(item.categoryName || item.category_name || "").trim()
+        )?.id || ""
+      ).trim();
+
     setEditingId(item.id);
     setEditingValue(item.name || "");
-    setEditingCategoryId(item.categoryId || "");
+    setEditingCategoryId(normalizedCategoryId);
   };
 
   const cancelEdit = () => {
@@ -473,6 +481,32 @@ export const AssetFieldsManager = () => {
     loadAllFields();
   }, []);
 
+  const normalizeCategoryItem = (item) => {
+    if (!item || typeof item !== "object") return { id: "", name: "" };
+    return {
+      ...item,
+      id: String(item.id || item.categoryId || item.category_id || "").trim(),
+      name: String(item.name || item.categoryName || item.category_name || "").trim(),
+    };
+  };
+
+  const normalizeSubcategoryItem = (item, categoryNameById) => {
+    if (!item || typeof item !== "object") {
+      return { id: "", name: "", categoryId: "", categoryName: "" };
+    }
+
+    const categoryId = String(item.categoryId || item.category_id || "").trim();
+    const fallbackCategoryName = categoryId ? String(categoryNameById.get(categoryId) || "").trim() : "";
+
+    return {
+      ...item,
+      id: String(item.id || item.subcategoryId || item.subcategory_id || "").trim(),
+      name: String(item.name || item.subCategory || item.sub_category || "").trim(),
+      categoryId,
+      categoryName: String(item.categoryName || item.category_name || fallbackCategoryName || "").trim(),
+    };
+  };
+
   const loadAllFields = async () => {
     try {
       setLoading(true);
@@ -504,8 +538,18 @@ export const AssetFieldsManager = () => {
         getReasons(),
       ]);
 
-      setCategories(categoriesData);
-      setSubcategories(subcategoriesData);
+      const normalizedCategories = (Array.isArray(categoriesData) ? categoriesData : [])
+        .map(normalizeCategoryItem)
+        .filter((item) => item.id || item.name);
+      const categoryNameById = new Map(
+        normalizedCategories.map((item) => [String(item.id || "").trim(), String(item.name || "").trim()])
+      );
+      const normalizedSubcategories = (Array.isArray(subcategoriesData) ? subcategoriesData : [])
+        .map((item) => normalizeSubcategoryItem(item, categoryNameById))
+        .filter((item) => item.id || item.name);
+
+      setCategories(normalizedCategories);
+      setSubcategories(normalizedSubcategories);
       setAccountingTypes(accountingTypesData);
       setBusinessUnits(businessUnitsData);
       setStatuses(statusesData);
@@ -539,10 +583,19 @@ export const AssetFieldsManager = () => {
   };
 
   const handleAddSubcategory = async (name, categoryId) => {
-    const selectedCategory = categories.find((item) => item.id === categoryId);
+    const selectedCategory = categories.find((item) => String(item.id) === String(categoryId));
     const categoryName = selectedCategory?.name || "";
     const newItem = await addSubcategory(name, categoryId, categoryName);
-    setSubcategories([...subcategories, newItem]);
+    setSubcategories([
+      ...subcategories,
+      {
+        ...newItem,
+        id: String(newItem?.id || "").trim(),
+        name: String(newItem?.name || name || "").trim(),
+        categoryId: String(newItem?.categoryId || newItem?.category_id || categoryId || "").trim(),
+        categoryName: String(newItem?.categoryName || newItem?.category_name || categoryName || "").trim(),
+      },
+    ]);
   };
 
   const handleDeleteSubcategory = async (id) => {
@@ -551,17 +604,17 @@ export const AssetFieldsManager = () => {
   };
 
   const handleEditSubcategory = async (id, name, categoryId) => {
-    const selectedCategory = categories.find((item) => item.id === categoryId);
+    const selectedCategory = categories.find((item) => String(item.id) === String(categoryId));
     const categoryName = selectedCategory?.name || "";
     await updateSubcategory(id, name, categoryId, categoryName);
     setSubcategories(
       subcategories.map((item) =>
-        item.id === id
+        String(item.id) === String(id)
           ? {
               ...item,
               name,
-              categoryId,
-              categoryName,
+              categoryId: String(categoryId || "").trim(),
+              categoryName: String(categoryName || "").trim(),
             }
           : item
       )
