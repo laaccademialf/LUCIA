@@ -22,6 +22,7 @@ const ENV_AUTH_API_TOKEN = String(
   import.meta.env.VITE_AUTH_API_TOKEN || import.meta.env.VITE_DATA_API_TOKEN || ""
 ).trim();
 const AUTH_SESSION_KEY = "lucia_auth_session_token";
+const AUTH_USER_CACHE_KEY = "lucia_auth_user_cache";
 const DEFAULT_PLATFORM_ADMIN_EMAILS = ["andrii.disha@gmail.com"];
 const ENV_PLATFORM_ADMIN_EMAILS = String(import.meta.env.VITE_PLATFORM_ADMIN_EMAILS || "")
   .split(",")
@@ -149,11 +150,39 @@ const setAuthSessionToken = (token) => {
     localStorage.setItem(AUTH_SESSION_KEY, token);
   } else {
     localStorage.removeItem(AUTH_SESSION_KEY);
+    localStorage.removeItem(AUTH_USER_CACHE_KEY);
+  }
+};
+
+const setCachedAuthUser = (user) => {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return;
+  if (!user || typeof user !== "object") {
+    localStorage.removeItem(AUTH_USER_CACHE_KEY);
+    return;
+  }
+  try {
+    localStorage.setItem(AUTH_USER_CACHE_KEY, JSON.stringify(user));
+  } catch {
+    // ignore cache write issues
+  }
+};
+
+const getCachedAuthUser = () => {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return null;
+  const raw = localStorage.getItem(AUTH_USER_CACHE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return applyPlatformAdminOverride(parsed);
+  } catch {
+    return null;
   }
 };
 
 const notifyAuthApiSubscribers = (user) => {
   authApiCurrentUser = user || null;
+  setCachedAuthUser(authApiCurrentUser);
   authApiSubscribers.forEach((callback) => {
     try {
       callback(authApiCurrentUser);
@@ -509,6 +538,13 @@ export const getCurrentUser = () => {
         // Тимчасові помилки бекенду/мережі не повинні розлогінювати користувача.
         if (authApiCurrentUser) {
           resolve(authApiCurrentUser);
+          return;
+        }
+
+        const cachedUser = getCachedAuthUser();
+        if (cachedUser) {
+          notifyAuthApiSubscribers(cachedUser);
+          resolve(cachedUser);
           return;
         }
 
