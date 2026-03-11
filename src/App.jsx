@@ -1758,7 +1758,8 @@ function App() {
         );
 
         const isAssetVisibleForCurrentRestaurants = (asset) => {
-          if (isGlobalAdmin || restaurants.length === 0) return true;
+          if (isGlobalAdmin) return true;
+          if (restaurants.length === 0) return false;
 
           const assetRestaurantIds = [
             asset?.restaurantId,
@@ -1793,9 +1794,9 @@ function App() {
           return false;
         };
 
-        const assetsForReports = !isGlobalAdmin && restaurants.length > 0
-          ? assets.filter((asset) => isAssetVisibleForCurrentRestaurants(asset))
-          : assets;
+        const assetsForReports = isGlobalAdmin
+          ? assets
+          : assets.filter((asset) => isAssetVisibleForCurrentRestaurants(asset));
 
         // ...existing code...
         if (
@@ -2804,7 +2805,7 @@ function App() {
             {(() => {
               // Фільтруємо активи на основі ролі користувача
               let assetsToShow = assets;
-              if (user?.role !== 'admin' && restaurants.length > 0) {
+              if (user?.role !== 'admin') {
                 // Не-адмін бачить активи лише дозволених ресторанів (може бути декілька)
                 assetsToShow = assets.filter((a) => isAssetVisibleForCurrentRestaurants(a));
               }
@@ -2947,7 +2948,7 @@ function App() {
           {(() => {
             // Фільтруємо активи на основі ролі користувача
             let assetsToShow = assets;
-            if (user?.role !== 'admin' && restaurants.length > 0) {
+            if (user?.role !== 'admin') {
               // Не-адмін бачить активи лише дозволених ресторанів (може бути декілька)
               assetsToShow = assets.filter((a) => isAssetVisibleForCurrentRestaurants(a));
             }
