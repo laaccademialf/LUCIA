@@ -393,6 +393,26 @@ const ensureGenericTablePostgres = async (client, collectionName) => {
   return tableName;
 };
 
+const mapMySqlRowToDocument = (row) => {
+  const safeRow = row && typeof row === "object" ? row : {};
+  const normalizedId = String(safeRow.id || "");
+
+  if (Object.prototype.hasOwnProperty.call(safeRow, "payload")) {
+    const parsed = parsePayloadField(safeRow.payload);
+    const scalar = Object.entries(safeRow).reduce((acc, [key, value]) => {
+      if (key === "id" || key === "payload") return acc;
+      if (value === undefined || value === null) return acc;
+      if (parsed[key] === undefined) {
+        acc[key] = value;
+      }
+      return acc;
+    }, {});
+    return { id: normalizedId, ...parsed, ...scalar };
+  }
+
+  return { ...safeRow, id: normalizedId };
+};
+
 const getCollectionItemsData = async (collectionName, dbConfig) => {
   const collection = normalizeCollectionName(collectionName);
 
@@ -406,9 +426,15 @@ const getCollectionItemsData = async (collectionName, dbConfig) => {
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
       const tableName = await resolveCollectionTableMySql(conn, collection);
-      const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\``);
+      const existingColumns = await getMySqlColumns(conn, tableName);
+      const hasPayloadColumn = existingColumns.has("payload");
+      const [rows] = await conn.execute(
+        hasPayloadColumn
+          ? `SELECT id, payload FROM \`${tableName}\``
+          : `SELECT * FROM \`${tableName}\``
+      );
       return sortByPayloadTimestampsDesc(
-        rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }))
+        rows.map((row) => mapMySqlRowToDocument(row))
       );
     } finally {
       await conn.end();
@@ -450,9 +476,16 @@ const getCollectionItemData = async (collectionName, id, dbConfig) => {
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
       const tableName = await resolveCollectionTableMySql(conn, collection);
-      const [rows] = await conn.execute(`SELECT id, payload FROM \`${tableName}\` WHERE id = ? LIMIT 1`, [itemId]);
+      const existingColumns = await getMySqlColumns(conn, tableName);
+      const hasPayloadColumn = existingColumns.has("payload");
+      const [rows] = await conn.execute(
+        hasPayloadColumn
+          ? `SELECT id, payload FROM \`${tableName}\` WHERE id = ? LIMIT 1`
+          : `SELECT * FROM \`${tableName}\` WHERE id = ? LIMIT 1`,
+        [itemId]
+      );
       if (!rows.length) return null;
-      return { id: rows[0].id, ...parsePayloadField(rows[0].payload) };
+      return mapMySqlRowToDocument(rows[0]);
     } finally {
       await conn.end();
     }
@@ -498,9 +531,55 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
       const tableName = await resolveCollectionTableMySql(conn, collection);
+      const existingColumns = await getMySqlColumns(conn, tableName);
+      const hasPayloadColumn = existingColumns.has("payload");
+
+      if (hasPayloadColumn) {
+        await conn.execute(
+          `INSERT INTO \`${tableName}\` (id, payload) VALUES (?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP`,
+          [nextId, JSON.stringify(normalized)]
+        );
+        return nextId;
+      }
+
+      // Compatibility mode: some flat tables were created without payload column.
+      const flat = flattenScalarFields(normalized);
+      const typeMap = Object.entries(flat).reduce((acc, [col, value]) => {
+        acc[col] = mergeTypes(acc[col], detectValueType(value));
+        return acc;
+      }, {});
+
+      await ensureFlatColumnsMySql(conn, tableName, typeMap);
+      const columnsAfterEnsure = await getMySqlColumns(conn, tableName);
+      const scalarColumns = Object.keys(flat).filter((col) => columnsAfterEnsure.has(col));
+
+      const insertColumns = ["id", ...scalarColumns];
+      const insertValues = [
+        nextId,
+        ...scalarColumns.map((col) => {
+          const value = flat[col];
+          if (typeof value === "boolean") return value ? 1 : 0;
+          return value ?? null;
+        }),
+      ];
+
+      const placeholders = insertColumns.map(() => "?").join(", ");
+      const updates = [
+        ...scalarColumns.map((col) => `${quoteIdentMySql(col)} = VALUES(${quoteIdentMySql(col)})`),
+        ...(columnsAfterEnsure.has("updated_at") ? ["updated_at = CURRENT_TIMESTAMP"] : []),
+      ].join(", ");
+
+      if (!updates) {
+        await conn.execute(
+          `INSERT IGNORE INTO ${quoteIdentMySql(tableName)} (${insertColumns.map((col) => quoteIdentMySql(col)).join(", ")}) VALUES (${placeholders})`,
+          insertValues
+        );
+        return nextId;
+      }
+
       await conn.execute(
-        `INSERT INTO \`${tableName}\` (id, payload) VALUES (?, ?) ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP`,
-        [nextId, JSON.stringify(normalized)]
+        `INSERT INTO ${quoteIdentMySql(tableName)} (${insertColumns.map((col) => quoteIdentMySql(col)).join(", ")}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updates}`,
+        insertValues
       );
       return nextId;
     } finally {
