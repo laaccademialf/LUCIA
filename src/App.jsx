@@ -46,6 +46,7 @@ import ChecklistModule from "./components/ChecklistModule";
 import TeamHiringModule from "./components/TeamHiringModule";
 import SecurityAuditModule from "./components/SecurityAuditModule";
 import DatabaseConnectionsManager from "./components/DatabaseConnectionsManager";
+import ProfileSettingsModal from "./components/ProfileSettingsModal";
 import { useChecklists } from "./hooks/useChecklists";
 import { useServiceRequests } from "./hooks/useServiceRequests";
 import { logAuditEvent } from "./firebase/audit";
@@ -269,6 +270,7 @@ function App() {
                                 });
                             // Модальне вікно логіну
                             const [showLoginModal, setShowLoginModal] = useState(false);
+                            const [showProfileModal, setShowProfileModal] = useState(false);
                           // Стан бокового меню
                           const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
                           const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -317,6 +319,7 @@ function App() {
                       });
                     // Права користувача
                     const [userPermissions, setUserPermissions] = useState({});
+                    const [roleRestaurantIds, setRoleRestaurantIds] = useState([]);
                   // Структура меню
                   const { menuStructure, save, loading: menuLoading, error: menuError } = useMenuStructure();
                 // Firebase активи
@@ -519,20 +522,19 @@ function App() {
       // Фільтрація ресторанів на основі ролі користувача
       if (user?.role === 'admin') {
         // Адмін бачить всі ресторани
-        console.log("✅ Адмін - показуємо всі ресторани");
         setRestaurants(firebaseRestaurants);
+      } else if (Array.isArray(roleRestaurantIds) && roleRestaurantIds.length > 0) {
+        // Якщо у ролі є масив ресторанів
+        const allowed = firebaseRestaurants.filter((r) => roleRestaurantIds.includes(String(r.id)));
+        setRestaurants(allowed);
       } else if (user?.restaurant) {
-        // Керуючий бачить тільки свій ресторан
-        console.log("👤 Керуючий - показуємо тільки свій ресторан");
-        const userRestaurant = firebaseRestaurants.filter(r => r.id === user.restaurant);
-        setRestaurants(userRestaurant);
+        // Якщо у користувача є один ресторан
+        setRestaurants(firebaseRestaurants.filter(r => r.id === user.restaurant));
       } else {
-        // Якщо немає прив'язки - показуємо порожній список
-        console.log("⚠️ Немає ролі або ресторану - порожній список");
         setRestaurants([]);
       }
     }
-  }, [firebaseRestaurants, restaurantsLoading, user]);
+  }, [firebaseRestaurants, restaurantsLoading, user, roleRestaurantIds]);
 
   useEffect(() => {
     const normalizedFromDictionary = Array.isArray(assetBusinessUnits)
@@ -554,12 +556,14 @@ function App() {
     const loadPermissions = async () => {
       if (!user) {
         setUserPermissions({});
+        setRoleRestaurantIds([]);
         return;
       }
 
       // адміністратор не потребує фільтрації, зберігаємо порожній об'єкт
       if (user.role === 'admin') {
         setUserPermissions({});
+        setRoleRestaurantIds([]);
         return;
       }
 
@@ -567,6 +571,7 @@ function App() {
       const roleIdOrName = user.workRole || user.role;
       if (!roleIdOrName) {
         setUserPermissions({});
+        setRoleRestaurantIds([]);
         return;
       }
 
@@ -574,9 +579,14 @@ function App() {
         const rolePerms = await getRolePermissions(roleIdOrName);
         console.log("DEBUG завантажено дозволи для ролі/робочої ролі:", roleIdOrName, rolePerms);
         setUserPermissions(rolePerms.permissions || {});
+        const normalizedRestaurantIds = Array.isArray(rolePerms?.restaurants)
+          ? rolePerms.restaurants.map((id) => String(id))
+          : [];
+        setRoleRestaurantIds(normalizedRestaurantIds);
       } catch (err) {
         console.error("Помилка отримання прав доступу для користувача:", err);
         setUserPermissions({});
+        setRoleRestaurantIds([]);
       }
     };
     loadPermissions();
@@ -600,8 +610,15 @@ function App() {
 
   // Автоматично заповнюємо форму даними ресторану керуючого
   useEffect(() => {
-    if (!restaurantsLoading && user?.role !== 'admin' && user?.restaurant && firebaseRestaurants.length > 0) {
-      const userRestaurant = firebaseRestaurants.find(r => r.id === user.restaurant);
+    if (!restaurantsLoading && user?.role !== 'admin' && firebaseRestaurants.length > 0) {
+      const effectiveRestaurantId =
+        roleRestaurantIds.length === 1
+          ? roleRestaurantIds[0]
+          : user?.restaurant
+            ? String(user.restaurant)
+            : "";
+      if (!effectiveRestaurantId) return;
+      const userRestaurant = firebaseRestaurants.find((r) => String(r.id) === String(effectiveRestaurantId));
       if (userRestaurant) {
         setRestaurantForm({
           regNumber: userRestaurant.regNumber || "",
@@ -626,7 +643,7 @@ function App() {
         }
       }
     }
-  }, [restaurantsLoading, user, firebaseRestaurants]);
+  }, [restaurantsLoading, user, firebaseRestaurants, roleRestaurantIds]);
 
   // Допоміжна функція для отримання вкладок для конкретного підрозділу з menuStructure
   const getTabsForSection = (navId) => {
@@ -663,10 +680,6 @@ function App() {
     if (allowed === true) return allTabs;
     if (Array.isArray(allowed)) {
       return allTabs.filter(tab => allowed.includes(tab.id));
-    }
-    // Fallback: для ролі керуючого не блокуємо вкладки повністю, якщо права не знайшлись/застаріли.
-    if (isManagerLikeUser(user) && !ADMIN_ONLY_NAV_IDS.has(activeNav)) {
-      return allTabs;
     }
     // Якщо доступу немає — не показувати вкладки
     return [];
@@ -734,76 +747,12 @@ function App() {
   ]);
 
   const menuStructureForPermissions = useMemo(() => {
-
-    // Базова структура навігації (без фільтрації прав)
+    // Базова структура навігації
     const baseNavItems = [
-      {
-        id: "dashboard",
-        label: "Дашборд",
-        children: [
-          { id: "dashboard-ops", label: "Операційний огляд" },
-        ],
-      },
-      {
-        id: "settings",
-        label: "Налаштування",
-        children: [
-          { id: "settings-restaurant", label: "Дані ресторану" },
-          { id: "settings-accounts", label: "Облікові записи" },
-          { id: "settings-permissions", label: "Права доступу" },
-        ],
-      },
-      {
-        id: "operations",
-        label: "Операції",
-        children: [
-          { id: "ops-checklists", label: "Чек-листи" },
-          { id: "ops-haccp", label: "HACCP журнали" },
-          { id: "ops-maintenance", label: "Сервісні заявки" },
-        ],
-      },
-      {
-        id: "inventory",
-        label: "Облік",
-        children: [
-          { id: "inventory-products", label: "Продукти" },
-          { id: "inventory-utilities", label: "Утиліти" },
-          { id: "inventory-assets", label: "Основні засоби" },
-        ],
-      },
-      {
-        id: "reports",
-        label: "Звіти",
-        children: [
-          { id: "reports-products", label: "Інвентаризація продуктів" },
-          { id: "reports-assets", label: "Основні засоби" },
-        ],
-      },
-      {
-        id: "security",
-        label: "Безпека",
-        children: [
-          { id: "security-audit", label: "Аудит дій" },
-        ],
-      },
-      {
-        id: "team",
-        label: "Команда",
-        children: [
-          { id: "team-roles", label: "Ролі та доступи" },
-        ],
-      },
-      {
-        id: "maintenance",
-        label: "Сервіс",
-        children: [
-          { id: "maintenance-plan", label: "Планові роботи" },
-        ],
-      },
+      // ...existing code...
     ];
-
     // Додаємо вкладки до кожного пункту меню
-    return baseNavItems.map(section => ({
+    const navWithTabs = baseNavItems.map(section => ({
       ...section,
       children: section.children.map(child => {
         const tabs = getTabsForSection(child.id);
@@ -812,7 +761,19 @@ function App() {
           : child;
       })
     }));
-  }, []);
+    // Якщо користувач адмін — показуємо все
+    if (user?.role === 'admin') return navWithTabs;
+    // Фільтруємо children згідно з userPermissions
+    return navWithTabs.map(section => ({
+      ...section,
+      children: section.children.filter(child => {
+        const perm = userPermissions[child.id];
+        // Якщо немає права — не показуємо
+        if (perm === undefined) return false;
+        return perm === true || (Array.isArray(perm) && perm.length > 0);
+      })
+    }));
+  }, [user, userPermissions]);
 
   useEffect(() => {
     if (topTabs.length === 0) {
@@ -1580,9 +1541,9 @@ function App() {
     // Фільтрація за правами
     const filtered = structureWithAdmin.map(group => {
       const filteredChildren = group.children.filter(child => {
-        const hasExplicitAccess = userPermissions[child.id] !== undefined && userPermissions[child.id] !== false;
-        const hasManagerFallbackAccess = !isAdmin && isManagerLikeUser(user) && !ADMIN_ONLY_NAV_IDS.has(child.id);
-        const hasAccess = isAdmin || hasExplicitAccess || hasManagerFallbackAccess;
+        const perm = userPermissions[child.id];
+        const hasExplicitAccess = perm === true || (Array.isArray(perm) && perm.length > 0);
+        const hasAccess = isAdmin || hasExplicitAccess;
         return hasAccess;
       });
       return { ...group, children: filteredChildren };
@@ -1725,8 +1686,9 @@ function App() {
         const userRestaurantName = user?.restaurant
           ? restaurants.find((r) => r.id === user.restaurant)?.name
           : "";
-        const assetsForReports = !isGlobalAdmin && user?.restaurant
-          ? assets.filter((asset) => String(asset?.locationName || "") === String(userRestaurantName || ""))
+        const allowedRestaurantNames = new Set((restaurants || []).map((r) => String(r?.name || "")));
+        const assetsForReports = !isGlobalAdmin && restaurants.length > 0
+          ? assets.filter((asset) => allowedRestaurantNames.has(String(asset?.locationName || "")))
           : assets;
 
         // ...existing code...
@@ -2752,10 +2714,10 @@ function App() {
             {(() => {
               // Фільтруємо активи на основі ролі користувача
               let assetsToShow = assets;
-              if (user?.role !== 'admin' && user?.restaurant) {
-                // Керуючий бачить тільки активи свого ресторану
-                const userRestaurantName = restaurants.find(r => r.id === user.restaurant)?.name;
-                assetsToShow = assets.filter(a => a.locationName === userRestaurantName);
+              if (user?.role !== 'admin' && restaurants.length > 0) {
+                // Не-адмін бачить активи лише дозволених ресторанів (може бути декілька)
+                const allowedRestaurantNames = new Set((restaurants || []).map((r) => String(r?.name || "")));
+                assetsToShow = assets.filter((a) => allowedRestaurantNames.has(String(a?.locationName || "")));
               }
               
               return (
@@ -2896,10 +2858,10 @@ function App() {
           {(() => {
             // Фільтруємо активи на основі ролі користувача
             let assetsToShow = assets;
-            if (user?.role !== 'admin' && user?.restaurant) {
-              // Керуючий бачить тільки активи свого ресторану
-              const userRestaurantName = restaurants.find(r => r.id === user.restaurant)?.name;
-              assetsToShow = assets.filter(a => a.locationName === userRestaurantName);
+            if (user?.role !== 'admin' && restaurants.length > 0) {
+              // Не-адмін бачить активи лише дозволених ресторанів (може бути декілька)
+              const allowedRestaurantNames = new Set((restaurants || []).map((r) => String(r?.name || "")));
+              assetsToShow = assets.filter((a) => allowedRestaurantNames.has(String(a?.locationName || "")));
             }
             
             return (
@@ -3242,15 +3204,20 @@ function App() {
                   onClose={() => setNotificationPanelOpen(false)}
                   notifications={notifications}
                 />
-                <div className="hidden sm:flex items-center gap-2 text-sm text-slate-300">
+                <button
+                  type="button"
+                  onClick={() => setShowProfileModal(true)}
+                  className="flex items-center gap-2 text-sm text-slate-300 rounded-lg px-2 py-1.5 hover:bg-slate-800"
+                  title="Налаштування профілю"
+                >
                   <LucideIcons.UserIcon size={16} />
-                  <span className="max-w-xs truncate">{user?.displayName || user?.email}</span>
+                  <span className="max-w-xs truncate hidden sm:inline">{user?.displayName || user?.email}</span>
                   {user?.role === "admin" && (
-                    <span className="px-2 py-1 rounded bg-indigo-600 text-white text-xs font-semibold">
+                    <span className="px-2 py-1 rounded bg-indigo-600 text-white text-xs font-semibold hidden sm:inline">
                       Admin
                     </span>
                   )}
-                </div>
+                </button>
                 <button
                   onClick={async () => {
                     try {
@@ -3325,6 +3292,11 @@ function App() {
 
       {/* Auth Modals */}
       {loginModalElement}
+      <ProfileSettingsModal
+        open={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+        user={user}
+      />
     </div>
   );
 }

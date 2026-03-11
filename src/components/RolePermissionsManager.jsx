@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
 import { Shield, Save, AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { getWorkRoles } from "../firebase/rolesPositions";
+import RestaurantMultiSelect from "./RestaurantMultiSelect";
 import { getRolePermissions, saveRolePermissions } from "../firebase/permissions";
 
 export const RolePermissionsManager = ({ menuStructure = [] }) => {
+  const [restaurants, setRestaurants] = useState([]);
   // Стан згортання секцій
   // За замовчуванням усі секції згорнуті
   const [collapsedSections, setCollapsedSections] = useState(() => {
@@ -24,6 +26,7 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
   const [roles, setRoles] = useState([]);
   const [selectedRole, setSelectedRole] = useState(null);
   const [permissions, setPermissions] = useState({});
+  const [roleRestaurants, setRoleRestaurants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -32,6 +35,10 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
   useEffect(() => {
     console.log("🔧 RolePermissionsManager mounted, menuStructure:", menuStructure);
     loadRoles();
+    // Завантажити список ресторанів
+    import("../firebase/firestore").then(({ getRestaurants }) => {
+      getRestaurants().then(setRestaurants).catch(() => setRestaurants([]));
+    });
   }, []);
 
   const loadRoles = async () => {
@@ -50,13 +57,14 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
   const handleRoleSelect = async (role) => {
     setSelectedRole(role);
     setSuccess("");
-    
     try {
       const rolePerms = await getRolePermissions(role.id);
       setPermissions(rolePerms.permissions || {});
+      setRoleRestaurants(Array.isArray(rolePerms.restaurants) ? rolePerms.restaurants : []);
     } catch (error) {
       console.error("Помилка завантаження дозволів:", error);
       setPermissions({});
+      setRoleRestaurants([]);
     }
   };
 
@@ -93,28 +101,26 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
 
   const handleSave = async () => {
     if (!selectedRole) return;
-
     try {
       setSaving(true);
       setError("");
       setSuccess("");
-      
       // Нормалізуємо права: якщо це пустий масив - перетворюємо на true (повний доступ)
       const normalizedPermissions = {};
       Object.entries(permissions).forEach(([key, value]) => {
         if (Array.isArray(value)) {
-          // Якщо це масив і він не пустий - залишаємо як є
           normalizedPermissions[key] = value.length > 0 ? value : true;
         } else {
-          // Іншим чином залишаємо як є
           normalizedPermissions[key] = value;
         }
       });
-      
-      console.log("💾 Збереження нормалізованих прав:", normalizedPermissions);
-      
-      await saveRolePermissions(selectedRole.id, selectedRole.name, normalizedPermissions);
-      
+      // Додаємо ресторани
+      const savePayload = {
+        permissions: normalizedPermissions,
+        restaurants: roleRestaurants,
+      };
+      console.log("💾 Збереження прав і ресторанів:", savePayload);
+      await saveRolePermissions(selectedRole.id, selectedRole.name, normalizedPermissions, roleRestaurants);
       setSuccess(`Доступи для ролі "${selectedRole.name}" успішно збережено!`);
     } catch (error) {
       console.error("Помилка збереження:", error);
@@ -189,6 +195,12 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
               <h3 className="text-lg font-semibold text-slate-900 mb-4">
                 Налаштування доступів для ролі: <span className="text-indigo-600">{selectedRole.name}</span>
               </h3>
+              {/* Вибір ресторанів для ролі */}
+              <RestaurantMultiSelect
+                restaurants={restaurants}
+                value={roleRestaurants}
+                onChange={setRoleRestaurants}
+              />
 
               {menuStructure.length === 0 ? (
                 <div className="p-4 bg-yellow-100 border border-yellow-400 text-yellow-800 rounded-lg">

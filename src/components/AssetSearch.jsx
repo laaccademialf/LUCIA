@@ -133,13 +133,10 @@ export default function AssetSearch({ assets, user, restaurants, onEdit }) {
   if (user && found) {
     if (user.role === 'admin') {
       canEdit = true;
-    } else if (user.restaurant && restaurants && restaurants.length > 0) {
-      // Знаходимо ресторан користувача
-      const userRest = restaurants.find(r => r.id === user.restaurant);
-      // Дозволяємо редагування, якщо назва ресторану співпадає з locationName активу
-      if (userRest && found.locationName === userRest.name) {
-        canEdit = true;
-      }
+    } else if (restaurants && restaurants.length > 0) {
+      // Не-адмін може редагувати активи лише зі списку дозволених ресторанів
+      const allowedRestaurantNames = new Set(restaurants.map((r) => String(r?.name || "")));
+      canEdit = allowedRestaurantNames.has(String(found?.locationName || ""));
     }
   }
   return (

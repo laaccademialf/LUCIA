@@ -4,6 +4,10 @@ import {
   signOut,
   onAuthStateChanged,
   updateProfile,
+  updateEmail,
+  updatePassword,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
 } from "firebase/auth";
 import { doc, setDoc, getDoc } from "firebase/firestore";
 import { auth, db } from "./config";
@@ -362,6 +366,105 @@ export const logoutUser = async () => {
     console.error("Помилка виходу:", error);
     throw error;
   }
+};
+
+/**
+ * Оновити профіль поточного користувача
+ * @param {{displayName?: string, email?: string, currentPassword?: string}} payload
+ * @returns {Promise<Object>} Оновлений профіль
+ */
+export const updateCurrentUserProfile = async ({ displayName, email, currentPassword } = {}) => {
+  const nextDisplayName = String(displayName || "").trim();
+  const nextEmail = String(email || "").trim();
+
+  if (isAuthApiEnabled()) {
+    const response = await authApiRequest("/auth/update-profile", {
+      method: "POST",
+      headers: authApiHeaders(true),
+      body: JSON.stringify({
+        displayName: nextDisplayName,
+        email: nextEmail,
+        currentPassword: String(currentPassword || ""),
+      }),
+    });
+
+    const updatedUser = applyPlatformAdminOverride(response?.user || null);
+    if (updatedUser) {
+      notifyAuthApiSubscribers(updatedUser);
+      return updatedUser;
+    }
+    return getCurrentUser();
+  }
+
+  const current = auth.currentUser;
+  if (!current) {
+    throw new Error("Користувач не авторизований");
+  }
+
+  const currentEmail = String(current.email || "").trim();
+  const emailChanged = Boolean(nextEmail) && nextEmail !== currentEmail;
+
+  // Для зміни email у Firebase може знадобитися повторна автентифікація
+  if (emailChanged) {
+    const pwd = String(currentPassword || "").trim();
+    if (!pwd) {
+      const err = new Error("Для зміни email введіть поточний пароль");
+      err.code = "auth/requires-current-password";
+      throw err;
+    }
+    const credential = EmailAuthProvider.credential(currentEmail, pwd);
+    await reauthenticateWithCredential(current, credential);
+    await updateEmail(current, nextEmail);
+  }
+
+  if (nextDisplayName && nextDisplayName !== String(current.displayName || "")) {
+    await updateProfile(current, { displayName: nextDisplayName });
+  }
+
+  await setDoc(
+    doc(db, "users", current.uid),
+    {
+      email: emailChanged ? nextEmail : currentEmail,
+      displayName: nextDisplayName || current.displayName || "",
+      updatedAt: new Date().toISOString(),
+    },
+    { merge: true }
+  );
+
+  return await resolveFirebaseUserProfile(current);
+};
+
+/**
+ * Змінити пароль поточного користувача
+ * @param {{currentPassword: string, newPassword: string}} payload
+ * @returns {Promise<boolean>}
+ */
+export const changeCurrentUserPassword = async ({ currentPassword, newPassword } = {}) => {
+  const currentPwd = String(currentPassword || "").trim();
+  const nextPwd = String(newPassword || "").trim();
+
+  if (!currentPwd || !nextPwd) {
+    throw new Error("Заповніть поточний та новий пароль");
+  }
+
+  if (isAuthApiEnabled()) {
+    await authApiRequest("/auth/change-password", {
+      method: "POST",
+      headers: authApiHeaders(true),
+      body: JSON.stringify({ currentPassword: currentPwd, newPassword: nextPwd }),
+    });
+    return true;
+  }
+
+  const current = auth.currentUser;
+  if (!current || !current.email) {
+    throw new Error("Користувач не авторизований");
+  }
+
+  const credential = EmailAuthProvider.credential(current.email, currentPwd);
+  await reauthenticateWithCredential(current, credential);
+  await updatePassword(current, nextPwd);
+  return true;
 };
 
 /**

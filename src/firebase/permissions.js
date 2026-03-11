@@ -72,11 +72,12 @@ export const getAllRolePermissions = async () => {
 /**
  * Зберегти дозволи для ролі
  */
-export const saveRolePermissions = async (roleId, roleName, permissions) => {
+export const saveRolePermissions = async (roleId, roleName, permissions, restaurants = []) => {
   if (isApiDataModeEnabled()) {
     await upsertCollectionItemById("rolePermissions", roleId, {
       roleName,
       permissions,
+      restaurants,
       updatedAt: new Date().toISOString(),
     });
     return;
@@ -86,6 +87,7 @@ export const saveRolePermissions = async (roleId, roleName, permissions) => {
     await setDoc(doc(db, "rolePermissions", roleId), {
       roleName,
       permissions,
+      restaurants,
       updatedAt: new Date().toISOString(),
     });
   } catch (error) {
