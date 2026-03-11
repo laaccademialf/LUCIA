@@ -196,7 +196,10 @@ const authApiHeaders = (withJson = true) => {
   const headers = {};
   if (withJson) headers["Content-Type"] = "application/json";
   const sessionToken = getAuthSessionToken();
-  if (sessionToken) headers["x-session-token"] = sessionToken;
+  if (sessionToken) {
+    headers["x-session-token"] = sessionToken;
+    headers.Authorization = `Bearer ${sessionToken}`;
+  }
   const apiToken = getAuthApiToken();
   if (apiToken) headers["x-api-token"] = apiToken;
   return headers;
@@ -525,6 +528,18 @@ export const getCurrentUser = () => {
           headers: authApiHeaders(false),
         });
         const user = applyPlatformAdminOverride(payload?.user || null);
+
+        // Деякі проксі можуть загубити нестандартний заголовок сесії на окремих запитах.
+        // Якщо токен локально є, але /auth/me повернув user:null, зберігаємо поточну сесію.
+        if (!user) {
+          const cachedUser = getCachedAuthUser();
+          if (token && cachedUser) {
+            notifyAuthApiSubscribers(cachedUser);
+            resolve(cachedUser);
+            return;
+          }
+        }
+
         notifyAuthApiSubscribers(user);
         resolve(user);
       } catch (error) {
