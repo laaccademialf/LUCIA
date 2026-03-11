@@ -1343,6 +1343,20 @@ const ensureCollectionFlatTableMySql = async (conn, collectionName) => {
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )
   `);
+
+  // Backward compatibility: older _flat tables may miss payload/updated_at columns.
+  const existingColumns = await getMySqlColumns(conn, flatTable);
+  if (!existingColumns.has("payload")) {
+    await conn.execute(
+      `ALTER TABLE ${quoteIdentMySql(flatTable)} ADD COLUMN ${quoteIdentMySql("payload")} JSON NULL`
+    );
+  }
+  if (!existingColumns.has("updated_at")) {
+    await conn.execute(
+      `ALTER TABLE ${quoteIdentMySql(flatTable)} ADD COLUMN ${quoteIdentMySql("updated_at")} TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`
+    );
+  }
+
   return flatTable;
 };
 
