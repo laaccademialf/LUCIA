@@ -319,7 +319,7 @@ export default function DatabaseConnectionsManager() {
       const payload = buildDraftConnectionPayload();
       const result = await normalizeCustomMySqlData({
         targetConfig: payload.config,
-        collections: [],
+        collections: DEFAULT_COLLECTIONS,
       });
       const stats = result?.serverResponse?.stats || {};
       const statText = Object.entries(stats)
@@ -489,7 +489,7 @@ export default function DatabaseConnectionsManager() {
     try {
       const result = await normalizeCustomMySqlData({
         targetConfig: connection.config || {},
-        collections: [],
+        collections: DEFAULT_COLLECTIONS,
       });
       const stats = result?.serverResponse?.stats || {};
       const statText = Object.entries(stats)
