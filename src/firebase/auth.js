@@ -178,10 +178,19 @@ const authApiRequest = async (path, options = {}) => {
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     const error = new Error(body || `Auth API error ${response.status}`);
+    error.status = response.status;
     error.code = `auth/api-${response.status}`;
     throw error;
   }
   return response.json().catch(() => ({}));
+};
+
+const isUnauthorizedAuthError = (error) => {
+  const status = Number(error?.status);
+  if (status === 401 || status === 403) return true;
+
+  const code = String(error?.code || "").toLowerCase();
+  return code === "auth/api-401" || code === "auth/api-403";
 };
 
 /**
@@ -489,9 +498,20 @@ export const getCurrentUser = () => {
         const user = applyPlatformAdminOverride(payload?.user || null);
         notifyAuthApiSubscribers(user);
         resolve(user);
-      } catch {
-        setAuthSessionToken("");
-        notifyAuthApiSubscribers(null);
+      } catch (error) {
+        if (isUnauthorizedAuthError(error)) {
+          setAuthSessionToken("");
+          notifyAuthApiSubscribers(null);
+          resolve(null);
+          return;
+        }
+
+        // Тимчасові помилки бекенду/мережі не повинні розлогінювати користувача.
+        if (authApiCurrentUser) {
+          resolve(authApiCurrentUser);
+          return;
+        }
+
         resolve(null);
       }
     });

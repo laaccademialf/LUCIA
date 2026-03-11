@@ -270,7 +270,8 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     if (!restaurant) return "";
 
     // Беремо перші 3 символи облікового номеру
-    const prefix = restaurant.regNumber.substring(0, 3);
+    const prefix = String(restaurant?.regNumber || "").substring(0, 3);
+    if (!prefix) return "";
 
     // Знаходимо всі активи цього ресторану
     const restaurantAssets = allAssets.filter(a => a.locationName === locationName);
