@@ -1,28 +1,4 @@
 import http from "node:http";
-import multer from "multer";
-import { createServer as createExpressServer } from "express";
-// Express сервер для multipart/form-data
-const express = require('express');
-const upload = require('multer')({ dest: ASSET_IMAGE_DIR });
-const app = express();
-
-app.post('/api/assets/photos', upload.single('photo'), async (req, res) => {
-  setCorsHeaders(res);
-  if (!isAuthorized(req)) {
-    return sendJson(res, 401, { ok: false, error: "Unauthorized" });
-  }
-  if (!req.file) {
-    return sendJson(res, 400, { ok: false, error: "No file uploaded" });
-  }
-  // Генеруємо публічний URL
-  const url = `${ASSET_IMAGE_PUBLIC_BASE}/${req.file.filename}`;
-  return sendJson(res, 200, { ok: true, url, name: req.file.originalname });
-});
-
-// Запуск Express сервера паралельно з http
-app.listen(PORT + 1, () => {
-  console.log(`Express photo upload server running on port ${PORT + 1}`);
-});
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
