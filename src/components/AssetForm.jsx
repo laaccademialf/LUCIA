@@ -452,8 +452,22 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     const sourceDataUrl = await readAsDataUrl(file);
     const image = await loadImage(sourceDataUrl);
 
-    const MAX_SIDE = 1600;
-    const TARGET_MAX_CHARS = 210000;
+    const MAX_SIDE = 1280;
+    const TARGET_MAX_BYTES = 180 * 1024;
+    const MIN_SIDE = 700;
+
+    const canvasToBlob = (canvasEl, mimeType, quality) =>
+      new Promise((resolve) => {
+        canvasEl.toBlob((blob) => resolve(blob), mimeType, quality);
+      });
+
+    const blobToDataUrl = (blob) =>
+      new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
 
     let width = image.naturalWidth || image.width;
     let height = image.naturalHeight || image.height;
@@ -480,21 +494,30 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     draw(width, height);
 
     let quality = 0.82;
-    let output = canvas.toDataURL("image/jpeg", quality);
+    let outputBlob = await canvasToBlob(canvas, "image/jpeg", quality);
 
-    while (output.length > TARGET_MAX_CHARS && quality > 0.45) {
-      quality -= 0.08;
-      output = canvas.toDataURL("image/jpeg", quality);
+    while (outputBlob && outputBlob.size > TARGET_MAX_BYTES && quality > 0.48) {
+      quality -= 0.07;
+      outputBlob = await canvasToBlob(canvas, "image/jpeg", quality);
     }
 
-    while (output.length > TARGET_MAX_CHARS && width > 900 && height > 900) {
+    while (
+      outputBlob &&
+      outputBlob.size > TARGET_MAX_BYTES &&
+      width > MIN_SIDE &&
+      height > MIN_SIDE
+    ) {
       width = Math.round(width * 0.86);
       height = Math.round(height * 0.86);
       draw(width, height);
-      output = canvas.toDataURL("image/jpeg", Math.max(quality, 0.55));
+      outputBlob = await canvasToBlob(canvas, "image/jpeg", Math.max(quality, 0.55));
     }
 
-    return output;
+    if (!outputBlob) {
+      return sourceDataUrl;
+    }
+
+    return await blobToDataUrl(outputBlob);
   };
 
   const handlePhotoUpload = async (e) => {
