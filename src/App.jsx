@@ -1249,7 +1249,7 @@ function App() {
       await endAssetInventorySessionInFirestore(assetInventorySession.id, {
         endedById: user?.uid || "",
         endedByName,
-      });
+      }, assetInventorySessionScopeId);
       setAssetInventorySession((prev) => ({
         ...(prev || {}),
         isActive: false,

@@ -266,15 +266,30 @@ export const subscribeToAssets = (callback) => {
 
 // ==================== СЕСІЇ ІНВЕНТАРИЗАЦІЇ ОЗ ====================
 
+const normalizeSessionActive = (value) => {
+  if (value === true || value === 1) return true;
+  const text = String(value || "").trim().toLowerCase();
+  return text === "true" || text === "1";
+};
+
+const normalizeInventorySession = (item) => {
+  if (!item || typeof item !== "object") return item;
+  return {
+    ...item,
+    isActive: normalizeSessionActive(item.isActive),
+    scopeId: String(item.scopeId || "global"),
+  };
+};
+
 export const startAssetInventorySession = async (scopeId, sessionData = {}) => {
   if (isApiDataModeEnabled()) {
     const scope = String(scopeId || "global");
     const nowIso = new Date().toISOString();
-    const all = await listCollectionItemsApi("assetInventorySessions");
+    const all = (await listCollectionItemsApi("assetInventorySessions")).map(normalizeInventorySession);
 
     await Promise.all(
       all
-        .filter((item) => String(item?.scopeId || "global") === scope && item?.isActive === true)
+        .filter((item) => String(item?.scopeId || "global") === scope && normalizeSessionActive(item?.isActive))
         .map((item) =>
           updateCollectionItemApi("assetInventorySessions", item.id, {
             isActive: false,
@@ -328,7 +343,7 @@ export const startAssetInventorySession = async (scopeId, sessionData = {}) => {
   }
 };
 
-export const endAssetInventorySession = async (sessionId, endData = {}) => {
+export const endAssetInventorySession = async (sessionId, endData = {}, scopeId = "") => {
   if (isApiDataModeEnabled()) {
     const nowIso = new Date().toISOString();
     await updateCollectionItemApi("assetInventorySessions", sessionId, {
@@ -337,6 +352,30 @@ export const endAssetInventorySession = async (sessionId, endData = {}) => {
       updatedAt: nowIso,
       ...endData,
     });
+
+    // Safety net: close any other active sessions in the same scope (legacy duplicates).
+    const targetScope = String(scopeId || "").trim();
+    if (targetScope) {
+      const all = (await listCollectionItemsApi("assetInventorySessions")).map(normalizeInventorySession);
+      await Promise.all(
+        all
+          .filter(
+            (item) =>
+              String(item?.id || "") !== String(sessionId || "") &&
+              String(item?.scopeId || "global") === targetScope &&
+              normalizeSessionActive(item?.isActive)
+          )
+          .map((item) =>
+            updateCollectionItemApi("assetInventorySessions", item.id, {
+              isActive: false,
+              endedAt: nowIso,
+              endedReason: "auto_closed_by_scope_end",
+              updatedAt: nowIso,
+              ...endData,
+            })
+          )
+      );
+    }
     return;
   }
 
@@ -359,9 +398,9 @@ export const subscribeToActiveAssetInventorySession = (scopeId, callback) => {
   if (isApiDataModeEnabled()) {
     return subscribeByPolling(async () => {
       const scope = String(scopeId || "global");
-      const sessions = await listCollectionItemsApi("assetInventorySessions");
+      const sessions = (await listCollectionItemsApi("assetInventorySessions")).map(normalizeInventorySession);
       const filtered = sessions
-        .filter((item) => String(item?.scopeId || "global") === scope && item?.isActive === true)
+        .filter((item) => String(item?.scopeId || "global") === scope && normalizeSessionActive(item?.isActive))
         .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
       return filtered.slice(0, 1);
     }, (items) => callback(items[0] || null), 5000);
@@ -384,7 +423,7 @@ export const subscribeToAssetInventorySessions = (scopeId, callback) => {
   if (isApiDataModeEnabled()) {
     return subscribeByPolling(async () => {
       const scope = String(scopeId || "global");
-      const sessions = await listCollectionItemsApi("assetInventorySessions");
+      const sessions = (await listCollectionItemsApi("assetInventorySessions")).map(normalizeInventorySession);
       return sessions
         .filter((item) => String(item?.scopeId || "global") === scope)
         .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
