@@ -1347,12 +1347,44 @@ const toMySqlDateTime = (value) => {
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
 };
 
+const toMySqlDate = (value) => {
+  if (value === null || value === undefined) return null;
+
+  const text = String(value).trim();
+  if (!text) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text;
+  }
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const yyyy = parsed.getFullYear();
+  const mm = String(parsed.getMonth() + 1).padStart(2, "0");
+  const dd = String(parsed.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+
 const getMySqlColumns = async (conn, tableName) => {
   const [rows] = await conn.execute(
     `SELECT COLUMN_NAME AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`,
     [tableName]
   );
   return new Set(rows.map((row) => String(row.column_name || "")));
+};
+
+const getMySqlColumnTypes = async (conn, tableName) => {
+  const [rows] = await conn.execute(
+    `SELECT COLUMN_NAME AS column_name, DATA_TYPE AS data_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`,
+    [tableName]
+  );
+
+  return rows.reduce((acc, row) => {
+    const name = String(row.column_name || "");
+    if (!name) return acc;
+    acc[name] = String(row.data_type || "").toLowerCase();
+    return acc;
+  }, {});
 };
 
 const listMySqlLuciaCollections = async (conn) => {
@@ -1427,6 +1459,8 @@ const normalizeOneCollectionToFlatMySql = async (conn, collectionName) => {
 
   await ensureFlatColumnsMySql(conn, flatTable, typeMap);
 
+  const columnTypes = await getMySqlColumnTypes(conn, flatTable);
+
   await conn.execute(`DELETE FROM ${quoteIdentMySql(flatTable)}`);
 
   const scalarColumns = Object.keys(typeMap);
@@ -1438,6 +1472,15 @@ const normalizeOneCollectionToFlatMySql = async (conn, collectionName) => {
       JSON.stringify(row.payload || {}),
       ...scalarColumns.map((col) => {
         const value = row.flat[col];
+        const declaredType = String(columnTypes[col] || "").toLowerCase();
+
+        if (declaredType === "date") {
+          return toMySqlDate(value);
+        }
+        if (declaredType === "datetime" || declaredType === "timestamp") {
+          return toMySqlDateTime(value);
+        }
+
         if (typeMap[col] === "date") {
           return toMySqlDateTime(value);
         }
