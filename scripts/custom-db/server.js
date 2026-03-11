@@ -278,7 +278,8 @@ const mapUserProfile = (profile) => ({
   email: normalizeEmail(profile?.email || profile?.user_email || ""),
   displayName: readFirstString(profile?.displayName, profile?.display_name),
   role: readFirstString(profile?.role, "user") || "user",
-  restaurant: readFirstString(profile?.restaurant, profile?.restaurant_id),
+  restaurant: readFirstString(profile?.restaurant, profile?.restaurant_id, profile?.restaurant_name),
+  restaurantName: readFirstString(profile?.restaurant_name, profile?.restaurant, profile?.restaurant_id),
   position: readFirstString(profile?.position, profile?.position_name),
   workRole: readFirstString(profile?.workRole, profile?.work_role, profile?.work_role_name),
 });

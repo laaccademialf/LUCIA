@@ -521,7 +521,9 @@ function App() {
       console.log("- firebaseRestaurants:", firebaseRestaurants);
       
       const normalizeText = (value) => String(value || "").trim().toLowerCase();
-      const userRestaurantKey = String(user?.restaurant || user?.restaurantId || user?.restaurant_id || "").trim();
+      const userRestaurantKey = String(
+        user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name || ""
+      ).trim();
       const isRestaurantMatchedByProfile = (restaurant) => {
         const candidateId = String(restaurant?.id || "").trim();
         const candidateName = normalizeText(restaurant?.name);
@@ -545,7 +547,21 @@ function App() {
         setRestaurants(allowed);
       } else if (user?.restaurant) {
         // Якщо у користувача є один ресторан
-        const matched = firebaseRestaurants.filter(isRestaurantMatchedByProfile);
+        let matched = firebaseRestaurants.filter(isRestaurantMatchedByProfile);
+
+        // Conservative fallback: if exact match failed, allow a fuzzy name match
+        // only when there is exactly one candidate.
+        if (matched.length === 0) {
+          const target = normalizeText(userRestaurantKey);
+          const fuzzyCandidates = firebaseRestaurants.filter((r) => {
+            const name = normalizeText(r?.name);
+            return Boolean(name) && Boolean(target) && (name.includes(target) || target.includes(name));
+          });
+          if (fuzzyCandidates.length === 1) {
+            matched = fuzzyCandidates;
+          }
+        }
+
         setRestaurants(matched);
       } else {
         setRestaurants([]);
@@ -631,8 +647,8 @@ function App() {
       const effectiveRestaurantId =
         roleRestaurantIds.length === 1
           ? roleRestaurantIds[0]
-          : (user?.restaurant || user?.restaurantId || user?.restaurant_id)
-            ? String(user?.restaurant || user?.restaurantId || user?.restaurant_id)
+          : (user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name)
+            ? String(user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name)
             : "";
       if (!effectiveRestaurantId) return;
       const normalizedEffectiveRestaurant = String(effectiveRestaurantId || "").trim().toLowerCase();
@@ -1704,10 +1720,10 @@ function App() {
   );
 
   const renderContent = () => {
-        const isGlobalAdmin = user?.role === 'admin' && !user?.restaurant;
-        const userRestaurantName = (user?.restaurant || user?.restaurantId || user?.restaurant_id)
+          const isGlobalAdmin = user?.role === 'admin' && !user?.restaurant;
+          const userRestaurantName = (user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name)
           ? restaurants.find((r) => {
-              const key = String(user?.restaurant || user?.restaurantId || user?.restaurant_id || "").trim();
+            const key = String(user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name || "").trim();
               const target = String(key || "").trim().toLowerCase();
               const id = String(r?.id || "").trim();
               const name = String(r?.name || "").trim().toLowerCase();
@@ -3210,7 +3226,7 @@ function App() {
                     </svg>
                     <span className={clsx("font-semibold truncate", isMobile ? "text-xs" : "text-sm")}>
                       {restaurants.find((r) => {
-                        const key = String(user?.restaurant || user?.restaurantId || user?.restaurant_id || "").trim();
+                        const key = String(user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name || "").trim();
                         const target = String(key || "").trim().toLowerCase();
                         const id = String(r?.id || "").trim();
                         const name = String(r?.name || "").trim().toLowerCase();

@@ -371,7 +371,13 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       setPhotos(normalizePhotosForState(normalizedSelectedAsset.photos));
     } else {
       // При створенні нового активу підставляємо ресторан користувача
-      const userRestaurantKey = currentUser?.restaurant || currentUser?.restaurantId || currentUser?.restaurant_id || "";
+      const userRestaurantKey =
+        currentUser?.restaurant ||
+        currentUser?.restaurantId ||
+        currentUser?.restaurant_id ||
+        currentUser?.restaurantName ||
+        currentUser?.restaurant_name ||
+        "";
       const userRestaurant = userRestaurantKey
         ? findRestaurantByLocation(userRestaurantKey)
         : null;
