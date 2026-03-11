@@ -941,12 +941,14 @@ function App() {
   }, [assets, assetInventorySession, isAssetInventorySessionActive]);
 
   const getSessionRestaurantLabel = (session) => {
-    const sessionRestaurantId = String(session?.startedForRestaurantId || "");
+    const sessionRestaurantId = String(
+      session?.startedForRestaurantId || session?.started_for_restaurant_id || session?.restaurantId || session?.restaurant_id || ""
+    );
     if (sessionRestaurantId) {
       return restaurants.find((item) => String(item.id) === sessionRestaurantId)?.name || sessionRestaurantId;
     }
 
-    const scopeId = String(session?.scopeId || "");
+    const scopeId = String(session?.scopeId || session?.scope_id || "");
     if (scopeId.startsWith("restaurant:")) {
       const restaurantIdFromScope = scopeId.slice("restaurant:".length);
       return restaurants.find((item) => String(item.id) === restaurantIdFromScope)?.name || restaurantIdFromScope;

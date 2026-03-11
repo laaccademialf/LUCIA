@@ -274,10 +274,29 @@ const normalizeSessionActive = (value) => {
 
 const normalizeInventorySession = (item) => {
   if (!item || typeof item !== "object") return item;
+  const scopeId = String(item.scopeId || item.scope_id || "global");
+  const startedAt = item.startedAt || item.started_at || "";
+  const endedAt = item.endedAt || item.ended_at || "";
+  const updatedAt = item.updatedAt || item.updated_at || "";
+  const startedById = item.startedById || item.started_by_id || "";
+  const startedByName = item.startedByName || item.started_by_name || "";
+  const endedById = item.endedById || item.ended_by_id || "";
+  const endedByName = item.endedByName || item.ended_by_name || "";
+  const startedForRestaurantId =
+    item.startedForRestaurantId || item.started_for_restaurant_id || item.restaurantId || item.restaurant_id || "";
+
   return {
     ...item,
-    isActive: normalizeSessionActive(item.isActive),
-    scopeId: String(item.scopeId || "global"),
+    isActive: normalizeSessionActive(item.isActive ?? item.is_active),
+    scopeId,
+    startedAt,
+    endedAt,
+    updatedAt,
+    startedById,
+    startedByName,
+    endedById,
+    endedByName,
+    startedForRestaurantId,
   };
 };
 
