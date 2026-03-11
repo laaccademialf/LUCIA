@@ -530,7 +530,15 @@ function App() {
         setRestaurants(allowed);
       } else if (user?.restaurant) {
         // Якщо у користувача є один ресторан
-        setRestaurants(firebaseRestaurants.filter(r => r.id === user.restaurant));
+        const userRestaurantKey = String(user.restaurant || "").trim();
+        const normalizeText = (value) => String(value || "").trim().toLowerCase();
+        setRestaurants(
+          firebaseRestaurants.filter((r) => {
+            const idMatch = String(r?.id || "").trim() === userRestaurantKey;
+            const nameMatch = normalizeText(r?.name) === normalizeText(userRestaurantKey);
+            return idMatch || nameMatch;
+          })
+        );
       } else {
         setRestaurants([]);
       }
@@ -619,7 +627,12 @@ function App() {
             ? String(user.restaurant)
             : "";
       if (!effectiveRestaurantId) return;
-      const userRestaurant = firebaseRestaurants.find((r) => String(r.id) === String(effectiveRestaurantId));
+      const normalizedEffectiveRestaurant = String(effectiveRestaurantId || "").trim().toLowerCase();
+      const userRestaurant = firebaseRestaurants.find((r) => {
+        const byId = String(r?.id || "").trim().toLowerCase() === normalizedEffectiveRestaurant;
+        const byName = String(r?.name || "").trim().toLowerCase() === normalizedEffectiveRestaurant;
+        return byId || byName;
+      });
       if (userRestaurant) {
         setRestaurantForm({
           regNumber: userRestaurant.regNumber || "",
@@ -1685,7 +1698,7 @@ function App() {
   const renderContent = () => {
         const isGlobalAdmin = user?.role === 'admin' && !user?.restaurant;
         const userRestaurantName = user?.restaurant
-          ? restaurants.find((r) => r.id === user.restaurant)?.name
+          ? restaurants.find((r) => String(r?.id || "") === String(user.restaurant || "") || String(r?.name || "").trim().toLowerCase() === String(user.restaurant || "").trim().toLowerCase())?.name
           : "";
 
         const normalizeText = (value) => String(value || "").trim().toLowerCase();
@@ -3186,7 +3199,7 @@ function App() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                     </svg>
                     <span className={clsx("font-semibold truncate", isMobile ? "text-xs" : "text-sm")}>
-                      {restaurants.find(r => r.id === user.restaurant)?.name || 'Невідомий ресторан'}
+                      {restaurants.find((r) => String(r?.id || "") === String(user.restaurant || "") || String(r?.name || "").trim().toLowerCase() === String(user.restaurant || "").trim().toLowerCase())?.name || 'Невідомий ресторан'}
                     </span>
                   </div>
                 )}

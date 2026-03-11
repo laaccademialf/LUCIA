@@ -162,6 +162,21 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     return normalized;
   };
 
+  const normalizeText = (value) => String(value || "").trim().toLowerCase();
+
+  const findRestaurantByLocation = (locationValue) => {
+    const target = normalizeText(locationValue);
+    if (!target) return null;
+
+    return (
+      restaurants.find((r) => {
+        const byName = normalizeText(r?.name) === target;
+        const byId = String(r?.id || "").trim().toLowerCase() === target;
+        return byName || byId;
+      }) || null
+    );
+  };
+
   const filteredSubcategories = useMemo(() => {
     if (!Array.isArray(subcategoryItems) || subcategoryItems.length === 0) {
       return subcategories;
@@ -252,7 +267,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     } else {
       // При створенні нового активу підставляємо ресторан користувача
       const userRestaurant = currentUser?.restaurant
-        ? restaurants.find(r => r.id === currentUser.restaurant)
+        ? findRestaurantByLocation(currentUser.restaurant)
         : null;
       
       reset({
@@ -266,7 +281,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   // Функція для генерації інвентарного номеру
   const generateInvNumber = (locationName, allAssets) => {
     // Знаходимо ресторан по назві локації
-    const restaurant = restaurants.find(r => r.name === locationName);
+    const restaurant = findRestaurantByLocation(locationName);
     if (!restaurant) return "";
 
     // Беремо перші 3 символи облікового номеру
@@ -274,7 +289,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
     if (!prefix) return "";
 
     // Знаходимо всі активи цього ресторану
-    const restaurantAssets = allAssets.filter(a => a.locationName === locationName);
+    const restaurantAssets = allAssets.filter((a) => normalizeText(a?.locationName) === normalizeText(locationName));
 
     // Знаходимо максимальний 6-значний суфікс
     let maxNumber = 0;
@@ -297,7 +312,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       return; // Не генеруємо номер для редагування існуючого активу
     }
 
-    const locationName = watch("locationName");
+    const locationName = selectedLocationName;
     if (locationName) {
       // Генеруємо інвентарний номер
       const newInvNumber = generateInvNumber(locationName, assetsProp);
@@ -306,12 +321,12 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       }
       
       // Автозаповнюємо бізнес-напрям з ресторану
-      const restaurant = restaurants.find(r => r.name === locationName);
+      const restaurant = findRestaurantByLocation(locationName);
       if (restaurant && restaurant.businessUnit) {
         setValue("businessUnit", restaurant.businessUnit);
       }
     }
-  }, [watch("locationName"), restaurants, setValue, assetsProp]);
+  }, [selectedLocationName, restaurants, setValue, assetsProp]);
 
   const physicalWear = watch("physicalWear");
   const moralWear = watch("moralWear");
