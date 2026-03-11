@@ -532,7 +532,6 @@ function App() {
         if (candidateId && candidateId === userRestaurantKey) return true;
         if (candidateRegNumber && candidateRegNumber === userRestaurantKey) return true;
         if (candidateName && candidateName === target) return true;
-        if (candidateName && (candidateName.includes(target) || target.includes(candidateName))) return true;
         return false;
       };
 
@@ -1713,7 +1712,7 @@ function App() {
               const id = String(r?.id || "").trim();
               const name = String(r?.name || "").trim().toLowerCase();
               const reg = String(r?.regNumber || r?.reg_number || "").trim();
-              return id === key || reg === key || name === target || name.includes(target) || target.includes(name);
+              return id === key || reg === key || name === target;
             })?.name
           : "";
 
@@ -1760,11 +1759,6 @@ function App() {
 
           for (const candidate of assetRestaurantNames) {
             if (allowedRestaurantNames.has(candidate)) return true;
-            for (const allowedName of allowedRestaurantNames) {
-              if (candidate.includes(allowedName) || allowedName.includes(candidate)) {
-                return true;
-              }
-            }
           }
 
           return false;
@@ -3221,7 +3215,7 @@ function App() {
                         const id = String(r?.id || "").trim();
                         const name = String(r?.name || "").trim().toLowerCase();
                         const reg = String(r?.regNumber || r?.reg_number || "").trim();
-                        return id === key || reg === key || name === target || name.includes(target) || target.includes(name);
+                        return id === key || reg === key || name === target;
                       })?.name || 'Невідомий ресторан'}
                     </span>
                   </div>
