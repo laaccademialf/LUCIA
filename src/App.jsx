@@ -1761,18 +1761,6 @@ function App() {
 
         // Вкладка управління утилітами
         if (activeNav === "inventory-utilities" && topTab === "utilityservice") {
-          console.log("DEBUG renderContent: activeNav:", activeNav, "topTab:", topTab);
-          return (
-            <div className="p-4">
-              <div className="mb-4 p-3 bg-blue-100 border border-blue-300 text-blue-700 rounded-lg text-sm">
-                <div>DEBUG renderContent:</div>
-                <div>activeNav: {String(activeNav)}</div>
-                <div>topTab: {String(topTab)}</div>
-              </div>
-              {/* Далі йде реальний інтерфейс */}
-              {/* ...старий код повернення UtilityMetersManager... */}
-            </div>
-          );
           const handleAddMeter = async (meter) => {
             await addUtilityMeter(meter);
             // Оновити список після додавання
@@ -1797,12 +1785,6 @@ function App() {
           };
           return (
             <div className="p-4">
-              {/* DEBUG: вкладка утиліти */}
-              <div className="mb-4 p-3 bg-yellow-100 border border-yellow-300 text-yellow-700 rounded-lg text-sm">
-                <div>DEBUG UtilityMetersManager:</div>
-                <div>restaurants: {JSON.stringify(restaurants)}</div>
-                <div>meters: {JSON.stringify(utilityMeters)}</div>
-              </div>
               <UtilityMetersManager
                 restaurants={restaurants}
                 meters={utilityMeters}
@@ -1939,7 +1921,9 @@ function App() {
       );
     }
     if (activeNav === "settings-restaurant") {
-      if (topTab === "main") {
+      const restaurantTopTab = String(topTab || "projects");
+
+      if (restaurantTopTab === "main") {
         return (
           <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl space-y-6">
             <div>
@@ -1983,11 +1967,11 @@ function App() {
         );
       }
 
-      if (topTab === "schedule") {
+      if (restaurantTopTab === "schedule") {
         return renderSchedule();
       }
 
-      if (topTab === "projects") {
+      if (restaurantTopTab === "projects") {
         const handleAddRestaurant = () => {
           const defaultBusinessUnit = businessUnits[0] || "";
           setSelectedRestaurant({
@@ -2883,12 +2867,11 @@ function App() {
       );
     }
 
-    // Глобальний debug-блок для всіх вкладок
+    // Fallback для невідомих комбінацій nav/tab
     return (
-      <div className="mb-4 p-3 bg-blue-100 border border-blue-300 text-blue-700 rounded-lg text-sm">
-        <div>DEBUG renderContent:</div>
-        <div>activeNav: {activeNav}</div>
-        <div>topTab: {topTab}</div>
+      <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
+        <h2 className="text-lg font-semibold">Розділ тимчасово недоступний</h2>
+        <p className="mt-2 text-sm text-slate-600">Спробуйте обрати іншу вкладку в меню або перезавантажити сторінку.</p>
       </div>
     );
   };
