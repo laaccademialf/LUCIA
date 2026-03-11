@@ -322,8 +322,14 @@ export default function DatabaseConnectionsManager() {
         collections: DEFAULT_COLLECTIONS,
       });
       const stats = result?.serverResponse?.stats || {};
+      const processedCollections = Object.keys(stats);
+      if (processedCollections.length < DEFAULT_COLLECTIONS.length) {
+        throw new Error(
+          `Сервер повернув лише ${processedCollections.length} з ${DEFAULT_COLLECTIONS.length} колекцій (${processedCollections.join(", ")}). Ймовірно, на API розгорнуто стару версію /migration/normalize. Оновіть backend scripts/custom-db/server.js і повторіть.`
+        );
+      }
       const statText = Object.entries(stats)
-        .map(([name, count]) => `${name}: ${count}`)
+        .map(([name, count]) => `${name}: ${typeof count === "object" && count !== null ? (count.rows ?? 0) : count}`)
         .join(" | ");
       setStatus(`Нормалізацію завершено успішно. ${statText}`);
     } catch (error) {
@@ -492,8 +498,14 @@ export default function DatabaseConnectionsManager() {
         collections: DEFAULT_COLLECTIONS,
       });
       const stats = result?.serverResponse?.stats || {};
+      const processedCollections = Object.keys(stats);
+      if (processedCollections.length < DEFAULT_COLLECTIONS.length) {
+        throw new Error(
+          `Сервер повернув лише ${processedCollections.length} з ${DEFAULT_COLLECTIONS.length} колекцій (${processedCollections.join(", ")}). Ймовірно, на API розгорнуто стару версію /migration/normalize. Оновіть backend scripts/custom-db/server.js і повторіть.`
+        );
+      }
       const statText = Object.entries(stats)
-        .map(([name, count]) => `${name}: ${count}`)
+        .map(([name, count]) => `${name}: ${typeof count === "object" && count !== null ? (count.rows ?? 0) : count}`)
         .join(" | ");
       setStatus(`Нормалізацію завершено для "${connection.name}". ${statText}`);
     } catch (error) {
