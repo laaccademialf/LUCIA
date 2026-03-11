@@ -8,6 +8,25 @@ import {
   updateCollectionItemApi,
 } from "./collectionsAdapter";
 
+const normalizeUserRecord = (user) => {
+  if (!user || typeof user !== "object") return user;
+
+  const createdAt = user.createdAt || user.created_at || "";
+  const updatedAt = user.updatedAt || user.updated_at || "";
+
+  return {
+    ...user,
+    displayName: user.displayName || user.display_name || "",
+    email: user.email || user.user_email || "",
+    role: user.role || "user",
+    restaurant: user.restaurant || user.restaurant_id || "",
+    position: user.position || user.position_name || "",
+    workRole: user.workRole || user.work_role || user.work_role_name || "",
+    createdAt,
+    updatedAt,
+  };
+};
+
 /**
  * Отримати всіх користувачів
  * @returns {Promise<Array>} Масив користувачів
@@ -15,7 +34,9 @@ import {
 export const getUsers = async () => {
   if (isApiDataModeEnabled()) {
     const users = await listCollectionItemsApi("users");
-    return users.sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")));
+    return users
+      .map(normalizeUserRecord)
+      .sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")));
   }
 
   try {
@@ -39,7 +60,8 @@ export const getUsers = async () => {
  */
 export const getUser = async (id) => {
   if (isApiDataModeEnabled()) {
-    return await getCollectionItemApi("users", id).catch(() => null);
+    const user = await getCollectionItemApi("users", id).catch(() => null);
+    return normalizeUserRecord(user);
   }
 
   try {

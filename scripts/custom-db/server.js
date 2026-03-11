@@ -251,6 +251,15 @@ const createSessionToken = () => crypto.randomBytes(32).toString("hex");
 
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 
+const readFirstString = (...values) => {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    const normalized = String(value).trim();
+    if (normalized) return normalized;
+  }
+  return "";
+};
+
 const sessionTokenFromRequest = (req) => {
   const sessionHeader = String(req.headers["x-session-token"] || "").trim();
   if (sessionHeader) return sessionHeader;
@@ -266,13 +275,15 @@ const sessionTokenFromRequest = (req) => {
 
 const mapUserProfile = (profile) => ({
   uid: String(profile?.id || ""),
-  email: String(profile?.email || ""),
-  displayName: String(profile?.displayName || ""),
-  role: String(profile?.role || "user"),
-  restaurant: String(profile?.restaurant || ""),
-  position: String(profile?.position || ""),
-  workRole: String(profile?.workRole || ""),
+  email: normalizeEmail(profile?.email || profile?.user_email || ""),
+  displayName: readFirstString(profile?.displayName, profile?.display_name),
+  role: readFirstString(profile?.role, "user") || "user",
+  restaurant: readFirstString(profile?.restaurant, profile?.restaurant_id),
+  position: readFirstString(profile?.position, profile?.position_name),
+  workRole: readFirstString(profile?.workRole, profile?.work_role, profile?.work_role_name),
 });
+
+const hasAdminRole = (profile) => String(mapUserProfile(profile).role || "").toLowerCase() === "admin";
 
 const getAuthUserByEmail = async (email, dbConfig) => {
   const normalizedEmail = normalizeEmail(email);
@@ -382,6 +393,9 @@ const resolveCollectionTableMySql = async (conn, collectionName, { preferFlat = 
   const flatTable = `${baseTable}_flat`;
 
   if (preferFlat && (await tableExistsMySql(conn, flatTable))) {
+    // Existing _flat tables from older migration versions may miss payload/updated_at.
+    // Ensure required columns exist so camelCase fields can be reconstructed reliably.
+    await ensureCollectionFlatTableMySql(conn, collectionName);
     return flatTable;
   }
 
@@ -1757,10 +1771,128 @@ const handleAuthLogout = async (req, res) => {
   return sendJson(res, 200, { ok: true });
 };
 
+const handleAuthUpdateProfile = async (req, res) => {
+  const dbConfig = getAssetsRuntimeConfig();
+  const { profile } = await resolveAuthContext(req, dbConfig);
+  if (!profile?.id) {
+    return sendJson(res, 401, { ok: false, error: "Authentication required" });
+  }
+
+  let payload;
+  try {
+    payload = await parseJsonBody(req);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  const currentProfile = mapUserProfile(profile);
+  const nextDisplayName = readFirstString(payload?.displayName, currentProfile.displayName, currentProfile.email);
+  const nextEmail = normalizeEmail(payload?.email || currentProfile.email);
+  const currentPassword = String(payload?.currentPassword || "");
+
+  if (!nextEmail) {
+    return sendJson(res, 400, { ok: false, error: "Email is required" });
+  }
+
+  const authUser = await getCollectionItemData("authUsers", profile.id, dbConfig);
+  if (!authUser) {
+    return sendJson(res, 404, { ok: false, error: "Auth user not found" });
+  }
+
+  const authCurrentEmail = normalizeEmail(authUser?.email || currentProfile.email);
+  const emailChanged = nextEmail !== authCurrentEmail;
+
+  if (emailChanged) {
+    const sameEmailUser = await getAuthUserByEmail(nextEmail, dbConfig);
+    if (sameEmailUser && String(sameEmailUser.id || "") !== String(profile.id)) {
+      return sendJson(res, 409, { ok: false, error: "Email already in use" });
+    }
+
+    const passwordSalt = authUser?.passwordSalt || authUser?.password_salt || "";
+    const passwordHash = authUser?.passwordHash || authUser?.password_hash || "";
+    const isValidPassword = verifyPassword(currentPassword, passwordSalt, passwordHash);
+    if (!isValidPassword) {
+      return sendJson(res, 401, { ok: false, error: "Current password is invalid" });
+    }
+  }
+
+  await updateCollectionItemData(
+    "authUsers",
+    String(profile.id),
+    {
+      email: nextEmail,
+      updatedAt: nowIso(),
+    },
+    dbConfig
+  );
+
+  await updateCollectionItemData(
+    "users",
+    String(profile.id),
+    {
+      email: nextEmail,
+      displayName: nextDisplayName,
+      updatedAt: nowIso(),
+    },
+    dbConfig
+  );
+
+  const updatedProfile = await getUserProfileById(profile.id, dbConfig);
+  return sendJson(res, 200, { ok: true, user: mapUserProfile(updatedProfile) });
+};
+
+const handleAuthChangePassword = async (req, res) => {
+  const dbConfig = getAssetsRuntimeConfig();
+  const { profile } = await resolveAuthContext(req, dbConfig);
+  if (!profile?.id) {
+    return sendJson(res, 401, { ok: false, error: "Authentication required" });
+  }
+
+  let payload;
+  try {
+    payload = await parseJsonBody(req);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  const currentPassword = String(payload?.currentPassword || "");
+  const newPassword = String(payload?.newPassword || "");
+
+  if (!currentPassword || !newPassword || newPassword.length < 6) {
+    return sendJson(res, 400, { ok: false, error: "currentPassword and newPassword(min 6) are required" });
+  }
+
+  const authUser = await getCollectionItemData("authUsers", profile.id, dbConfig);
+  if (!authUser) {
+    return sendJson(res, 404, { ok: false, error: "Auth user not found" });
+  }
+
+  const passwordSalt = authUser?.passwordSalt || authUser?.password_salt || "";
+  const passwordHash = authUser?.passwordHash || authUser?.password_hash || "";
+  const isValidPassword = verifyPassword(currentPassword, passwordSalt, passwordHash);
+  if (!isValidPassword) {
+    return sendJson(res, 401, { ok: false, error: "Current password is invalid" });
+  }
+
+  const nextPassword = hashPassword(newPassword);
+  await updateCollectionItemData(
+    "authUsers",
+    String(profile.id),
+    {
+      passwordHash: nextPassword.hash,
+      passwordSalt: nextPassword.salt,
+      updatedAt: nowIso(),
+    },
+    dbConfig
+  );
+
+  return sendJson(res, 200, { ok: true });
+};
+
 const handleAuthAdminCreateUser = async (req, res) => {
   const dbConfig = getAssetsRuntimeConfig();
   const { profile } = await resolveAuthContext(req, dbConfig);
-  if (!profile || String(profile.role || "") !== "admin") {
+  if (!profile || !hasAdminRole(profile)) {
     return sendJson(res, 403, { ok: false, error: "Admin role required" });
   }
 
@@ -2172,6 +2304,22 @@ const server = http.createServer(async (req, res) => {
   if (method === "POST" && pathname === "/auth/admin-create-user") {
     try {
       return await handleAuthAdminCreateUser(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  if (method === "POST" && pathname === "/auth/update-profile") {
+    try {
+      return await handleAuthUpdateProfile(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  if (method === "POST" && pathname === "/auth/change-password") {
+    try {
+      return await handleAuthChangePassword(req, res);
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
     }
