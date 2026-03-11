@@ -9,6 +9,7 @@ import {
   getPrimaryConnectionId,
   migrateFirebaseData,
   migrateFirebaseToCustomData,
+  normalizeCustomMySqlData,
   setPrimaryConnectionById,
   testCustomConnection,
   testFirebaseConnection,
@@ -308,6 +309,27 @@ export default function DatabaseConnectionsManager() {
     }
   };
 
+  const onNormalizeCustomSql = async () => {
+    if (connectionType !== "custom") return;
+
+    setBusy(true);
+    setStatus("Крок 3/3: запускаємо нормалізацію JSON -> табличний SQL (/migration/normalize)...");
+
+    try {
+      const payload = buildDraftConnectionPayload();
+      const result = await normalizeCustomMySqlData({ targetConfig: payload.config });
+      const stats = result?.serverResponse?.stats || {};
+      const statText = Object.entries(stats)
+        .map(([name, count]) => `${name}: ${count}`)
+        .join(" | ");
+      setStatus(`Нормалізацію завершено успішно. ${statText}`);
+    } catch (error) {
+      setStatus(`Нормалізація не пройшла: ${error?.message || error}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onTestDraftConnection = async () => {
     setBusy(true);
     setStatus("Тестуємо введені параметри підключення...");
@@ -591,6 +613,7 @@ export default function DatabaseConnectionsManager() {
             <>
               <button disabled={busy} onClick={onTestCustomHealthOnly} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">Крок 1: Health</button>
               <button disabled={busy} onClick={onTestCustomDbOnly} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">Крок 2: DB Test</button>
+              <button disabled={busy} onClick={onNormalizeCustomSql} className="rounded-md border border-amber-300 px-3 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-60">Крок 3: JSON to SQL</button>
               <button disabled={busy} onClick={onQuickSetupCustom} className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60">Швидко підключити (3-4 кліки)</button>
             </>
           )}

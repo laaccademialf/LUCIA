@@ -1277,6 +1277,220 @@ const handleDbTest = async (req, res) => {
   }
 };
 
+const ensureNormalizedTablesMySql = async (conn) => {
+  await conn.execute(`
+    CREATE TABLE IF NOT EXISTS lucia_assets_flat (
+      id VARCHAR(255) PRIMARY KEY,
+      inv_number VARCHAR(128) NULL,
+      asset_name VARCHAR(512) NULL,
+      business_unit VARCHAR(255) NULL,
+      location_name VARCHAR(255) NULL,
+      resp_center VARCHAR(255) NULL,
+      status VARCHAR(128) NULL,
+      asset_condition VARCHAR(128) NULL,
+      decision VARCHAR(128) NULL,
+      initial_cost DECIMAL(15,2) NULL,
+      residual_value DECIMAL(15,2) NULL,
+      market_value_new DECIMAL(15,2) NULL,
+      market_value_used DECIMAL(15,2) NULL,
+      audit_date DATE NULL,
+      created_at_raw VARCHAR(64) NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY idx_assets_flat_location (location_name),
+      KEY idx_assets_flat_status (status),
+      KEY idx_assets_flat_business_unit (business_unit),
+      KEY idx_assets_flat_inv_number (inv_number)
+    )
+  `);
+
+  await conn.execute(`
+    CREATE TABLE IF NOT EXISTS lucia_restaurants_flat (
+      id VARCHAR(255) PRIMARY KEY,
+      reg_number VARCHAR(128) NULL,
+      restaurant_name VARCHAR(255) NULL,
+      business_unit VARCHAR(255) NULL,
+      country VARCHAR(128) NULL,
+      region VARCHAR(128) NULL,
+      city VARCHAR(128) NULL,
+      street VARCHAR(255) NULL,
+      address VARCHAR(512) NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY idx_restaurants_flat_name (restaurant_name),
+      KEY idx_restaurants_flat_reg (reg_number)
+    )
+  `);
+
+  await conn.execute(`
+    CREATE TABLE IF NOT EXISTS lucia_users_flat (
+      id VARCHAR(255) PRIMARY KEY,
+      email VARCHAR(255) NULL,
+      display_name VARCHAR(255) NULL,
+      role VARCHAR(64) NULL,
+      restaurant_id VARCHAR(255) NULL,
+      position_name VARCHAR(255) NULL,
+      work_role VARCHAR(255) NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY idx_users_flat_email (email),
+      KEY idx_users_flat_role (role),
+      KEY idx_users_flat_restaurant (restaurant_id)
+    )
+  `);
+
+  await conn.execute(`
+    CREATE TABLE IF NOT EXISTS lucia_service_requests_flat (
+      id VARCHAR(255) PRIMARY KEY,
+      title VARCHAR(512) NULL,
+      status VARCHAR(128) NULL,
+      priority VARCHAR(64) NULL,
+      restaurant_id VARCHAR(255) NULL,
+      restaurant_name VARCHAR(255) NULL,
+      created_by VARCHAR(255) NULL,
+      created_at_raw VARCHAR(64) NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY idx_sr_flat_status (status),
+      KEY idx_sr_flat_restaurant (restaurant_id),
+      KEY idx_sr_flat_priority (priority)
+    )
+  `);
+};
+
+const normalizeCollectionsToMySqlFlat = async (mysqlConfig) => {
+  const mysql = await import("mysql2/promise");
+  const conn = await mysql.default.createConnection(mysqlConfig);
+
+  try {
+    await ensureGenericTableMySql(conn, "assets");
+    await ensureGenericTableMySql(conn, "restaurants");
+    await ensureGenericTableMySql(conn, "users");
+    await ensureGenericTableMySql(conn, "serviceRequests");
+    await ensureNormalizedTablesMySql(conn);
+
+    await conn.execute("DELETE FROM lucia_assets_flat");
+    await conn.execute(`
+      INSERT INTO lucia_assets_flat (
+        id, inv_number, asset_name, business_unit, location_name, resp_center, status,
+        asset_condition, decision, initial_cost, residual_value, market_value_new,
+        market_value_used, audit_date, created_at_raw
+      )
+      SELECT
+        id,
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.invNumber')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.name')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.businessUnit')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.locationName')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.respCenter')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.status')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.condition')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.decision')),
+        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.initialCost')), '') AS DECIMAL(15,2)),
+        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.residualValue')), '') AS DECIMAL(15,2)),
+        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.marketValueNew')), '') AS DECIMAL(15,2)),
+        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.marketValueUsed')), '') AS DECIMAL(15,2)),
+        CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.auditDate')), '') AS DATE),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.created'))
+      FROM lucia_assets
+    `);
+
+    await conn.execute("DELETE FROM lucia_restaurants_flat");
+    await conn.execute(`
+      INSERT INTO lucia_restaurants_flat (
+        id, reg_number, restaurant_name, business_unit, country, region, city, street, address
+      )
+      SELECT
+        id,
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.regNumber')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.name')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.businessUnit')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.country')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.region')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.city')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.street')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.address'))
+      FROM lucia_restaurants
+    `);
+
+    await conn.execute("DELETE FROM lucia_users_flat");
+    await conn.execute(`
+      INSERT INTO lucia_users_flat (
+        id, email, display_name, role, restaurant_id, position_name, work_role
+      )
+      SELECT
+        id,
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.email')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.displayName')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.role')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.restaurant')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.position')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.workRole'))
+      FROM lucia_users
+    `);
+
+    await conn.execute("DELETE FROM lucia_service_requests_flat");
+    await conn.execute(`
+      INSERT INTO lucia_service_requests_flat (
+        id, title, status, priority, restaurant_id, restaurant_name, created_by, created_at_raw
+      )
+      SELECT
+        id,
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.title')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.status')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.priority')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.restaurantId')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.restaurantName')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.createdByName')),
+        JSON_UNQUOTE(JSON_EXTRACT(payload, '$.createdAt'))
+      FROM lucia_serviceRequests
+    `);
+
+    const [assetsCountRows] = await conn.execute("SELECT COUNT(*) AS total FROM lucia_assets_flat");
+    const [restaurantsCountRows] = await conn.execute("SELECT COUNT(*) AS total FROM lucia_restaurants_flat");
+    const [usersCountRows] = await conn.execute("SELECT COUNT(*) AS total FROM lucia_users_flat");
+    const [srCountRows] = await conn.execute("SELECT COUNT(*) AS total FROM lucia_service_requests_flat");
+
+    return {
+      assets: Number(assetsCountRows?.[0]?.total || 0),
+      restaurants: Number(restaurantsCountRows?.[0]?.total || 0),
+      users: Number(usersCountRows?.[0]?.total || 0),
+      serviceRequests: Number(srCountRows?.[0]?.total || 0),
+    };
+  } finally {
+    await conn.end();
+  }
+};
+
+const handleMigrationNormalize = async (req, res) => {
+  if (!isAuthorized(req)) {
+    return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+  }
+
+  let payload;
+  try {
+    payload = await parseJsonBody(req);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  const targetDb = parseTargetDbConfig(payload?.target || {});
+  if (targetDb.dbEngine !== "mysql") {
+    return sendJson(res, 400, {
+      ok: false,
+      error: "Нормалізація наразі підтримується тільки для MariaDB/MySQL",
+    });
+  }
+
+  try {
+    const stats = await normalizeCollectionsToMySqlFlat(targetDb.mysqlConfig);
+    return sendJson(res, 200, {
+      ok: true,
+      engine: targetDb.dbEngine,
+      stats,
+      normalizedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    return sendJson(res, 500, { ok: false, error: error.message });
+  }
+};
+
 const handleAuthRegister = async (req, res) => {
   let payload;
   try {
@@ -1730,6 +1944,14 @@ const server = http.createServer(async (req, res) => {
   if (method === "POST" && pathname === "/db/test") {
     try {
       return await handleDbTest(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  if (method === "POST" && pathname === "/migration/normalize") {
+    try {
+      return await handleMigrationNormalize(req, res);
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
     }

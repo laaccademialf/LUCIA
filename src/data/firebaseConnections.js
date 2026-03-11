@@ -530,6 +530,48 @@ export const migrateFirebaseToCustomData = async ({ sourceConfig, targetConfig, 
   };
 };
 
+export const normalizeCustomMySqlData = async ({ targetConfig }) => {
+  const target = normalizeCustomConfig(targetConfig);
+
+  if (!isValidCustomConfig(target)) {
+    throw new Error("Для нормалізації потрібен валідний API Base URL");
+  }
+
+  const endpoint = customApiUrl(target.apiBaseUrl, "/migration/normalize");
+  const payload = {
+    target: {
+      type: "custom",
+      apiBaseUrl: target.apiBaseUrl,
+      dbEngine: target.dbEngine,
+      dbHost: target.dbHost,
+      dbPort: target.dbPort,
+      dbUser: target.dbUser,
+      dbPassword: target.dbPassword,
+      dbName: target.dbName,
+      postgresUrl: target.postgresUrl,
+    },
+    normalizedAt: new Date().toISOString(),
+  };
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: customHeaders(target.token),
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Custom normalization failed (${response.status}): ${body || "no body"}`);
+  }
+
+  const serverResponse = await response.json().catch(() => null);
+  return {
+    ok: true,
+    endpoint,
+    serverResponse,
+  };
+};
+
 export const bootstrapFirebaseConnection = async ({ targetConfig, sourceConfig }) => {
   const target = normalizeFirebaseConfig(targetConfig);
   const source = normalizeFirebaseConfig(sourceConfig || getCurrentRuntimeConfig() || {});
