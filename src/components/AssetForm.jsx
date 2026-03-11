@@ -246,8 +246,111 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
 
   useEffect(() => {
     if (selectedAsset) {
-      const normalizedInventoryQty = Number(selectedAsset?.inventoryQuantity);
-      const normalizedResidualTotal = Number(selectedAsset?.residualValue);
+      const normalizedSelectedAsset = {
+        ...selectedAsset,
+        invNumber:
+          selectedAsset?.invNumber ??
+          selectedAsset?.inv_number ??
+          "",
+        invNumber1C:
+          selectedAsset?.invNumber1C ??
+          selectedAsset?.inv_number_1c ??
+          selectedAsset?.inv_number1_c ??
+          "",
+        name:
+          selectedAsset?.name ??
+          selectedAsset?.assetName ??
+          selectedAsset?.asset_name ??
+          "",
+        subCategory:
+          selectedAsset?.subCategory ??
+          selectedAsset?.sub_category ??
+          "",
+        serialNumber:
+          selectedAsset?.serialNumber ??
+          selectedAsset?.serial_number ??
+          "",
+        businessUnit:
+          selectedAsset?.businessUnit ??
+          selectedAsset?.business_unit ??
+          "",
+        locationName:
+          selectedAsset?.locationName ??
+          selectedAsset?.location_name ??
+          selectedAsset?.restaurant_name ??
+          "",
+        respCenter:
+          selectedAsset?.respCenter ??
+          selectedAsset?.resp_center ??
+          "",
+        respPerson:
+          selectedAsset?.respPerson ??
+          selectedAsset?.resp_person ??
+          "",
+        purchaseYear:
+          selectedAsset?.purchaseYear ??
+          selectedAsset?.purchase_year ??
+          "",
+        commissionDate:
+          selectedAsset?.commissionDate ??
+          selectedAsset?.commission_date ??
+          "",
+        normativeTerm:
+          selectedAsset?.normativeTerm ??
+          selectedAsset?.normative_term ??
+          "",
+        physicalWear:
+          selectedAsset?.physicalWear ??
+          selectedAsset?.physical_wear ??
+          "",
+        moralWear:
+          selectedAsset?.moralWear ??
+          selectedAsset?.moral_wear ??
+          "",
+        totalWear:
+          selectedAsset?.totalWear ??
+          selectedAsset?.total_wear ??
+          "",
+        initialCost:
+          selectedAsset?.initialCost ??
+          selectedAsset?.initial_cost ??
+          "",
+        marketValueNew:
+          selectedAsset?.marketValueNew ??
+          selectedAsset?.market_value_new ??
+          "",
+        marketValueUsed:
+          selectedAsset?.marketValueUsed ??
+          selectedAsset?.market_value_used ??
+          "",
+        residualValuePerUnit:
+          selectedAsset?.residualValuePerUnit ??
+          selectedAsset?.residual_value_per_unit ??
+          "",
+        residualValue:
+          selectedAsset?.residualValue ??
+          selectedAsset?.residual_value ??
+          "",
+        newLocation:
+          selectedAsset?.newLocation ??
+          selectedAsset?.new_location ??
+          "",
+        auditDate:
+          selectedAsset?.auditDate ??
+          selectedAsset?.audit_date ??
+          defaultAsset.auditDate,
+        inventoryQuantity:
+          selectedAsset?.inventoryQuantity ??
+          selectedAsset?.inventory_quantity ??
+          "",
+        nextInventoryQuantity:
+          selectedAsset?.nextInventoryQuantity ??
+          selectedAsset?.next_inventory_quantity ??
+          "",
+      };
+
+      const normalizedInventoryQty = Number(normalizedSelectedAsset?.inventoryQuantity);
+      const normalizedResidualTotal = Number(normalizedSelectedAsset?.residualValue);
       const derivedResidualPerUnit =
         Number.isFinite(normalizedInventoryQty) &&
         normalizedInventoryQty > 0 &&
@@ -257,15 +360,15 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
 
       reset({
         ...defaultAsset,
-        ...selectedAsset,
+        ...normalizedSelectedAsset,
         residualValuePerUnit:
-          selectedAsset?.residualValuePerUnit !== undefined &&
-          selectedAsset?.residualValuePerUnit !== null &&
-          String(selectedAsset?.residualValuePerUnit).trim() !== ""
-            ? selectedAsset.residualValuePerUnit
+          normalizedSelectedAsset?.residualValuePerUnit !== undefined &&
+          normalizedSelectedAsset?.residualValuePerUnit !== null &&
+          String(normalizedSelectedAsset?.residualValuePerUnit).trim() !== ""
+            ? normalizedSelectedAsset.residualValuePerUnit
             : derivedResidualPerUnit,
       });
-      setPhotos(normalizePhotosForState(selectedAsset.photos));
+      setPhotos(normalizePhotosForState(normalizedSelectedAsset.photos));
     } else {
       // При створенні нового активу підставляємо ресторан користувача
       const userRestaurantKey = currentUser?.restaurant || currentUser?.restaurantId || currentUser?.restaurant_id || "";
