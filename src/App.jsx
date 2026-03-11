@@ -659,7 +659,9 @@ function App() {
         const restaurantsExplicitlyConfigured = Object.prototype.hasOwnProperty.call(rolePerms || {}, "restaurants");
         setRoleRestaurantsConfigured(restaurantsExplicitlyConfigured);
         const normalizedRestaurantIds = Array.isArray(rolePerms?.restaurants)
-          ? rolePerms.restaurants.map((id) => String(id))
+          ? rolePerms.restaurants
+              .map((id) => String(id || "").trim())
+              .filter(Boolean)
           : [];
         setRoleRestaurantIds(normalizedRestaurantIds);
       } catch (err) {
