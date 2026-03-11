@@ -7,20 +7,72 @@ import {
   getCollectionItemApi,
 } from "./collectionsAdapter";
 
+const parseMaybeJson = (value) => {
+  if (typeof value !== "string") return value;
+  const text = value.trim();
+  if (!text) return value;
+  if (!(text.startsWith("{") || text.startsWith("["))) return value;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return value;
+  }
+};
+
+const normalizeRolePermissionsDoc = (item) => {
+  if (!item || typeof item !== "object") return { permissions: {}, restaurants: [] };
+
+  const maybePermissions = parseMaybeJson(item.permissions);
+  let permissions = maybePermissions && typeof maybePermissions === "object" && !Array.isArray(maybePermissions)
+    ? maybePermissions
+    : null;
+
+  if (!permissions) {
+    const rebuilt = {};
+    Object.entries(item).forEach(([key, rawValue]) => {
+      if (!String(key || "").startsWith("permissions_")) return;
+      const navId = String(key).slice("permissions_".length).replace(/_/g, "-");
+      const value = parseMaybeJson(rawValue);
+
+      if (Array.isArray(value)) {
+        rebuilt[navId] = value;
+        return;
+      }
+
+      if (value === true || value === 1 || String(value || "").toLowerCase() === "true") {
+        rebuilt[navId] = true;
+      }
+    });
+    permissions = rebuilt;
+  }
+
+  const maybeRestaurants = parseMaybeJson(item.restaurants);
+  const restaurants = Array.isArray(maybeRestaurants)
+    ? maybeRestaurants.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+
+  return {
+    ...item,
+    roleName: item.roleName || item.role_name || "",
+    permissions,
+    restaurants,
+  };
+};
+
 /**
  * Отримати дозволи для ролі
  */
 export const getRolePermissions = async (roleId) => {
   if (isApiDataModeEnabled()) {
     const byId = await getCollectionItemApi("rolePermissions", roleId).catch(() => null);
-    if (byId) return byId;
+    if (byId) return normalizeRolePermissionsDoc(byId);
 
     const all = await listCollectionItemsApi("rolePermissions");
     const roleByName = all.find((item) => {
-      const rn = item?.roleName;
+      const rn = item?.roleName || item?.role_name;
       return rn && rn.toLowerCase() === String(roleId).toLowerCase();
     });
-    return roleByName || { permissions: {} };
+    return roleByName ? normalizeRolePermissionsDoc(roleByName) : { permissions: {}, restaurants: [] };
   }
 
   try {
@@ -28,21 +80,21 @@ export const getRolePermissions = async (roleId) => {
     const docRef = doc(db, "rolePermissions", roleId);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
-      return docSnap.data();
+      return normalizeRolePermissionsDoc(docSnap.data());
     }
 
     // Якщо не знайдено по ID, шукаємо по roleName (НЕЗАЛЕЖНО ВІД РЕЄСТРУ)
     const querySnapshot = await getDocs(collection(db, "rolePermissions"));
     const roleByName = querySnapshot.docs.find(doc => {
-      const rn = doc.data().roleName;
+      const rn = doc.data().roleName || doc.data().role_name;
       return rn && rn.toLowerCase() === String(roleId).toLowerCase();
     });
     if (roleByName) {
       console.log(`✅ Знайдено роль по roleName: ${roleId} -> ${roleByName.id}`);
-      return roleByName.data();
+      return normalizeRolePermissionsDoc(roleByName.data());
     }
     console.log(`⚠️ Роль не знайдена: ${roleId}`);
-    return { permissions: {} };
+    return { permissions: {}, restaurants: [] };
   } catch (error) {
     console.error("Помилка завантаження дозволів:", error);
     throw error;
@@ -54,14 +106,15 @@ export const getRolePermissions = async (roleId) => {
  */
 export const getAllRolePermissions = async () => {
   if (isApiDataModeEnabled()) {
-    return await listCollectionItemsApi("rolePermissions");
+    const all = await listCollectionItemsApi("rolePermissions");
+    return all.map((item) => normalizeRolePermissionsDoc(item));
   }
 
   try {
     const querySnapshot = await getDocs(collection(db, "rolePermissions"));
     return querySnapshot.docs.map((doc) => ({
       id: doc.id,
-      ...doc.data(),
+      ...normalizeRolePermissionsDoc(doc.data()),
     }));
   } catch (error) {
     console.error("Помилка завантаження дозволів:", error);

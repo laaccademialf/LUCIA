@@ -607,12 +607,27 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
       const existingColumns = await getMySqlColumns(conn, tableName);
       const hasPayloadColumn = existingColumns.has("payload");
       const isFlatTable = String(tableName || "").endsWith("_flat");
-      const forcePayloadCollections = new Set(["rolePermissions", "fieldPermissions"]);
-      const shouldPersistPayload =
-        hasPayloadColumn && (!isFlatTable || forcePayloadCollections.has(collection));
+      const shouldPersistPayload = hasPayloadColumn && !isFlatTable;
 
       // Compatibility mode: some flat tables were created without payload column.
-      const flat = flattenScalarFields(normalized);
+      // For permissions collections in _flat mode, keep nested permissions/restaurants
+      // as JSON strings in scalar columns to avoid relying on payload column.
+      const flatSource = (() => {
+        if (!isFlatTable || (collection !== "rolePermissions" && collection !== "fieldPermissions")) {
+          return normalized;
+        }
+
+        const next = { ...normalized };
+        if (next.permissions && typeof next.permissions === "object") {
+          next.permissions = JSON.stringify(next.permissions);
+        }
+        if (Array.isArray(next.restaurants)) {
+          next.restaurants = JSON.stringify(next.restaurants);
+        }
+        return next;
+      })();
+
+      const flat = flattenScalarFields(flatSource);
       const typeMap = Object.entries(flat).reduce((acc, [col, value]) => {
         acc[col] = mergeTypes(acc[col], detectValueType(value));
         return acc;
