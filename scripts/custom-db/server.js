@@ -686,6 +686,10 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
       }, {});
 
       await ensureFlatColumnsMySql(conn, tableName, typeMap);
+      if (collection === "assets") {
+        // During repeated inventory edits, change history/photos can exceed TEXT size.
+        await ensureMySqlLongTextColumns(conn, tableName, ["inventory_change_history", "photos"]);
+      }
       const columnsAfterEnsure = await getMySqlColumns(conn, tableName);
       const columnTypes = await getMySqlColumnTypes(conn, tableName);
       const scalarColumns = Object.keys(flat).filter((col) => columnsAfterEnsure.has(col));
@@ -1631,6 +1635,26 @@ const ensureFlatColumnsMySql = async (conn, flatTable, typeMap) => {
     if (!columnName || existing.has(columnName)) continue;
     await conn.execute(
       `ALTER TABLE ${quoteIdentMySql(flatTable)} ADD COLUMN ${quoteIdentMySql(columnName)} ${sqlTypeFor(mergedType)}`
+    );
+  }
+};
+
+const ensureMySqlLongTextColumns = async (conn, tableName, columnNames = []) => {
+  const normalizedColumns = Array.isArray(columnNames)
+    ? columnNames.map((col) => String(col || "").trim()).filter(Boolean)
+    : [];
+  if (normalizedColumns.length === 0) return;
+
+  const columnTypes = await getMySqlColumnTypes(conn, tableName);
+  const widenableTypes = new Set(["varchar", "text", "tinytext", "mediumtext"]);
+
+  for (const columnName of normalizedColumns) {
+    const currentType = String(columnTypes[columnName] || "").toLowerCase();
+    if (!currentType || currentType === "longtext") continue;
+    if (!widenableTypes.has(currentType)) continue;
+
+    await conn.execute(
+      `ALTER TABLE ${quoteIdentMySql(tableName)} MODIFY COLUMN ${quoteIdentMySql(columnName)} LONGTEXT NULL`
     );
   }
 };
