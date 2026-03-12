@@ -345,3 +345,64 @@ export const downloadAssetTemplate = () => {
   XLSX.utils.book_append_sheet(wb, ws, "Активи");
   XLSX.writeFile(wb, "asset_template.xlsx");
 };
+
+export const exportTypicalAssetFieldsToExcel = (typicalFields = {}, filename = "asset_typical_fields.xlsx") => {
+  const sections = [
+    { key: "categories", title: "Категорії", sheet: "Категорії" },
+    { key: "subcategories", title: "Підкатегорії", sheet: "Підкатегорії" },
+    { key: "accountingTypes", title: "Типи обліку", sheet: "Типи обліку" },
+    { key: "businessUnits", title: "Бізнес напрями", sheet: "Бізнес напрями" },
+    { key: "statuses", title: "Статуси", sheet: "Статуси" },
+    { key: "conditions", title: "Стан", sheet: "Стан" },
+    { key: "decisions", title: "Рішення", sheet: "Рішення" },
+    { key: "placementZones", title: "Зони розміщення", sheet: "Зони розміщення" },
+    { key: "functionalities", title: "Працездатність", sheet: "Працездатність" },
+    { key: "relevances", title: "Моральна актуальність", sheet: "Моральна акт-ть" },
+    { key: "reasons", title: "Причини", sheet: "Причини" },
+  ];
+
+  const wb = XLSX.utils.book_new();
+
+  const overviewRows = sections.map((section) => ({
+    "Розділ": section.title,
+    "Кількість": Array.isArray(typicalFields?.[section.key]) ? typicalFields[section.key].length : 0,
+  }));
+
+  const overviewSheet = XLSX.utils.json_to_sheet(overviewRows);
+  overviewSheet["!cols"] = [{ wch: 30 }, { wch: 12 }];
+  XLSX.utils.book_append_sheet(wb, overviewSheet, "Огляд");
+
+  sections.forEach((section) => {
+    const sourceItems = Array.isArray(typicalFields?.[section.key]) ? typicalFields[section.key] : [];
+
+    const rows = sourceItems.map((item) => {
+      const base = {
+        "ID": String(item?.id || "").trim(),
+        "Назва": String(item?.name || "").trim(),
+      };
+
+      if (section.key === "subcategories") {
+        return {
+          ...base,
+          "ID категорії": String(item?.categoryId || item?.category_id || "").trim(),
+          "Категорія": String(item?.categoryName || item?.category_name || "").trim(),
+        };
+      }
+
+      return base;
+    });
+
+    const fallbackRow = section.key === "subcategories"
+      ? [{ "ID": "", "Назва": "", "ID категорії": "", "Категорія": "" }]
+      : [{ "ID": "", "Назва": "" }];
+
+    const ws = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : fallbackRow);
+    ws["!cols"] = section.key === "subcategories"
+      ? [{ wch: 26 }, { wch: 38 }, { wch: 18 }, { wch: 30 }]
+      : [{ wch: 26 }, { wch: 38 }];
+
+    XLSX.utils.book_append_sheet(wb, ws, section.sheet);
+  });
+
+  XLSX.writeFile(wb, filename);
+};

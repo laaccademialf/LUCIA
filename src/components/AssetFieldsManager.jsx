@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Trash2, AlertCircle, List, CheckCircle, Pencil, Check, X } from "lucide-react";
+import { Plus, Trash2, AlertCircle, List, CheckCircle, Pencil, Check, X, Download } from "lucide-react";
 import {
   getCategories,
   addCategory,
@@ -476,6 +476,7 @@ export const AssetFieldsManager = () => {
   const [reasons, setReasons] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     loadAllFields();
@@ -756,6 +757,31 @@ export const AssetFieldsManager = () => {
     setReasons(reasons.map((item) => (item.id === id ? { ...item, name } : item)));
   };
 
+  const handleExportTypicalFields = async () => {
+    setExporting(true);
+    try {
+      const { exportTypicalAssetFieldsToExcel } = await import("../utils/excelHelpers");
+      exportTypicalAssetFieldsToExcel({
+        categories,
+        subcategories,
+        accountingTypes,
+        businessUnits,
+        statuses,
+        conditions,
+        decisions,
+        placementZones,
+        functionalities,
+        relevances,
+        reasons,
+      });
+    } catch (exportError) {
+      console.error("Помилка експорту типових полів:", exportError);
+      alert("Не вдалося експортувати типові поля в Excel.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center py-12">
@@ -766,9 +792,19 @@ export const AssetFieldsManager = () => {
 
   return (
     <div className="card p-6 bg-white border border-slate-200 shadow-xl">
-      <div className="flex items-center gap-3 mb-6">
-        <CheckCircle className="text-indigo-600" size={24} />
-        <h2 className="text-xl font-semibold text-slate-900">Типові поля активів</h2>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <CheckCircle className="text-indigo-600" size={24} />
+          <h2 className="text-xl font-semibold text-slate-900">Типові поля активів</h2>
+        </div>
+        <button
+          type="button"
+          onClick={handleExportTypicalFields}
+          disabled={exporting}
+          className="inline-flex items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Download size={16} /> {exporting ? "Експорт..." : "Експорт в Excel"}
+        </button>
       </div>
 
       {error && (
