@@ -23,11 +23,47 @@ export const useAssets = (enableRealtime = true) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  const snakeToCamel = (value) => String(value || "").replace(/_([a-z])/g, (_, ch) => ch.toUpperCase());
+
+  const parseJsonIfNeeded = (value) => {
+    if (typeof value !== "string") return value;
+    const text = value.trim();
+    if (!text) return value;
+    if (!(text.startsWith("{") || text.startsWith("["))) return value;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return value;
+    }
+  };
+
+  const buildNestedFromFlat = (item, camelKey, snakePrefix) => {
+    const direct = item?.[camelKey];
+    if (direct && typeof direct === "object") return direct;
+
+    const flatContainer = parseJsonIfNeeded(item?.[snakePrefix]);
+    if (flatContainer && typeof flatContainer === "object") return flatContainer;
+
+    const nested = {};
+    const prefix = `${snakePrefix}_`;
+    Object.entries(item || {}).forEach(([key, rawValue]) => {
+      if (!String(key || "").startsWith(prefix)) return;
+      const nestedKey = snakeToCamel(String(key).slice(prefix.length));
+      nested[nestedKey] = parseJsonIfNeeded(rawValue);
+    });
+
+    return Object.keys(nested).length > 0 ? nested : null;
+  };
+
   const normalizeAsset = (item) => {
     if (!item || typeof item !== "object") return item;
 
     const invNumber = String(item.invNumber || item.inv_number || "").trim();
     const invNumber1C = String(item.invNumber1C || item.inv_number_1c || item.inv_number1_c || "").trim();
+
+    const transferRequest = buildNestedFromFlat(item, "transferRequest", "transfer_request");
+    const writeOffRequest = buildNestedFromFlat(item, "writeOffRequest", "write_off_request");
+    const employeeUsage = buildNestedFromFlat(item, "employeeUsage", "employee_usage");
 
     return {
       ...item,
@@ -71,6 +107,11 @@ export const useAssets = (enableRealtime = true) => {
       inventoryQuantity: item.inventoryQuantity ?? item.inventory_quantity ?? "",
       nextInventoryQuantity: item.nextInventoryQuantity ?? item.next_inventory_quantity ?? "",
       inventoryChangeHistory: item.inventoryChangeHistory || item.inventory_change_history || [],
+      transferRequest,
+      writeOffRequest,
+      employeeUsage,
+      transferHistory: item.transferHistory || item.transfer_history || [],
+      employeeUsageHistory: item.employeeUsageHistory || item.employee_usage_history || [],
     };
   };
 

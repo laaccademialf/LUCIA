@@ -18,6 +18,7 @@ const hasFinanceApprovalRole = (user) => {
 };
 
 const toNormalizedId = (value) => String(value || "");
+const toLower = (value) => String(value || "").trim().toLowerCase();
 
 const generateInvNumberByRestaurant = (restaurant, allAssets) => {
   const prefix = String(restaurant?.regNumber || "").substring(0, 3);
@@ -84,16 +85,64 @@ function openPrintDocument({ title, bodyHtml }) {
   printWindow.document.close();
 }
 
-export default function AssetTransferWriteoffManager({ assets, restaurants, user, updateAsset }) {
+export default function AssetTransferWriteoffManager({ assets, restaurants, user, updateAsset, addAsset }) {
   const [assetId, setAssetId] = useState("");
   const [requestType, setRequestType] = useState("transfer");
   const [targetRestaurantId, setTargetRestaurantId] = useState("");
+  const [transferQuantity, setTransferQuantity] = useState("1");
   const [employeeName, setEmployeeName] = useState("");
   const [employeePosition, setEmployeePosition] = useState("");
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const myRestaurantId = toNormalizedId(user?.restaurant);
+  const myUserIds = useMemo(() => {
+    return new Set(
+      [user?.uid, user?.id, user?.userId]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    );
+  }, [user?.uid, user?.id, user?.userId]);
+
+  const myUserEmails = useMemo(() => {
+    return new Set(
+      [user?.email]
+        .map((value) => toLower(value))
+        .filter(Boolean)
+    );
+  }, [user?.email]);
+
+  const myRestaurantIdentity = useMemo(() => {
+    const rawCandidates = [
+      user?.restaurant,
+      user?.restaurantId,
+      user?.restaurant_id,
+      user?.restaurantName,
+      user?.restaurant_name,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    const matched = restaurants.find((item) => {
+      const itemId = String(item?.id || "").trim();
+      const itemName = String(item?.name || "").trim();
+      return rawCandidates.some((candidate) => candidate === itemId || toLower(candidate) === toLower(itemName));
+    });
+
+    const idSet = new Set(rawCandidates);
+    const nameSet = new Set(rawCandidates.map((value) => toLower(value)).filter(Boolean));
+
+    if (matched) {
+      const matchedId = String(matched?.id || "").trim();
+      const matchedName = String(matched?.name || "").trim();
+      if (matchedId) idSet.add(matchedId);
+      if (matchedName) {
+        nameSet.add(toLower(matchedName));
+      }
+    }
+
+    return { idSet, nameSet };
+  }, [restaurants, user?.restaurant, user?.restaurantId, user?.restaurant_id, user?.restaurantName, user?.restaurant_name]);
 
   const assetsForRequest = useMemo(() => {
     if (user?.role === "admin") return assets;
@@ -103,31 +152,56 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
 
   const selectedAsset = useMemo(() => assets.find((item) => toNormalizedId(item.id) === toNormalizedId(assetId)) || null, [assets, assetId]);
 
+  const selectedAssetQuantity = useMemo(() => {
+    const raw = selectedAsset?.inventoryQuantity;
+    const numeric = Number.parseInt(String(raw ?? "1"), 10);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : 1;
+  }, [selectedAsset]);
+
   const pendingForApproval = useMemo(() => {
     const canFinanceApprove = hasFinanceApprovalRole(user);
+    const isAdminUser = toLower(user?.role) === "admin";
+
+    const isTransferForMyRestaurant = (transfer) => {
+      const transferToId = String(transfer?.toRestaurantId || "").trim();
+      const transferToName = toLower(transfer?.toRestaurantName);
+      if (transferToId && myRestaurantIdentity.idSet.has(transferToId)) return true;
+      if (transferToName && myRestaurantIdentity.nameSet.has(transferToName)) return true;
+      return false;
+    };
+
     return assets.filter((asset) => {
       const transfer = asset?.transferRequest;
       const writeOff = asset?.writeOffRequest;
 
       const transferPendingForMe = transfer?.status === "pending" && (
-        user?.role === "admin" || toNormalizedId(transfer?.toRestaurantId) === myRestaurantId
+        isAdminUser || isTransferForMyRestaurant(transfer)
       );
 
       const writeOffPendingForMe = writeOff?.status === "pending" && canFinanceApprove;
 
       return transferPendingForMe || writeOffPendingForMe;
     });
-  }, [assets, user, myRestaurantId]);
+  }, [assets, user, myRestaurantIdentity]);
 
   const myRequests = useMemo(() => {
-    const userId = toNormalizedId(user?.uid);
+    const isMineById = (value) => {
+      const normalized = String(value || "").trim();
+      return Boolean(normalized) && myUserIds.has(normalized);
+    };
+
+    const isMineByEmail = (value) => {
+      const normalized = toLower(value);
+      return Boolean(normalized) && myUserEmails.has(normalized);
+    };
+
     return assets.filter((asset) => {
-      const transferByMe = toNormalizedId(asset?.transferRequest?.requestedById) === userId;
-      const writeOffByMe = toNormalizedId(asset?.writeOffRequest?.requestedById) === userId;
-      const usageByMe = toNormalizedId(asset?.employeeUsage?.assignedById) === userId;
+      const transferByMe = isMineById(asset?.transferRequest?.requestedById) || isMineByEmail(asset?.transferRequest?.requestedByEmail);
+      const writeOffByMe = isMineById(asset?.writeOffRequest?.requestedById) || isMineByEmail(asset?.writeOffRequest?.requestedByEmail);
+      const usageByMe = isMineById(asset?.employeeUsage?.assignedById) || isMineByEmail(asset?.employeeUsage?.assignedByEmail);
       return transferByMe || writeOffByMe || usageByMe;
     });
-  }, [assets, user]);
+  }, [assets, myUserIds, myUserEmails]);
 
   const activeRestaurants = useMemo(() => {
     if (!selectedAsset) return restaurants;
@@ -141,6 +215,8 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
     }
 
     const requestedByName = user?.displayName || user?.fullName || user?.email || "Користувач";
+    const requestedById = String(user?.uid || user?.id || user?.userId || "").trim();
+    const requestedByEmail = String(user?.email || "").trim();
     const nowIso = new Date().toISOString();
 
     if (requestType === "transfer") {
@@ -148,6 +224,18 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         alert("Оберіть заклад, куди переміщуємо актив.");
         return;
       }
+
+      const requestedQuantity = Number.parseInt(String(transferQuantity || ""), 10);
+      if (!Number.isFinite(requestedQuantity) || requestedQuantity <= 0) {
+        alert("Вкажіть коректну кількість для переміщення (ціле число більше 0).");
+        return;
+      }
+
+      if (requestedQuantity > selectedAssetQuantity) {
+        alert(`Неможливо перемістити ${requestedQuantity} шт. Доступно: ${selectedAssetQuantity} шт.`);
+        return;
+      }
+
       const toRestaurant = restaurants.find((item) => toNormalizedId(item.id) === toNormalizedId(targetRestaurantId));
       if (!toRestaurant) {
         alert("Не вдалося визначити заклад-отримувач.");
@@ -159,13 +247,16 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         transferRequest: {
           status: "pending",
           requestedAt: nowIso,
-          requestedById: toNormalizedId(user?.uid),
+          requestedById,
+          requestedByEmail,
           requestedByName,
           reason: reason.trim(),
           fromRestaurantId: toNormalizedId(fromRestaurant?.id),
           fromRestaurantName: String(selectedAsset.locationName || ""),
           toRestaurantId: toNormalizedId(toRestaurant.id),
           toRestaurantName: String(toRestaurant.name || ""),
+          quantity: requestedQuantity,
+          sourceQuantity: selectedAssetQuantity,
         },
       };
 
@@ -179,8 +270,9 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
 
       setAssetId("");
       setReason("");
+      setTransferQuantity("1");
       setTargetRestaurantId("");
-      alert("Запит на переміщення відправлено на погодження.");
+      alert(`Запит на переміщення (${requestedQuantity} шт.) відправлено на погодження.`);
       return;
     }
 
@@ -195,7 +287,8 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         employeeUsage: {
           status: "active",
           assignedAt: nowIso,
-          assignedById: toNormalizedId(user?.uid),
+          assignedById: requestedById,
+          assignedByEmail: requestedByEmail,
           assignedByName: requestedByName,
           employeeName: normalizedEmployeeName,
           employeePosition: employeePosition.trim(),
@@ -206,7 +299,8 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
           {
             status: "active",
             assignedAt: nowIso,
-            assignedById: toNormalizedId(user?.uid),
+            assignedById: requestedById,
+            assignedByEmail: requestedByEmail,
             assignedByName: requestedByName,
             employeeName: normalizedEmployeeName,
             employeePosition: employeePosition.trim(),
@@ -236,7 +330,8 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       writeOffRequest: {
         status: "pending",
         requestedAt: nowIso,
-        requestedById: toNormalizedId(user?.uid),
+        requestedById,
+        requestedByEmail,
         requestedByName,
         reason: reason.trim(),
       },
@@ -275,6 +370,80 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
 
     const approverName = user?.displayName || user?.fullName || user?.email || "Користувач";
     const nowIso = new Date().toISOString();
+    const sourceQuantityRaw = Number.parseInt(String(asset?.inventoryQuantity ?? "1"), 10);
+    const sourceQuantity = Number.isFinite(sourceQuantityRaw) && sourceQuantityRaw > 0 ? sourceQuantityRaw : 1;
+    const requestedQuantityRaw = Number.parseInt(String(request?.quantity ?? sourceQuantity), 10);
+    const requestedQuantity = Number.isFinite(requestedQuantityRaw) && requestedQuantityRaw > 0
+      ? Math.min(requestedQuantityRaw, sourceQuantity)
+      : sourceQuantity;
+    const isFullTransfer = requestedQuantity >= sourceQuantity;
+
+    const transferHistoryEntry = {
+      fromRestaurantId: request.fromRestaurantId,
+      fromRestaurantName: request.fromRestaurantName,
+      toRestaurantId: request.toRestaurantId,
+      toRestaurantName: request.toRestaurantName,
+      movedAt: nowIso,
+      movedById: toNormalizedId(user?.uid),
+      movedByName: approverName,
+      oldInvNumber: asset.invNumber,
+      newInvNumber,
+      quantityMoved: requestedQuantity,
+    };
+
+    if (!isFullTransfer) {
+      const destinationAssetPayload = {
+        ...asset,
+        invNumber: newInvNumber,
+        locationName: request.toRestaurantName,
+        businessUnit: destinationRestaurant.businessUnit || asset.businessUnit || "",
+        inventoryQuantity: requestedQuantity,
+        transferHistory: [...(Array.isArray(asset.transferHistory) ? asset.transferHistory : []), transferHistoryEntry],
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      delete destinationAssetPayload.id;
+      delete destinationAssetPayload.transferRequest;
+      delete destinationAssetPayload.writeOffRequest;
+      delete destinationAssetPayload.employeeUsage;
+      delete destinationAssetPayload.employeeUsageHistory;
+
+      if (typeof addAsset !== "function") {
+        alert("Неможливо виконати часткове переміщення: функція створення активу недоступна.");
+        return;
+      }
+
+      const addResult = await addAsset(destinationAssetPayload);
+      if (!addResult?.success) {
+        alert("Не вдалося створити актив у закладі-отримувачі для часткового переміщення.");
+        return;
+      }
+
+      const sourceUpdatePayload = {
+        inventoryQuantity: sourceQuantity - requestedQuantity,
+        transferRequest: {
+          ...request,
+          status: "approved",
+          approvedAt: nowIso,
+          approvedById: toNormalizedId(user?.uid),
+          approvedByName: approverName,
+          acceptedInvNumber: newInvNumber,
+          approvedQuantity: requestedQuantity,
+          transferMode: "partial",
+        },
+        transferHistory: [...(Array.isArray(asset.transferHistory) ? asset.transferHistory : []), transferHistoryEntry],
+      };
+
+      const sourceUpdateResult = await updateAsset(asset.id, sourceUpdatePayload);
+      if (!sourceUpdateResult?.success) {
+        alert("Актив у закладі-отримувачі створено, але не вдалося оновити залишок у закладі-відправнику. Перевірте дані.");
+        return;
+      }
+
+      alert(`Часткове переміщення підтверджено: ${requestedQuantity} шт. Новий інвентарний номер у закладі-отримувачі: ${newInvNumber}`);
+      return;
+    }
 
     const updatePayload = {
       invNumber: newInvNumber,
@@ -287,18 +456,10 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         approvedById: toNormalizedId(user?.uid),
         approvedByName: approverName,
         acceptedInvNumber: newInvNumber,
+        approvedQuantity: requestedQuantity,
+        transferMode: "full",
       },
-      transferHistory: [...(Array.isArray(asset.transferHistory) ? asset.transferHistory : []), {
-        fromRestaurantId: request.fromRestaurantId,
-        fromRestaurantName: request.fromRestaurantName,
-        toRestaurantId: request.toRestaurantId,
-        toRestaurantName: request.toRestaurantName,
-        movedAt: nowIso,
-        movedById: toNormalizedId(user?.uid),
-        movedByName: approverName,
-        oldInvNumber: asset.invNumber,
-        newInvNumber,
-      }],
+      transferHistory: [...(Array.isArray(asset.transferHistory) ? asset.transferHistory : []), transferHistoryEntry],
     };
 
     const result = await updateAsset(asset.id, updatePayload);
@@ -307,7 +468,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       return;
     }
 
-    alert(`Переміщення підтверджено. Новий інвентарний номер: ${newInvNumber}`);
+    alert(`Переміщення підтверджено (${requestedQuantity} шт.). Новий інвентарний номер: ${newInvNumber}`);
   };
 
   const rejectTransfer = async (asset) => {
@@ -403,6 +564,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         <div><strong>Серійний №:</strong> ${escapeHtml(asset?.serialNumber || "-")}</div>
         <div><strong>Передає:</strong> ${escapeHtml(request?.fromRestaurantName || asset?.locationName || "-")}</div>
         <div><strong>Приймає:</strong> ${escapeHtml(request?.toRestaurantName || "-")}</div>
+        <div><strong>Кількість:</strong> ${escapeHtml(request?.quantity || asset?.inventoryQuantity || 1)} шт.</div>
         <div><strong>Ініціатор:</strong> ${escapeHtml(request?.requestedByName || "-")}</div>
         <div><strong>Статус погодження:</strong> ${escapeHtml(request?.status || "-")}</div>
       </div>
@@ -607,6 +769,23 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
             </div>
           )}
 
+          {requestType === "transfer" && (
+            <div>
+              <label className="text-sm font-semibold">Кількість до переміщення, шт.</label>
+              <input
+                type="number"
+                min={1}
+                max={selectedAssetQuantity}
+                step={1}
+                className={inputClass}
+                value={transferQuantity}
+                onChange={(e) => setTransferQuantity(e.target.value)}
+                placeholder="Наприклад: 2"
+              />
+              <p className="mt-1 text-xs text-slate-500">Доступно в активі: {selectedAssetQuantity} шт.</p>
+            </div>
+          )}
+
           {requestType === "assign" && (
             <div>
               <label className="text-sm font-semibold">ПІБ співробітника</label>
@@ -677,7 +856,8 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
               {pendingForApproval.map((asset) => {
                 const transferPending = asset?.transferRequest?.status === "pending";
                 const writeOffPending = asset?.writeOffRequest?.status === "pending";
-                const typeLabel = transferPending ? "Переміщення" : writeOffPending ? "Списання" : "-";
+                const transferQuantityLabel = transferPending ? ` (${asset?.transferRequest?.quantity || asset?.inventoryQuantity || 1} шт.)` : "";
+                const typeLabel = transferPending ? `Переміщення${transferQuantityLabel}` : writeOffPending ? "Списання" : "-";
                 const request = transferPending ? asset.transferRequest : asset.writeOffRequest;
 
                 return (

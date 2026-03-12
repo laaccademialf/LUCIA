@@ -2917,6 +2917,7 @@ function App() {
             restaurants={firebaseRestaurants}
             user={user}
             updateAsset={updateAssetInFirebase}
+            addAsset={addAssetToFirebase}
           />
         </div>
       );
