@@ -963,6 +963,7 @@ function App() {
   }, [user, assetInventoryHistoryScopeId]);
 
   const isAssetInventorySessionActive = Boolean(assetInventorySession?.isActive);
+  const isAssetEditAllowedForCurrentUser = user?.role === "admin" || isAssetInventorySessionActive;
 
   const activeAssetInventorySessionsByScope = useMemo(() => {
     const map = new Map();
@@ -2914,7 +2915,7 @@ function App() {
       if (topTab === "test2") {
         // Якщо вибрано актив для редагування - показуємо форму
         if (selected) {
-          if (!isAssetInventorySessionActive) {
+          if (!isAssetEditAllowedForCurrentUser) {
             return (
               <div className="card p-6 text-sm text-slate-700">
                 <p className="text-base font-semibold text-slate-900">Редагування тимчасово заблоковано</p>
@@ -2958,7 +2959,7 @@ function App() {
                   data={assetsToShow}
                   onEdit={setSelected}
                   mobileCardMode={true}
-                  canEdit={isAssetInventorySessionActive}
+                  canEdit={isAssetEditAllowedForCurrentUser}
                   editDisabledReason="Запустіть сесію інвентаризації, щоб редагувати активи"
                   getRowClassName={(assetRow) =>
                     recentlyInventoriedAssetIds.has(String(assetRow?.id || ""))

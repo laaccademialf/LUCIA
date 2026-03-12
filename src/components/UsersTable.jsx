@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../hooks/useAuth";
-import { Users, Shield, User, Trash2, AlertCircle, Edit2, X, Save } from "lucide-react";
+import { Users, Shield, User, Trash2, AlertCircle, Edit2, X, Save, KeyRound } from "lucide-react";
 import { getUsers, updateUserRole, deleteUser, updateUser } from "../firebase/users";
 import { getRestaurants } from "../firebase/firestore";
 import { getPositions, getWorkRoles } from "../firebase/rolesPositions";
+import { adminResetUserPassword } from "../firebase/auth";
 
 export const UsersTable = ({ currentUser }) => {
   const { user: authUser } = useAuth();
@@ -15,6 +16,7 @@ export const UsersTable = ({ currentUser }) => {
   const [error, setError] = useState("");
   const [updatingUserId, setUpdatingUserId] = useState(null);
   const [deletingUserId, setDeletingUserId] = useState(null);
+  const [resettingPasswordUserId, setResettingPasswordUserId] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
   const [editingUser, setEditingUser] = useState(null);
   const [editForm, setEditForm] = useState({
@@ -157,6 +159,38 @@ export const UsersTable = ({ currentUser }) => {
     }
   };
 
+  const handleResetPassword = async (targetUser) => {
+    if (!targetUser?.id) return;
+    if (currentUser?.uid === targetUser.id) {
+      setError("Для власного акаунта використовуйте зміну пароля у профілі");
+      return;
+    }
+
+    const adminPassword = window.prompt("Введіть ваш пароль адміністратора для скидання пароля користувача:");
+    if (adminPassword === null) return;
+    if (!String(adminPassword || "").trim()) {
+      setError("Введіть ваш пароль для підтвердження");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Скинути пароль користувача ${targetUser.displayName || targetUser.email || targetUser.id} до значення Qwerty1?`
+    );
+    if (!confirmed) return;
+
+    try {
+      setResettingPasswordUserId(targetUser.id);
+      setError("");
+      await adminResetUserPassword(targetUser.id, adminPassword, "Qwerty1");
+      alert(`Пароль користувача ${targetUser.displayName || targetUser.email || targetUser.id} скинуто до Qwerty1`);
+    } catch (resetError) {
+      console.error("Помилка скидання пароля:", resetError);
+      setError(resetError?.message || "Не вдалося скинути пароль користувача");
+    } finally {
+      setResettingPasswordUserId(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center py-12">
@@ -242,6 +276,7 @@ export const UsersTable = ({ currentUser }) => {
                 const isCurrentUser = currentUser?.uid === user.id;
                 const isUpdating = updatingUserId === user.id;
                 const isDeleting = deletingUserId === user.id;
+                const isResettingPassword = resettingPasswordUserId === user.id;
 
                 return (
                   <tr
@@ -347,6 +382,20 @@ export const UsersTable = ({ currentUser }) => {
                             title={isCurrentUser ? "Не можна редагувати себе" : "Редагувати"}
                           >
                             <Edit2 size={16} />
+                          </button>
+                          <button
+                            onClick={() => handleResetPassword(user)}
+                            disabled={isCurrentUser || isResettingPassword}
+                            className={`text-amber-600 hover:text-amber-800 disabled:text-amber-300 disabled:cursor-not-allowed transition ${
+                              isCurrentUser ? "opacity-30" : ""
+                            }`}
+                            title={isCurrentUser ? "Для себе змініть пароль у профілі" : "Скинути пароль до Qwerty1"}
+                          >
+                            {isResettingPassword ? (
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current"></div>
+                            ) : (
+                              <KeyRound size={16} />
+                            )}
                           </button>
                           <button
                             onClick={() => setShowDeleteConfirm(user.id)}

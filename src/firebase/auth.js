@@ -305,6 +305,7 @@ export const registerUser = async (email, password, displayName) => {
  */
 export const createUserByAdmin = async (email, password, displayName, currentUser, currentPassword, restaurant, position, workRole, role = "user") => {
   if (isAuthApiEnabled()) {
+    const effectiveCurrentUser = currentUser || authApiCurrentUser || getCachedAuthUser();
     const payload = await authApiRequest("/auth/admin-create-user", {
       method: "POST",
       headers: authApiHeaders(true),
@@ -317,7 +318,7 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
         workRole,
         role,
         currentPassword,
-        currentUserId: currentUser?.uid || "",
+        currentUserId: effectiveCurrentUser?.uid || effectiveCurrentUser?.id || "",
       }),
     });
 
@@ -504,10 +505,15 @@ export const changeCurrentUserPassword = async ({ currentPassword, newPassword }
   }
 
   if (isAuthApiEnabled()) {
+    const effectiveUser = authApiCurrentUser || getCachedAuthUser();
     await authApiRequest("/auth/change-password", {
       method: "POST",
       headers: authApiHeaders(true),
-      body: JSON.stringify({ currentPassword: currentPwd, newPassword: nextPwd }),
+      body: JSON.stringify({
+        currentPassword: currentPwd,
+        newPassword: nextPwd,
+        currentUserId: effectiveUser?.uid || effectiveUser?.id || "",
+      }),
     });
     return true;
   }
@@ -521,6 +527,38 @@ export const changeCurrentUserPassword = async ({ currentPassword, newPassword }
   await reauthenticateWithCredential(current, credential);
   await updatePassword(current, nextPwd);
   return true;
+};
+
+export const adminResetUserPassword = async (targetUserId, currentPassword, defaultPassword = "Qwerty1") => {
+  if (!isAuthApiEnabled()) {
+    throw new Error("Admin reset password доступний лише в API режимі");
+  }
+
+  const normalizedTargetUserId = String(targetUserId || "").trim();
+  const normalizedCurrentPassword = String(currentPassword || "").trim();
+  if (!normalizedTargetUserId) {
+    throw new Error("Не вказано користувача для скидання пароля");
+  }
+  if (!normalizedCurrentPassword) {
+    throw new Error("Введіть ваш пароль для підтвердження");
+  }
+
+  const effectiveUser = authApiCurrentUser || getCachedAuthUser();
+  const payload = await authApiRequest("/auth/admin-reset-user-password", {
+    method: "POST",
+    headers: authApiHeaders(true),
+    body: JSON.stringify({
+      targetUserId: normalizedTargetUserId,
+      currentPassword: normalizedCurrentPassword,
+      defaultPassword: String(defaultPassword || "Qwerty1").trim() || "Qwerty1",
+      currentUserId: effectiveUser?.uid || effectiveUser?.id || "",
+    }),
+  });
+
+  return {
+    ok: Boolean(payload?.ok),
+    defaultPassword: String(payload?.defaultPassword || defaultPassword || "Qwerty1"),
+  };
 };
 
 /**

@@ -311,6 +311,16 @@ const hasUserManagementPermission = (profile) => {
   return false;
 };
 
+const resolveAuthProfileWithFallback = async (req, dbConfig, fallbackUserId = "") => {
+  const { profile } = await resolveAuthContext(req, dbConfig);
+  if (profile?.id) return profile;
+
+  const normalizedFallbackUserId = String(fallbackUserId || "").trim();
+  if (!normalizedFallbackUserId) return null;
+
+  return await getUserProfileById(normalizedFallbackUserId, dbConfig);
+};
+
 const getAuthUserByEmail = async (email, dbConfig) => {
   const normalizedEmail = normalizeEmail(email);
   const authUsers = await getCollectionItemsData("authUsers", dbConfig);
@@ -1888,10 +1898,6 @@ const handleAuthUpdateProfile = async (req, res) => {
 
 const handleAuthChangePassword = async (req, res) => {
   const dbConfig = getAssetsRuntimeConfig();
-  const { profile } = await resolveAuthContext(req, dbConfig);
-  if (!profile?.id) {
-    return sendJson(res, 401, { ok: false, error: "Authentication required" });
-  }
 
   let payload;
   try {
@@ -1902,6 +1908,12 @@ const handleAuthChangePassword = async (req, res) => {
 
   const currentPassword = String(payload?.currentPassword || "");
   const newPassword = String(payload?.newPassword || "");
+  const currentUserId = String(payload?.currentUserId || payload?.current_user_id || "").trim();
+
+  const profile = await resolveAuthProfileWithFallback(req, dbConfig, currentUserId);
+  if (!profile?.id) {
+    return sendJson(res, 401, { ok: false, error: "Authentication required" });
+  }
 
   if (!currentPassword || !newPassword || newPassword.length < 6) {
     return sendJson(res, 400, { ok: false, error: "currentPassword and newPassword(min 6) are required" });
@@ -1936,10 +1948,6 @@ const handleAuthChangePassword = async (req, res) => {
 
 const handleAuthAdminCreateUser = async (req, res) => {
   const dbConfig = getAssetsRuntimeConfig();
-  const { profile } = await resolveAuthContext(req, dbConfig);
-  if (!profile?.id) {
-    return sendJson(res, 401, { ok: false, error: "Authentication required" });
-  }
 
   let payload;
   try {
@@ -1956,6 +1964,12 @@ const handleAuthAdminCreateUser = async (req, res) => {
   const position = String(payload?.position || "").trim();
   const workRole = String(payload?.workRole || "").trim();
   const currentPassword = String(payload?.currentPassword || "");
+  const currentUserId = String(payload?.currentUserId || payload?.current_user_id || "").trim();
+
+  const profile = await resolveAuthProfileWithFallback(req, dbConfig, currentUserId);
+  if (!profile?.id) {
+    return sendJson(res, 401, { ok: false, error: "Authentication required" });
+  }
 
   if (!currentPassword) {
     return sendJson(res, 400, { ok: false, error: "Current password is required" });
@@ -2025,6 +2039,73 @@ const handleAuthAdminCreateUser = async (req, res) => {
     ok: true,
     user: mapUserProfile(profilePayload),
   });
+};
+
+const handleAuthAdminResetUserPassword = async (req, res) => {
+  const dbConfig = getAssetsRuntimeConfig();
+
+  let payload;
+  try {
+    payload = await parseJsonBody(req);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  const targetUserId = String(payload?.targetUserId || payload?.target_user_id || payload?.userId || "").trim();
+  const currentPassword = String(payload?.currentPassword || "");
+  const currentUserId = String(payload?.currentUserId || payload?.current_user_id || "").trim();
+  const defaultPassword = String(payload?.defaultPassword || "Qwerty1").trim() || "Qwerty1";
+
+  if (!targetUserId) {
+    return sendJson(res, 400, { ok: false, error: "targetUserId is required" });
+  }
+
+  if (!currentPassword) {
+    return sendJson(res, 400, { ok: false, error: "Current password is required" });
+  }
+
+  const profile = await resolveAuthProfileWithFallback(req, dbConfig, currentUserId);
+  if (!profile?.id) {
+    return sendJson(res, 401, { ok: false, error: "Authentication required" });
+  }
+
+  if (!hasAdminRole(profile)) {
+    return sendJson(res, 403, { ok: false, error: "Only admin can reset user passwords" });
+  }
+
+  const currentAuthUser = await getCollectionItemData("authUsers", String(profile.id), dbConfig);
+  if (!currentAuthUser) {
+    return sendJson(res, 404, { ok: false, error: "Auth user not found" });
+  }
+
+  const currentPasswordSalt = currentAuthUser?.passwordSalt || currentAuthUser?.password_salt || "";
+  const currentPasswordHash = currentAuthUser?.passwordHash || currentAuthUser?.password_hash || "";
+  const isValidCurrentPassword = verifyPassword(currentPassword, currentPasswordSalt, currentPasswordHash);
+  if (!isValidCurrentPassword) {
+    return sendJson(res, 401, { ok: false, error: "Current password is invalid" });
+  }
+
+  const targetAuthUser = await getCollectionItemData("authUsers", targetUserId, dbConfig);
+  if (!targetAuthUser) {
+    return sendJson(res, 404, { ok: false, error: "Target auth user not found" });
+  }
+
+  const nextPassword = hashPassword(defaultPassword);
+  await updateCollectionItemData(
+    "authUsers",
+    targetUserId,
+    {
+      passwordHash: nextPassword.hash,
+      passwordSalt: nextPassword.salt,
+      updatedAt: nowIso(),
+      passwordResetAt: nowIso(),
+      passwordResetBy: String(profile.id || ""),
+      passwordResetDefault: true,
+    },
+    dbConfig
+  );
+
+  return sendJson(res, 200, { ok: true, defaultPassword });
 };
 
 const handleAssetsApi = async (req, res, assetId) => {
@@ -2375,6 +2456,14 @@ const server = http.createServer(async (req, res) => {
   if (method === "POST" && pathname === "/auth/admin-create-user") {
     try {
       return await handleAuthAdminCreateUser(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  if (method === "POST" && pathname === "/auth/admin-reset-user-password") {
+    try {
+      return await handleAuthAdminResetUserPassword(req, res);
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
     }
