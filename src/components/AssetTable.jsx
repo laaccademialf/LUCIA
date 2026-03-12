@@ -113,7 +113,7 @@ const ALL_FIELD_DEFS = [
 export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, canEditAsset = null, editDisabledReason = "Редагування тимчасово недоступне", getEditDisabledReason = null, getRowClassName = null, mobileCardMode = false }) {
   // Стан для видимих колонок
   const fileInputRef = useRef(null);
-      const defaultVisible = ["invNumber", "name", "category", "businessUnit", "status", "decision", "actions"];
+  const defaultVisible = ["invNumber", "name", "category", "locationName", "status", "decision", "actions"];
   const [visibleColumns, setVisibleColumns] = useState(defaultVisible);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [showDesktopFilters, setShowDesktopFilters] = useState(true);
@@ -311,7 +311,16 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     "reason",
   ]);
 
-  const visibleFilterKeys = visibleColumns.filter((key) => filterableColumnKeys.has(key));
+  const visibleFilterKeys = useMemo(() => {
+    const keys = visibleColumns.filter((key) => filterableColumnKeys.has(key));
+
+    // На мобільному і desktop показуємо детальну локацію пріоритетно, а загальну — після неї.
+    return keys.sort((left, right) => {
+      if (left === "locationName" && right === "businessUnit") return -1;
+      if (left === "businessUnit" && right === "locationName") return 1;
+      return 0;
+    });
+  }, [visibleColumns]);
 
   const filterOptionsByKey = useMemo(() => {
     const optionsMap = {};

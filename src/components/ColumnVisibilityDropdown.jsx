@@ -3,7 +3,6 @@ import React, { useState, useRef, useEffect } from "react";
 export default function ColumnVisibilityDropdown({ columns, visibleColumns, setVisibleColumns }) {
   const [open, setOpen] = useState(false);
   const ref = useRef();
-  const allCheckboxRef = useRef(null);
 
   const columnKeys = columns.map((col) => col.key).filter(Boolean);
   const selectedCount = columnKeys.filter((key) => visibleColumns.includes(key)).length;
@@ -17,13 +16,12 @@ export default function ColumnVisibilityDropdown({ columns, visibleColumns, setV
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("touchstart", handleClickOutside, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("touchstart", handleClickOutside);
+    };
   }, []);
-
-  useEffect(() => {
-    if (!allCheckboxRef.current) return;
-    allCheckboxRef.current.indeterminate = isPartiallySelected;
-  }, [isPartiallySelected]);
 
   const handleToggle = (col) => {
     setVisibleColumns((prev) =>
@@ -44,40 +42,52 @@ export default function ColumnVisibilityDropdown({ columns, visibleColumns, setV
         </svg>
       </button>
       {open && (
-        <div className="origin-top-right absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-[120] max-h-96 overflow-y-auto">
+        <div className="origin-top-right absolute right-0 mt-2 w-64 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-[120] max-h-96 overflow-y-auto touch-manipulation">
           <div className="py-1">
-            {/* Чекбокс "Всі" */}
-            <label className="flex items-center px-4 py-2 text-xs font-semibold text-gray-900 cursor-pointer border-b border-gray-100">
+            <button
+              type="button"
+              onClick={() => {
+                if (isAllSelected) {
+                  // Не дозволяємо порожній набір колонок.
+                  const safeFallback = columnKeys.includes("name")
+                    ? ["name"]
+                    : columnKeys.slice(0, 1);
+                  setVisibleColumns(safeFallback);
+                } else {
+                  setVisibleColumns(columnKeys);
+                }
+              }}
+              className="flex w-full items-center px-4 py-2.5 text-xs font-semibold text-gray-900 cursor-pointer border-b border-gray-100 hover:bg-slate-50"
+            >
               <input
-                ref={allCheckboxRef}
                 type="checkbox"
                 checked={isAllSelected}
-                onChange={() => {
-                  if (isAllSelected) {
-                    // Не дозволяємо порожній набір колонок.
-                    const safeFallback = columnKeys.includes("name")
-                      ? ["name"]
-                      : columnKeys.slice(0, 1);
-                    setVisibleColumns(safeFallback);
-                  } else {
-                    setVisibleColumns(columnKeys);
-                  }
-                }}
-                className="mr-2"
+                readOnly
+                className="mr-2 h-4 w-4 pointer-events-none"
               />
               Всі
-            </label>
-            {columns.map((col) => (
-              <label key={col.key} className="flex items-center px-4 py-2 text-xs text-gray-700 cursor-pointer">
+              {isPartiallySelected && !isAllSelected && (
+                <span className="ml-2 text-[10px] text-slate-500">частково</span>
+              )}
+            </button>
+            {columns.map((col) => {
+              const isChecked = visibleColumns.includes(col.key);
+              return (
+              <button
+                type="button"
+                key={col.key}
+                onClick={() => handleToggle(col.key)}
+                className="flex w-full items-center px-4 py-2.5 text-xs text-gray-700 cursor-pointer hover:bg-slate-50"
+              >
                 <input
                   type="checkbox"
-                  checked={visibleColumns.includes(col.key)}
-                  onChange={() => handleToggle(col.key)}
-                  className="mr-2"
+                  checked={isChecked}
+                  readOnly
+                  className="mr-2 h-4 w-4 pointer-events-none"
                 />
                 {col.header}
-              </label>
-            ))}
+              </button>
+            );})}
           </div>
         </div>
       )}
