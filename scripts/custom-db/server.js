@@ -347,12 +347,15 @@ const resolveAuthProfileWithFallback = async (req, dbConfig, fallbackUserId = ""
   return await getUserProfileById(normalizedFallbackUserId, dbConfig);
 };
 
-const getAuthUserByEmail = async (email, dbConfig) => {
+const getAuthUsersByEmail = async (email, dbConfig) => {
   const normalizedEmail = normalizeEmail(email);
   const authUsers = await getCollectionItemsData("authUsers", dbConfig);
-  return (
-    authUsers.find((item) => normalizeEmail(item?.email) === normalizedEmail) || null
-  );
+  return authUsers.filter((item) => normalizeEmail(item?.email) === normalizedEmail);
+};
+
+const getAuthUserByEmail = async (email, dbConfig) => {
+  const matches = await getAuthUsersByEmail(email, dbConfig);
+  return matches[0] || null;
 };
 
 const getUserProfileById = async (id, dbConfig) => {
@@ -846,6 +849,15 @@ const getAssetsData = async (dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      const tableName = await resolveCollectionTableMySql(conn, "assets");
+      await ensureAssetsIndexesMySql(conn, tableName);
+    } finally {
+      await conn.end();
+    }
+
     return getCollectionItemsData("assets", dbConfig);
   }
 
@@ -1623,6 +1635,45 @@ const ensureFlatColumnsMySql = async (conn, flatTable, typeMap) => {
   }
 };
 
+const ensureMySqlIndex = async (conn, tableName, indexName, columns) => {
+  const normalizedColumns = Array.isArray(columns)
+    ? columns.map((col) => String(col || "").trim()).filter(Boolean)
+    : [];
+  if (normalizedColumns.length === 0) return;
+
+  const [indexRows] = await conn.execute(
+    `SELECT 1 AS ok
+     FROM information_schema.statistics
+     WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?
+     LIMIT 1`,
+    [tableName, indexName]
+  );
+
+  if (indexRows.length > 0) return;
+
+  const columnsSql = normalizedColumns.map((col) => quoteIdentMySql(col)).join(", ");
+  await conn.execute(
+    `CREATE INDEX ${quoteIdentMySql(indexName)} ON ${quoteIdentMySql(tableName)} (${columnsSql})`
+  );
+};
+
+const ensureAssetsIndexesMySql = async (conn, tableName) => {
+  const existingColumns = await getMySqlColumns(conn, tableName);
+
+  const tryEnsure = async (indexName, columns) => {
+    const availableColumns = columns.filter((col) => existingColumns.has(col));
+    if (availableColumns.length === 0) return;
+    await ensureMySqlIndex(conn, tableName, indexName, availableColumns).catch(() => {});
+  };
+
+  await tryEnsure("idx_assets_inv_number", ["inv_number"]);
+  await tryEnsure("idx_assets_location_name", ["location_name"]);
+  await tryEnsure("idx_assets_status", ["status"]);
+  await tryEnsure("idx_assets_category", ["category"]);
+  await tryEnsure("idx_assets_decision", ["decision"]);
+  await tryEnsure("idx_assets_updated_at", ["updated_at"]);
+};
+
 const normalizeOneCollectionToFlatMySql = async (conn, collectionName) => {
   const sourceTable = `lucia_${collectionName}`;
   const flatTable = await ensureCollectionFlatTableMySql(conn, collectionName);
@@ -1751,8 +1802,8 @@ const handleAuthRegister = async (req, res) => {
   }
 
   const dbConfig = getAssetsRuntimeConfig();
-  const existing = await getAuthUserByEmail(email, dbConfig);
-  if (existing) {
+  const existing = await getAuthUsersByEmail(email, dbConfig);
+  if (Array.isArray(existing) && existing.length > 0) {
     return sendJson(res, 409, { ok: false, error: "Email already in use" });
   }
 
@@ -1808,18 +1859,74 @@ const handleAuthLogin = async (req, res) => {
   }
 
   const dbConfig = getAssetsRuntimeConfig();
-  const authUser = await getAuthUserByEmail(email, dbConfig);
-  if (!authUser) {
+  const authUsers = await getAuthUsersByEmail(email, dbConfig);
+  if (!Array.isArray(authUsers) || authUsers.length === 0) {
     return sendJson(res, 401, { ok: false, error: "Invalid credentials" });
   }
 
-  const credentials = getAuthPasswordCredentials(authUser);
-  const valid = verifyPassword(password, credentials.salt, credentials.hash);
-  if (!valid) {
+  const passwordMatchedCandidates = authUsers.filter((candidate) => {
+    const credentials = getAuthPasswordCredentials(candidate);
+    return verifyPassword(password, credentials.salt, credentials.hash);
+  });
+
+  if (passwordMatchedCandidates.length === 0) {
     return sendJson(res, 401, { ok: false, error: "Invalid credentials" });
   }
 
-  const profile = await getUserProfileById(authUser.id, dbConfig);
+  const candidatesWithProfiles = await Promise.all(
+    passwordMatchedCandidates.map(async (candidate) => {
+      const profile = await getUserProfileById(candidate.id, dbConfig);
+      return {
+        candidate,
+        profile,
+      };
+    })
+  );
+
+  const parseTs = (value) => {
+    const ts = Date.parse(String(value || ""));
+    return Number.isFinite(ts) ? ts : 0;
+  };
+
+  candidatesWithProfiles.sort((a, b) => {
+    const aHasProfile = a.profile ? 1 : 0;
+    const bHasProfile = b.profile ? 1 : 0;
+    if (bHasProfile !== aHasProfile) return bHasProfile - aHasProfile;
+
+    const aProfileTs = Math.max(
+      parseTs(a.profile?.updatedAt),
+      parseTs(a.profile?.createdAt),
+      parseTs(a.profile?.updated_at),
+      parseTs(a.profile?.created_at)
+    );
+    const bProfileTs = Math.max(
+      parseTs(b.profile?.updatedAt),
+      parseTs(b.profile?.createdAt),
+      parseTs(b.profile?.updated_at),
+      parseTs(b.profile?.created_at)
+    );
+    if (bProfileTs !== aProfileTs) return bProfileTs - aProfileTs;
+
+    const aAuthTs = Math.max(
+      parseTs(a.candidate?.updatedAt),
+      parseTs(a.candidate?.createdAt),
+      parseTs(a.candidate?.updated_at),
+      parseTs(a.candidate?.created_at)
+    );
+    const bAuthTs = Math.max(
+      parseTs(b.candidate?.updatedAt),
+      parseTs(b.candidate?.createdAt),
+      parseTs(b.candidate?.updated_at),
+      parseTs(b.candidate?.created_at)
+    );
+    if (bAuthTs !== aAuthTs) return bAuthTs - aAuthTs;
+
+    return String(b.candidate?.id || "").localeCompare(String(a.candidate?.id || ""));
+  });
+
+  const selected = candidatesWithProfiles[0] || null;
+  const authUser = selected?.candidate || null;
+  const profile = selected?.profile || null;
   if (!profile) {
     return sendJson(res, 404, { ok: false, error: "User profile not found" });
   }
@@ -2020,8 +2127,8 @@ const handleAuthAdminCreateUser = async (req, res) => {
     return sendJson(res, 400, { ok: false, error: "email and password(min 6) are required" });
   }
 
-  const existing = await getAuthUserByEmail(email, dbConfig);
-  if (existing) {
+  const existing = await getAuthUsersByEmail(email, dbConfig);
+  if (Array.isArray(existing) && existing.length > 0) {
     return sendJson(res, 409, { ok: false, error: "Email already in use" });
   }
 
@@ -2141,7 +2248,67 @@ const handleAssetsApi = async (req, res, assetId) => {
 
   if (method === "GET" && !assetId) {
     const assets = await getAssetsData(dbConfig);
-    return sendJson(res, 200, { ok: true, data: assets });
+
+    const requestUrl = new URL(req.url || "/api/assets", `http://${HOST}:${PORT}`);
+    const pageRaw = String(requestUrl.searchParams.get("page") || "").trim();
+    const pageSizeRaw = String(requestUrl.searchParams.get("pageSize") || "").trim();
+    const search = String(requestUrl.searchParams.get("search") || "").trim().toLowerCase();
+    const locationName = String(requestUrl.searchParams.get("locationName") || "").trim();
+    const status = String(requestUrl.searchParams.get("status") || "").trim();
+    const category = String(requestUrl.searchParams.get("category") || "").trim();
+    const decision = String(requestUrl.searchParams.get("decision") || "").trim();
+
+    const hasPaging = Boolean(pageRaw || pageSizeRaw);
+    if (!hasPaging && !search && !locationName && !status && !category && !decision) {
+      return sendJson(res, 200, { ok: true, data: assets });
+    }
+
+    const normalizedPage = Math.max(1, Number.parseInt(pageRaw || "1", 10) || 1);
+    const normalizedPageSize = Math.min(
+      500,
+      Math.max(1, Number.parseInt(pageSizeRaw || "50", 10) || 50)
+    );
+
+    const filtered = (assets || []).filter((asset) => {
+      if (locationName && String(asset?.locationName || asset?.location_name || "") !== locationName) return false;
+      if (status && String(asset?.status || "") !== status) return false;
+      if (category && String(asset?.category || "") !== category) return false;
+      if (decision && String(asset?.decision || "") !== decision) return false;
+      if (!search) return true;
+
+      const pool = [
+        asset?.invNumber,
+        asset?.inv_number,
+        asset?.name,
+        asset?.category,
+        asset?.locationName,
+        asset?.location_name,
+        asset?.status,
+        asset?.decision,
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase())
+        .join(" ");
+
+      return pool.includes(search);
+    });
+
+    const total = filtered.length;
+    const pageCount = Math.max(1, Math.ceil(total / normalizedPageSize));
+    const safePage = Math.min(normalizedPage, pageCount);
+    const startIndex = (safePage - 1) * normalizedPageSize;
+    const data = filtered.slice(startIndex, startIndex + normalizedPageSize);
+
+    return sendJson(res, 200, {
+      ok: true,
+      data,
+      meta: {
+        page: safePage,
+        pageSize: normalizedPageSize,
+        total,
+        pageCount,
+      },
+    });
   }
 
   if (method === "POST" && !assetId) {
