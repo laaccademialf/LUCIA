@@ -298,6 +298,19 @@ const mapUserProfile = (profile) => ({
 
 const hasAdminRole = (profile) => String(mapUserProfile(profile).role || "").toLowerCase() === "admin";
 
+const hasUserManagementPermission = (profile) => {
+  const mapped = mapUserProfile(profile);
+  const role = String(mapped?.role || "").toLowerCase();
+  const workRole = String(mapped?.workRole || "").toLowerCase();
+
+  if (role === "admin") return true;
+  if (role.includes("manager")) return true;
+  if (workRole.includes("керуюч")) return true;
+  if (workRole.includes("manager")) return true;
+
+  return false;
+};
+
 const getAuthUserByEmail = async (email, dbConfig) => {
   const normalizedEmail = normalizeEmail(email);
   const authUsers = await getCollectionItemsData("authUsers", dbConfig);
@@ -1924,8 +1937,8 @@ const handleAuthChangePassword = async (req, res) => {
 const handleAuthAdminCreateUser = async (req, res) => {
   const dbConfig = getAssetsRuntimeConfig();
   const { profile } = await resolveAuthContext(req, dbConfig);
-  if (!profile || !hasAdminRole(profile)) {
-    return sendJson(res, 403, { ok: false, error: "Admin role required" });
+  if (!profile?.id) {
+    return sendJson(res, 401, { ok: false, error: "Authentication required" });
   }
 
   let payload;
@@ -1942,6 +1955,32 @@ const handleAuthAdminCreateUser = async (req, res) => {
   const restaurant = String(payload?.restaurant || "").trim();
   const position = String(payload?.position || "").trim();
   const workRole = String(payload?.workRole || "").trim();
+  const currentPassword = String(payload?.currentPassword || "");
+
+  if (!currentPassword) {
+    return sendJson(res, 400, { ok: false, error: "Current password is required" });
+  }
+
+  const currentAuthUser = await getCollectionItemData("authUsers", String(profile.id), dbConfig);
+  if (!currentAuthUser) {
+    return sendJson(res, 404, { ok: false, error: "Auth user not found" });
+  }
+
+  const currentPasswordSalt = currentAuthUser?.passwordSalt || currentAuthUser?.password_salt || "";
+  const currentPasswordHash = currentAuthUser?.passwordHash || currentAuthUser?.password_hash || "";
+  const isValidCurrentPassword = verifyPassword(currentPassword, currentPasswordSalt, currentPasswordHash);
+  if (!isValidCurrentPassword) {
+    return sendJson(res, 401, { ok: false, error: "Current password is invalid" });
+  }
+
+  if (!hasUserManagementPermission(profile)) {
+    return sendJson(res, 403, { ok: false, error: "Insufficient permissions" });
+  }
+
+  const normalizedRequestedRole = String(role || "user").trim().toLowerCase();
+  if (normalizedRequestedRole === "admin" && !hasAdminRole(profile)) {
+    return sendJson(res, 403, { ok: false, error: "Only admin can create admin users" });
+  }
 
   if (!email || !password || password.length < 6) {
     return sendJson(res, 400, { ok: false, error: "email and password(min 6) are required" });

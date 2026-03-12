@@ -446,6 +446,9 @@ export const subscribeToAssetInventorySessions = (scopeId, callback) => {
     return subscribeByPolling(async () => {
       const scope = String(scopeId || "global");
       const sessions = (await listCollectionItemsApi("assetInventorySessions")).map(normalizeInventorySession);
+      if (scope === "*") {
+        return sessions.sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
+      }
       return sessions
         .filter((item) => String(item?.scopeId || "global") === scope)
         .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
@@ -456,9 +459,11 @@ export const subscribeToAssetInventorySessions = (scopeId, callback) => {
   const q = query(sessionsRef, orderBy("startedAt", "desc"));
 
   return onSnapshot(q, (snapshot) => {
+    const scope = String(scopeId || "global");
     const sessions = snapshot.docs
       .map((item) => ({ id: item.id, ...item.data() }))
-      .filter((item) => String(item.scopeId || "global") === String(scopeId || "global"));
+      .filter((item) => scope === "*" || String(item.scopeId || "global") === scope)
+      .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
 
     callback(sessions);
   });

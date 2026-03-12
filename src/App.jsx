@@ -885,9 +885,49 @@ function App() {
 
   const assetInventorySessionScopeId = useMemo(() => {
     if (user?.role === "admin") return "global";
-    if (user?.restaurant) return `restaurant:${String(user.restaurant)}`;
+
+    const normalizedRoleRestaurantIds = Array.isArray(roleRestaurantIds)
+      ? roleRestaurantIds.map((id) => String(id || "").trim()).filter(Boolean)
+      : [];
+
+    if (normalizedRoleRestaurantIds.length === 1) {
+      return `restaurant:${normalizedRoleRestaurantIds[0]}`;
+    }
+
+    const userRestaurantKey = String(
+      user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name || ""
+    ).trim();
+
+    if (userRestaurantKey) {
+      const normalizedKey = userRestaurantKey.toLowerCase();
+      const matched = (restaurants || []).find((item) => {
+        const byId = String(item?.id || "").trim().toLowerCase() === normalizedKey;
+        const byName = String(item?.name || "").trim().toLowerCase() === normalizedKey;
+        const byReg = String(item?.regNumber || item?.reg_number || "").trim().toLowerCase() === normalizedKey;
+        return byId || byName || byReg;
+      });
+      if (matched?.id) {
+        return `restaurant:${String(matched.id)}`;
+      }
+
+      return `restaurant:${userRestaurantKey}`;
+    }
+
+    if (normalizedRoleRestaurantIds.length > 1) {
+      return `restaurant:${normalizedRoleRestaurantIds[0]}`;
+    }
+
+    if (Array.isArray(restaurants) && restaurants.length === 1 && restaurants[0]?.id) {
+      return `restaurant:${String(restaurants[0].id)}`;
+    }
+
     return "global";
-  }, [user]);
+  }, [user, roleRestaurantIds, restaurants]);
+
+  const assetInventoryHistoryScopeId = useMemo(() => {
+    if (user?.role === "admin") return "*";
+    return assetInventorySessionScopeId;
+  }, [user, assetInventorySessionScopeId]);
 
   useEffect(() => {
     if (!user) {
@@ -913,16 +953,28 @@ function App() {
       return;
     }
 
-    const unsubscribe = subscribeToAssetInventorySessions(assetInventorySessionScopeId, (sessions) => {
+    const unsubscribe = subscribeToAssetInventorySessions(assetInventoryHistoryScopeId, (sessions) => {
       setAssetInventorySessionsHistory(Array.isArray(sessions) ? sessions : []);
     });
 
     return () => {
       unsubscribe?.();
     };
-  }, [user, assetInventorySessionScopeId]);
+  }, [user, assetInventoryHistoryScopeId]);
 
   const isAssetInventorySessionActive = Boolean(assetInventorySession?.isActive);
+
+  const activeAssetInventorySessionsByScope = useMemo(() => {
+    const map = new Map();
+    (assetInventorySessionsHistory || []).forEach((session) => {
+      if (!session?.isActive) return;
+      const scopeId = String(session?.scopeId || session?.scope_id || "global");
+      if (!map.has(scopeId)) {
+        map.set(scopeId, session);
+      }
+    });
+    return map;
+  }, [assetInventorySessionsHistory]);
 
   const recentlyInventoriedAssetIds = useMemo(() => {
     const activeSessionId = String(assetInventorySession?.id || "");
@@ -1177,7 +1229,7 @@ function App() {
     <h1>Журнал інвентаризацій основних засобів</h1>
     <div class="meta">
       Сформовано: ${new Date().toLocaleString("uk-UA")}<br/>
-      Scope: ${assetInventorySessionScopeId}<br/>
+      Scope: ${assetInventoryHistoryScopeId === "*" ? "всі заклади" : assetInventorySessionScopeId}<br/>
       К-сть записів: ${assetInventorySessionsHistory.length}
     </div>
     <table>
@@ -1209,31 +1261,49 @@ function App() {
     printWindow.document.close();
   };
 
-  const startAssetInventorySession = async () => {
-    if (assetInventorySessionLoading || isAssetInventorySessionActive || !user) return;
+  const startAssetInventorySession = async ({ scopeId, restaurantId, restaurantName } = {}) => {
+    if (assetInventorySessionLoading || !user) return;
+
+    const targetScopeId = String(scopeId || assetInventorySessionScopeId || "").trim();
+    if (!targetScopeId) return;
+
+    if (activeAssetInventorySessionsByScope.has(targetScopeId)) return;
+
+    const targetRestaurantId = String(
+      restaurantId ||
+      user?.restaurant ||
+      user?.restaurantId ||
+      user?.restaurant_id ||
+      ""
+    ).trim();
+
     const startedByName = user?.displayName || user?.fullName || user?.email || "Користувач";
     const nowIso = new Date().toISOString();
     try {
       setAssetInventorySessionLoading(true);
-      const sessionId = await startAssetInventorySessionInFirestore(assetInventorySessionScopeId, {
+      const sessionId = await startAssetInventorySessionInFirestore(targetScopeId, {
         startedById: user?.uid || "",
         startedByName,
-        startedForRestaurantId: user?.restaurant || "",
+        startedForRestaurantId: targetRestaurantId,
+        startedForRestaurantName: String(restaurantName || "").trim(),
       });
-      setAssetInventorySession({
-        id: String(sessionId || ""),
-        scopeId: assetInventorySessionScopeId,
-        isActive: true,
-        startedAt: nowIso,
-        startedById: user?.uid || "",
-        startedByName,
-        startedForRestaurantId: user?.restaurant || "",
-      });
+      if (targetScopeId === assetInventorySessionScopeId) {
+        setAssetInventorySession({
+          id: String(sessionId || ""),
+          scopeId: targetScopeId,
+          isActive: true,
+          startedAt: nowIso,
+          startedById: user?.uid || "",
+          startedByName,
+          startedForRestaurantId: targetRestaurantId,
+          startedForRestaurantName: String(restaurantName || "").trim(),
+        });
+      }
       writeAuditLog({
         action: "asset_inventory_session_start",
         entityType: "asset_inventory_session",
-        entityId: assetInventorySessionScopeId,
-        description: `Запущено сесію інвентаризації ОЗ (${assetInventorySessionScopeId})`,
+        entityId: targetScopeId,
+        description: `Запущено сесію інвентаризації ОЗ (${targetScopeId})`,
       });
     } catch (error) {
       alert(`Не вдалося запустити сесію інвентаризації: ${error?.message || "невідома помилка"}`);
@@ -1242,28 +1312,41 @@ function App() {
     }
   };
 
-  const endAssetInventorySession = async () => {
-    if (assetInventorySessionLoading || !isAssetInventorySessionActive || !assetInventorySession?.id || !user) return;
+  const endAssetInventorySession = async (sessionOverride = null) => {
+    if (assetInventorySessionLoading || !user) return;
+
+    const targetSession = sessionOverride || assetInventorySession;
+    const targetSessionId = String(targetSession?.id || "").trim();
+    if (!targetSessionId) return;
+
+    const targetScopeId = String(
+      targetSession?.scopeId || targetSession?.scope_id || assetInventorySessionScopeId || ""
+    ).trim();
+
     const endedByName = user?.displayName || user?.fullName || user?.email || "Користувач";
     const nowIso = new Date().toISOString();
     try {
       setAssetInventorySessionLoading(true);
-      await endAssetInventorySessionInFirestore(assetInventorySession.id, {
+      await endAssetInventorySessionInFirestore(targetSessionId, {
         endedById: user?.uid || "",
         endedByName,
-      }, assetInventorySessionScopeId);
-      setAssetInventorySession((prev) => ({
-        ...(prev || {}),
-        isActive: false,
-        endedAt: nowIso,
-        endedById: user?.uid || "",
-        endedByName,
-      }));
+      }, targetScopeId);
+
+      if (targetSessionId === String(assetInventorySession?.id || "")) {
+        setAssetInventorySession((prev) => ({
+          ...(prev || {}),
+          isActive: false,
+          endedAt: nowIso,
+          endedById: user?.uid || "",
+          endedByName,
+        }));
+      }
+
       writeAuditLog({
         action: "asset_inventory_session_end",
         entityType: "asset_inventory_session",
-        entityId: assetInventorySession?.id || assetInventorySessionScopeId,
-        description: `Завершено сесію інвентаризації ОЗ (${assetInventorySession?.id || "-"})`,
+        entityId: targetSessionId || targetScopeId,
+        description: `Завершено сесію інвентаризації ОЗ (${targetSessionId || "-"})`,
       });
       setSelected(null);
     } catch (error) {
@@ -2837,13 +2920,9 @@ function App() {
                 <p className="text-base font-semibold text-slate-900">Редагування тимчасово заблоковано</p>
                 <p className="mt-1 text-slate-600">Перегляд активів доступний завжди, але для редагування потрібно активувати сесію інвентаризації.</p>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={startAssetInventorySession}
-                    className="inline-flex items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
-                  >
-                    Почати інвентаризацію
-                  </button>
+                  <span className="inline-flex items-center rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700">
+                    Запуск інвентаризації доступний в журналі інвентаризацій
+                  </span>
                   <button
                     type="button"
                     onClick={() => setSelected(null)}
@@ -2937,7 +3016,7 @@ function App() {
             <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
               <div>
                 <h2 className="text-lg font-semibold">Журнал інвентаризацій ОЗ</h2>
-                <p className="text-sm text-slate-600">Історія запуску та завершення сесій інвентаризації ({assetInventorySessionScopeId})</p>
+                <p className="text-sm text-slate-600">Історія запуску та завершення сесій інвентаризації ({assetInventoryHistoryScopeId === "*" ? "всі заклади" : assetInventorySessionScopeId})</p>
               </div>
               <div className="flex items-center gap-2">
                 <span className="rounded bg-slate-100 border border-slate-200 px-2 py-1 text-xs text-slate-700">
@@ -2952,6 +3031,74 @@ function App() {
                 </button>
               </div>
             </div>
+
+            {user?.role === "admin" && (
+              <div className="mb-4 overflow-x-auto rounded-lg border border-slate-200">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-slate-700">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Заклад</th>
+                      <th className="px-3 py-2 text-left">Активна сесія</th>
+                      <th className="px-3 py-2 text-left">Початок</th>
+                      <th className="px-3 py-2 text-left">Хто почав</th>
+                      <th className="px-3 py-2 text-left">Дія</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(restaurants || []).map((restaurant) => {
+                      const restaurantId = String(restaurant?.id || "").trim();
+                      const scopeId = `restaurant:${restaurantId}`;
+                      const activeSession = activeAssetInventorySessionsByScope.get(scopeId) || null;
+
+                      return (
+                        <tr key={scopeId} className="border-t border-slate-200">
+                          <td className="px-3 py-2 font-medium text-slate-900">{restaurant?.name || restaurantId}</td>
+                          <td className="px-3 py-2">
+                            {activeSession ? (
+                              <span className="inline-flex items-center rounded-md px-2 py-1 text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">Активна</span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-md px-2 py-1 text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-300">Не активна</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">{activeSession?.startedAt ? new Date(activeSession.startedAt).toLocaleString("uk-UA") : "-"}</td>
+                          <td className="px-3 py-2">{activeSession?.startedByName || "-"}</td>
+                          <td className="px-3 py-2">
+                            {!activeSession ? (
+                              <button
+                                type="button"
+                                onClick={() => startAssetInventorySession({
+                                  scopeId,
+                                  restaurantId,
+                                  restaurantName: String(restaurant?.name || ""),
+                                })}
+                                disabled={assetInventorySessionLoading}
+                                className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+                              >
+                                Почати інвентаризацію
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => endAssetInventorySession(activeSession)}
+                                disabled={assetInventorySessionLoading}
+                                className="rounded bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-60"
+                              >
+                                Завершити інвентаризацію
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {(!restaurants || restaurants.length === 0) && (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-6 text-center text-slate-500">Немає закладів для керування інвентаризацією.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             <div className="overflow-x-auto rounded-lg border border-slate-200">
               <table className="min-w-full text-sm">
@@ -3176,31 +3323,9 @@ function App() {
                   : `Сесія активна з ${new Date(assetInventorySession?.startedAt || Date.now()).toLocaleString("uk-UA")}`)
                 : (isMobile ? "Сесія не активна" : "Сесія інвентаризації не активна")}
             </span>
-            {!isAssetInventorySessionActive ? (
-              <button
-                type="button"
-                onClick={startAssetInventorySession}
-                disabled={assetInventorySessionLoading}
-                className={clsx(
-                  "rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-60",
-                  isMobile && "ml-auto"
-                )}
-              >
-                Почати інвентаризацію
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={endAssetInventorySession}
-                disabled={assetInventorySessionLoading}
-                className={clsx(
-                  "rounded bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-60",
-                  isMobile && "ml-auto"
-                )}
-              >
-                Завершити інвентаризацію
-              </button>
-            )}
+            {user?.role === "admin" ? (
+              <span className={clsx("text-[11px] text-slate-300", isMobile && "ml-auto")}>Керування запуском: вкладка "Журнал інвентаризацій"</span>
+            ) : null}
           </div>
         )}
       </div>

@@ -209,7 +209,22 @@ const authApiRequest = async (path, options = {}) => {
   const response = await fetch(`${getAuthApiBase()}${path}`, options);
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    const error = new Error(body || `Auth API error ${response.status}`);
+    let normalizedMessage = body || `Auth API error ${response.status}`;
+    if (body) {
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed && typeof parsed === "object") {
+          const apiError = String(parsed?.error || "").trim();
+          const apiMessage = String(parsed?.message || "").trim();
+          if (apiError) normalizedMessage = apiError;
+          else if (apiMessage) normalizedMessage = apiMessage;
+        }
+      } catch {
+        // body is not JSON
+      }
+    }
+
+    const error = new Error(normalizedMessage);
     error.status = response.status;
     error.code = `auth/api-${response.status}`;
     throw error;
