@@ -70,7 +70,6 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   const [completedTabs, setCompletedTabs] = useState([]);
   const [photos, setPhotos] = useState([]);
   const [processingPhotos, setProcessingPhotos] = useState(false);
-  const [printedQrFingerprint, setPrintedQrFingerprint] = useState("");
   
   // Завантаження типових полів з Firebase
   const {
@@ -456,16 +455,6 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   const moralWear = watch("moralWear");
   const invNumberValue = watch("invNumber");
   const nameValue = watch("name");
-  const initialNameValue = String(selectedAsset?.name || "").trim();
-  const currentNameValue = String(nameValue || "").trim();
-  const isNameChangedInEdit = isEdit && currentNameValue !== initialNameValue;
-  const currentQrFingerprint = `${String(invNumberValue || "").trim()}::${String(nameValue || "").trim()}`;
-  const hasPrintedQr = Boolean(
-    String(invNumberValue || "").trim() &&
-    String(nameValue || "").trim() &&
-    printedQrFingerprint === currentQrFingerprint
-  );
-  const requiresQrPrintBeforeSave = isNameChangedInEdit;
   const savedPrimaryInventoryQuantityRaw =
     selectedAsset?.inventoryQuantity ??
     selectedAsset?.inventory_quantity ??
@@ -513,10 +502,6 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
   useEffect(() => {
     setValue("residualValue", residualValueTotalComputed);
   }, [residualValueTotalComputed, setValue]);
-
-  useEffect(() => {
-    setPrintedQrFingerprint("");
-  }, [selectedAsset?.id]);
 
   useEffect(() => {
     const phys = Number(physicalWear) || 0;
@@ -1402,7 +1387,6 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                         name: nameValue,
                         qrValue: invNumberValue,
                       });
-                      setPrintedQrFingerprint(currentQrFingerprint);
                     } catch (error) {
                       alert(error.message || "Не вдалося надрукувати QR код");
                     }
@@ -1414,13 +1398,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
                 </button>
                 <button
                   type="submit"
-                  disabled={requiresQrPrintBeforeSave && !hasPrintedQr}
-                  className={clsx(
-                    "inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2 sm:py-3.5 rounded-md sm:rounded-lg font-bold text-sm sm:text-base border-2 transition-all duration-200 shadow-xl",
-                    !requiresQrPrintBeforeSave || hasPrintedQr
-                      ? "bg-gradient-to-r from-green-600 to-green-700 border-green-500 text-white hover:from-green-500 hover:to-green-600 hover:border-green-400 shadow-green-500/50 hover:shadow-green-400/70"
-                      : "bg-slate-300 border-slate-300 text-slate-500 cursor-not-allowed shadow-none"
-                  )}
+                  className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2 sm:py-3.5 rounded-md sm:rounded-lg font-bold text-sm sm:text-base border-2 transition-all duration-200 shadow-xl bg-gradient-to-r from-green-600 to-green-700 border-green-500 text-white hover:from-green-500 hover:to-green-600 hover:border-green-400 shadow-green-500/50 hover:shadow-green-400/70"
                 >
                   {isSubmitting ? <Loader2 size={16} className="animate-spin sm:w-[18px] sm:h-[18px]" /> : <Save size={16} className="sm:w-[18px] sm:h-[18px]" />}
                   Зберегти актив
@@ -1429,11 +1407,6 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
             )}
           </div>
         </div>
-        {isLastTab && requiresQrPrintBeforeSave && !hasPrintedQr && (
-          <div className="text-xs sm:text-sm text-amber-600 font-semibold">
-            Ви змінили назву активу. Перед збереженням потрібно роздрукувати QR етикетку.
-          </div>
-        )}
       </form>
     </div>
   );

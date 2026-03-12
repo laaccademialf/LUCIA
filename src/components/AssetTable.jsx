@@ -110,7 +110,7 @@ const ALL_FIELD_DEFS = [
   { key: "actions", header: "Дії" },
 ];
 
-export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, editDisabledReason = "Редагування тимчасово недоступне", getRowClassName = null, mobileCardMode = false }) {
+export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, canEditAsset = null, editDisabledReason = "Редагування тимчасово недоступне", getEditDisabledReason = null, getRowClassName = null, mobileCardMode = false }) {
   // Стан для видимих колонок
   const fileInputRef = useRef(null);
       const defaultVisible = ["invNumber", "name", "category", "businessUnit", "status", "decision", "actions"];
@@ -159,23 +159,36 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         <span className="hidden sm:inline">Друк QR</span><span className="sm:hidden">QR</span>
       </button>
       {onEdit && (
+        (() => {
+          const isAssetEditableByRule = typeof canEditAsset === "function" ? Boolean(canEditAsset(asset)) : true;
+          const isEditAllowed = Boolean(canEdit) && isAssetEditableByRule;
+          const disabledReasonByAsset = typeof getEditDisabledReason === "function"
+            ? String(getEditDisabledReason(asset) || "").trim()
+            : "";
+          const buttonTitle = isEditAllowed
+            ? "Редагувати актив"
+            : (disabledReasonByAsset || editDisabledReason);
+
+          return (
         <button
           type="button"
           onClick={() => {
-            if (!canEdit) return;
+            if (!isEditAllowed) return;
             onEdit(asset);
           }}
-          disabled={!canEdit}
-          title={!canEdit ? editDisabledReason : "Редагувати актив"}
+          disabled={!isEditAllowed}
+          title={buttonTitle}
           className={clsx(
             "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition whitespace-nowrap",
-            canEdit
+            isEditAllowed
               ? "bg-indigo-600 border border-indigo-500 text-white hover:bg-indigo-500"
               : "bg-slate-300 border border-slate-300 text-slate-600 cursor-not-allowed"
           )}
         >
           <Pencil size={14} /> <span className="hidden sm:inline">Редагувати</span><span className="sm:hidden">Ред.</span>
         </button>
+          );
+        })()
       )}
       {isAdminOnly && onDelete && (
         <button
@@ -191,7 +204,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         </button>
       )}
     </div>
-  ), [onEdit, canEdit, editDisabledReason, isAdminOnly, onDelete]);
+  ), [onEdit, canEdit, canEditAsset, editDisabledReason, getEditDisabledReason, isAdminOnly, onDelete]);
 
   const allColumns = useMemo(() => ALL_FIELD_DEFS.map((def) => {
     if (def.key === "actions") {

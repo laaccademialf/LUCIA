@@ -207,6 +207,13 @@ const isManagerLikeUser = (user) => {
   return roleValue.includes("manager") || roleValue.includes("керуюч") || workRoleValue.includes("manager") || workRoleValue.includes("керуюч");
 };
 
+const isFinanceLikeUser = (user) => {
+  const roleValue = String(user?.role || "").toLowerCase();
+  const workRoleValue = String(user?.workRole || "").toLowerCase();
+  const terms = ["finance", "financial", "фін", "директор", "cfo"];
+  return roleValue === "admin" || terms.some((term) => roleValue.includes(term) || workRoleValue.includes(term));
+};
+
 const toMinutes = (value) => {
   if (!value || typeof value !== "string" || !value.includes(":")) return null;
   const [hours, minutes] = value.split(":").map(Number);
@@ -1021,6 +1028,37 @@ function App() {
 
   const isAssetInventorySessionActive = Boolean(assetInventorySession?.isActive);
   const isAssetEditAllowedForCurrentUser = user?.role === "admin" || isAssetInventorySessionActive;
+  const canOverrideWrittenOffEdit = isFinanceLikeUser(user);
+
+  const isAssetWrittenOff = useCallback((asset) => {
+    const status = String(asset?.status || "").trim().toLowerCase();
+    const decision = String(asset?.decision || "").trim().toLowerCase();
+    const writeOffStatus = String(asset?.writeOffRequest?.status || "").trim().toLowerCase();
+    const remainingAfterWriteOff = Number(asset?.writeOffRequest?.remainingQuantity);
+
+    if (status === "списано") return true;
+    if (decision === "списати") return true;
+    if (writeOffStatus === "approved" && Number.isFinite(remainingAfterWriteOff) && remainingAfterWriteOff <= 0) {
+      return true;
+    }
+
+    return false;
+  }, []);
+
+  const canEditAssetRow = useCallback((asset) => {
+    if (isAssetWrittenOff(asset) && !canOverrideWrittenOffEdit) return false;
+    return isAssetEditAllowedForCurrentUser;
+  }, [isAssetEditAllowedForCurrentUser, isAssetWrittenOff, canOverrideWrittenOffEdit]);
+
+  const getAssetEditDisabledReason = useCallback((asset) => {
+    if (isAssetWrittenOff(asset) && !canOverrideWrittenOffEdit) {
+      return "Актив зі статусом 'Списано' не редагується";
+    }
+    if (!isAssetEditAllowedForCurrentUser) {
+      return "Запустіть сесію інвентаризації, щоб редагувати активи";
+    }
+    return "Редагування тимчасово недоступне";
+  }, [isAssetEditAllowedForCurrentUser, isAssetWrittenOff, canOverrideWrittenOffEdit]);
 
   const activeAssetInventorySessionsByScope = useMemo(() => {
     const map = new Map();
@@ -2918,6 +2956,7 @@ function App() {
             user={user}
             updateAsset={updateAssetInFirebase}
             addAsset={addAssetToFirebase}
+            deleteAsset={deleteAssetFromFirebase}
           />
         </div>
       );
@@ -2985,7 +3024,14 @@ function App() {
       if (topTab === "search") {
         return (
           <div className="grid grid-cols-1">
-            <AssetSearch assets={assets} user={user} restaurants={restaurants} onEdit={(asset) => { setSelected(asset); setTopTab('test2'); }} />
+            <AssetSearch assets={assets} user={user} restaurants={restaurants} onEdit={(asset) => {
+              if (!canEditAssetRow(asset)) {
+                alert(getAssetEditDisabledReason(asset));
+                return;
+              }
+              setSelected(asset);
+              setTopTab('test2');
+            }} />
           </div>
         );
       }
@@ -3050,7 +3096,9 @@ function App() {
                   onEdit={setSelected}
                   mobileCardMode={true}
                   canEdit={isAssetEditAllowedForCurrentUser}
+                  canEditAsset={canEditAssetRow}
                   editDisabledReason="Запустіть сесію інвентаризації, щоб редагувати активи"
+                  getEditDisabledReason={getAssetEditDisabledReason}
                   getRowClassName={(assetRow) =>
                     recentlyInventoriedAssetIds.has(String(assetRow?.id || ""))
                       ? "bg-emerald-100/60"
@@ -3255,6 +3303,8 @@ function App() {
                 data={assetsToShow}
                 onEdit={setSelected}
                 mobileCardMode={true}
+                canEditAsset={canEditAssetRow}
+                getEditDisabledReason={getAssetEditDisabledReason}
                 filters={filters}
                 setFilters={setFilters}
                 onExport={handleExport}

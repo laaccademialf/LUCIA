@@ -1,0 +1,15 @@
+[
+  {
+    "id": "user_1773059370940_qq2xvl",
+    "data": {
+      "email": "auth.test@example.com",
+      "displayName": "Auth Test",
+      "role": "user",
+      "restaurant": "",
+      "position": "",
+      "workRole": "",
+      "createdAt": "2026-03-09T12:29:30.998Z",
+      "updatedAt": "2026-03-09T12:29:30.998Z"
+    }
+  }
+]
