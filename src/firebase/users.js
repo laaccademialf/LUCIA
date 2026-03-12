@@ -46,7 +46,7 @@ const normalizeUserRecord = (user) => {
     restaurant: user.restaurant || user.restaurant_id || user.restaurant_name || "",
     restaurantName: user.restaurantName || user.restaurant_name || user.restaurant || "",
     position: user.position || user.position_name || "",
-    workRole: user.workRole || user.work_role_name || user.work_role || "",
+    workRole: user.work_role_name || user.work_role || user.workRole || "",
     createdAt,
     updatedAt,
   };

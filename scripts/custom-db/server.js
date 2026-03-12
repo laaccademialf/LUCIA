@@ -319,7 +319,7 @@ const mapUserProfile = (profile) => ({
     profile?.restaurant_id
   ),
   position: readFirstString(profile?.position, profile?.position_name),
-  workRole: readFirstString(profile?.workRole, profile?.work_role_name, profile?.work_role),
+  workRole: readFirstString(profile?.work_role_name, profile?.work_role, profile?.workRole),
 });
 
 const hasAdminRole = (profile) => String(mapUserProfile(profile).role || "").toLowerCase() === "admin";
