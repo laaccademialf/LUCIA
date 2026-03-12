@@ -247,6 +247,32 @@ const verifyPassword = (password, salt, hash) => {
   }
 };
 
+const getAuthPasswordCredentials = (authUser) => {
+  const snakeSalt = String(authUser?.password_salt || "").trim();
+  const snakeHash = String(authUser?.password_hash || "").trim();
+  if (snakeSalt && snakeHash) {
+    return { salt: snakeSalt, hash: snakeHash };
+  }
+
+  const camelSalt = String(authUser?.passwordSalt || "").trim();
+  const camelHash = String(authUser?.passwordHash || "").trim();
+  if (camelSalt && camelHash) {
+    return { salt: camelSalt, hash: camelHash };
+  }
+
+  return {
+    salt: snakeSalt || camelSalt,
+    hash: snakeHash || camelHash,
+  };
+};
+
+const buildPasswordStoragePayload = ({ salt, hash }) => ({
+  passwordHash: String(hash || ""),
+  passwordSalt: String(salt || ""),
+  password_hash: String(hash || ""),
+  password_salt: String(salt || ""),
+});
+
 const createSessionToken = () => crypto.randomBytes(32).toString("hex");
 
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
@@ -1738,8 +1764,7 @@ const handleAuthRegister = async (req, res) => {
     {
       id: userId,
       email,
-      passwordHash: hash,
-      passwordSalt: salt,
+      ...buildPasswordStoragePayload({ salt, hash }),
       createdAt: nowIso(),
       updatedAt: nowIso(),
     },
@@ -1788,9 +1813,8 @@ const handleAuthLogin = async (req, res) => {
     return sendJson(res, 401, { ok: false, error: "Invalid credentials" });
   }
 
-  const passwordSalt = authUser.passwordSalt || authUser.password_salt || "";
-  const passwordHash = authUser.passwordHash || authUser.password_hash || "";
-  const valid = verifyPassword(password, passwordSalt, passwordHash);
+  const credentials = getAuthPasswordCredentials(authUser);
+  const valid = verifyPassword(password, credentials.salt, credentials.hash);
   if (!valid) {
     return sendJson(res, 401, { ok: false, error: "Invalid credentials" });
   }
@@ -1863,9 +1887,8 @@ const handleAuthUpdateProfile = async (req, res) => {
       return sendJson(res, 409, { ok: false, error: "Email already in use" });
     }
 
-    const passwordSalt = authUser?.passwordSalt || authUser?.password_salt || "";
-    const passwordHash = authUser?.passwordHash || authUser?.password_hash || "";
-    const isValidPassword = verifyPassword(currentPassword, passwordSalt, passwordHash);
+    const credentials = getAuthPasswordCredentials(authUser);
+    const isValidPassword = verifyPassword(currentPassword, credentials.salt, credentials.hash);
     if (!isValidPassword) {
       return sendJson(res, 401, { ok: false, error: "Current password is invalid" });
     }
@@ -1924,9 +1947,8 @@ const handleAuthChangePassword = async (req, res) => {
     return sendJson(res, 404, { ok: false, error: "Auth user not found" });
   }
 
-  const passwordSalt = authUser?.passwordSalt || authUser?.password_salt || "";
-  const passwordHash = authUser?.passwordHash || authUser?.password_hash || "";
-  const isValidPassword = verifyPassword(currentPassword, passwordSalt, passwordHash);
+  const currentCredentials = getAuthPasswordCredentials(authUser);
+  const isValidPassword = verifyPassword(currentPassword, currentCredentials.salt, currentCredentials.hash);
   if (!isValidPassword) {
     return sendJson(res, 401, { ok: false, error: "Current password is invalid" });
   }
@@ -1936,8 +1958,7 @@ const handleAuthChangePassword = async (req, res) => {
     "authUsers",
     String(profile.id),
     {
-      passwordHash: nextPassword.hash,
-      passwordSalt: nextPassword.salt,
+      ...buildPasswordStoragePayload(nextPassword),
       updatedAt: nowIso(),
     },
     dbConfig
@@ -1980,9 +2001,8 @@ const handleAuthAdminCreateUser = async (req, res) => {
     return sendJson(res, 404, { ok: false, error: "Auth user not found" });
   }
 
-  const currentPasswordSalt = currentAuthUser?.passwordSalt || currentAuthUser?.password_salt || "";
-  const currentPasswordHash = currentAuthUser?.passwordHash || currentAuthUser?.password_hash || "";
-  const isValidCurrentPassword = verifyPassword(currentPassword, currentPasswordSalt, currentPasswordHash);
+  const currentCredentials = getAuthPasswordCredentials(currentAuthUser);
+  const isValidCurrentPassword = verifyPassword(currentPassword, currentCredentials.salt, currentCredentials.hash);
   if (!isValidCurrentPassword) {
     return sendJson(res, 401, { ok: false, error: "Current password is invalid" });
   }
@@ -2013,8 +2033,7 @@ const handleAuthAdminCreateUser = async (req, res) => {
     {
       id: userId,
       email,
-      passwordHash: hash,
-      passwordSalt: salt,
+      ...buildPasswordStoragePayload({ salt, hash }),
       createdAt: nowIso(),
       updatedAt: nowIso(),
     },
@@ -2078,9 +2097,8 @@ const handleAuthAdminResetUserPassword = async (req, res) => {
     return sendJson(res, 404, { ok: false, error: "Auth user not found" });
   }
 
-  const currentPasswordSalt = currentAuthUser?.passwordSalt || currentAuthUser?.password_salt || "";
-  const currentPasswordHash = currentAuthUser?.passwordHash || currentAuthUser?.password_hash || "";
-  const isValidCurrentPassword = verifyPassword(currentPassword, currentPasswordSalt, currentPasswordHash);
+  const currentCredentials = getAuthPasswordCredentials(currentAuthUser);
+  const isValidCurrentPassword = verifyPassword(currentPassword, currentCredentials.salt, currentCredentials.hash);
   if (!isValidCurrentPassword) {
     return sendJson(res, 401, { ok: false, error: "Current password is invalid" });
   }
@@ -2095,8 +2113,7 @@ const handleAuthAdminResetUserPassword = async (req, res) => {
     "authUsers",
     targetUserId,
     {
-      passwordHash: nextPassword.hash,
-      passwordSalt: nextPassword.salt,
+      ...buildPasswordStoragePayload(nextPassword),
       updatedAt: nowIso(),
       passwordResetAt: nowIso(),
       passwordResetBy: String(profile.id || ""),
