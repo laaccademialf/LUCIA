@@ -90,10 +90,8 @@ export const getRolePermissions = async (roleId) => {
       return rn && rn.toLowerCase() === String(roleId).toLowerCase();
     });
     if (roleByName) {
-      console.log(`✅ Знайдено роль по roleName: ${roleId} -> ${roleByName.id}`);
       return normalizeRolePermissionsDoc(roleByName.data());
     }
-    console.log(`⚠️ Роль не знайдена: ${roleId}`);
     return { permissions: {}, restaurants: [] };
   } catch (error) {
     console.error("Помилка завантаження дозволів:", error);

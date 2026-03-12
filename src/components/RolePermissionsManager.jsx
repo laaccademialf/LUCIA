@@ -33,7 +33,6 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
   const [success, setSuccess] = useState("");
 
   useEffect(() => {
-    console.log("🔧 RolePermissionsManager mounted, menuStructure:", menuStructure);
     loadRoles();
     // Завантажити список ресторанів
     import("../firebase/firestore").then(({ getRestaurants }) => {
@@ -119,7 +118,6 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
         permissions: normalizedPermissions,
         restaurants: roleRestaurants,
       };
-      console.log("💾 Збереження прав і ресторанів:", savePayload);
       await saveRolePermissions(selectedRole.id, selectedRole.name, normalizedPermissions, roleRestaurants);
       setSuccess(`Доступи для ролі "${selectedRole.name}" успішно збережено!`);
     } catch (error) {

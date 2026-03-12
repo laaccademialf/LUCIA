@@ -17,8 +17,10 @@ export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
     // Перевірка Firebase змінних потрібна лише коли не використовується Auth API backend
     const apiMode = isAuthApiEnabled();
     const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
-    console.log("Auth mode:", apiMode ? "Auth API" : "Firebase");
-    console.log("Environment:", import.meta.env.MODE);
+    if (import.meta.env.DEV) {
+      console.log("Auth mode:", apiMode ? "Auth API" : "Firebase");
+      console.log("Environment:", import.meta.env.MODE);
+    }
 
     if (!apiMode && (!apiKey || apiKey === "YOUR_API_KEY")) {
       setError("⚠️ Firebase змінні НЕ завантажені!\n\n" + 

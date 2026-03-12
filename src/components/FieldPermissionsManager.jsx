@@ -123,7 +123,6 @@ export function FieldPermissionsManager() {
       });
 
       setFieldPermissions(permissions);
-      console.log("✅ Завантажено fieldPermissions з Firestore");
 
       setLoading(false);
     } catch (error) {
@@ -146,7 +145,6 @@ export function FieldPermissionsManager() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      console.log("💾 Зберігаємо дозволи у Firestore:", fieldPermissions);
       for (const role of roles) {
         const rolePerms = fieldPermissions[role.id] || {};
         await saveFieldPermissions(role.id, role.name, rolePerms);

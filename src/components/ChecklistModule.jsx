@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckSquare, Clock3, ListChecks, Plus, Settings, Trash2 } from "lucide-react";
 import { useChecklists } from "../hooks/useChecklists";
 
@@ -26,6 +26,10 @@ const DAY_OPTIONS = [
   { key: "sat", label: "Сб" },
   { key: "sun", label: "Нд" },
 ];
+const DAY_LABEL_BY_KEY = DAY_OPTIONS.reduce((acc, item) => {
+  acc[item.key] = item.label;
+  return acc;
+}, {});
 
 const normalizeTopTab = (tab = "") => {
   const value = String(tab).toLowerCase();
@@ -75,6 +79,7 @@ function ExecutionTab({ user, restaurants, templates, executions, createExecutio
   const [selectedKind, setSelectedKind] = useState("opening");
   const [selectedRestaurantId, setSelectedRestaurantId] = useState(user?.restaurant || "");
   const [expandedNotes, setExpandedNotes] = useState({});
+  const [noteDrafts, setNoteDrafts] = useState({});
 
   const availableRestaurants = restaurants || [];
   const effectiveRestaurantId = user?.role === "admin" ? selectedRestaurantId : user?.restaurant || selectedRestaurantId;
@@ -84,23 +89,36 @@ function ExecutionTab({ user, restaurants, templates, executions, createExecutio
     [availableRestaurants, effectiveRestaurantId]
   );
 
-  const applicableTemplates = useMemo(() => {
-    const selectedDayKey = dayKeys[new Date(`${selectedDate}T00:00:00`).getDay()];
+  const selectedDayKey = useMemo(() => dayKeys[new Date(`${selectedDate}T00:00:00`).getDay()], [selectedDate]);
 
-    return templates
-      .filter((item) => item.isActive !== false)
-      .filter((item) => item.kind === selectedKind)
-      .filter((item) => {
-        if (!Array.isArray(item.activeDays) || item.activeDays.length === 0) return true;
-        return item.activeDays.includes(selectedDayKey);
-      })
-      .filter((item) => {
-        if (!effectiveRestaurantId) return true;
-        if (!Array.isArray(item.restaurantIds) || item.restaurantIds.length === 0) return true;
-        return item.restaurantIds.map(String).includes(String(effectiveRestaurantId));
-      })
-      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "uk"));
-  }, [templates, selectedKind, effectiveRestaurantId, selectedDate]);
+  const applicableTemplates = useMemo(() => {
+    const restaurantId = String(effectiveRestaurantId || "");
+    const result = [];
+
+    for (const item of templates || []) {
+      if (item?.isActive === false) continue;
+      if (item?.kind !== selectedKind) continue;
+
+      if (Array.isArray(item?.activeDays) && item.activeDays.length > 0 && !item.activeDays.includes(selectedDayKey)) {
+        continue;
+      }
+
+      if (restaurantId && Array.isArray(item?.restaurantIds) && item.restaurantIds.length > 0) {
+        let matchesRestaurant = false;
+        for (const id of item.restaurantIds) {
+          if (String(id) === restaurantId) {
+            matchesRestaurant = true;
+            break;
+          }
+        }
+        if (!matchesRestaurant) continue;
+      }
+
+      result.push(item);
+    }
+
+    return result.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "uk"));
+  }, [templates, selectedKind, effectiveRestaurantId, selectedDayKey]);
 
   const activeExecution = useMemo(() => {
     return executions.find(
@@ -136,6 +154,15 @@ function ExecutionTab({ user, restaurants, templates, executions, createExecutio
     const checks = activeExecution?.checks || {};
     return tasks.filter((item) => Boolean(checks[item.id]?.done)).length;
   }, [tasks, activeExecution]);
+
+  useEffect(() => {
+    const nextDrafts = {};
+    const checks = activeExecution?.checks || {};
+    Object.entries(checks).forEach(([taskId, check]) => {
+      nextDrafts[taskId] = String(check?.note || "");
+    });
+    setNoteDrafts(nextDrafts);
+  }, [activeExecution]);
 
   const toggleTask = async (task, checked) => {
     if (!effectiveRestaurantId) {
@@ -173,8 +200,12 @@ function ExecutionTab({ user, restaurants, templates, executions, createExecutio
     if (!result.success) alert("Не вдалося оновити чек-ліст.");
   };
 
-  const updateTaskNote = async (taskId, note) => {
+  const persistTaskNote = async (taskId) => {
     if (!activeExecution?.id) return;
+
+    const note = String(noteDrafts[taskId] || "");
+    const currentNote = String(activeExecution?.checks?.[taskId]?.note || "");
+    if (note === currentNote) return;
 
     const checks = {
       ...(activeExecution?.checks || {}),
@@ -240,7 +271,8 @@ function ExecutionTab({ user, restaurants, templates, executions, createExecutio
       <div className="space-y-2">
         {tasks.map((task) => {
           const checked = Boolean(activeExecution?.checks?.[task.id]?.done);
-          const note = activeExecution?.checks?.[task.id]?.note || "";
+          const fallbackNote = activeExecution?.checks?.[task.id]?.note || "";
+          const note = String(noteDrafts[task.id] ?? fallbackNote);
           const deadline = getDeadlineLabel(task, selectedRestaurant?.schedule, selectedDate);
           const isNoteOpen = Boolean(expandedNotes[task.id]);
           return (
@@ -277,7 +309,10 @@ function ExecutionTab({ user, restaurants, templates, executions, createExecutio
                 <textarea
                   className={`${inputClass} min-h-[56px]`}
                   value={note}
-                  onChange={(e) => updateTaskNote(task.id, e.target.value)}
+                  onChange={(e) => setNoteDrafts((prev) => ({ ...prev, [task.id]: e.target.value }))}
+                  onBlur={() => {
+                    void persistTaskNote(task.id);
+                  }}
                   placeholder="Коментар до пункту"
                 />
               ) : null}
@@ -374,6 +409,29 @@ function SettingsTab({ user, restaurants, templates, createTemplate, updateTempl
   };
 
   const [form, setForm] = useState(emptyTemplate);
+
+  const selectedRestaurantIdsSet = useMemo(
+    () => new Set((form.restaurantIds || []).map((id) => String(id))),
+    [form.restaurantIds]
+  );
+
+  const selectedActiveDaysSet = useMemo(
+    () => new Set(form.activeDays || []),
+    [form.activeDays]
+  );
+
+  const templateDayLabelsById = useMemo(() => {
+    const map = new Map();
+    for (const template of templates || []) {
+      if (!Array.isArray(template?.activeDays) || template.activeDays.length === 0) {
+        map.set(String(template?.id || ""), "щодня");
+        continue;
+      }
+      const labels = template.activeDays.map((key) => DAY_LABEL_BY_KEY[key]).filter(Boolean);
+      map.set(String(template?.id || ""), labels.length > 0 ? labels.join(", ") : "щодня");
+    }
+    return map;
+  }, [templates]);
 
   const startCreate = () => {
     setEditingId(null);
@@ -538,9 +596,7 @@ function SettingsTab({ user, restaurants, templates, createTemplate, updateTempl
                     <p className="font-semibold text-slate-900">{template.name}</p>
                     <p className="text-xs text-slate-500">
                       {KIND_OPTIONS.find((option) => option.value === template.kind)?.label || template.kind} · пунктів: {(template.items || []).length}
-                      {Array.isArray(template.activeDays) && template.activeDays.length > 0
-                        ? ` · дні: ${DAY_OPTIONS.filter((day) => template.activeDays.includes(day.key)).map((day) => day.label).join(", ")}`
-                        : " · щодня"}
+                      {` · дні: ${templateDayLabelsById.get(String(template?.id || "")) || "щодня"}`}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -597,7 +653,7 @@ function SettingsTab({ user, restaurants, templates, createTemplate, updateTempl
                 <label key={item.id} className="flex items-center gap-2 text-sm text-slate-700">
                   <input
                     type="checkbox"
-                    checked={form.restaurantIds.map(String).includes(String(item.id))}
+                    checked={selectedRestaurantIdsSet.has(String(item.id))}
                     onChange={() => toggleRestaurant(item.id)}
                     disabled={!isAdmin}
                   />
@@ -612,7 +668,7 @@ function SettingsTab({ user, restaurants, templates, createTemplate, updateTempl
             <p className="text-xs text-slate-500">Якщо не обрати жоден день, шаблон буде працювати щодня.</p>
             <div className="mt-2 flex flex-wrap gap-2">
               {DAY_OPTIONS.map((day) => {
-                const isSelected = (form.activeDays || []).includes(day.key);
+                const isSelected = selectedActiveDaysSet.has(day.key);
                 return (
                   <button
                     key={day.key}

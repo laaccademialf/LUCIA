@@ -1,6 +1,29 @@
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from "react";
 import DeployInfo from "./components/DeployInfo";
-import * as LucideIcons from "lucide-react";
+import {
+  Archive,
+  BarChart3,
+  Bell,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ClipboardList,
+  Clock3,
+  Database,
+  Download,
+  FileDown,
+  Folder,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  Plus,
+  Settings,
+  Shield,
+  Upload,
+  UserIcon,
+  Users,
+  Wrench,
+} from "lucide-react";
 import clsx from "clsx";
 import { AssetTable } from "./components/AssetTable";
 import AssetSearch from "./components/AssetSearch";
@@ -8,16 +31,10 @@ import { AssetForm } from "./components/AssetForm";
 import { AddUserForm } from "./components/AddUserForm";
 import { LoginModal } from "./components/LoginModal";
 import { UsersTable } from "./components/UsersTable";
-import { RolesPositionsManager } from "./components/RolesPositionsManager";
-import { RolePermissionsManager } from "./components/RolePermissionsManager";
-import { FieldPermissionsManager } from "./components/FieldPermissionsManager";
 import UtilityMetersManager from "./components/UtilityMetersManager";
 import ElectricityTab from "./components/ElectricityTab";
 import { MaterialResponsibilityManager } from "./components/MaterialResponsibilityManager";
 import AssetTransferWriteoffManager from "./components/AssetTransferWriteoffManager";
-import { AssetFieldsManager } from "./components/AssetFieldsManager";
-import FinancialAssetsReport from "./components/FinancialAssetsReport";
-import AssetDetailedReport from "./components/AssetDetailedReport";
 import { useAuth } from "./hooks/useAuth";
 import NotificationPanel from "./components/NotificationPanel";
 import { logoutUser } from "./firebase/auth";
@@ -39,30 +56,84 @@ import {
   updateUtilityMeterPrice,
   deleteUtilityMeter,
 } from "./firebase/utilityMeters";
-import MenuStructureEditor from "./components/MenuStructureEditor";
-import ProductBookingModule from "./components/ProductBookingModule";
-import ServiceRequestsModule from "./components/ServiceRequestsModule";
-import ChecklistModule from "./components/ChecklistModule";
-import TeamHiringModule from "./components/TeamHiringModule";
-import SecurityAuditModule from "./components/SecurityAuditModule";
-import DatabaseConnectionsManager from "./components/DatabaseConnectionsManager";
-import ProfileSettingsModal from "./components/ProfileSettingsModal";
 import { useChecklists } from "./hooks/useChecklists";
 import { useServiceRequests } from "./hooks/useServiceRequests";
 import { logAuditEvent } from "./firebase/audit";
 import { getCurrentRuntimeCustomConfig, getPrimaryConnection } from "./data/firebaseConnections";
-import {
-  downloadAssetTemplate,
-  downloadRestaurantTemplate,
-  exportAssetsToExcel,
-  exportRestaurantsToExcel,
-  importAssetsFromExcel,
-  importRestaurantsFromExcel,
-} from "./utils/excelHelpers";
+
+const loadExcelHelpers = () => import("./utils/excelHelpers");
+
+const RolesPositionsManager = lazy(() =>
+  import("./components/RolesPositionsManager").then((module) => ({ default: module.RolesPositionsManager }))
+);
+const RolePermissionsManager = lazy(() =>
+  import("./components/RolePermissionsManager").then((module) => ({ default: module.RolePermissionsManager }))
+);
+const FieldPermissionsManager = lazy(() =>
+  import("./components/FieldPermissionsManager").then((module) => ({ default: module.FieldPermissionsManager }))
+);
+const AssetFieldsManager = lazy(() =>
+  import("./components/AssetFieldsManager").then((module) => ({ default: module.AssetFieldsManager }))
+);
+const FinancialAssetsReport = lazy(() => import("./components/FinancialAssetsReport"));
+const AssetDetailedReport = lazy(() => import("./components/AssetDetailedReport"));
+const MenuStructureEditor = lazy(() => import("./components/MenuStructureEditor"));
+const ProductBookingModule = lazy(() => import("./components/ProductBookingModule"));
+const ServiceRequestsModule = lazy(() => import("./components/ServiceRequestsModule"));
+const ChecklistModule = lazy(() => import("./components/ChecklistModule"));
+const TeamHiringModule = lazy(() => import("./components/TeamHiringModule"));
+const SecurityAuditModule = lazy(() => import("./components/SecurityAuditModule"));
+const DatabaseConnectionsManager = lazy(() => import("./components/DatabaseConnectionsManager"));
+const ProfileSettingsModal = lazy(() => import("./components/ProfileSettingsModal"));
 
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const APP_VERSION = "1.0.3";
 const ADMIN_ONLY_NAV_IDS = new Set(["settings-permissions", "menu-admin", "security-audit"]);
+const NAV_ICON_MAP = {
+  LayoutDashboard,
+  Settings,
+  ClipboardList,
+  Archive,
+  BarChart3,
+  Shield,
+  Users,
+  Wrench,
+  Folder,
+};
+const NAV_SECTION_ICON_BY_ID = {
+  dashboard: "LayoutDashboard",
+  settings: "Settings",
+  operations: "ClipboardList",
+  inventory: "Archive",
+  reports: "BarChart3",
+  security: "Shield",
+  team: "Users",
+  maintenance: "Wrench",
+};
+
+const normalizeIconKey = (value) => String(value || "")
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]/g, "")
+  .replace(/icon$/, "");
+
+const resolveNavIconComponent = (group) => {
+  const rawIcon = String(group?.icon || "").trim();
+  if (rawIcon && NAV_ICON_MAP[rawIcon]) {
+    return NAV_ICON_MAP[rawIcon];
+  }
+
+  const normalizedRawIcon = normalizeIconKey(rawIcon);
+  if (normalizedRawIcon) {
+    const matched = Object.entries(NAV_ICON_MAP).find(([key]) => normalizeIconKey(key) === normalizedRawIcon);
+    if (matched?.[1]) {
+      return matched[1];
+    }
+  }
+
+  const fallbackKey = NAV_SECTION_ICON_BY_ID[String(group?.id || "").trim()] || "Folder";
+  return NAV_ICON_MAP[fallbackKey] || Folder;
+};
 const DEFAULT_FALLBACK_MENU_STRUCTURE = [
   {
     id: "dashboard",
@@ -168,6 +239,7 @@ const ASSET_FIELD_LABELS = {
 };
 
 const getAssetFieldLabel = (field) => ASSET_FIELD_LABELS[String(field || "")] || String(field || "-");
+const normalizeLowerText = (value) => String(value || "").trim().toLowerCase();
 
 const getPlannedTime = (item, scheduleByDay, dayKey) => {
   const mode = item?.timeMode || "before_open";
@@ -514,13 +586,6 @@ function App() {
   // Sync Firebase data with local state
   useEffect(() => {
     if (!restaurantsLoading) {
-      console.log("DEBUG FirebaseRestaurants:", firebaseRestaurants);
-      console.log("🔍 Фільтрація ресторанів:");
-      console.log("- user:", user);
-      console.log("- user.role:", user?.role);
-      console.log("- user.restaurant:", user?.restaurant);
-      console.log("- firebaseRestaurants:", firebaseRestaurants);
-      
       const normalizeText = (value) => String(value || "").trim().toLowerCase();
       const profileRestaurantCandidates = Array.from(
         new Set(
@@ -654,7 +719,6 @@ function App() {
 
       try {
         const rolePerms = await getRolePermissions(roleIdOrName);
-        console.log("DEBUG завантажено дозволи для ролі/робочої ролі:", roleIdOrName, rolePerms);
         setUserPermissions(rolePerms.permissions || {});
         const restaurantsExplicitlyConfigured = Object.prototype.hasOwnProperty.call(rolePerms || {}, "restaurants");
         setRoleRestaurantsConfigured(restaurantsExplicitlyConfigured);
@@ -673,13 +737,6 @@ function App() {
     };
     loadPermissions();
   }, [user]);
-
-  // DEBUG: завантаження лічильників
-  useEffect(() => {
-    if (activeNav === "inventory-utilities" && topTab === "utilityservice") {
-      console.log("DEBUG utilityMeters state:", utilityMeters);
-    }
-  }, [activeNav, topTab, utilityMeters]);
 
   useEffect(() => {
     if (!assetsLoading && firebaseAssets.length > 0) {
@@ -1556,11 +1613,30 @@ function App() {
   };
 
   const handleExport = () => {
-    exportAssetsToExcel(assets);
+    void (async () => {
+      try {
+        const { exportAssetsToExcel } = await loadExcelHelpers();
+        exportAssetsToExcel(assets);
+      } catch (error) {
+        console.error("Помилка експорту активів:", error);
+        alert("Помилка експорту активів. Спробуйте ще раз.");
+      }
+    })();
+  };
+
+  const handleDownloadAssetTemplate = async () => {
+    try {
+      const { downloadAssetTemplate } = await loadExcelHelpers();
+      downloadAssetTemplate();
+    } catch (error) {
+      console.error("Помилка завантаження шаблону активів:", error);
+      alert("Помилка завантаження шаблону активів. Спробуйте ще раз.");
+    }
   };
 
   const handleImportAssets = async (file) => {
     try {
+      const { importAssetsFromExcel } = await loadExcelHelpers();
       const importedAssets = await importAssetsFromExcel(file);
       if (!Array.isArray(importedAssets) || importedAssets.length === 0) {
         alert("Файл не містить даних для імпорту.");
@@ -1706,6 +1782,40 @@ function App() {
     }
   };
 
+  const handleImportRestaurants = async (file) => {
+    try {
+      const { importRestaurantsFromExcel } = await loadExcelHelpers();
+      const importedRestaurants = await importRestaurantsFromExcel(file);
+      for (const restaurant of importedRestaurants) {
+        await addRestaurantToFirebase(restaurant);
+      }
+      alert(`Успішно імпортовано ${importedRestaurants.length} ресторанів`);
+    } catch (error) {
+      console.error("Помилка імпорту ресторанів:", error);
+      alert("Помилка імпорту файлу. Перевірте формат файлу.");
+    }
+  };
+
+  const handleDownloadRestaurantTemplate = async () => {
+    try {
+      const { downloadRestaurantTemplate } = await loadExcelHelpers();
+      downloadRestaurantTemplate();
+    } catch (error) {
+      console.error("Помилка завантаження шаблону ресторанів:", error);
+      alert("Помилка завантаження шаблону ресторанів. Спробуйте ще раз.");
+    }
+  };
+
+  const handleExportRestaurants = async () => {
+    try {
+      const { exportRestaurantsToExcel } = await loadExcelHelpers();
+      exportRestaurantsToExcel(restaurants);
+    } catch (error) {
+      console.error("Помилка експорту ресторанів:", error);
+      alert("Помилка експорту ресторанів. Спробуйте ще раз.");
+    }
+  };
+
   const summary = useMemo(() => {
     const total = assets.length;
     const toWriteOff = assets.filter((a) => a.decision === "Списати").length;
@@ -1715,8 +1825,6 @@ function App() {
 
   // Використовуємо menuStructure з Firestore для побудови меню
   const navItems = useMemo(() => {
-      console.log('DEBUG navItems (перед фільтрацією):', menuStructure);
-    console.log('DEBUG current user:', user, 'userPermissions:', userPermissions);
     const isAdmin = user?.role === 'admin';
     // Якщо menuStructure порожній, fallback на стандартну структуру
     const structure = (Array.isArray(menuStructure) && menuStructure.length > 0)
@@ -1751,11 +1859,70 @@ function App() {
     // Додаємо іконки
     const result = filtered.map(group => ({
       ...group,
-      icon: LucideIcons[group.icon || "Folder"] || LucideIcons.Folder
+      icon: resolveNavIconComponent(group)
     }));
-    console.log('DEBUG navItems (після фільтрації):', result);
     return result;
   }, [menuStructure, user?.role, user?.workRole, userPermissions]);
+
+  const isGlobalAdmin = useMemo(() => user?.role === "admin" && !user?.restaurant, [user?.role, user?.restaurant]);
+
+  const allowedRestaurantNames = useMemo(() => {
+    return new Set(
+      (restaurants || [])
+        .map((restaurant) => normalizeLowerText(restaurant?.name))
+        .filter(Boolean)
+    );
+  }, [restaurants]);
+
+  const allowedRestaurantIds = useMemo(() => {
+    return new Set(
+      (restaurants || [])
+        .map((restaurant) => String(restaurant?.id || "").trim())
+        .filter(Boolean)
+    );
+  }, [restaurants]);
+
+  const isAssetVisibleForCurrentRestaurants = useCallback((asset) => {
+    if (isGlobalAdmin) return true;
+    if (restaurants.length === 0) return false;
+
+    const assetRestaurantIds = [
+      asset?.restaurantId,
+      asset?.restaurant_id,
+      asset?.locationId,
+      asset?.location_id,
+      asset?.restaurant,
+      asset?.location,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    if (assetRestaurantIds.some((id) => allowedRestaurantIds.has(id))) {
+      return true;
+    }
+
+    const assetRestaurantNames = [
+      asset?.locationName,
+      asset?.location_name,
+      asset?.restaurantName,
+      asset?.restaurant_name,
+      asset?.restaurant,
+      asset?.location,
+    ]
+      .map((value) => normalizeLowerText(value))
+      .filter(Boolean);
+
+    for (const candidate of assetRestaurantNames) {
+      if (allowedRestaurantNames.has(candidate)) return true;
+    }
+
+    return false;
+  }, [isGlobalAdmin, restaurants.length, allowedRestaurantIds, allowedRestaurantNames]);
+
+  const visibleAssetsForCurrentUser = useMemo(() => {
+    if (isGlobalAdmin) return assets;
+    return assets.filter((asset) => isAssetVisibleForCurrentRestaurants(asset));
+  }, [assets, isGlobalAdmin, isAssetVisibleForCurrentRestaurants]);
 
   const renderAddressFields = () => (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -1881,70 +2048,7 @@ function App() {
   );
 
   const renderContent = () => {
-          const isGlobalAdmin = user?.role === 'admin' && !user?.restaurant;
-          const userRestaurantName = (user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name)
-          ? restaurants.find((r) => {
-            const key = String(user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name || "").trim();
-              const target = String(key || "").trim().toLowerCase();
-              const id = String(r?.id || "").trim();
-              const name = String(r?.name || "").trim().toLowerCase();
-              const reg = String(r?.regNumber || r?.reg_number || "").trim();
-              return id === key || reg === key || name === target;
-            })?.name
-          : "";
-
-        const normalizeText = (value) => String(value || "").trim().toLowerCase();
-        const allowedRestaurantNames = new Set(
-          (restaurants || [])
-            .map((r) => normalizeText(r?.name))
-            .filter(Boolean)
-        );
-        const allowedRestaurantIds = new Set(
-          (restaurants || [])
-            .map((r) => String(r?.id || "").trim())
-            .filter(Boolean)
-        );
-
-        const isAssetVisibleForCurrentRestaurants = (asset) => {
-          if (isGlobalAdmin) return true;
-          if (restaurants.length === 0) return false;
-
-          const assetRestaurantIds = [
-            asset?.restaurantId,
-            asset?.restaurant_id,
-            asset?.locationId,
-            asset?.location_id,
-            asset?.restaurant,
-            asset?.location,
-          ]
-            .map((value) => String(value || "").trim())
-            .filter(Boolean);
-
-          if (assetRestaurantIds.some((id) => allowedRestaurantIds.has(id))) {
-            return true;
-          }
-
-          const assetRestaurantNames = [
-            asset?.locationName,
-            asset?.location_name,
-            asset?.restaurantName,
-            asset?.restaurant_name,
-            asset?.restaurant,
-            asset?.location,
-          ]
-            .map((value) => normalizeText(value))
-            .filter(Boolean);
-
-          for (const candidate of assetRestaurantNames) {
-            if (allowedRestaurantNames.has(candidate)) return true;
-          }
-
-          return false;
-        };
-
-        const assetsForReports = isGlobalAdmin
-          ? assets
-          : assets.filter((asset) => isAssetVisibleForCurrentRestaurants(asset));
+        const assetsForReports = visibleAssetsForCurrentUser;
 
         // ...existing code...
         if (
@@ -2287,15 +2391,10 @@ function App() {
           }
           
           try {
-            console.log("Видалення ресторану з ID:", id);
-            console.log("Поточний користувач:", user);
-            console.log("Роль користувача:", user?.role);
-            
             const result = await deleteRestaurantFromFirebase(id);
             if (!result?.success) {
               throw result?.error || new Error("Не вдалося видалити ресторан");
             }
-            console.log("Ресторан успішно видалено");
             alert("✅ Ресторан успішно видалено!");
           } catch (error) {
             console.error("Помилка видалення ресторану:", error);
@@ -2594,26 +2693,19 @@ function App() {
                     onChange={async (e) => {
                       const file = e.target.files[0];
                       if (file) {
-                        try {
-                          const importedRestaurants = await importRestaurantsFromExcel(file);
-                          for (const restaurant of importedRestaurants) {
-                            await addRestaurantToFirebase(restaurant);
-                          }
-                          alert(`Успішно імпортовано ${importedRestaurants.length} ресторанів`);
-                        } catch (error) {
-                          console.error("Помилка імпорту:", error);
-                          alert("Помилка імпорту файлу. Перевірте формат файлу.");
-                        }
+                        await handleImportRestaurants(file);
                         e.target.value = "";
                       }
                     }}
                   />
                   <button
                     type="button"
-                    onClick={() => downloadRestaurantTemplate()}
+                    onClick={() => {
+                      void handleDownloadRestaurantTemplate();
+                    }}
                     className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-slate-600 text-white font-semibold hover:bg-slate-500 shadow text-xs sm:text-sm"
                   >
-                    <LucideIcons.FileDown size={16} />
+                    <FileDown size={16} />
                     <span className="hidden sm:inline">Шаблон</span>
                   </button>
                   <button
@@ -2621,15 +2713,17 @@ function App() {
                     onClick={() => window.restaurantImportInput?.click()}
                     className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-green-600 text-white font-semibold hover:bg-green-500 shadow text-xs sm:text-sm"
                   >
-                    <LucideIcons.Upload size={16} />
+                    <Upload size={16} />
                     <span className="hidden sm:inline">Імпорт</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => exportRestaurantsToExcel(restaurants)}
+                    onClick={() => {
+                      void handleExportRestaurants();
+                    }}
                     className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-500 shadow text-xs sm:text-sm"
                   >
-                    <LucideIcons.Download size={16} />
+                    <Download size={16} />
                     <span className="hidden sm:inline">Експорт</span>
                   </button>
                   <button
@@ -2637,7 +2731,7 @@ function App() {
                     onClick={() => handleAddRestaurant()}
                     className="flex items-center gap-1 px-2 sm:px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow text-xs sm:text-sm"
                   >
-                    <LucideIcons.Plus size={18} />
+                    <Plus size={18} />
                     <span className="hidden sm:inline">Додати ресторан</span>
                     <span className="sm:hidden">+</span>
                   </button>
@@ -2947,12 +3041,7 @@ function App() {
         return (
           <div className="grid grid-cols-1">
             {(() => {
-              // Фільтруємо активи на основі ролі користувача
-              let assetsToShow = assets;
-              if (user?.role !== 'admin') {
-                // Не-адмін бачить активи лише дозволених ресторанів (може бути декілька)
-                assetsToShow = assets.filter((a) => isAssetVisibleForCurrentRestaurants(a));
-              }
+              const assetsToShow = visibleAssetsForCurrentUser;
               
               return (
                 <AssetTable
@@ -2971,7 +3060,7 @@ function App() {
                   setFilters={setFilters}
                   onExport={handleExport}
                   onImport={user?.role === 'admin' ? handleImportAssets : null}
-                  onDownloadTemplate={user?.role === 'admin' ? downloadAssetTemplate : null}
+                  onDownloadTemplate={user?.role === 'admin' ? handleDownloadAssetTemplate : null}
                   headerTitle="Редагування активів"
                   headerSubtitle={
                     isAssetInventorySessionActive
@@ -3158,12 +3247,7 @@ function App() {
       return (
         <div className="grid grid-cols-1">
           {(() => {
-            // Фільтруємо активи на основі ролі користувача
-            let assetsToShow = assets;
-            if (user?.role !== 'admin') {
-              // Не-адмін бачить активи лише дозволених ресторанів (може бути декілька)
-              assetsToShow = assets.filter((a) => isAssetVisibleForCurrentRestaurants(a));
-            }
+            const assetsToShow = visibleAssetsForCurrentUser;
             
             return (
               <AssetTable
@@ -3194,13 +3278,13 @@ function App() {
 
   const mobileMenuButton = isMobile ? (
     <button type="button" onClick={() => setSidebarOpen(false)} className="absolute right-2 top-4 p-1 hover:bg-slate-700 rounded transition">
-      <LucideIcons.ChevronLeft size={18} className="text-slate-300" />
+      <ChevronLeft size={18} className="text-slate-300" />
     </button>
   ) : null;
 
   const desktopCollapseButton = !isMobile ? (
     <button type="button" onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className="absolute right-2 top-4 p-1 hover:bg-slate-700 rounded transition">
-      {sidebarCollapsed ? <LucideIcons.ChevronRight size={18} className="text-slate-300" /> : <LucideIcons.ChevronLeft size={18} className="text-slate-300" />}
+      {sidebarCollapsed ? <ChevronRight size={18} className="text-slate-300" /> : <ChevronLeft size={18} className="text-slate-300" />}
     </button>
   ) : null;
 
@@ -3219,7 +3303,7 @@ function App() {
             <div style={{display: "flex", alignItems: "center", gap: "0.5rem"}}>
               <group.icon size={16} /> {group.label}
             </div>
-            <LucideIcons.ChevronDown size={14} style={{transition: "transform 150ms", transform: expandedGroups[group.id] ? "rotate(0deg)" : "rotate(-90deg)"}} />
+            <ChevronDown size={14} style={{transition: "transform 150ms", transform: expandedGroups[group.id] ? "rotate(0deg)" : "rotate(-90deg)"}} />
           </button>
           {expandedGroups[group.id] && (
             <div style={{display: "flex", flexDirection: "column", gap: "0.25rem", paddingBottom: "0.5rem"}}>
@@ -3335,7 +3419,6 @@ function App() {
 
   const handleLoginSuccess = () => {
     // на момент закриття модалки user ще не встановлений, тому переходимо у useEffect нижче
-    console.log("DEBUG: handleLoginSuccess invoked");
   };
 
   const loginModalElement = showLoginModal ? (
@@ -3356,7 +3439,6 @@ function App() {
     if (allowedIds.length === 0) return;
     if (!allowedIds.includes(activeNav)) {
       const defaultNav = allowedIds[0];
-      console.log("DEBUG: switch activeNav to first allowed", defaultNav);
       setActiveNav(defaultNav);
       localStorage.setItem('lucia_activeNav', defaultNav);
     }
@@ -3417,7 +3499,7 @@ function App() {
                   className="p-1 hover:bg-slate-700 rounded transition"
                   title="Відкрити меню"
                 >
-                  <LucideIcons.Menu size={22} className="text-slate-300" />
+                  <Menu size={22} className="text-slate-300" />
                 </button>
               )}
               {/* Плашки ліворуч */}
@@ -3483,7 +3565,7 @@ function App() {
               {/* Користувач, сповіщення та вихід - праворуч */}
               <div className="flex items-center gap-2 sm:gap-4">
                 <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300">
-                  <LucideIcons.Database size={16} />
+                  <Database size={16} />
                   <span className="text-xs font-semibold">
                     БД: {activeDbBadge.label}
                   </span>
@@ -3492,7 +3574,7 @@ function App() {
                   )}
                 </div>
                 <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300">
-                  <LucideIcons.Clock3 size={16} />
+                  <Clock3 size={16} />
                   <span className="text-sm font-medium tabular-nums">
                     {currentTime.toLocaleTimeString("uk-UA", {
                       hour: "2-digit",
@@ -3508,7 +3590,7 @@ function App() {
                   title="Сповіщення"
                   onClick={() => setNotificationPanelOpen((v) => !v)}
                 >
-                  <LucideIcons.Bell size={20} className="text-slate-300" />
+                  <Bell size={20} className="text-slate-300" />
                   {/* Badge для непрочитаних */}
                   {notifications && notifications.length > 0 && (
                     <span className="absolute top-1 right-1 block h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-white animate-pulse"></span>
@@ -3526,7 +3608,7 @@ function App() {
                   className="flex items-center gap-2 text-sm text-slate-300 rounded-lg px-2 py-1.5 hover:bg-slate-800"
                   title="Налаштування профілю"
                 >
-                  <LucideIcons.UserIcon size={16} />
+                  <UserIcon size={16} />
                   <span className="max-w-xs truncate hidden sm:inline">{user?.displayName || user?.email}</span>
                   {user?.role === "admin" && (
                     <span className="px-2 py-1 rounded bg-indigo-600 text-white text-xs font-semibold hidden sm:inline">
@@ -3557,7 +3639,7 @@ function App() {
                   }}
                   className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition text-xs sm:text-sm font-medium"
                 >
-                  <LucideIcons.LogOut size={16} />
+                  <LogOut size={16} />
                   <span className="hidden sm:inline">Вийти</span>
                 </button>
               </div>
@@ -3599,7 +3681,9 @@ function App() {
             )}
           >
             <div className={clsx(activeNav === "inventory-products" ? "mt-0" : "mt-4")}>
-              {renderContent()}
+              <Suspense fallback={<div className="p-4 text-sm text-slate-500">Завантаження модуля...</div>}>
+                {renderContent()}
+              </Suspense>
             </div>
           </div>
         </main>
@@ -3608,11 +3692,13 @@ function App() {
 
       {/* Auth Modals */}
       {loginModalElement}
-      <ProfileSettingsModal
-        open={showProfileModal}
-        onClose={() => setShowProfileModal(false)}
-        user={user}
-      />
+      <Suspense fallback={null}>
+        <ProfileSettingsModal
+          open={showProfileModal}
+          onClose={() => setShowProfileModal(false)}
+          user={user}
+        />
+      </Suspense>
     </div>
   );
 }

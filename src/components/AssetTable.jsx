@@ -38,6 +38,38 @@ const readAssetField = (asset, key) => {
   return asset[key] ?? "";
 };
 
+const matchesSearchQuery = (asset, normalizedQuery) => {
+  if (!normalizedQuery) return true;
+
+  const pool = [
+    readAssetField(asset, "invNumber"),
+    readAssetField(asset, "invNumber1C"),
+    asset?.name,
+    asset?.category,
+    asset?.subCategory,
+    asset?.type,
+    asset?.inventoryQuantity,
+    asset?.nextInventoryQuantity,
+    asset?.serialNumber,
+    asset?.brand,
+    asset?.businessUnit,
+    asset?.locationName,
+    asset?.zone,
+    asset?.respCenter,
+    asset?.respPerson,
+    asset?.status,
+    asset?.condition,
+    asset?.residualValuePerUnit,
+    asset?.decision,
+    asset?.comment,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase())
+    .join(" ");
+
+  return pool.includes(normalizedQuery);
+};
+
 const ALL_FIELD_DEFS = [
   { key: "invNumber", header: "Інв. номер" },
   { key: "invNumber1C", header: "Інв. номер 1С" },
@@ -87,6 +119,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
   const [showDesktopFilters, setShowDesktopFilters] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const deferredSearchQuery = useDeferredValue(searchQuery);
+  const shouldRenderInlineQr = data.length <= 300;
 
   const [pagination, setPagination] = useState({
     pageIndex: 0,
@@ -177,9 +210,11 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
           return (
             <div className="flex items-center gap-2">
               {invNumberValue && (
-                <div className="bg-white p-1 rounded border border-slate-200">
-                  {QRCode && <QRCode value={invNumberValue} size={32} level="L" />}
-                </div>
+                shouldRenderInlineQr && (
+                  <div className="bg-white p-1 rounded border border-slate-200">
+                    {QRCode && <QRCode value={invNumberValue} size={32} level="L" />}
+                  </div>
+                )
               )}
               <div className="font-semibold text-slate-800">{invNumberValue || "-"}</div>
             </div>
@@ -197,48 +232,12 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         return <span className="text-sm">{info.getValue() ?? ""}</span>;
       },
     });
-  }), [renderActions]);
-  const searchableData = useMemo(() => {
-    return data.map((item) => {
-      const searchPool = [
-        readAssetField(item, "invNumber"),
-        readAssetField(item, "invNumber1C"),
-        item.name,
-        item.category,
-        item.subCategory,
-        item.type,
-        item.inventoryQuantity,
-        item.nextInventoryQuantity,
-        item.serialNumber,
-        item.brand,
-        item.businessUnit,
-        item.locationName,
-        item.zone,
-        item.respCenter,
-        item.respPerson,
-        item.status,
-        item.condition,
-        item.residualValuePerUnit,
-        item.decision,
-        item.comment,
-      ]
-        .filter(Boolean)
-        .map((value) => String(value).toLowerCase())
-        .join(" ");
-
-      return {
-        item,
-        searchPool,
-      };
-    });
-  }, [data]);
-
+  }), [renderActions, shouldRenderInlineQr]);
   // Фільтрація по ВСІХ активних фільтрах
   const filteredData = useMemo(() => {
     const normalizedQuery = String(deferredSearchQuery || "").trim().toLowerCase();
 
-    return searchableData
-      .filter(({ item }) => {
+    return data.filter((item) => {
       const byFilters = Object.entries(filters).every(([key, val]) => {
         if (!val) return true;
         // Спеціальна логіка для "location" (businessUnit)
@@ -249,10 +248,9 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
       });
 
       if (!byFilters) return false;
-      return !normalizedQuery || String(searchPool).includes(normalizedQuery);
-      })
-      .map(({ item }) => item);
-  }, [searchableData, filters, deferredSearchQuery]);
+      return matchesSearchQuery(item, normalizedQuery);
+    });
+  }, [data, filters, deferredSearchQuery]);
 
   const columns = useMemo(() => {
     return allColumns.filter((col) => visibleColumns.includes(col.id || col.accessorKey));
@@ -301,6 +299,16 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
   ]);
 
   const visibleFilterKeys = visibleColumns.filter((key) => filterableColumnKeys.has(key));
+
+  const filterOptionsByKey = useMemo(() => {
+    const optionsMap = {};
+
+    for (const key of filterableColumnKeys) {
+      optionsMap[key] = Array.from(new Set(data.map((asset) => asset?.[key]).filter(Boolean)));
+    }
+
+    return optionsMap;
+  }, [data]);
 
   useEffect(() => {
     const allowedFilterKeys = new Set(
@@ -371,7 +379,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
 
     const label = ALL_FIELD_DEFS.find((f) => f.key === key)?.header || key;
     const filterKey = key;
-    const options = Array.from(new Set(data.map((a) => a[key]).filter(Boolean)));
+    const options = filterOptionsByKey[key] || [];
 
     return (
       <FilterSelect

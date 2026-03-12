@@ -68,6 +68,10 @@ const writeSettingsFile = async (settings) => {
 };
 
 const CORS_ORIGIN = process.env.RUNTIME_SETTINGS_CORS_ORIGIN || "*";
+const ASSETS_API_SLOW_MS = Math.max(
+  50,
+  Number.parseInt(String(process.env.ASSETS_API_SLOW_MS || "500"), 10) || 500
+);
 
 const setCorsHeaders = (res) => {
   res.setHeader("Access-Control-Allow-Origin", CORS_ORIGIN);
@@ -86,6 +90,29 @@ const sendJson = (res, status, payload) => {
     "Content-Length": Buffer.byteLength(body),
   });
   res.end(body);
+};
+
+const logSlowAssetsGet = (details) => {
+  const elapsedMs = Number(details?.elapsedMs || 0);
+  if (elapsedMs < ASSETS_API_SLOW_MS) return;
+
+  const entry = {
+    at: new Date().toISOString(),
+    elapsedMs,
+    dbEngine: String(details?.dbEngine || ""),
+    paged: Boolean(details?.paged),
+    page: Number(details?.page || 1),
+    pageSize: Number(details?.pageSize || 0),
+    resultCount: Number(details?.resultCount || 0),
+    total: Number(details?.total || 0),
+    hasSearch: Boolean(details?.hasSearch),
+    hasLocation: Boolean(details?.hasLocation),
+    hasStatus: Boolean(details?.hasStatus),
+    hasCategory: Boolean(details?.hasCategory),
+    hasDecision: Boolean(details?.hasDecision),
+  };
+
+  console.warn(`[assets-api][slow] ${JSON.stringify(entry)}`);
 };
 
 const isValidFirebaseRuntimeConfig = (config) => {
@@ -846,6 +873,49 @@ const getAssetsRuntimeConfig = () => {
   return targetDb;
 };
 
+const mysqlPoolCache = new Map();
+
+const getMySqlPoolCacheKey = (mysqlConfig = {}) => {
+  return [
+    String(mysqlConfig.host || ""),
+    String(mysqlConfig.port || ""),
+    String(mysqlConfig.user || ""),
+    String(mysqlConfig.database || ""),
+  ].join("|");
+};
+
+const getOrCreateMySqlPool = async (mysqlConfig = {}) => {
+  const cacheKey = getMySqlPoolCacheKey(mysqlConfig);
+  const cachedPool = mysqlPoolCache.get(cacheKey);
+  if (cachedPool) return cachedPool;
+
+  const mysql = await import("mysql2/promise");
+  const poolLimit = Math.max(
+    2,
+    Number.parseInt(String(process.env.LUCIA_MYSQL_POOL_LIMIT || "16"), 10) || 16
+  );
+
+  const pool = mysql.default.createPool({
+    ...mysqlConfig,
+    waitForConnections: true,
+    connectionLimit: poolLimit,
+    queueLimit: 0,
+  });
+
+  mysqlPoolCache.set(cacheKey, pool);
+  return pool;
+};
+
+const withMySqlPooledConnection = async (mysqlConfig, handler) => {
+  const pool = await getOrCreateMySqlPool(mysqlConfig);
+  const conn = await pool.getConnection();
+  try {
+    return await handler(conn);
+  } finally {
+    conn.release();
+  }
+};
+
 const getAssetsData = async (dbConfig) => {
   if (dbConfig.dbEngine === "file") {
     const items = await readCollectionFile("assets");
@@ -853,14 +923,10 @@ const getAssetsData = async (dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
+    await withMySqlPooledConnection(dbConfig.mysqlConfig, async (conn) => {
       const tableName = await resolveCollectionTableMySql(conn, "assets");
       await ensureAssetsIndexesMySql(conn, tableName);
-    } finally {
-      await conn.end();
-    }
+    });
 
     return getCollectionItemsData("assets", dbConfig);
   }
@@ -879,6 +945,186 @@ const getAssetsData = async (dbConfig) => {
   }
 
   throw new Error(`Unsupported engine for assets: ${dbConfig.dbEngine}`);
+};
+
+const filterAssetsInMemory = (assets, {
+  search = "",
+  locationName = "",
+  status = "",
+  category = "",
+  decision = "",
+} = {}) => {
+  const normalizedSearch = String(search || "").trim().toLowerCase();
+  const normalizedLocationName = String(locationName || "").trim();
+  const normalizedStatus = String(status || "").trim();
+  const normalizedCategory = String(category || "").trim();
+  const normalizedDecision = String(decision || "").trim();
+
+  return (assets || []).filter((asset) => {
+    if (
+      normalizedLocationName &&
+      String(asset?.locationName || asset?.location_name || "") !== normalizedLocationName
+    ) return false;
+    if (normalizedStatus && String(asset?.status || "") !== normalizedStatus) return false;
+    if (normalizedCategory && String(asset?.category || "") !== normalizedCategory) return false;
+    if (normalizedDecision && String(asset?.decision || "") !== normalizedDecision) return false;
+    if (!normalizedSearch) return true;
+
+    const pool = [
+      asset?.invNumber,
+      asset?.inv_number,
+      asset?.invNumber1C,
+      asset?.inv_number_1c,
+      asset?.name,
+      asset?.category,
+      asset?.locationName,
+      asset?.location_name,
+      asset?.status,
+      asset?.decision,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase())
+      .join(" ");
+
+    return pool.includes(normalizedSearch);
+  });
+};
+
+const getAssetsPageData = async (dbConfig, {
+  page = 1,
+  pageSize = 50,
+  search = "",
+  locationName = "",
+  status = "",
+  category = "",
+  decision = "",
+} = {}) => {
+  const normalizedPage = Math.max(1, Number.parseInt(String(page || "1"), 10) || 1);
+  const normalizedPageSize = Math.min(500, Math.max(1, Number.parseInt(String(pageSize || "50"), 10) || 50));
+  const normalizedSearch = String(search || "").trim().toLowerCase();
+  const normalizedLocationName = String(locationName || "").trim();
+  const normalizedStatus = String(status || "").trim();
+  const normalizedCategory = String(category || "").trim();
+  const normalizedDecision = String(decision || "").trim();
+
+  if (dbConfig.dbEngine === "mysql") {
+    return withMySqlPooledConnection(dbConfig.mysqlConfig, async (conn) => {
+      const tableName = await resolveCollectionTableMySql(conn, "assets");
+      await ensureAssetsIndexesMySql(conn, tableName);
+
+      const existingColumns = await getMySqlColumns(conn, tableName);
+
+      const chooseColumn = (...candidates) =>
+        candidates.find((candidate) => existingColumns.has(candidate)) || "";
+
+      const whereParts = [];
+      const whereParams = [];
+
+      const locationColumn = chooseColumn("location_name", "locationName");
+      if (locationColumn && normalizedLocationName) {
+        whereParts.push(`${quoteIdentMySql(locationColumn)} = ?`);
+        whereParams.push(normalizedLocationName);
+      }
+
+      const statusColumn = chooseColumn("status");
+      if (statusColumn && normalizedStatus) {
+        whereParts.push(`${quoteIdentMySql(statusColumn)} = ?`);
+        whereParams.push(normalizedStatus);
+      }
+
+      const categoryColumn = chooseColumn("category");
+      if (categoryColumn && normalizedCategory) {
+        whereParts.push(`${quoteIdentMySql(categoryColumn)} = ?`);
+        whereParams.push(normalizedCategory);
+      }
+
+      const decisionColumn = chooseColumn("decision");
+      if (decisionColumn && normalizedDecision) {
+        whereParts.push(`${quoteIdentMySql(decisionColumn)} = ?`);
+        whereParams.push(normalizedDecision);
+      }
+
+      if (normalizedSearch) {
+        const searchColumns = [
+          "inv_number",
+          "invNumber",
+          "inv_number_1c",
+          "invNumber1C",
+          "name",
+          "category",
+          "location_name",
+          "locationName",
+          "status",
+          "decision",
+        ].filter((columnName, idx, arr) => arr.indexOf(columnName) === idx && existingColumns.has(columnName));
+
+        if (searchColumns.length > 0) {
+          const likeParts = searchColumns.map(
+            (columnName) => `LOWER(COALESCE(CAST(${quoteIdentMySql(columnName)} AS CHAR), '')) LIKE ?`
+          );
+          whereParts.push(`(${likeParts.join(" OR ")})`);
+          for (let i = 0; i < searchColumns.length; i += 1) {
+            whereParams.push(`%${normalizedSearch}%`);
+          }
+        }
+      }
+
+      const whereSql = whereParts.length > 0 ? ` WHERE ${whereParts.join(" AND ")}` : "";
+      const orderSql = existingColumns.has("updated_at")
+        ? ` ORDER BY ${quoteIdentMySql("updated_at")} DESC, ${quoteIdentMySql("id")} DESC`
+        : ` ORDER BY ${quoteIdentMySql("id")} DESC`;
+
+      const [countRows] = await conn.execute(
+        `SELECT COUNT(*) AS total FROM ${quoteIdentMySql(tableName)}${whereSql}`,
+        whereParams
+      );
+
+      const total = Number(countRows?.[0]?.total || 0);
+      const pageCount = Math.max(1, Math.ceil(total / normalizedPageSize));
+      const safePage = Math.min(normalizedPage, pageCount);
+      const offset = (safePage - 1) * normalizedPageSize;
+
+      const [rows] = await conn.execute(
+        `SELECT * FROM ${quoteIdentMySql(tableName)}${whereSql}${orderSql} LIMIT ? OFFSET ?`,
+        [...whereParams, normalizedPageSize, offset]
+      );
+
+      return {
+        data: (rows || []).map((row) => mapMySqlRowToDocument(row)),
+        meta: {
+          page: safePage,
+          pageSize: normalizedPageSize,
+          total,
+          pageCount,
+        },
+      };
+    });
+  }
+
+  const assets = await getAssetsData(dbConfig);
+  const filtered = filterAssetsInMemory(assets, {
+    search: normalizedSearch,
+    locationName: normalizedLocationName,
+    status: normalizedStatus,
+    category: normalizedCategory,
+    decision: normalizedDecision,
+  });
+
+  const total = filtered.length;
+  const pageCount = Math.max(1, Math.ceil(total / normalizedPageSize));
+  const safePage = Math.min(normalizedPage, pageCount);
+  const startIndex = (safePage - 1) * normalizedPageSize;
+  const data = filtered.slice(startIndex, startIndex + normalizedPageSize);
+
+  return {
+    data,
+    meta: {
+      page: safePage,
+      pageSize: normalizedPageSize,
+      total,
+      pageCount,
+    },
+  };
 };
 
 const createAssetData = async (payload, dbConfig) => {
@@ -1696,6 +1942,11 @@ const ensureAssetsIndexesMySql = async (conn, tableName) => {
   await tryEnsure("idx_assets_category", ["category"]);
   await tryEnsure("idx_assets_decision", ["decision"]);
   await tryEnsure("idx_assets_updated_at", ["updated_at"]);
+
+  // Composite indexes for common list filters with updated-at sorting.
+  await tryEnsure("idx_assets_loc_status_updated", ["location_name", "status", "updated_at"]);
+  await tryEnsure("idx_assets_loc_category_updated", ["location_name", "category", "updated_at"]);
+  await tryEnsure("idx_assets_loc_decision_updated", ["location_name", "decision", "updated_at"]);
 };
 
 const normalizeOneCollectionToFlatMySql = async (conn, collectionName) => {
@@ -2271,8 +2522,7 @@ const handleAssetsApi = async (req, res, assetId) => {
   }
 
   if (method === "GET" && !assetId) {
-    const assets = await getAssetsData(dbConfig);
-
+    const startedAt = Date.now();
     const requestUrl = new URL(req.url || "/api/assets", `http://${HOST}:${PORT}`);
     const pageRaw = String(requestUrl.searchParams.get("page") || "").trim();
     const pageSizeRaw = String(requestUrl.searchParams.get("pageSize") || "").trim();
@@ -2284,54 +2534,53 @@ const handleAssetsApi = async (req, res, assetId) => {
 
     const hasPaging = Boolean(pageRaw || pageSizeRaw);
     if (!hasPaging && !search && !locationName && !status && !category && !decision) {
+      const assets = await getAssetsData(dbConfig);
+      logSlowAssetsGet({
+        elapsedMs: Date.now() - startedAt,
+        dbEngine: dbConfig.dbEngine,
+        paged: false,
+        page: 1,
+        pageSize: assets.length,
+        resultCount: assets.length,
+        total: assets.length,
+        hasSearch: false,
+        hasLocation: false,
+        hasStatus: false,
+        hasCategory: false,
+        hasDecision: false,
+      });
       return sendJson(res, 200, { ok: true, data: assets });
     }
 
-    const normalizedPage = Math.max(1, Number.parseInt(pageRaw || "1", 10) || 1);
-    const normalizedPageSize = Math.min(
-      500,
-      Math.max(1, Number.parseInt(pageSizeRaw || "50", 10) || 50)
-    );
-
-    const filtered = (assets || []).filter((asset) => {
-      if (locationName && String(asset?.locationName || asset?.location_name || "") !== locationName) return false;
-      if (status && String(asset?.status || "") !== status) return false;
-      if (category && String(asset?.category || "") !== category) return false;
-      if (decision && String(asset?.decision || "") !== decision) return false;
-      if (!search) return true;
-
-      const pool = [
-        asset?.invNumber,
-        asset?.inv_number,
-        asset?.name,
-        asset?.category,
-        asset?.locationName,
-        asset?.location_name,
-        asset?.status,
-        asset?.decision,
-      ]
-        .filter(Boolean)
-        .map((value) => String(value).toLowerCase())
-        .join(" ");
-
-      return pool.includes(search);
+    const pagePayload = await getAssetsPageData(dbConfig, {
+      page: pageRaw || "1",
+      pageSize: pageSizeRaw || "50",
+      search,
+      locationName,
+      status,
+      category,
+      decision,
     });
 
-    const total = filtered.length;
-    const pageCount = Math.max(1, Math.ceil(total / normalizedPageSize));
-    const safePage = Math.min(normalizedPage, pageCount);
-    const startIndex = (safePage - 1) * normalizedPageSize;
-    const data = filtered.slice(startIndex, startIndex + normalizedPageSize);
+    logSlowAssetsGet({
+      elapsedMs: Date.now() - startedAt,
+      dbEngine: dbConfig.dbEngine,
+      paged: true,
+      page: pagePayload?.meta?.page || (Number.parseInt(pageRaw || "1", 10) || 1),
+      pageSize: pagePayload?.meta?.pageSize || (Number.parseInt(pageSizeRaw || "50", 10) || 50),
+      resultCount: Array.isArray(pagePayload?.data) ? pagePayload.data.length : 0,
+      total: Number(pagePayload?.meta?.total || 0),
+      hasSearch: Boolean(search),
+      hasLocation: Boolean(locationName),
+      hasStatus: Boolean(status),
+      hasCategory: Boolean(category),
+      hasDecision: Boolean(decision),
+    });
 
     return sendJson(res, 200, {
       ok: true,
-      data,
-      meta: {
-        page: safePage,
-        pageSize: normalizedPageSize,
-        total,
-        pageCount,
-      },
+      data: pagePayload.data,
+      meta: pagePayload.meta,
     });
   }
 

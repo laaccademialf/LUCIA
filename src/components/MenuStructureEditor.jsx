@@ -218,7 +218,6 @@ function MenuStructureEditor({ menuStructure, saveMenuStructure, loading, error 
     } : s));
   };
   const handleSave = () => {
-    console.log("Спроба зберегти структуру меню:", draft);
     saveMenuStructure(draft);
   };
   const handleInitStandard = () => saveMenuStructure(initialMenuStructure);

@@ -1,17 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2, Download, Upload, FileDown, X, Printer } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
-import {
-  downloadProductsTemplate,
-  downloadProductsTemplate1C,
-  exportInventoriesToExcel,
-  exportInventoryTo1CExcel,
-  exportProductsAndInventoriesToExcel,
-  importProductsFromExcel,
-  exportSuppliersToExcel,
-  importSuppliersFromExcel,
-} from "../utils/productInventoryExcel";
 import { endProductInventorySession, startProductInventorySession, subscribeToActiveProductInventorySession } from "../firebase/firestore";
+
+const loadProductInventoryExcel = () => import("../utils/productInventoryExcel");
 
 const normalizeTabKind = (tabId = "") => {
   const value = String(tabId).toLowerCase();
@@ -215,8 +207,19 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
     }
   };
 
-  const handleExportProductsAndInventories = () => {
+  const handleExportProductsAndInventories = async () => {
+    const { exportProductsAndInventoriesToExcel } = await loadProductInventoryExcel();
     exportProductsAndInventoriesToExcel(products, inventories);
+  };
+
+  const handleDownloadProductsTemplate = async () => {
+    const { downloadProductsTemplate } = await loadProductInventoryExcel();
+    downloadProductsTemplate();
+  };
+
+  const handleDownloadProductsTemplate1C = async () => {
+    const { downloadProductsTemplate1C } = await loadProductInventoryExcel();
+    downloadProductsTemplate1C();
   };
 
   const handleImportProducts = async (event) => {
@@ -233,6 +236,7 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
     }
 
     try {
+      const { importProductsFromExcel } = await loadProductInventoryExcel();
       const importedProducts = await importProductsFromExcel(file, {
         id: importMode === "selected" ? selectedRestaurantId : "",
         name: importMode === "selected" ? String(selectedRestaurant?.name || "") : "",
@@ -321,14 +325,18 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
             </select>
             <button
               type="button"
-              onClick={() => downloadProductsTemplate()}
+              onClick={() => {
+                void handleDownloadProductsTemplate();
+              }}
               className="inline-flex items-center gap-2 rounded-lg bg-slate-600 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-500"
             >
               <FileDown size={15} /> Шаблон
             </button>
             <button
               type="button"
-              onClick={() => downloadProductsTemplate1C()}
+              onClick={() => {
+                void handleDownloadProductsTemplate1C();
+              }}
               className="inline-flex items-center gap-2 rounded-lg bg-zinc-700 px-3 py-2 text-sm font-semibold text-white hover:bg-zinc-600"
             >
               <FileDown size={15} /> Шаблон 1С
@@ -856,23 +864,25 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }
   };
 
-  const handleExportSingleInventory = (inventory) => {
+  const handleExportSingleInventory = async (inventory) => {
     const safeDate = String(inventory?.inventoryDate || "inventory").replace(/[^0-9-]/g, "");
     const safeRestaurant = String(inventory?.restaurantName || "restaurant")
       .trim()
       .replace(/\s+/g, "_")
       .replace(/[^a-zA-Z0-9а-яА-ЯіїєІЇЄґҐ_-]/g, "");
     const fileName = `inventory_${safeDate || "date"}_${safeRestaurant || "restaurant"}.xlsx`;
+    const { exportInventoriesToExcel } = await loadProductInventoryExcel();
     exportInventoriesToExcel([inventory], fileName);
   };
 
-  const handleExportSingleInventory1C = (inventory) => {
+  const handleExportSingleInventory1C = async (inventory) => {
     const safeDate = String(inventory?.inventoryDate || "inventory").replace(/[^0-9-]/g, "");
     const safeRestaurant = String(inventory?.restaurantName || inventory?.restaurantRegNumber || "restaurant")
       .trim()
       .replace(/\s+/g, "_")
       .replace(/[^a-zA-Z0-9а-яА-ЯіїєІЇЄґҐ_-]/g, "");
     const fileName = `inventory_1c_${safeDate || "date"}_${safeRestaurant || "restaurant"}.xlsx`;
+    const { exportInventoryTo1CExcel } = await loadProductInventoryExcel();
     exportInventoryTo1CExcel(inventory, fileName);
   };
 
@@ -1341,23 +1351,25 @@ function InventoryJournalTab({ inventories, user }) {
     return inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
   }, [inventories, user, isGlobalAdmin]);
 
-  const handleExportSingleInventory = (inventory) => {
+  const handleExportSingleInventory = async (inventory) => {
     const safeDate = String(inventory?.inventoryDate || "inventory").replace(/[^0-9-]/g, "");
     const safeRestaurant = String(inventory?.restaurantName || "restaurant")
       .trim()
       .replace(/\s+/g, "_")
       .replace(/[^a-zA-Z0-9а-яА-ЯіїєІЇЄґҐ_-]/g, "");
     const fileName = `inventory_${safeDate || "date"}_${safeRestaurant || "restaurant"}.xlsx`;
+    const { exportInventoriesToExcel } = await loadProductInventoryExcel();
     exportInventoriesToExcel([inventory], fileName);
   };
 
-  const handleExportSingleInventory1C = (inventory) => {
+  const handleExportSingleInventory1C = async (inventory) => {
     const safeDate = String(inventory?.inventoryDate || "inventory").replace(/[^0-9-]/g, "");
     const safeRestaurant = String(inventory?.restaurantName || inventory?.restaurantRegNumber || "restaurant")
       .trim()
       .replace(/\s+/g, "_")
       .replace(/[^a-zA-Z0-9а-яА-ЯіїєІЇЄґҐ_-]/g, "");
     const fileName = `inventory_1c_${safeDate || "date"}_${safeRestaurant || "restaurant"}.xlsx`;
+    const { exportInventoryTo1CExcel } = await loadProductInventoryExcel();
     exportInventoryTo1CExcel(inventory, fileName);
   };
 
@@ -1574,7 +1586,8 @@ function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplie
     setNewSupplierName("");
   };
 
-  const exportSuppliers = () => {
+  const exportSuppliers = async () => {
+    const { exportSuppliersToExcel } = await loadProductInventoryExcel();
     exportSuppliersToExcel(suppliers, `suppliers_export_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
@@ -1583,6 +1596,7 @@ function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplie
     if (!file) return;
 
     try {
+      const { importSuppliersFromExcel } = await loadProductInventoryExcel();
       const imported = await importSuppliersFromExcel(file);
 
       if (imported.length === 0) {

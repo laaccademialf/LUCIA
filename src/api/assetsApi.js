@@ -52,6 +52,48 @@ export const getAssetsApi = async () => {
   return Array.isArray(payload?.data) ? payload.data : [];
 };
 
+export const getAssetsPageApi = async ({
+  page = 1,
+  pageSize = 50,
+  search = "",
+  locationName = "",
+  status = "",
+  category = "",
+  decision = "",
+} = {}) => {
+  const params = new URLSearchParams();
+  params.set("page", String(page));
+  params.set("pageSize", String(pageSize));
+  if (String(search || "").trim()) params.set("search", String(search || "").trim());
+  if (String(locationName || "").trim()) params.set("locationName", String(locationName || "").trim());
+  if (String(status || "").trim()) params.set("status", String(status || "").trim());
+  if (String(category || "").trim()) params.set("category", String(category || "").trim());
+  if (String(decision || "").trim()) params.set("decision", String(decision || "").trim());
+
+  const response = await fetch(endpoint(`/api/assets?${params.toString()}`), {
+    method: "GET",
+    headers: headers(),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Assets API GET page failed (${response.status}): ${body || "no body"}`);
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  return {
+    data: Array.isArray(payload?.data) ? payload.data : [],
+    meta: payload?.meta && typeof payload.meta === "object"
+      ? payload.meta
+      : {
+          page: Number(page) || 1,
+          pageSize: Number(pageSize) || 50,
+          total: 0,
+          pageCount: 0,
+        },
+  };
+};
+
 export const addAssetApi = async (asset) => {
   const response = await fetch(endpoint("/api/assets"), {
     method: "POST",

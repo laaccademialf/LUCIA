@@ -1,5 +1,21 @@
-import * as QRCode from "qrcode";
-import JSZip from "jszip";
+let qrCodeModulePromise;
+let jsZipModulePromise;
+
+const getQRCodeModule = async () => {
+  if (!qrCodeModulePromise) {
+    qrCodeModulePromise = import("qrcode");
+  }
+  const mod = await qrCodeModulePromise;
+  return mod?.default || mod;
+};
+
+const getJSZipModule = async () => {
+  if (!jsZipModulePromise) {
+    jsZipModulePromise = import("jszip");
+  }
+  const mod = await jsZipModulePromise;
+  return mod?.default || mod;
+};
 
 const isMobileDevice = () => {
   if (typeof navigator === "undefined") return false;
@@ -94,6 +110,7 @@ const generateBrotherLabelImage = async ({ invNumber, name, qrValue }) => {
     throw new Error("Для друку QR потрібні інвентарний номер і назва активу");
   }
 
+  const QRCode = await getQRCodeModule();
   const qrDataUrl = await QRCode.toDataURL(valueToEncode, {
     margin: 0,
     width: 900,
@@ -164,6 +181,7 @@ const generateBrotherLbxFile = async ({ invNumber, name, qrValue, androidSafe = 
   }
 
   const templateBuffer = await response.arrayBuffer();
+  const JSZip = await getJSZipModule();
   const zip = await JSZip.loadAsync(templateBuffer);
 
   const labelXml = await zip.file("label.xml")?.async("string");
@@ -371,6 +389,7 @@ export const printAssetQrLabel = async ({
     throw new Error("Для друку QR потрібні інвентарний номер і назва активу");
   }
 
+  const QRCode = await getQRCodeModule();
   const qrDataUrl = await QRCode.toDataURL(valueToEncode, {
     margin: 1,
     width: 240,

@@ -35,6 +35,19 @@ const hasMaintenanceAccess = (user) => {
 
 const getStatusMeta = (status) => STATUS_OPTIONS.find((item) => item.value === status) || STATUS_OPTIONS[0];
 const getUrgencyLabel = (urgency) => URGENCY_OPTIONS.find((item) => item.value === urgency)?.label || "—";
+const dateTimeFormatterUk = new Intl.DateTimeFormat("uk-UA", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+const formatDateTimeUk = (value) => {
+  const date = new Date(value || Date.now());
+  if (Number.isNaN(date.getTime())) return "—";
+  return dateTimeFormatterUk.format(date);
+};
 
 const toDataUrl = (file) =>
   new Promise((resolve, reject) => {
@@ -255,6 +268,28 @@ function AdminRequestsTab({ requests, restaurants, user, canManage, updateReques
   const [urgencyFilter, setUrgencyFilter] = useState("all");
   const [restaurantFilter, setRestaurantFilter] = useState("");
 
+  const requestSearchPoolById = useMemo(() => {
+    const index = new Map();
+    for (const item of requests || []) {
+      index.set(
+        String(item?.id || ""),
+        [item?.title, item?.equipment, item?.description, item?.createdByName, item?.restaurantName]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+      );
+    }
+    return index;
+  }, [requests]);
+
+  const requestCreatedAtById = useMemo(() => {
+    const index = new Map();
+    for (const item of requests || []) {
+      index.set(String(item?.id || ""), formatDateTimeUk(item?.createdAt));
+    }
+    return index;
+  }, [requests]);
+
   const visibleRequests = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     return requests.filter((item) => {
@@ -262,15 +297,11 @@ function AdminRequestsTab({ requests, restaurants, user, canManage, updateReques
       const byStatus = statusFilter === "all" ? true : item.status === statusFilter;
       const byUrgency = urgencyFilter === "all" ? true : item.urgency === urgencyFilter;
       const bySearch = normalizedSearch
-        ? [item.title, item.equipment, item.description, item.createdByName, item.restaurantName]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase()
-            .includes(normalizedSearch)
+        ? String(requestSearchPoolById.get(String(item?.id || "")) || "").includes(normalizedSearch)
         : true;
       return byRestaurant && byStatus && byUrgency && bySearch;
     });
-  }, [requests, restaurantFilter, statusFilter, urgencyFilter, search]);
+  }, [requests, restaurantFilter, statusFilter, urgencyFilter, search, requestSearchPoolById]);
 
   const changeStatus = async (item, newStatus) => {
     if (!canManage) return;
@@ -357,7 +388,7 @@ function AdminRequestsTab({ requests, restaurants, user, canManage, updateReques
                 <div>
                   <h3 className="text-base font-semibold text-slate-900">{item.title || "Без теми"}</h3>
                   <p className="text-xs text-slate-500">
-                    {item.restaurantName || "—"} · {item.equipment || "—"} · {new Date(item.createdAt || Date.now()).toLocaleString("uk-UA")}
+                    {item.restaurantName || "—"} · {item.equipment || "—"} · {requestCreatedAtById.get(String(item?.id || "")) || "—"}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -415,8 +446,12 @@ function AdminRequestsTab({ requests, restaurants, user, canManage, updateReques
                   <label className="text-xs font-semibold text-slate-600">Виконавець</label>
                   <input
                     className={inputClass}
-                    value={item.assignedTo || ""}
-                    onChange={(e) => updateMeta(item, "assignedTo", e.target.value)}
+                    defaultValue={item.assignedTo || ""}
+                    onBlur={(e) => {
+                      const nextValue = e.target.value;
+                      if (nextValue === (item.assignedTo || "")) return;
+                      void updateMeta(item, "assignedTo", nextValue);
+                    }}
                     disabled={!canManage}
                     placeholder="Ім'я відповідального"
                   />
@@ -425,8 +460,12 @@ function AdminRequestsTab({ requests, restaurants, user, canManage, updateReques
                   <label className="text-xs font-semibold text-slate-600">Коментар експлуатації</label>
                   <input
                     className={inputClass}
-                    value={item.internalComment || ""}
-                    onChange={(e) => updateMeta(item, "internalComment", e.target.value)}
+                    defaultValue={item.internalComment || ""}
+                    onBlur={(e) => {
+                      const nextValue = e.target.value;
+                      if (nextValue === (item.internalComment || "")) return;
+                      void updateMeta(item, "internalComment", nextValue);
+                    }}
                     disabled={!canManage}
                     placeholder="Що зроблено / що потрібно"
                   />

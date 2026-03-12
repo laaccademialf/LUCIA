@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { getFieldPermissions } from "../firebase/permissions";
 
 /**
@@ -13,7 +13,6 @@ export const useFieldPermissions = (workRoleId) => {
   useEffect(() => {
     const loadPermissions = async () => {
       if (!workRoleId) {
-        console.log("⚠️ Немає workRoleId");
         setFieldPermissions({});
         setLoading(false);
         return;
@@ -23,10 +22,8 @@ export const useFieldPermissions = (workRoleId) => {
         const doc = await getFieldPermissions(workRoleId);
 
         if (doc && doc.permissions) {
-          console.log("🔐 Дозволи для ролі:", workRoleId, doc.permissions);
           setFieldPermissions(doc.permissions);
         } else {
-          console.log("⚠️ Дозволи для ролі не знайдені у Firestore, дозволяємо за замовчуванням");
           setFieldPermissions({});
         }
       } catch (error) {
@@ -45,19 +42,17 @@ export const useFieldPermissions = (workRoleId) => {
    * @param {string} fieldId - ID поля
    * @returns {boolean} - true якщо може редагувати, false якщо тільки читання
    */
-  const canEdit = (fieldId) => {
+  const canEdit = useCallback((fieldId) => {
     // Якщо немає дозволів взагалі - забороняємо редагування (захисний підхід)
     if (Object.keys(fieldPermissions).length === 0) {
-      console.log(`⚠️ canEdit(${fieldId}): true (немає налаштованих дозволів, дозволяємо за замовчуванням)`);
       return true; // За замовчуванням дозволяємо, поки не налаштовані права
     }
     
     // Перевіряємо конкретний дозвіл:
     // false -> заборонено, true/undefined -> дозволено (щоб нові поля не блокувалися автоматично)
     const allowed = fieldPermissions[fieldId] !== false;
-    console.log(`🔒 canEdit(${fieldId}): ${allowed} (значення в permissions: ${fieldPermissions[fieldId]})`);
     return allowed;
-  };
+  }, [fieldPermissions]);
 
   return {
     fieldPermissions,
