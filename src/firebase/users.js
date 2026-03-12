@@ -8,6 +8,30 @@ import {
   updateCollectionItemApi,
 } from "./collectionsAdapter";
 
+const normalizeEmailValue = (value) => String(value || "").trim().toLowerCase();
+
+const updateUsersByEmailInApiMode = async (id, payload = {}) => {
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) throw new Error("User id is required");
+
+  const targetUser = await getCollectionItemApi("users", normalizedId).catch(() => null);
+  const targetEmail = normalizeEmailValue(targetUser?.email || targetUser?.user_email || "");
+
+  if (!targetEmail) {
+    await updateCollectionItemApi("users", normalizedId, payload);
+    return;
+  }
+
+  const allUsers = await listCollectionItemsApi("users");
+  const matchedIds = allUsers
+    .filter((item) => normalizeEmailValue(item?.email || item?.user_email || "") === targetEmail)
+    .map((item) => String(item?.id || "").trim())
+    .filter(Boolean);
+
+  const idsToUpdate = Array.from(new Set(matchedIds.length > 0 ? matchedIds : [normalizedId]));
+  await Promise.all(idsToUpdate.map((userId) => updateCollectionItemApi("users", userId, payload)));
+};
+
 const normalizeUserRecord = (user) => {
   if (!user || typeof user !== "object") return user;
 
@@ -86,7 +110,7 @@ export const getUser = async (id) => {
  */
 export const updateUserRole = async (id, role) => {
   if (isApiDataModeEnabled()) {
-    await updateCollectionItemApi("users", id, {
+    await updateUsersByEmailInApiMode(id, {
       role,
       updatedAt: new Date().toISOString(),
     });
@@ -113,7 +137,7 @@ export const updateUserRole = async (id, role) => {
  */
 export const updateUser = async (id, data) => {
   if (isApiDataModeEnabled()) {
-    await updateCollectionItemApi("users", id, {
+    await updateUsersByEmailInApiMode(id, {
       ...(data || {}),
       updatedAt: new Date().toISOString(),
     });
