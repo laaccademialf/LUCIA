@@ -2419,6 +2419,41 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
   const dbConfig = getAssetsRuntimeConfig();
   const method = req.method || "GET";
 
+  const normalizeUsersPayloadAliases = (input) => {
+    if (!input || typeof input !== "object") return input;
+    const next = { ...(input || {}) };
+
+    const normalizeString = (value) => String(value || "").trim();
+
+    const workRoleValue = [next.workRole, next.work_role, next.work_role_name]
+      .map(normalizeString)
+      .find(Boolean);
+    if (workRoleValue) {
+      next.workRole = workRoleValue;
+      next.work_role = workRoleValue;
+      next.work_role_name = workRoleValue;
+    }
+
+    const positionValue = [next.position, next.position_name]
+      .map(normalizeString)
+      .find(Boolean);
+    if (positionValue) {
+      next.position = positionValue;
+      next.position_name = positionValue;
+    }
+
+    const restaurantValue = [next.restaurant, next.restaurantId, next.restaurant_id, next.restaurantName, next.restaurant_name]
+      .map(normalizeString)
+      .find(Boolean);
+    if (restaurantValue) {
+      next.restaurant = restaurantValue;
+      next.restaurant_id = restaurantValue;
+      next.restaurant_name = restaurantValue;
+    }
+
+    return next;
+  };
+
   if (method === "GET" && !itemId) {
     const items = await getCollectionItemsData(collectionName, dbConfig);
     return sendJson(res, 200, { ok: true, data: items });
@@ -2437,7 +2472,10 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
       return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
     }
 
-    const id = await createCollectionItemData(collectionName, payload, dbConfig);
+    const normalizedPayload = collectionName === "users"
+      ? normalizeUsersPayloadAliases(payload)
+      : payload;
+    const id = await createCollectionItemData(collectionName, normalizedPayload, dbConfig);
     return sendJson(res, 200, { ok: true, id });
   }
 
@@ -2449,7 +2487,10 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
       return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
     }
 
-    await updateCollectionItemData(collectionName, itemId, payload, dbConfig);
+    const normalizedPayload = collectionName === "users"
+      ? normalizeUsersPayloadAliases(payload)
+      : payload;
+    await updateCollectionItemData(collectionName, itemId, normalizedPayload, dbConfig);
     return sendJson(res, 200, { ok: true });
   }
 
