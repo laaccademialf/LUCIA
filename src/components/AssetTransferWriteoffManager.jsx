@@ -112,6 +112,7 @@ function openPrintDocument({ title, bodyHtml }) {
 export default function AssetTransferWriteoffManager({ assets, restaurants, user, updateAsset, addAsset, deleteAsset }) {
   const [assetId, setAssetId] = useState("");
   const [assetSearch, setAssetSearch] = useState("");
+  const [isAssetSearchOpen, setIsAssetSearchOpen] = useState(false);
   const [requestType, setRequestType] = useState("transfer");
   const [targetRestaurantId, setTargetRestaurantId] = useState("");
   const [transferQuantity, setTransferQuantity] = useState("1");
@@ -199,6 +200,25 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       return pool.includes(query);
     });
   }, [assetsForRequest, assetSearch]);
+
+  const handleAssetSelect = (value) => {
+    setAssetId(String(value || ""));
+  };
+
+  const handleAssetSuggestionPick = (asset) => {
+    if (!asset) return;
+    handleAssetSelect(asset.id);
+    const invNumber = String(asset?.invNumber || "").trim();
+    const assetName = String(asset?.name || "").trim();
+    setAssetSearch(invNumber && assetName ? `${invNumber} — ${assetName}` : invNumber || assetName);
+    setIsAssetSearchOpen(false);
+  };
+
+  const clearAssetSearch = () => {
+    setAssetSearch("");
+    setAssetId("");
+    setIsAssetSearchOpen(false);
+  };
 
   const selectedAssetQuantity = useMemo(() => {
     const raw = selectedAsset?.inventoryQuantity;
@@ -1343,19 +1363,54 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
           <div>
             <label className="text-sm font-semibold">Актив</label>
-            <input
-              className={inputClass}
-              value={assetSearch}
-              onChange={(e) => setAssetSearch(e.target.value)}
-              placeholder="Пошук: інв. №, назва, категорія..."
-            />
+            <div className="relative">
+              <input
+                className={`${inputClass} pr-9`}
+                value={assetSearch}
+                onFocus={() => setIsAssetSearchOpen(true)}
+                onBlur={() => setTimeout(() => setIsAssetSearchOpen(false), 120)}
+                onChange={(e) => {
+                  setAssetSearch(e.target.value);
+                  setAssetId("");
+                  setIsAssetSearchOpen(true);
+                }}
+                placeholder="Пошук: інв. №, назва, категорія..."
+              />
+              {assetSearch.trim() && (
+                <button
+                  type="button"
+                  aria-label="Очистити пошук активу"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={clearAssetSearch}
+                >
+                  <X size={14} />
+                </button>
+              )}
+              {isAssetSearchOpen && assetSearch.trim() && (
+                <div className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-slate-300 bg-white shadow-xl">
+                  {filteredAssetsForRequest.length > 0 ? (
+                    filteredAssetsForRequest.slice(0, 60).map((item) => (
+                      <button
+                        key={String(item.id || item.invNumber || item.name)}
+                        type="button"
+                        className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50"
+                        onMouseDown={() => handleAssetSuggestionPick(item)}
+                      >
+                        <span className="font-semibold">{item.invNumber || "-"}</span>
+                        <span className="text-slate-500"> — {item.name || "Без назви"}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-3 py-2 text-sm text-slate-500">Нічого не знайдено</div>
+                  )}
+                </div>
+              )}
+            </div>
             <p className="mt-1 text-xs text-slate-500">Знайдено: {filteredAssetsForRequest.length}</p>
-            <select className={inputClass} value={assetId} onChange={(e) => setAssetId(e.target.value)}>
-              <option value="">Оберіть актив</option>
-              {filteredAssetsForRequest.map((item) => (
-                <option key={item.id} value={item.id}>{item.invNumber} — {item.name}</option>
-              ))}
-            </select>
+            {selectedAsset && (
+              <p className="mt-1 text-xs text-emerald-700">Обрано: {selectedAsset.invNumber} — {selectedAsset.name}</p>
+            )}
           </div>
 
           <div>
