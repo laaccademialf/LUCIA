@@ -115,6 +115,70 @@ const logSlowAssetsGet = (details) => {
   console.warn(`[assets-api][slow] ${JSON.stringify(entry)}`);
 };
 
+const assetsSseClients = new Set();
+
+const writeSseEvent = (res, eventName, payload) => {
+  const serialized = JSON.stringify(payload || {});
+  res.write(`event: ${eventName}\n`);
+  res.write(`data: ${serialized}\n\n`);
+};
+
+const broadcastAssetsSse = (eventName, payload) => {
+  for (const client of assetsSseClients) {
+    try {
+      writeSseEvent(client, eventName, payload);
+    } catch {
+      assetsSseClients.delete(client);
+      try {
+        client.end();
+      } catch {
+        // ignore broken sockets
+      }
+    }
+  }
+};
+
+const registerAssetsSseClient = (req, res) => {
+  setCorsHeaders(res);
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+
+  assetsSseClients.add(res);
+  res.write(`: connected ${new Date().toISOString()}\n\n`);
+
+  const removeClient = () => {
+    assetsSseClients.delete(res);
+    try {
+      res.end();
+    } catch {
+      // ignore close race
+    }
+  };
+
+  req.on("close", removeClient);
+  req.on("aborted", removeClient);
+};
+
+setInterval(() => {
+  const heartbeat = `: ping ${Date.now()}\n\n`;
+  for (const client of assetsSseClients) {
+    try {
+      client.write(heartbeat);
+    } catch {
+      assetsSseClients.delete(client);
+      try {
+        client.end();
+      } catch {
+        // ignore broken sockets
+      }
+    }
+  }
+}, 25000);
+
 const isValidFirebaseRuntimeConfig = (config) => {
   const required = ["apiKey", "authDomain", "projectId", "appId"];
   return required.every((key) => Boolean(String(config?.[key] || "").trim()));
@@ -2593,6 +2657,11 @@ const handleAssetsApi = async (req, res, assetId) => {
     }
 
     const id = await createAssetData(payload, dbConfig);
+    broadcastAssetsSse("assets-change", {
+      type: "created",
+      id: String(id || ""),
+      at: nowIso(),
+    });
     return sendJson(res, 200, { ok: true, id });
   }
 
@@ -2605,11 +2674,21 @@ const handleAssetsApi = async (req, res, assetId) => {
     }
 
     await updateAssetData(assetId, payload, dbConfig);
+    broadcastAssetsSse("assets-change", {
+      type: "updated",
+      id: String(assetId || ""),
+      at: nowIso(),
+    });
     return sendJson(res, 200, { ok: true });
   }
 
   if (method === "DELETE" && assetId) {
     await deleteAssetData(assetId, dbConfig);
+    broadcastAssetsSse("assets-change", {
+      type: "deleted",
+      id: String(assetId || ""),
+      at: nowIso(),
+    });
     return sendJson(res, 200, { ok: true });
   }
 
@@ -3001,6 +3080,18 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
     }
+  }
+
+  if (pathname === "/api/assets/events" && method === "GET") {
+    const tokenFromQuery = String(requestUrl.searchParams.get("token") || "").trim();
+    const authorized = isAuthorized(req) || (Boolean(TOKEN) && tokenFromQuery === TOKEN);
+    if (!authorized) {
+      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+    }
+
+    registerAssetsSseClient(req, res);
+    writeSseEvent(res, "assets-ready", { ok: true, at: nowIso() });
+    return;
   }
 
   if (pathname === "/api/assets/photos") {

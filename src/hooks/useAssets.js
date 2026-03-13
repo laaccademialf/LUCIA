@@ -11,6 +11,7 @@ import {
   deleteAssetApi,
   getAssetsApi,
   isAssetsApiEnabled,
+  subscribeToAssetsEventsApi,
   updateAssetApi,
 } from "../api/assetsApi";
 
@@ -22,6 +23,10 @@ export const useAssets = (enableRealtime = true) => {
   const [assets, setAssets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const apiPollIntervalMs = Math.max(
+    1000,
+    Number(import.meta.env.VITE_ASSETS_API_POLL_INTERVAL_MS || 1000) || 1000
+  );
 
   const snakeToCamel = (value) => String(value || "").replace(/_([a-z])/g, (_, ch) => ch.toUpperCase());
 
@@ -119,23 +124,67 @@ export const useAssets = (enableRealtime = true) => {
 
   useEffect(() => {
     let unsubscribe;
+    let unsubscribeAssetsEvents;
+    let pollTimer;
+    let isStopped = false;
+    let isRequestInFlight = false;
     const apiMode = isAssetsApiEnabled();
 
     if (apiMode) {
+      const startPollingFallback = () => {
+        if (!enableRealtime || pollTimer) return;
+        pollTimer = setInterval(() => {
+          void fetchViaApi();
+        }, apiPollIntervalMs);
+      };
+
       const fetchViaApi = async () => {
+        if (isStopped || isRequestInFlight) return;
+        isRequestInFlight = true;
         try {
           const data = await getAssetsApi();
+          if (isStopped) return;
           setAssets(normalizeAssets(data));
+          setError(null);
           setLoading(false);
         } catch (err) {
+          if (isStopped) return;
           console.error("Помилка завантаження активів через API:", err);
           setError(err);
           setLoading(false);
+        } finally {
+          isRequestInFlight = false;
         }
       };
 
-      fetchViaApi();
-      return () => {};
+      void fetchViaApi();
+
+      if (enableRealtime) {
+        const canUseSse = typeof window !== "undefined" && typeof EventSource !== "undefined";
+        if (canUseSse) {
+          unsubscribeAssetsEvents = subscribeToAssetsEventsApi({
+            onChange: () => {
+              void fetchViaApi();
+            },
+            onError: () => {
+              // Network/proxy issues may break SSE; fallback keeps data fresh.
+              startPollingFallback();
+            },
+          });
+        } else {
+          startPollingFallback();
+        }
+      }
+
+      return () => {
+        isStopped = true;
+        if (unsubscribeAssetsEvents) {
+          unsubscribeAssetsEvents();
+        }
+        if (pollTimer) {
+          clearInterval(pollTimer);
+        }
+      };
     }
     
     if (enableRealtime) {
@@ -167,11 +216,15 @@ export const useAssets = (enableRealtime = true) => {
     }
 
     return () => {
+      isStopped = true;
+      if (pollTimer) {
+        clearInterval(pollTimer);
+      }
       if (unsubscribe) {
         unsubscribe();
       }
     };
-  }, [enableRealtime]);
+  }, [enableRealtime, apiPollIntervalMs]);
 
   const refreshAssetsFromApi = async () => {
     if (!isAssetsApiEnabled()) return;

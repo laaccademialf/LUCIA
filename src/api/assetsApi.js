@@ -149,3 +149,41 @@ export const uploadAssetPhotoApi = async ({ fileName, dataUrl }) => {
     name: String(payload?.name || fileName || "photo"),
   };
 };
+
+export const subscribeToAssetsEventsApi = ({ onChange, onError } = {}) => {
+  if (typeof window === "undefined" || typeof EventSource === "undefined") {
+    return () => {};
+  }
+
+  const base = getApiBase();
+  if (!base) {
+    return () => {};
+  }
+
+  const token = getApiToken();
+  const params = new URLSearchParams();
+  if (token) {
+    params.set("token", token);
+  }
+
+  const sseUrl = `${endpoint("/api/assets/events")}${params.toString() ? `?${params.toString()}` : ""}`;
+  const source = new EventSource(sseUrl);
+
+  const notifyChange = () => {
+    if (typeof onChange === "function") {
+      onChange();
+    }
+  };
+
+  source.addEventListener("assets-change", notifyChange);
+  source.onmessage = notifyChange;
+  source.onerror = (event) => {
+    if (typeof onError === "function") {
+      onError(event);
+    }
+  };
+
+  return () => {
+    source.close();
+  };
+};
