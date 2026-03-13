@@ -130,7 +130,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
 
   useEffect(() => {
     setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, [filters, deferredSearchQuery, data.length]);
+  }, [filters, deferredSearchQuery, data.length, inventoryStateFilter]);
 
   useEffect(() => {
     setPagination((prev) => {
@@ -248,8 +248,8 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
       },
     });
   }), [renderActions, shouldRenderInlineQr]);
-  // Фільтрація по ВСІХ активних фільтрах
-  const filteredData = useMemo(() => {
+  // Фільтрація по всіх фільтрах/пошуку без стану інвентаризації.
+  const baseFilteredData = useMemo(() => {
     const normalizedQuery = String(deferredSearchQuery || "").trim().toLowerCase();
 
     return data.filter((item) => {
@@ -263,18 +263,54 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
       });
 
       if (!byFilters) return false;
-
-      const isInventorized = canUseInventoryStateFilter ? Boolean(isAssetInventorizedInSession(item)) : false;
-      const matchesInventoryState =
-        !canUseInventoryStateFilter ||
-        inventoryStateFilter === "all" ||
-        (inventoryStateFilter === "inventorized" && isInventorized) ||
-        (inventoryStateFilter === "notInventorized" && !isInventorized);
-
-      if (!matchesInventoryState) return false;
       return matchesSearchQuery(item, normalizedQuery);
     });
-  }, [data, filters, deferredSearchQuery, canUseInventoryStateFilter, isAssetInventorizedInSession, inventoryStateFilter]);
+  }, [data, filters, deferredSearchQuery]);
+
+  const inventoryStateCounters = useMemo(() => {
+    if (!canUseInventoryStateFilter) {
+      return {
+        all: baseFilteredData.length,
+        inventorized: 0,
+        notInventorized: 0,
+      };
+    }
+
+    let inventorized = 0;
+    let notInventorized = 0;
+
+    baseFilteredData.forEach((item) => {
+      if (Boolean(isAssetInventorizedInSession(item))) {
+        inventorized += 1;
+      } else {
+        notInventorized += 1;
+      }
+    });
+
+    return {
+      all: baseFilteredData.length,
+      inventorized,
+      notInventorized,
+    };
+  }, [baseFilteredData, canUseInventoryStateFilter, isAssetInventorizedInSession]);
+
+  // Фільтрація за станом інвентаризації (останній крок).
+  const filteredData = useMemo(() => {
+    if (!canUseInventoryStateFilter || inventoryStateFilter === "all") {
+      return baseFilteredData;
+    }
+
+    return baseFilteredData.filter((item) => {
+      const isInventorized = Boolean(isAssetInventorizedInSession(item));
+      if (inventoryStateFilter === "inventorized") return isInventorized;
+      return !isInventorized;
+    });
+  }, [
+    baseFilteredData,
+    canUseInventoryStateFilter,
+    inventoryStateFilter,
+    isAssetInventorizedInSession,
+  ]);
 
   const columns = useMemo(() => {
     return allColumns.filter((col) => visibleColumns.includes(col.id || col.accessorKey));
@@ -534,9 +570,9 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
               onChange={(e) => setInventoryStateFilter(e.target.value || "all")}
               className="sm:hidden rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700"
             >
-              <option value="all">Всі</option>
-              <option value="inventorized">Проінвентаризовані</option>
-              <option value="notInventorized">Не проінвентаризовані</option>
+              <option value="all">Всі ({inventoryStateCounters.all})</option>
+              <option value="inventorized">Проінвентаризовані ({inventoryStateCounters.inventorized})</option>
+              <option value="notInventorized">Не проінвентаризовані ({inventoryStateCounters.notInventorized})</option>
             </select>
             <div className="hidden sm:flex sm:flex-wrap sm:items-center sm:gap-2">
               <button
@@ -549,7 +585,10 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
                     : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                 )}
               >
-                Всі
+                <span>Всі</span>
+                <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-white/90 px-1 text-[10px] font-bold text-slate-700">
+                  {inventoryStateCounters.all}
+                </span>
               </button>
               <button
                 type="button"
@@ -561,7 +600,10 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
                     : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                 )}
               >
-                Проінвентаризовані
+                <span>Проінвентаризовані</span>
+                <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-white/90 px-1 text-[10px] font-bold text-emerald-700">
+                  {inventoryStateCounters.inventorized}
+                </span>
               </button>
               <button
                 type="button"
@@ -573,7 +615,10 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
                     : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                 )}
               >
-                Не проінвентаризовані
+                <span>Не проінвентаризовані</span>
+                <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-white/90 px-1 text-[10px] font-bold text-amber-700">
+                  {inventoryStateCounters.notInventorized}
+                </span>
               </button>
             </div>
           </div>
