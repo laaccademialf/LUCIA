@@ -711,13 +711,13 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       return Number.isFinite(parsed) ? parsed : null;
     };
 
-    const sanitizePhotoUrls = (items) => {
+    const sanitizePhotoUrls = (items, { enforceSizeLimits = true } = {}) => {
       const MAX_PHOTOS = 5;
       const MAX_SINGLE_PHOTO_CHARS = 220000;
       const MAX_TOTAL_CHARS = 700000;
 
       if (!Array.isArray(items)) {
-        return { urls: [], droppedCount: 0 };
+        return { urls: [], droppedCount: 0, droppedByCount: 0, droppedBySize: 0 };
       }
 
       const normalized = items
@@ -731,14 +731,18 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       const accepted = [];
       let totalChars = 0;
       let droppedCount = 0;
+      let droppedByCount = 0;
+      let droppedBySize = 0;
 
       for (const url of normalized) {
-        const isTooLargeSingle = url.length > MAX_SINGLE_PHOTO_CHARS;
+        const isTooLargeSingle = enforceSizeLimits && url.length > MAX_SINGLE_PHOTO_CHARS;
         const isOverCount = accepted.length >= MAX_PHOTOS;
-        const isOverTotal = totalChars + url.length > MAX_TOTAL_CHARS;
+        const isOverTotal = enforceSizeLimits && totalChars + url.length > MAX_TOTAL_CHARS;
 
         if (isTooLargeSingle || isOverCount || isOverTotal) {
           droppedCount += 1;
+          if (isOverCount) droppedByCount += 1;
+          if (isTooLargeSingle || isOverTotal) droppedBySize += 1;
           continue;
         }
 
@@ -746,7 +750,7 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
         totalChars += url.length;
       }
 
-      return { urls: accepted, droppedCount };
+      return { urls: accepted, droppedCount, droppedByCount, droppedBySize };
     };
 
     const stripUndefinedDeep = (input) => {
@@ -770,10 +774,16 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       return input;
     };
 
-    const { urls: safePhotoUrls, droppedCount } = sanitizePhotoUrls(photos);
+    const useApiPhotoUpload = isAssetsApiEnabled();
+    const {
+      urls: safePhotoUrls,
+      droppedCount,
+      droppedByCount,
+      droppedBySize,
+    } = sanitizePhotoUrls(photos, { enforceSizeLimits: !useApiPhotoUpload });
 
     let resolvedPhotoUrls = safePhotoUrls;
-    if (isAssetsApiEnabled()) {
+    if (useApiPhotoUpload) {
       const uploadResults = [];
       let uploadFailed = 0;
 
@@ -863,8 +873,16 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
       auditors: safeString(values.auditors).trim(),
     };
 
-    if (droppedCount > 0) {
-      alert(`Частину фото (${droppedCount}) не збережено через обмеження розміру. Рекомендується стискати фото перед завантаженням.`);
+    if (droppedByCount > 0) {
+      alert(`Дозволено максимум 5 фото. Не збережено: ${droppedByCount}.`);
+    }
+
+    if (droppedBySize > 0) {
+      alert(`Частину фото (${droppedBySize}) не збережено через обмеження розміру. Рекомендується стискати фото перед завантаженням.`);
+    }
+
+    if (droppedCount > 0 && droppedByCount === 0 && droppedBySize === 0) {
+      alert(`Частину фото (${droppedCount}) не збережено через обмеження.`);
     }
 
     const saved = await onSubmit(stripUndefinedDeep(payload));
