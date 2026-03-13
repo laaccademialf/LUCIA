@@ -130,7 +130,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
 
   useEffect(() => {
     setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-  }, [filters, deferredSearchQuery, data.length, inventoryStateFilter]);
+  }, [filters, deferredSearchQuery, inventoryStateFilter]);
 
   useEffect(() => {
     setPagination((prev) => {
@@ -312,6 +312,15 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     isAssetInventorizedInSession,
   ]);
 
+  useEffect(() => {
+    setPagination((prev) => {
+      if (prev.pageSize <= 0) return prev;
+      const maxPageIndex = Math.max(0, Math.ceil(filteredData.length / prev.pageSize) - 1);
+      if (prev.pageIndex <= maxPageIndex) return prev;
+      return { ...prev, pageIndex: maxPageIndex };
+    });
+  }, [filteredData.length]);
+
   const columns = useMemo(() => {
     return allColumns.filter((col) => visibleColumns.includes(col.id || col.accessorKey));
   }, [visibleColumns, allColumns]);
@@ -319,6 +328,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
   const table = useReactTable({
     data: filteredData,
     columns,
+    autoResetPageIndex: false,
     state: {
       pagination,
     },
