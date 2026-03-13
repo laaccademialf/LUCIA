@@ -3099,6 +3099,8 @@ function App() {
                   canEditAsset={canEditAssetRow}
                   editDisabledReason="Запустіть сесію інвентаризації, щоб редагувати активи"
                   getEditDisabledReason={getAssetEditDisabledReason}
+                  isAssetInventorizedInSession={(assetRow) => recentlyInventoriedAssetIds.has(String(assetRow?.id || ""))}
+                  showInventoryStateFilter={isAssetInventorySessionActive}
                   getRowClassName={(assetRow) =>
                     recentlyInventoriedAssetIds.has(String(assetRow?.id || ""))
                       ? "bg-emerald-100/60"

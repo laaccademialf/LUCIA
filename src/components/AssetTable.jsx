@@ -110,7 +110,7 @@ const ALL_FIELD_DEFS = [
   { key: "actions", header: "Дії" },
 ];
 
-export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, canEditAsset = null, editDisabledReason = "Редагування тимчасово недоступне", getEditDisabledReason = null, getRowClassName = null, mobileCardMode = false }) {
+export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, canEditAsset = null, editDisabledReason = "Редагування тимчасово недоступне", getEditDisabledReason = null, getRowClassName = null, mobileCardMode = false, isAssetInventorizedInSession = null, showInventoryStateFilter = false }) {
   // Стан для видимих колонок
   const fileInputRef = useRef(null);
   const defaultVisible = ["invNumber", "name", "category", "locationName", "status", "decision", "actions"];
@@ -118,8 +118,10 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [showDesktopFilters, setShowDesktopFilters] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [inventoryStateFilter, setInventoryStateFilter] = useState("all");
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const shouldRenderInlineQr = data.length <= 300;
+  const canUseInventoryStateFilter = showInventoryStateFilter && typeof isAssetInventorizedInSession === "function";
 
   const [pagination, setPagination] = useState({
     pageIndex: 0,
@@ -261,9 +263,18 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
       });
 
       if (!byFilters) return false;
+
+      const isInventorized = canUseInventoryStateFilter ? Boolean(isAssetInventorizedInSession(item)) : false;
+      const matchesInventoryState =
+        !canUseInventoryStateFilter ||
+        inventoryStateFilter === "all" ||
+        (inventoryStateFilter === "inventorized" && isInventorized) ||
+        (inventoryStateFilter === "notInventorized" && !isInventorized);
+
+      if (!matchesInventoryState) return false;
       return matchesSearchQuery(item, normalizedQuery);
     });
-  }, [data, filters, deferredSearchQuery]);
+  }, [data, filters, deferredSearchQuery, canUseInventoryStateFilter, isAssetInventorizedInSession, inventoryStateFilter]);
 
   const columns = useMemo(() => {
     return allColumns.filter((col) => visibleColumns.includes(col.id || col.accessorKey));
@@ -512,6 +523,59 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         {showDesktopFilters && (
           <div className="mt-3 hidden gap-2.5 md:grid md:grid-cols-5 xl:grid-cols-6">
             {visibleFilterKeys.map(renderFilterByKey)}
+          </div>
+        )}
+
+        {canUseInventoryStateFilter && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-slate-700">Інвентаризація:</span>
+            <select
+              value={inventoryStateFilter}
+              onChange={(e) => setInventoryStateFilter(e.target.value || "all")}
+              className="sm:hidden rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700"
+            >
+              <option value="all">Всі</option>
+              <option value="inventorized">Проінвентаризовані</option>
+              <option value="notInventorized">Не проінвентаризовані</option>
+            </select>
+            <div className="hidden sm:flex sm:flex-wrap sm:items-center sm:gap-2">
+              <button
+                type="button"
+                onClick={() => setInventoryStateFilter("all")}
+                className={clsx(
+                  "rounded-md border px-2.5 py-1 text-xs font-semibold",
+                  inventoryStateFilter === "all"
+                    ? "border-indigo-500 bg-indigo-600 text-white"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                )}
+              >
+                Всі
+              </button>
+              <button
+                type="button"
+                onClick={() => setInventoryStateFilter("inventorized")}
+                className={clsx(
+                  "rounded-md border px-2.5 py-1 text-xs font-semibold",
+                  inventoryStateFilter === "inventorized"
+                    ? "border-emerald-500 bg-emerald-600 text-white"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                )}
+              >
+                Проінвентаризовані
+              </button>
+              <button
+                type="button"
+                onClick={() => setInventoryStateFilter("notInventorized")}
+                className={clsx(
+                  "rounded-md border px-2.5 py-1 text-xs font-semibold",
+                  inventoryStateFilter === "notInventorized"
+                    ? "border-amber-500 bg-amber-500 text-white"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                )}
+              >
+                Не проінвентаризовані
+              </button>
+            </div>
           </div>
         )}
       </div>
