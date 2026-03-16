@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import QRScanner from "./QRScanner";
 import { printAssetQrLabel } from "../utils/printQrLabel";
+import { formatPossiblyExcelDate, formatYearOrPossiblyExcelDate } from "../utils/dateUtils";
 
 class ScannerErrorBoundary extends React.Component {
   constructor(props) {
@@ -104,8 +105,8 @@ export default function AssetSearch({ assets, user, restaurants, onEdit }) {
             <div><span className="font-semibold">Стан:</span> {asset.condition}</div>
             <div><span className="font-semibold">Функціональність:</span> {asset.functionality}</div>
             <div><span className="font-semibold">Актуальність:</span> {asset.relevance}</div>
-            <div><span className="font-semibold">Рік придбання:</span> {asset.purchaseYear}</div>
-            <div><span className="font-semibold">Дата введення:</span> {asset.commissionDate}</div>
+            <div><span className="font-semibold">Рік придбання:</span> {formatYearOrPossiblyExcelDate(asset.purchaseYear)}</div>
+            <div><span className="font-semibold">Дата введення:</span> {formatPossiblyExcelDate(asset.commissionDate)}</div>
             <div><span className="font-semibold">Нормативний термін:</span> {asset.normativeTerm}</div>
             <div><span className="font-semibold">Знос фізичний:</span> {asset.physicalWear}%</div>
             <div><span className="font-semibold">Знос моральний:</span> {asset.moralWear}%</div>
@@ -119,7 +120,7 @@ export default function AssetSearch({ assets, user, restaurants, onEdit }) {
             <div><span className="font-semibold">Рішення:</span> {asset.decision}</div>
             <div><span className="font-semibold">Причина:</span> {asset.reason}</div>
             <div><span className="font-semibold">Нова локація:</span> {asset.newLocation}</div>
-            <div><span className="font-semibold">Дата аудиту:</span> {asset.auditDate}</div>
+            <div><span className="font-semibold">Дата аудиту:</span> {formatPossiblyExcelDate(asset.auditDate)}</div>
             <div><span className="font-semibold">Аудитори:</span> {asset.auditors}</div>
             <div><span className="font-semibold">Коментар:</span> {asset.comment}</div>
           </div>

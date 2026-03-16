@@ -3,6 +3,7 @@ import { Clock } from "lucide-react";
 import { useMemo } from "react";
 import { TrendingUp, DollarSign, AlertTriangle, BarChart3, Download, PieChart } from "lucide-react";
 import { BarChart, Bar, PieChart as PieChartComponent, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line } from "recharts";
+import { parsePossiblyExcelDate, formatPossiblyExcelDate, formatYearOrPossiblyExcelDate } from "../utils/dateUtils";
 
 export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsibilityCenters = [] }) => {
       // Амортизація: сума за рік/місяць, середня ставка
@@ -38,8 +39,8 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
         const now = new Date();
         return assets.filter(a => {
           if (!a.commissionDate || !a.normativeTerm) return false;
-          const start = new Date(a.commissionDate);
-          if (isNaN(start)) return false;
+          const start = parsePossiblyExcelDate(a.commissionDate);
+          if (!start) return false;
           const years = parseFloat(a.normativeTerm);
           if (!years) return false;
           const end = new Date(start);
@@ -67,8 +68,8 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
       };
       assets.forEach(a => {
         if (!a.commissionDate) return;
-        const date = new Date(a.commissionDate);
-        if (isNaN(date)) return;
+        const date = parsePossiblyExcelDate(a.commissionDate);
+        if (!date) return;
         const years = (now - date) / (1000 * 60 * 60 * 24 * 365.25);
         if (years < 3) groups['0-3']++;
         else if (years < 5) groups['3-5']++;
@@ -311,7 +312,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
                   <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50 transition">
                     <td className="px-4 py-3 font-medium text-slate-800">{asset.name}</td>
                     <td className="px-4 py-3 text-slate-600">{asset.category}</td>
-                    <td className="px-4 py-3">{asset.commissionDate}</td>
+                    <td className="px-4 py-3">{formatPossiblyExcelDate(asset.commissionDate)}</td>
                     <td className="px-4 py-3 text-right">{asset.normativeTerm}</td>
                     <td className="px-4 py-3 text-right font-semibold text-slate-900">{formatCurrency(asset.residualValue)}</td>
                   </tr>
@@ -345,7 +346,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
                     <td className="px-4 py-3 text-slate-600">{asset.category}</td>
                     <td className="px-4 py-3 text-right font-semibold text-slate-900">{formatCurrency(asset.residualValue)}</td>
                     <td className="px-4 py-3">{asset.respPerson || '-'}</td>
-                    <td className="px-4 py-3">{asset.commissionDate || '-'}</td>
+                    <td className="px-4 py-3">{formatPossiblyExcelDate(asset.commissionDate)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -530,6 +531,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold text-slate-800">Назва активу</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-800">Категорія</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Дата придбання</th>
                   <th className="px-4 py-3 text-right font-semibold text-slate-800">Знос</th>
                   <th className="px-4 py-3 text-right font-semibold text-slate-800">Залишкова вартість</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-800">Статус</th>
@@ -540,6 +542,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
                   <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50 transition">
                     <td className="px-4 py-3 font-medium text-slate-800">{asset.name}</td>
                     <td className="px-4 py-3 text-slate-600">{asset.category}</td>
+                    <td className="px-4 py-3 text-slate-700">{formatYearOrPossiblyExcelDate(asset.purchaseYear, formatPossiblyExcelDate(asset.commissionDate))}</td>
                     <td className="px-4 py-3 text-right">
                       <span className={`px-3 py-1 rounded-full font-semibold text-white ${
                         asset.totalWear >= 80 ? "bg-red-600" :
@@ -579,6 +582,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
                 <tr>
                   <th className="px-4 py-3 text-left font-semibold text-slate-800">Назва</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-800">Тип рішення</th>
+                  <th className="px-4 py-3 text-left font-semibold text-slate-800">Дата придбання</th>
                   <th className="px-4 py-3 text-right font-semibold text-slate-800">Первісна вартість</th>
                   <th className="px-4 py-3 text-right font-semibold text-slate-800">Залишкова вартість</th>
                   <th className="px-4 py-3 text-right font-semibold text-slate-800">Потенційні втрати</th>
@@ -595,6 +599,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
                           : "bg-orange-600 text-white"
                       }`}>
                         {asset.decision}
+                    <td className="px-4 py-3 text-slate-700">{formatYearOrPossiblyExcelDate(asset.purchaseYear, formatPossiblyExcelDate(asset.commissionDate))}</td>
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right text-slate-600">{formatCurrency(asset.initialCost)}</td>
