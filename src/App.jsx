@@ -230,6 +230,32 @@ const fromMinutes = (value) => {
 };
 
 const ASSET_FIELD_LABELS = {
+  invNumber: "Інв. номер",
+  invNumber1C: "Інв. номер 1С",
+  name: "Назва активу",
+  category: "Категорія",
+  subCategory: "Підкатегорія",
+  type: "Тип обліку",
+  inventoryQuantity: "Первинна інв. к-сть",
+  nextInventoryQuantity: "Наступна інв. к-сть",
+  serialNumber: "Серійний номер",
+  brand: "Бренд",
+  businessUnit: "Локація",
+  locationName: "Локація (детально)",
+  zone: "Зона",
+  respCenter: "Відповідальний підрозділ",
+  respPerson: "Відповідальна особа",
+  functionality: "Працездатність",
+  relevance: "Актуальність",
+  purchaseYear: "Дата придбання",
+  commissionDate: "Дата введення",
+  normativeTerm: "Нормативний строк",
+  residualValuePerUnit: "Залишкова за 1 шт",
+  marketValue: "Ринкова вартість",
+  auditDate: "Дата інвентаризації",
+  auditors: "Члени комісії",
+  reasonComment: "Коментар до причини",
+  newLocation: "Нова локація",
   initialCost: "Початкова вартість",
   marketValueNew: "Ринкова вартість (нова)",
   marketValueUsed: "Ринкова вартість (б/в)",
@@ -947,12 +973,14 @@ function App() {
     localStorage.setItem('lucia_topTab', nextTopTab);
   }, [activeNav, topTabs, topTab]);
 
+  const normalizedRoleRestaurantIds = useMemo(() => (
+    Array.isArray(roleRestaurantIds)
+      ? roleRestaurantIds.map((id) => String(id || "").trim()).filter(Boolean)
+      : []
+  ), [roleRestaurantIds]);
+
   const assetInventorySessionScopeId = useMemo(() => {
     if (user?.role === "admin") return "global";
-
-    const normalizedRoleRestaurantIds = Array.isArray(roleRestaurantIds)
-      ? roleRestaurantIds.map((id) => String(id || "").trim()).filter(Boolean)
-      : [];
 
     if (normalizedRoleRestaurantIds.length === 1) {
       return `restaurant:${normalizedRoleRestaurantIds[0]}`;
@@ -986,12 +1014,15 @@ function App() {
     }
 
     return "global";
-  }, [user, roleRestaurantIds, restaurants]);
+  }, [user, normalizedRoleRestaurantIds, restaurants]);
+
+  const hasMultiRestaurantRoleAccess = user?.role !== "admin" && normalizedRoleRestaurantIds.length > 1;
 
   const assetInventoryHistoryScopeId = useMemo(() => {
     if (user?.role === "admin") return "*";
+    if (hasMultiRestaurantRoleAccess) return "*";
     return assetInventorySessionScopeId;
-  }, [user, assetInventorySessionScopeId]);
+  }, [user, hasMultiRestaurantRoleAccess, assetInventorySessionScopeId]);
 
   useEffect(() => {
     if (!user) {
@@ -1026,8 +1057,72 @@ function App() {
     };
   }, [user, assetInventoryHistoryScopeId]);
 
+  const accessibleAssetInventoryScopeIds = useMemo(() => {
+    if (user?.role === "admin") return null;
+
+    const scopeIds = new Set();
+    (restaurants || []).forEach((restaurant) => {
+      const restaurantId = String(restaurant?.id || "").trim();
+      if (restaurantId) {
+        scopeIds.add(`restaurant:${restaurantId}`);
+      }
+    });
+
+    if (scopeIds.size === 0 && assetInventorySessionScopeId && assetInventorySessionScopeId !== "global") {
+      scopeIds.add(assetInventorySessionScopeId);
+    }
+
+    return scopeIds;
+  }, [user?.role, restaurants, assetInventorySessionScopeId]);
+
+  const assetInventorySessionsForCurrentUser = useMemo(() => {
+    if (user?.role === "admin") return assetInventorySessionsHistory;
+    if (assetInventoryHistoryScopeId !== "*") return assetInventorySessionsHistory;
+    if (!accessibleAssetInventoryScopeIds || accessibleAssetInventoryScopeIds.size === 0) return [];
+
+    return (assetInventorySessionsHistory || []).filter((session) => {
+      const scopeId = String(session?.scopeId || session?.scope_id || "global");
+      return accessibleAssetInventoryScopeIds.has(scopeId);
+    });
+  }, [
+    user?.role,
+    assetInventoryHistoryScopeId,
+    assetInventorySessionsHistory,
+    accessibleAssetInventoryScopeIds,
+  ]);
+
   const isAssetInventorySessionActive = Boolean(assetInventorySession?.isActive);
-  const isAssetEditAllowedForCurrentUser = user?.role === "admin" || isAssetInventorySessionActive;
+
+  const activeAssetInventorySessionsByScope = useMemo(() => {
+    const map = new Map();
+    (assetInventorySessionsForCurrentUser || []).forEach((session) => {
+      if (!session?.isActive) return;
+      const scopeId = String(session?.scopeId || session?.scope_id || "global");
+      if (!map.has(scopeId)) {
+        map.set(scopeId, session);
+      }
+    });
+    return map;
+  }, [assetInventorySessionsForCurrentUser]);
+
+  const hasAnyActiveAssetInventorySession = useMemo(() => {
+    return activeAssetInventorySessionsByScope.size > 0;
+  }, [activeAssetInventorySessionsByScope]);
+
+  const currentAccessibleAssetInventorySession = useMemo(() => {
+    const activeSessions = Array.from(activeAssetInventorySessionsByScope.values());
+    if (activeSessions.length > 0) {
+      return activeSessions.sort((left, right) =>
+        String(right?.startedAt || "").localeCompare(String(left?.startedAt || ""))
+      )[0] || null;
+    }
+    return isAssetInventorySessionActive ? assetInventorySession : null;
+  }, [activeAssetInventorySessionsByScope, assetInventorySession, isAssetInventorySessionActive]);
+
+  const isAnyAccessibleAssetInventorySessionActive = user?.role === "admin"
+    ? hasAnyActiveAssetInventorySession
+    : (hasAnyActiveAssetInventorySession || isAssetInventorySessionActive);
+
   const canOverrideWrittenOffEdit = isFinanceLikeUser(user);
 
   const isAssetWrittenOff = useCallback((asset) => {
@@ -1045,48 +1140,127 @@ function App() {
     return false;
   }, []);
 
+  const getAssetInventoryScopeId = useCallback((asset) => {
+    const normalizedText = (value) => String(value || "").trim().toLowerCase();
+    const assetRestaurantIds = [
+      asset?.restaurantId,
+      asset?.restaurant_id,
+      asset?.locationId,
+      asset?.location_id,
+      asset?.restaurant,
+      asset?.location,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    for (const candidateId of assetRestaurantIds) {
+      const matchedById = (restaurants || []).find((restaurant) => String(restaurant?.id || "").trim() === candidateId);
+      if (matchedById?.id) {
+        return `restaurant:${String(matchedById.id)}`;
+      }
+    }
+
+    const assetRestaurantNames = [
+      asset?.locationName,
+      asset?.location_name,
+      asset?.restaurantName,
+      asset?.restaurant_name,
+      asset?.restaurant,
+      asset?.location,
+    ]
+      .map((value) => normalizedText(value))
+      .filter(Boolean);
+
+    for (const candidateName of assetRestaurantNames) {
+      const matchedByName = (restaurants || []).find((restaurant) => {
+        const restaurantName = normalizedText(restaurant?.name);
+        const restaurantRegNumber = normalizedText(restaurant?.regNumber || restaurant?.reg_number);
+        return candidateName === restaurantName || candidateName === restaurantRegNumber;
+      });
+      if (matchedByName?.id) {
+        return `restaurant:${String(matchedByName.id)}`;
+      }
+    }
+
+    if (restaurants.length === 1 && restaurants[0]?.id) {
+      return `restaurant:${String(restaurants[0].id)}`;
+    }
+
+    return assetInventorySessionScopeId;
+  }, [restaurants, assetInventorySessionScopeId]);
+
+  const getActiveAssetInventorySessionForAsset = useCallback((asset) => {
+    const scopeId = String(getAssetInventoryScopeId(asset) || "").trim();
+    if (!scopeId) return null;
+
+    if (activeAssetInventorySessionsByScope.has(scopeId)) {
+      return activeAssetInventorySessionsByScope.get(scopeId) || null;
+    }
+
+    if (scopeId === assetInventorySessionScopeId && isAssetInventorySessionActive) {
+      return assetInventorySession || null;
+    }
+
+    return null;
+  }, [
+    getAssetInventoryScopeId,
+    activeAssetInventorySessionsByScope,
+    assetInventorySessionScopeId,
+    isAssetInventorySessionActive,
+    assetInventorySession,
+  ]);
+
+  const isAssetEditAllowedForCurrentUser = user?.role === "admin" || isAnyAccessibleAssetInventorySessionActive;
+
   const canEditAssetRow = useCallback((asset) => {
     if (isAssetWrittenOff(asset) && !canOverrideWrittenOffEdit) return false;
-    return isAssetEditAllowedForCurrentUser;
-  }, [isAssetEditAllowedForCurrentUser, isAssetWrittenOff, canOverrideWrittenOffEdit]);
+    if (user?.role === "admin") return true;
+    return Boolean(getActiveAssetInventorySessionForAsset(asset)?.isActive);
+  }, [user?.role, isAssetWrittenOff, canOverrideWrittenOffEdit, getActiveAssetInventorySessionForAsset]);
 
   const getAssetEditDisabledReason = useCallback((asset) => {
     if (isAssetWrittenOff(asset) && !canOverrideWrittenOffEdit) {
       return "Актив зі статусом 'Списано' не редагується";
     }
-    if (!isAssetEditAllowedForCurrentUser) {
-      return "Запустіть сесію інвентаризації, щоб редагувати активи";
+    if (!canEditAssetRow(asset)) {
+      return "Запустіть сесію інвентаризації для закладу цього активу, щоб редагувати його";
     }
     return "Редагування тимчасово недоступне";
-  }, [isAssetEditAllowedForCurrentUser, isAssetWrittenOff, canOverrideWrittenOffEdit]);
-
-  const activeAssetInventorySessionsByScope = useMemo(() => {
-    const map = new Map();
-    (assetInventorySessionsHistory || []).forEach((session) => {
-      if (!session?.isActive) return;
-      const scopeId = String(session?.scopeId || session?.scope_id || "global");
-      if (!map.has(scopeId)) {
-        map.set(scopeId, session);
-      }
-    });
-    return map;
-  }, [assetInventorySessionsHistory]);
+  }, [canEditAssetRow, isAssetWrittenOff, canOverrideWrittenOffEdit]);
 
   const recentlyInventoriedAssetIds = useMemo(() => {
-    const activeSessionId = String(assetInventorySession?.id || "");
-    if (!activeSessionId || !isAssetInventorySessionActive) return new Set();
+    const activeSessionIds = new Set(
+      Array.from(activeAssetInventorySessionsByScope.values())
+        .map((session) => String(session?.id || ""))
+        .filter(Boolean)
+    );
+
+    if (activeSessionIds.size === 0 && isAssetInventorySessionActive && assetInventorySession?.id) {
+      activeSessionIds.add(String(assetInventorySession.id));
+    }
+
+    if (activeSessionIds.size === 0) return new Set();
+
     const ids = new Set();
     assets.forEach((asset) => {
       const history = Array.isArray(asset?.inventoryChangeHistory) ? asset.inventoryChangeHistory : [];
       const hasChangeInLastSession = history.some(
-        (entry) => String(entry?.inventorySessionId || "") === activeSessionId
+        (entry) => activeSessionIds.has(String(entry?.inventorySessionId || ""))
       );
       if (hasChangeInLastSession && asset?.id) {
         ids.add(String(asset.id));
       }
     });
     return ids;
-  }, [assets, assetInventorySession, isAssetInventorySessionActive]);
+  }, [assets, assetInventorySession, isAssetInventorySessionActive, activeAssetInventorySessionsByScope]);
+
+  const shouldShowInventoryStateFilter = user?.role === "admin"
+    ? hasAnyActiveAssetInventorySession
+    : isAnyAccessibleAssetInventorySessionActive;
+
+  const assetInventoryHistoryScopeLabel = assetInventoryHistoryScopeId === "*"
+    ? (user?.role === "admin" ? "всі заклади" : "доступні заклади")
+    : assetInventorySessionScopeId;
 
   const getSessionRestaurantLabel = (session) => {
     const sessionRestaurantId = String(
@@ -1216,25 +1390,23 @@ function App() {
     <style>
       @page { size: A4 landscape; margin: 10mm; }
       body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; }
-      h1 { margin: 0 0 8px; font-size: 20px; }
-      .meta { margin-bottom: 10px; font-size: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; }
-      table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
-      th, td { border: 1px solid #cbd5e1; padding: 4px 6px; text-align: left; vertical-align: top; }
+      h1 { margin: 0 0 6px; font-size: 16px; }
+      .meta { margin-bottom: 8px; font-size: 11px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 12px; }
+      table { width: 100%; border-collapse: collapse; font-size: 9.5px; table-layout: fixed; }
+      th, td { border: 1px solid #cbd5e1; padding: 3px 4px; text-align: left; vertical-align: top; word-break: break-word; }
       th { background: #f8fafc; font-weight: 700; }
-      .asset-block { margin-top: 10px; break-inside: avoid; }
+      .asset-block { margin-top: 8px; break-inside: avoid; }
       .asset-header {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 2px 14px;
-        padding: 6px 8px;
+        gap: 1px 10px;
+        padding: 4px 6px;
         margin-bottom: 4px;
         border: 1px solid #cbd5e1;
         background: #f8fafc;
-        font-size: 11px;
+        font-size: 10px;
       }
       .hint { margin-top: 8px; font-size: 11px; color: #475569; }
-      .signatures { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-      .line { margin-top: 28px; border-bottom: 1px solid #334155; }
     </style>
   </head>
   <body>
@@ -1251,11 +1423,6 @@ function App() {
     </div>
 
     ${groupedBlocksHtml || '<table><tbody><tr><td>У цій інвентаризації зміни не зафіксовані</td></tr></tbody></table>'}
-
-    <div class="signatures">
-      <div><div>Відповідальний за інвентаризацію:</div><div class="line"></div></div>
-      <div><div>Підтвердження керівника:</div><div class="line"></div></div>
-    </div>
 
     <div class="hint">Якщо друк не стартував — натисніть Ctrl/Cmd+P</div>
     <script>
@@ -1276,7 +1443,7 @@ function App() {
       return;
     }
 
-    const rowsHtml = assetInventorySessionsHistory.map((session, index) => {
+    const rowsHtml = assetInventorySessionsForCurrentUser.map((session, index) => {
       const startedAt = session?.startedAt ? new Date(session.startedAt).toLocaleString("uk-UA") : "-";
       const endedAt = session?.endedAt ? new Date(session.endedAt).toLocaleString("uk-UA") : "-";
       const status = session?.isActive ? "Активна" : "Завершена";
@@ -1313,10 +1480,10 @@ function App() {
     <style>
       @page { size: A4 landscape; margin: 10mm; }
       body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; }
-      h1 { margin: 0 0 8px; font-size: 20px; }
-      .meta { margin-bottom: 10px; font-size: 12px; }
-      table { width: 100%; border-collapse: collapse; font-size: 11px; }
-      th, td { border: 1px solid #cbd5e1; padding: 5px 6px; text-align: left; }
+      h1 { margin: 0 0 6px; font-size: 16px; }
+      .meta { margin-bottom: 8px; font-size: 11px; line-height: 1.35; }
+      table { width: 100%; border-collapse: collapse; font-size: 9.5px; table-layout: fixed; }
+      th, td { border: 1px solid #cbd5e1; padding: 3px 4px; text-align: left; vertical-align: top; word-break: break-word; }
       th { background: #f8fafc; font-weight: 700; }
       .hint { margin-top: 8px; font-size: 11px; color: #475569; }
     </style>
@@ -1325,8 +1492,8 @@ function App() {
     <h1>Журнал інвентаризацій основних засобів</h1>
     <div class="meta">
       Сформовано: ${new Date().toLocaleString("uk-UA")}<br/>
-      Scope: ${assetInventoryHistoryScopeId === "*" ? "всі заклади" : assetInventorySessionScopeId}<br/>
-      К-сть записів: ${assetInventorySessionsHistory.length}
+      Область: ${assetInventoryHistoryScopeLabel}<br/>
+      К-сть записів: ${assetInventorySessionsForCurrentUser.length}
     </div>
     <table>
       <thead>
@@ -1546,13 +1713,17 @@ function App() {
           .filter(Boolean);
 
         if (changes.length > 0) {
+          const targetInventorySession = getActiveAssetInventorySessionForAsset(sanitizedAsset);
+          const targetInventoryScopeId = String(
+            targetInventorySession?.scopeId || targetInventorySession?.scope_id || getAssetInventoryScopeId(sanitizedAsset) || assetInventorySessionScopeId || ""
+          ).trim();
           const historyEntry = {
             changedAt: new Date().toISOString(),
             changedById: user?.uid || "",
             changedByName: user?.displayName || user?.fullName || user?.email || "Користувач",
             source: "inventory_edit",
-            inventorySessionId: assetInventorySession?.id || "",
-            inventorySessionScopeId: assetInventorySessionScopeId,
+            inventorySessionId: targetInventorySession?.id || "",
+            inventorySessionScopeId: targetInventoryScopeId,
             changes,
           };
 
@@ -1584,14 +1755,19 @@ function App() {
       } else {
         const { id: _ignoredId, ...addPayload } = sanitizedAsset || {};
 
+        const targetInventorySession = getActiveAssetInventorySessionForAsset(sanitizedAsset);
+        const targetInventoryScopeId = String(
+          targetInventorySession?.scopeId || targetInventorySession?.scope_id || getAssetInventoryScopeId(sanitizedAsset) || assetInventorySessionScopeId || ""
+        ).trim();
+
         sanitizedAsset.inventoryChangeHistory = [
           {
             changedAt: new Date().toISOString(),
             changedById: user?.uid || "",
             changedByName: user?.displayName || user?.fullName || user?.email || "Користувач",
             source: "asset_created",
-            inventorySessionId: assetInventorySession?.id || "",
-            inventorySessionScopeId: assetInventorySessionScopeId,
+            inventorySessionId: targetInventorySession?.id || "",
+            inventorySessionScopeId: targetInventoryScopeId,
             changes: [
               {
                 field: "created",
@@ -3056,14 +3232,14 @@ function App() {
       if (topTab === "test2") {
         // Якщо вибрано актив для редагування - показуємо форму
         if (selected) {
-          if (!isAssetEditAllowedForCurrentUser) {
+          if (!canEditAssetRow(selected)) {
             return (
               <div className="card p-6 text-sm text-slate-700">
                 <p className="text-base font-semibold text-slate-900">Редагування тимчасово заблоковано</p>
-                <p className="mt-1 text-slate-600">Перегляд активів доступний завжди, але для редагування потрібно активувати сесію інвентаризації.</p>
+                <p className="mt-1 text-slate-600">Перегляд активів доступний завжди, але для редагування потрібна активна сесія інвентаризації саме для закладу цього активу.</p>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <span className="inline-flex items-center rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700">
-                    Запуск інвентаризації доступний в журналі інвентаризацій
+                    {getAssetEditDisabledReason(selected)}
                   </span>
                   <button
                     type="button"
@@ -3100,7 +3276,7 @@ function App() {
                   editDisabledReason="Запустіть сесію інвентаризації, щоб редагувати активи"
                   getEditDisabledReason={getAssetEditDisabledReason}
                   isAssetInventorizedInSession={(assetRow) => recentlyInventoriedAssetIds.has(String(assetRow?.id || ""))}
-                  showInventoryStateFilter={isAssetInventorySessionActive}
+                  showInventoryStateFilter={shouldShowInventoryStateFilter}
                   getRowClassName={(assetRow) =>
                     recentlyInventoriedAssetIds.has(String(assetRow?.id || ""))
                       ? "bg-emerald-100/60"
@@ -3114,9 +3290,9 @@ function App() {
                   onDownloadTemplate={user?.role === 'admin' ? handleDownloadAssetTemplate : null}
                   headerTitle="Редагування активів"
                   headerSubtitle={
-                    isAssetInventorySessionActive
+                    isAnyAccessibleAssetInventorySessionActive
                       ? "Вибери актив для редагування"
-                      : "Перегляд доступний. Для редагування запустіть сесію інвентаризації"
+                      : "Перегляд доступний. Для редагування запустіть сесію інвентаризації для потрібного закладу"
                   }
                   hideLocationFilter={user?.role !== 'admin'}
                   isAdminOnly={user?.role === 'admin'}
@@ -3157,11 +3333,11 @@ function App() {
             <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
               <div>
                 <h2 className="text-lg font-semibold">Журнал інвентаризацій ОЗ</h2>
-                <p className="text-sm text-slate-600">Історія запуску та завершення сесій інвентаризації ({assetInventoryHistoryScopeId === "*" ? "всі заклади" : assetInventorySessionScopeId})</p>
+                <p className="text-sm text-slate-600">Історія запуску та завершення сесій інвентаризації ({assetInventoryHistoryScopeLabel})</p>
               </div>
               <div className="flex items-center gap-2">
                 <span className="rounded bg-slate-100 border border-slate-200 px-2 py-1 text-xs text-slate-700">
-                  Записів: {assetInventorySessionsHistory.length}
+                  Записів: {assetInventorySessionsForCurrentUser.length}
                 </span>
                 <button
                   type="button"
@@ -3256,7 +3432,7 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {assetInventorySessionsHistory.map((session) => (
+                  {assetInventorySessionsForCurrentUser.map((session) => (
                     <tr key={session.id} className="border-t border-slate-200">
                       <td className="px-3 py-2">{session?.startedAt ? new Date(session.startedAt).toLocaleString("uk-UA") : "-"}</td>
                       <td className="px-3 py-2">{session?.endedAt ? new Date(session.endedAt).toLocaleString("uk-UA") : "-"}</td>
@@ -3283,7 +3459,7 @@ function App() {
                       </td>
                     </tr>
                   ))}
-                  {assetInventorySessionsHistory.length === 0 && (
+                  {assetInventorySessionsForCurrentUser.length === 0 && (
                     <tr>
                       <td colSpan={8} className="px-3 py-8 text-center text-slate-500">Сесій інвентаризації поки немає.</td>
                     </tr>
@@ -3449,16 +3625,16 @@ function App() {
               assetInventorySessionLoading
                 ? "bg-slate-800 text-slate-300 border-slate-600"
                 :
-              isAssetInventorySessionActive
+              isAnyAccessibleAssetInventorySessionActive
                 ? "bg-emerald-900/15 text-emerald-200 border-emerald-700/30"
                 : "bg-slate-800 text-slate-300 border-slate-600"
             )}>
               {assetInventorySessionLoading
                 ? "Завантаження статусу сесії..."
-                : isAssetInventorySessionActive
+                : isAnyAccessibleAssetInventorySessionActive
                 ? (isMobile
                   ? "Сесія активна"
-                  : `Сесія активна з ${new Date(assetInventorySession?.startedAt || Date.now()).toLocaleString("uk-UA")}`)
+                  : `Сесія активна з ${new Date(currentAccessibleAssetInventorySession?.startedAt || Date.now()).toLocaleString("uk-UA")}`)
                 : (isMobile ? "Сесія не активна" : "Сесія інвентаризації не активна")}
             </span>
             {user?.role === "admin" ? (
