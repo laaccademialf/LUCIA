@@ -63,7 +63,7 @@ const defaultAsset = {
   auditors: "",
 };
 
-export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: restaurantsProp, assets: assetsProp = [] }) {
+export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, restaurants: restaurantsProp, assets: assetsProp = [] }) {
   const isEdit = !!selectedAsset;
   const isAdmin = currentUser?.role === 'admin' || currentUser?.workRole === 'admin';
   const [activeTab, setActiveTab] = useState("identification");
@@ -1366,6 +1366,16 @@ export function AssetForm({ selectedAsset, onSubmit, currentUser, restaurants: r
         {/* Навігаційні кнопки */}
         <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 border-t-2 border-indigo-700 pt-3 sm:pt-4">
           <div className="flex items-center gap-2 sm:gap-3">
+            {isEdit && typeof onCancel === "function" && (
+              <button
+                type="button"
+                onClick={onCancel}
+                className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-3 rounded-md sm:rounded-lg font-bold text-sm sm:text-base bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 transition-all duration-200 shadow"
+              >
+                Скасувати
+              </button>
+            )}
+
             {!isFirstTab && (
               <button
                 type="button"

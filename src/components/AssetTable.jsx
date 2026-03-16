@@ -110,7 +110,7 @@ const ALL_FIELD_DEFS = [
   { key: "actions", header: "Дії" },
 ];
 
-export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, canEditAsset = null, editDisabledReason = "Редагування тимчасово недоступне", getEditDisabledReason = null, getRowClassName = null, mobileCardMode = false, isAssetInventorizedInSession = null, showInventoryStateFilter = false }) {
+export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, canEditAsset = null, editDisabledReason = "Редагування тимчасово недоступне", getEditDisabledReason = null, getRowClassName = null, mobileCardMode = false, isAssetInventorizedInSession = null, showInventoryStateFilter = false, inventoryStateFilterValue = undefined, onInventoryStateFilterChange = null }) {
   // Стан для видимих колонок
   const fileInputRef = useRef(null);
   const defaultVisible = ["invNumber", "name", "category", "locationName", "status", "decision", "actions"];
@@ -118,7 +118,17 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [showDesktopFilters, setShowDesktopFilters] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [inventoryStateFilter, setInventoryStateFilter] = useState("all");
+  const [inventoryStateFilterInternal, setInventoryStateFilterInternal] = useState("all");
+  const inventoryStateFilter = inventoryStateFilterValue ?? inventoryStateFilterInternal;
+  const setInventoryStateFilter = useCallback((nextValue) => {
+    const normalizedNext = String(nextValue || "all");
+    if (typeof onInventoryStateFilterChange === "function") {
+      onInventoryStateFilterChange(normalizedNext);
+    }
+    if (inventoryStateFilterValue === undefined) {
+      setInventoryStateFilterInternal(normalizedNext);
+    }
+  }, [onInventoryStateFilterChange, inventoryStateFilterValue]);
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const shouldRenderInlineQr = data.length <= 300;
   const canUseInventoryStateFilter = showInventoryStateFilter && typeof isAssetInventorizedInSession === "function";
@@ -240,6 +250,9 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         }
         if (def.key === "decision") {
           return <span className={clsx("badge whitespace-nowrap text-xs", decisionColors[info.getValue()] || "bg-slate-100 text-slate-700")}>{info.getValue()}</span>;
+        }
+        if (def.key === "name") {
+          return <span className="text-sm select-text cursor-text">{info.getValue() ?? ""}</span>;
         }
         if (def.key === "initialCost" || def.key === "marketValueNew" || def.key === "marketValueUsed" || def.key === "residualValuePerUnit" || def.key === "residualValue") {
           return info.getValue() ? info.getValue().toLocaleString("uk-UA") + " ₴" : "";
@@ -676,7 +689,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
                 )}
               >
               <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-slate-900 leading-tight truncate">{asset.name || "-"}</p>
+                <p className="text-sm font-semibold text-slate-900 leading-tight truncate select-text cursor-text">{asset.name || "-"}</p>
                 <div className="flex items-center gap-1">
                   {isSessionHighlighted && (
                     <span className="inline-flex items-center rounded-md bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 whitespace-nowrap">

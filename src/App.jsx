@@ -388,6 +388,7 @@ function App() {
                       const [selected, setSelected] = useState(null);
                       // Стан для фільтрів таблиці активів
                       const [filters, setFilters] = useState({});
+                      const [assetTableInventoryStateFilter, setAssetTableInventoryStateFilter] = useState("all");
                       // Стан для центрів відповідальності (business units)
                       const [businessUnits, setBusinessUnits] = useState([]);
                       // Стан для фільтрації ресторану у графіку
@@ -3255,7 +3256,14 @@ function App() {
 
           return (
             <div className="grid grid-cols-1">
-              <AssetForm selectedAsset={selected} onSubmit={handleSubmit} currentUser={user} restaurants={restaurants} assets={assets} />
+              <AssetForm
+                selectedAsset={selected}
+                onSubmit={handleSubmit}
+                onCancel={() => setSelected(null)}
+                currentUser={user}
+                restaurants={restaurants}
+                assets={assets}
+              />
             </div>
           );
         }
@@ -3277,6 +3285,8 @@ function App() {
                   getEditDisabledReason={getAssetEditDisabledReason}
                   isAssetInventorizedInSession={(assetRow) => recentlyInventoriedAssetIds.has(String(assetRow?.id || ""))}
                   showInventoryStateFilter={shouldShowInventoryStateFilter}
+                  inventoryStateFilterValue={assetTableInventoryStateFilter}
+                  onInventoryStateFilterChange={setAssetTableInventoryStateFilter}
                   getRowClassName={(assetRow) =>
                     recentlyInventoriedAssetIds.has(String(assetRow?.id || ""))
                       ? "bg-emerald-100/60"
