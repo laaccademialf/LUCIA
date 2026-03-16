@@ -583,7 +583,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
                   <th className="px-4 py-3 text-left font-semibold text-slate-800">Назва</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-800">Тип рішення</th>
                   <th className="px-4 py-3 text-left font-semibold text-slate-800">Дата придбання</th>
-                  <th className="px-4 py-3 text-right font-semibold text-slate-800">Первісна вартість</th>
+                  <th className="px-4 py-3 text-right font-semibold text-slate-800">Сума покупки</th>
                   <th className="px-4 py-3 text-right font-semibold text-slate-800">Залишкова вартість</th>
                   <th className="px-4 py-3 text-right font-semibold text-slate-800">Потенційні втрати</th>
                 </tr>
@@ -599,9 +599,9 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
                           : "bg-orange-600 text-white"
                       }`}>
                         {asset.decision}
-                    <td className="px-4 py-3 text-slate-700">{formatYearOrPossiblyExcelDate(asset.purchaseYear, formatPossiblyExcelDate(asset.commissionDate))}</td>
                       </span>
                     </td>
+                    <td className="px-4 py-3 text-slate-700">{formatYearOrPossiblyExcelDate(asset.purchaseYear, formatPossiblyExcelDate(asset.commissionDate))}</td>
                     <td className="px-4 py-3 text-right text-slate-600">{formatCurrency(asset.initialCost)}</td>
                     <td className="px-4 py-3 text-right text-slate-600">{formatCurrency(asset.residualValue)}</td>
                     <td className="px-4 py-3 text-right font-semibold text-red-600">{formatCurrency(asset.loss)}</td>
@@ -610,7 +610,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [], responsib
               </tbody>
               <tfoot className="bg-red-100 border-t border-red-200">
                 <tr>
-                  <td colSpan="4" className="px-4 py-3 font-semibold text-slate-800 text-right">
+                  <td colSpan="5" className="px-4 py-3 font-semibold text-slate-800 text-right">
                     Всього потенційних втрат:
                   </td>
                   <td className="px-4 py-3 text-right font-bold text-red-600 text-lg">
