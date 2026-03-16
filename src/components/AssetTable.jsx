@@ -414,7 +414,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
           key={key}
           label="Локація"
           value={filters.location || ""}
-          options={["Ресторан", "Кав'ярня", "Кейтеринг", "Офіс", "Склад"]}
+          options={filterOptionsByKey.businessUnit || []}
           onChange={(val) => setFilters((f) => ({ ...f, location: val }))}
         />
       );
@@ -426,7 +426,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
           key={key}
           label="Категорія"
           value={filters.category || ""}
-          options={["Кухня", "Бар", "IT", "Меблі", "Транспорт"]}
+          options={filterOptionsByKey.category || []}
           onChange={(val) => setFilters((f) => ({ ...f, category: val }))}
         />
       );
@@ -438,7 +438,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
           key={key}
           label="Статус"
           value={filters.status || ""}
-          options={["В експлуатації", "Не використовується", "Законсервований"]}
+          options={filterOptionsByKey.status || []}
           onChange={(val) => setFilters((f) => ({ ...f, status: val }))}
         />
       );
@@ -450,7 +450,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
           key={key}
           label="Рішення"
           value={filters.decision || ""}
-          options={["Залишити", "Списати", "Продати", "Перемістити"]}
+          options={filterOptionsByKey.decision || []}
           onChange={(val) => setFilters((f) => ({ ...f, decision: val }))}
         />
       );
