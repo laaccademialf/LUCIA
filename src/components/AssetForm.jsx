@@ -70,6 +70,9 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
   const [completedTabs, setCompletedTabs] = useState([]);
   const [photos, setPhotos] = useState([]);
   const [processingPhotos, setProcessingPhotos] = useState(false);
+  const [isSavingAsset, setIsSavingAsset] = useState(false);
+  const isMountedRef = useRef(true);
+  const submitLockRef = useRef(false);
   
   // Завантаження типових полів з Firebase
   const {
@@ -130,6 +133,13 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
   const nextInventoryQuantityValue = watch("nextInventoryQuantity");
   const previousCategoryRef = useRef("");
   const subcategoryGuardInitializedRef = useRef(false);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Фільтруємо МВО по вибраному центру
   const filteredResponsiblePersons = useMemo(() => {
@@ -694,6 +704,16 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
   };
 
   const onSubmitForm = async (values) => {
+    if (submitLockRef.current) {
+      return false;
+    }
+
+    submitLockRef.current = true;
+    if (isMountedRef.current) {
+      setIsSavingAsset(true);
+    }
+
+    try {
     const safeString = (input) => {
       if (input === null || input === undefined) return "";
       return typeof input === "string" ? input : String(input);
@@ -885,11 +905,19 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
       alert(`Частину фото (${droppedCount}) не збережено через обмеження.`);
     }
 
-    const saved = await onSubmit(stripUndefinedDeep(payload));
-    if (saved !== false) {
-      setActiveTab("identification");
-      setCompletedTabs([]);
-      setPhotos([]);
+      const saved = await onSubmit(stripUndefinedDeep(payload));
+      if (saved !== false && isMountedRef.current) {
+        setActiveTab("identification");
+        setCompletedTabs([]);
+        setPhotos([]);
+      }
+
+      return saved;
+    } finally {
+      submitLockRef.current = false;
+      if (isMountedRef.current) {
+        setIsSavingAsset(false);
+      }
     }
   };
 
@@ -899,6 +927,7 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
   const currentTabIndex = tabs.findIndex((t) => t.id === activeTab);
   const isFirstTab = currentTabIndex === 0;
   const isLastTab = currentTabIndex === tabs.length - 1;
+  const isBusy = isSubmitting || processingPhotos || isSavingAsset;
 
   const normalizeDateForInput = (rawValue) => {
     if (!rawValue) return "";
@@ -1370,6 +1399,7 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
               <button
                 type="button"
                 onClick={onCancel}
+                disabled={isBusy}
                 className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-3 rounded-md sm:rounded-lg font-bold text-sm sm:text-base bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 transition-all duration-200 shadow"
               >
                 Скасувати
@@ -1380,6 +1410,7 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
               <button
                 type="button"
                 onClick={handlePrev}
+                disabled={isBusy}
                 className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-3 rounded-md sm:rounded-lg font-bold text-sm sm:text-base bg-slate-200 text-slate-700 hover:bg-slate-300 transition-all duration-200 shadow"
               >
                 <ChevronLeft size={16} className="sm:w-[18px] sm:h-[18px]" />
@@ -1391,6 +1422,7 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
               <button
                 type="button"
                 onClick={handleNext}
+                disabled={isBusy}
                 className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-3 rounded-md sm:rounded-lg font-bold text-sm sm:text-base bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow-xl shadow-indigo-500/50"
               >
                 Далі
@@ -1419,6 +1451,7 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
                       alert(error.message || "Не вдалося надрукувати QR код");
                     }
                   }}
+                  disabled={isBusy}
                   className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2 sm:py-3.5 rounded-md sm:rounded-lg font-bold text-sm sm:text-base bg-gradient-to-r from-indigo-600 to-indigo-700 border-2 border-indigo-500 text-white hover:from-indigo-500 hover:to-indigo-600 hover:border-indigo-400 transition-all duration-200 shadow-xl shadow-indigo-500/50"
                 >
                   <Printer size={16} className="sm:w-[18px] sm:h-[18px]" />
@@ -1426,9 +1459,10 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
                 </button>
                 <button
                   type="submit"
+                  disabled={isBusy}
                   className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2 sm:py-3.5 rounded-md sm:rounded-lg font-bold text-sm sm:text-base border-2 transition-all duration-200 shadow-xl bg-gradient-to-r from-green-600 to-green-700 border-green-500 text-white hover:from-green-500 hover:to-green-600 hover:border-green-400 shadow-green-500/50 hover:shadow-green-400/70"
                 >
-                  {isSubmitting ? <Loader2 size={16} className="animate-spin sm:w-[18px] sm:h-[18px]" /> : <Save size={16} className="sm:w-[18px] sm:h-[18px]" />}
+                  {isBusy ? <Loader2 size={16} className="animate-spin sm:w-[18px] sm:h-[18px]" /> : <Save size={16} className="sm:w-[18px] sm:h-[18px]" />}
                   Зберегти актив
                 </button>
               </>

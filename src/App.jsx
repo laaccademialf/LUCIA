@@ -386,6 +386,7 @@ function App() {
                       const [assets, setAssets] = useState([]);
                       // Стан для вибраного активу (редагування)
                       const [selected, setSelected] = useState(null);
+                      const submitAssetLockRef = useRef(false);
                       // Стан для фільтрів таблиці активів
                       const [filters, setFilters] = useState({});
                       const [assetTableInventoryStateFilter, setAssetTableInventoryStateFilter] = useState("all");
@@ -1633,6 +1634,12 @@ function App() {
   };
 
   const handleSubmit = async (asset) => {
+    if (submitAssetLockRef.current) {
+      return false;
+    }
+
+    submitAssetLockRef.current = true;
+
     const sanitizeFirestoreValue = (value) => {
       if (value === undefined) return undefined;
       if (value === null) return null;
@@ -1802,6 +1809,8 @@ function App() {
       console.error("Помилка збереження активу:", error);
       alert(`Помилка збереження активу: ${error?.message || "невідома помилка"}`);
       return false;
+    } finally {
+      submitAssetLockRef.current = false;
     }
   };
 
