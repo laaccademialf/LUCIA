@@ -43,6 +43,7 @@ import { getRolePermissions } from "./firebase/permissions";
 import {
   startAssetInventorySession as startAssetInventorySessionInFirestore,
   endAssetInventorySession as endAssetInventorySessionInFirestore,
+  deleteAssetInventorySession as deleteAssetInventorySessionInFirestore,
   subscribeToActiveAssetInventorySession,
   subscribeToAssetInventorySessions,
 } from "./firebase/firestore";
@@ -1621,6 +1622,49 @@ function App() {
     }
   };
 
+  const deleteAssetInventorySession = async (session) => {
+    if (assetInventorySessionLoading || !user || user?.role !== "admin") return;
+
+    const targetSessionId = String(session?.id || "").trim();
+    if (!targetSessionId) return;
+
+    if (session?.isActive) {
+      alert("Неможливо видалити активну сесію. Спочатку завершіть її.");
+      return;
+    }
+
+    const startedAtLabel = session?.startedAt ? new Date(session.startedAt).toLocaleString("uk-UA") : "-";
+    const restaurantLabel = getSessionRestaurantLabel(session);
+    const confirmed = window.confirm(
+      `Видалити запис сесії інвентаризації?\n\nРесторан: ${restaurantLabel}\nПочаток: ${startedAtLabel}\nID: ${targetSessionId}`
+    );
+    if (!confirmed) return;
+
+    try {
+      setAssetInventorySessionLoading(true);
+      await deleteAssetInventorySessionInFirestore(targetSessionId);
+
+      setAssetInventorySessionsHistory((prev) =>
+        Array.isArray(prev) ? prev.filter((item) => String(item?.id || "") !== targetSessionId) : prev
+      );
+
+      if (String(assetInventorySession?.id || "") === targetSessionId) {
+        setAssetInventorySession(null);
+      }
+
+      writeAuditLog({
+        action: "asset_inventory_session_delete",
+        entityType: "asset_inventory_session",
+        entityId: targetSessionId,
+        description: `Видалено запис сесії інвентаризації ОЗ (${targetSessionId})`,
+      });
+    } catch (error) {
+      alert(`Не вдалося видалити запис сесії: ${error?.message || "невідома помилка"}`);
+    } finally {
+      setAssetInventorySessionLoading(false);
+    }
+  };
+
   const toggleGroup = (id) => {
     setExpandedGroups((prev) => {
       const isCurrentlyExpanded = prev[id];
@@ -1836,10 +1880,17 @@ function App() {
     }
   };
 
-  const handleExport = () => {
+  const handleExport = (exportPayload = null) => {
     void (async () => {
       try {
-        const { exportAssetsToExcel } = await loadExcelHelpers();
+        const { exportAssetsToExcel, exportCustomRowsToExcel } = await loadExcelHelpers();
+
+        const rows = Array.isArray(exportPayload?.rows) ? exportPayload.rows : null;
+        if (rows && rows.length > 0) {
+          exportCustomRowsToExcel(rows);
+          return;
+        }
+
         exportAssetsToExcel(assets);
       } catch (error) {
         console.error("Помилка експорту активів:", error);
@@ -3468,13 +3519,25 @@ function App() {
                       <td className="px-3 py-2">{session?.endedByName || "-"}</td>
                       <td className="px-3 py-2 font-mono text-xs text-slate-600">{session?.id || "-"}</td>
                       <td className="px-3 py-2">
-                        <button
-                          type="button"
-                          onClick={() => printSingleAssetInventorySession(session)}
-                          className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                        >
-                          Друк інвентаризації
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => printSingleAssetInventorySession(session)}
+                            className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                          >
+                            Друк інвентаризації
+                          </button>
+                          {user?.role === "admin" && (
+                            <button
+                              type="button"
+                              onClick={() => deleteAssetInventorySession(session)}
+                              disabled={assetInventorySessionLoading || Boolean(session?.isActive)}
+                              className="rounded border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Видалити
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}

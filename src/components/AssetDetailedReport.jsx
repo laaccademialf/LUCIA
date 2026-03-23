@@ -29,12 +29,6 @@ const formatMoney = (value) => new Intl.NumberFormat("uk-UA", {
   minimumFractionDigits: 2,
 }).format(toNumberLoose(value));
 
-const formatDateTime = (value) => {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) return "-";
-  return date.toLocaleString("uk-UA");
-};
-
 const CHART_COLORS = ["#4f46e5", "#06b6d4", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#14b8a6", "#f97316"];
 
 const FIELD_LABELS = {
@@ -74,17 +68,10 @@ export default function AssetDetailedReport({ assets = [] }) {
           const delta = toNumberLoose(nextValue) - toNumberLoose(previousValue);
           rows.push({
             assetId: String(asset?.id || ""),
-            assetInvNumber: String(asset?.invNumber || "-"),
-            assetName: String(asset?.name || "-"),
             restaurant: String(asset?.locationName || "-"),
             changedAt: String(entry?.changedAt || ""),
-            changedByName: String(entry?.changedByName || "-"),
             field: String(change?.field || "-"),
-            previousValue,
-            nextValue,
             delta,
-            sessionId: String(entry?.inventorySessionId || "-"),
-            source: String(entry?.source || "-"),
           });
         });
       });
@@ -338,49 +325,6 @@ export default function AssetDetailedReport({ assets = [] }) {
         </div>
       </div>
 
-      <div className="card p-0 bg-white border border-slate-200 text-slate-900 shadow-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-slate-700">
-              <tr>
-                <th className="px-3 py-2 text-left">Дата</th>
-                <th className="px-3 py-2 text-left">Інв. номер</th>
-                <th className="px-3 py-2 text-left">Актив</th>
-                <th className="px-3 py-2 text-left">Ресторан</th>
-                <th className="px-3 py-2 text-left">Поле</th>
-                <th className="px-3 py-2 text-left">Було</th>
-                <th className="px-3 py-2 text-left">Стало</th>
-                <th className="px-3 py-2 text-left">Дельта</th>
-                <th className="px-3 py-2 text-left">Хто змінив</th>
-                <th className="px-3 py-2 text-left">Сесія</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredChanges.map((row, index) => (
-                <tr key={`${row.assetId}_${row.changedAt}_${row.field}_${index}`} className="border-t border-slate-200">
-                  <td className="px-3 py-2">{formatDateTime(row.changedAt)}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{row.assetInvNumber}</td>
-                  <td className="px-3 py-2">{row.assetName}</td>
-                  <td className="px-3 py-2">{row.restaurant}</td>
-                  <td className="px-3 py-2">{getFieldLabel(row.field)}</td>
-                  <td className="px-3 py-2">{String(row.previousValue ?? "-")}</td>
-                  <td className="px-3 py-2">{String(row.nextValue ?? "-")}</td>
-                  <td className={`px-3 py-2 font-semibold ${row.delta > 0 ? "text-emerald-700" : row.delta < 0 ? "text-rose-700" : "text-slate-600"}`}>
-                    {PRICE_FIELDS.has(row.field) ? formatMoney(row.delta) : "-"}
-                  </td>
-                  <td className="px-3 py-2">{row.changedByName}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{row.sessionId || "-"}</td>
-                </tr>
-              ))}
-              {filteredChanges.length === 0 && (
-                <tr>
-                  <td colSpan={10} className="px-3 py-8 text-center text-slate-500">За обраними фільтрами змін не знайдено.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 }

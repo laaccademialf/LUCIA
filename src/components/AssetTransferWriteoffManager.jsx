@@ -42,6 +42,31 @@ const hasFinanceApprovalRole = (user) => {
 const toNormalizedId = (value) => String(value || "");
 const toLower = (value) => String(value || "").trim().toLowerCase();
 
+const VALID_TRANSFER_STATUSES = new Set(["pending", "approved", "rejected"]);
+const VALID_WRITEOFF_STATUSES = new Set(["pending", "approved", "rejected"]);
+const VALID_USAGE_STATUSES = new Set(["active", "returned"]);
+
+const hasValidTransferRequest = (request) => {
+  if (!request || typeof request !== "object") return false;
+  const status = toLower(request?.status);
+  if (!VALID_TRANSFER_STATUSES.has(status)) return false;
+  return Boolean(request?.requestedAt || request?.approvedAt || request?.rejectedAt);
+};
+
+const hasValidWriteOffRequest = (request) => {
+  if (!request || typeof request !== "object") return false;
+  const status = toLower(request?.status);
+  if (!VALID_WRITEOFF_STATUSES.has(status)) return false;
+  return Boolean(request?.requestedAt || request?.approvedAt || request?.rejectedAt);
+};
+
+const hasValidEmployeeUsage = (usage) => {
+  if (!usage || typeof usage !== "object") return false;
+  const status = toLower(usage?.status || "active");
+  if (!VALID_USAGE_STATUSES.has(status)) return false;
+  return Boolean(usage?.assignedAt || usage?.returnedAt);
+};
+
 const generateInvNumberByRestaurant = (restaurant, allAssets) => {
   const prefix = String(restaurant?.regNumber || "").substring(0, 3);
   if (!prefix) return "";
@@ -228,7 +253,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
   const resolvePrimaryRequest = (asset) => {
     const candidates = [];
 
-    if (asset?.transferRequest) {
+    if (hasValidTransferRequest(asset?.transferRequest)) {
       const req = asset.transferRequest;
       candidates.push({
         type: "transfer",
@@ -237,7 +262,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       });
     }
 
-    if (asset?.writeOffRequest) {
+    if (hasValidWriteOffRequest(asset?.writeOffRequest)) {
       const req = asset.writeOffRequest;
       candidates.push({
         type: "writeoff",
@@ -246,7 +271,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       });
     }
 
-    if (asset?.employeeUsage) {
+    if (hasValidEmployeeUsage(asset?.employeeUsage)) {
       const req = asset.employeeUsage;
       candidates.push({
         type: "usage",
@@ -338,9 +363,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
     const canFinanceViewAllTransfers = hasFinanceApprovalRole(user);
 
     if (canFinanceViewAllTransfers) {
-      const allRequests = assets.filter((asset) => {
-        return Boolean(asset?.transferRequest) || Boolean(asset?.writeOffRequest) || Boolean(asset?.employeeUsage);
-      });
+      const allRequests = assets.filter((asset) => Boolean(resolvePrimaryRequest(asset)));
       const seen = new Set();
       return allRequests.filter((asset) => {
         const primary = resolvePrimaryRequest(asset);
@@ -372,9 +395,12 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
     };
 
     return assets.filter((asset) => {
-      const transferByMe = isMineById(asset?.transferRequest?.requestedById) || isMineByEmail(asset?.transferRequest?.requestedByEmail);
-      const writeOffByMe = isMineById(asset?.writeOffRequest?.requestedById) || isMineByEmail(asset?.writeOffRequest?.requestedByEmail);
-      const usageByMe = isMineById(asset?.employeeUsage?.assignedById) || isMineByEmail(asset?.employeeUsage?.assignedByEmail);
+      const transferByMe = hasValidTransferRequest(asset?.transferRequest)
+        && (isMineById(asset?.transferRequest?.requestedById) || isMineByEmail(asset?.transferRequest?.requestedByEmail));
+      const writeOffByMe = hasValidWriteOffRequest(asset?.writeOffRequest)
+        && (isMineById(asset?.writeOffRequest?.requestedById) || isMineByEmail(asset?.writeOffRequest?.requestedByEmail));
+      const usageByMe = hasValidEmployeeUsage(asset?.employeeUsage)
+        && (isMineById(asset?.employeeUsage?.assignedById) || isMineByEmail(asset?.employeeUsage?.assignedByEmail));
       return transferByMe || writeOffByMe || usageByMe;
     });
   }, [assets, myUserIds, myUserEmails, user]);

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">LUCIA</string>
+    <string name="title_activity_main">LUCIA</string>
+    <string name="package_name">com.laaccademialf.lucia</string>
+    <string name="custom_url_scheme">com.laaccademialf.lucia</string>
+</resources>

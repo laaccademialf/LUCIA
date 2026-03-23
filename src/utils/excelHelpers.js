@@ -268,6 +268,43 @@ export const exportAssetsToExcel = (assets, filename = "assets.xlsx") => {
   XLSX.writeFile(wb, filename);
 };
 
+export const exportCustomRowsToExcel = (rows, filename = "assets.xlsx", sheetName = "Активи") => {
+  const safeRows = Array.isArray(rows)
+    ? rows
+        .filter((row) => row && typeof row === "object")
+        .map((row) => {
+          const normalized = {};
+          Object.entries(row).forEach(([key, value]) => {
+            let nextValue = value;
+            if (Array.isArray(nextValue)) {
+              nextValue = nextValue.filter(Boolean).join(", ");
+            } else if (nextValue && typeof nextValue === "object") {
+              nextValue = JSON.stringify(nextValue);
+            }
+            normalized[key] = nextValue ?? "";
+          });
+          return normalized;
+        })
+    : [];
+
+  const normalizedRows = safeRows.length > 0 ? safeRows : [{ "Дані": "" }];
+  const headers = Object.keys(normalizedRows[0] || {});
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(normalizedRows, { header: headers });
+
+  ws["!cols"] = headers.map((header) => {
+    const maxContent = normalizedRows.reduce((maxLen, row) => {
+      const length = String(row?.[header] ?? "").length;
+      return Math.max(maxLen, length);
+    }, header.length);
+    return { wch: Math.min(40, Math.max(12, maxContent + 2)) };
+  });
+
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, filename);
+};
+
 export const importAssetsFromExcel = (file) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

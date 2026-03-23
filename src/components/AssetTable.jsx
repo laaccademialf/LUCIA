@@ -338,6 +338,59 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     return allColumns.filter((col) => visibleColumns.includes(col.id || col.accessorKey));
   }, [visibleColumns, allColumns]);
 
+  const exportableColumns = useMemo(() => {
+    return visibleColumns
+      .filter((key) => key !== "actions")
+      .map((key) => {
+        const field = ALL_FIELD_DEFS.find((item) => item.key === key);
+        if (!field) return null;
+        return { key: field.key, header: field.header };
+      })
+      .filter(Boolean);
+  }, [visibleColumns]);
+
+  const handleExportClick = useCallback(() => {
+    if (typeof onExport !== "function") return;
+
+    if (exportableColumns.length === 0) {
+      alert("Оберіть хоча б одну колонку для експорту.");
+      return;
+    }
+
+    const rows = filteredData.map((item) => {
+      const row = {};
+
+      exportableColumns.forEach((column) => {
+        const rawValue = readAssetField(item, column.key);
+        let normalized = rawValue;
+
+        if (Array.isArray(normalized)) {
+          normalized = normalized.filter(Boolean).join(", ");
+        } else if (normalized && typeof normalized === "object") {
+          normalized = JSON.stringify(normalized);
+        }
+
+        row[column.header] = normalized ?? "";
+      });
+
+      return row;
+    });
+
+    if (rows.length === 0) {
+      alert("Немає даних для експорту за поточними фільтрами.");
+      return;
+    }
+
+    onExport({
+      rows,
+      filters: {
+        ...(filters || {}),
+        inventoryState: inventoryStateFilter,
+      },
+      visibleColumns: exportableColumns,
+    });
+  }, [onExport, filteredData, exportableColumns, filters, inventoryStateFilter]);
+
   const table = useReactTable({
     data: filteredData,
     columns,
@@ -545,7 +598,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
                 <Upload size={14} /> <span className="hidden sm:inline">Імпорт</span><span className="sm:hidden">Імп.</span>
               </button>
             )}
-            <button type="button" onClick={onExport} className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow whitespace-nowrap">
+            <button type="button" onClick={handleExportClick} className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow whitespace-nowrap">
               <Download size={14} /> <span>Експорт</span>
             </button>
           </div>

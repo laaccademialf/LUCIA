@@ -416,6 +416,49 @@ export const endAssetInventorySession = async (sessionId, endData = {}, scopeId 
   }
 };
 
+export const deleteAssetInventorySession = async (sessionId) => {
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) {
+    throw new Error("Session ID is required");
+  }
+
+  if (isApiDataModeEnabled()) {
+    const session = normalizeInventorySession(
+      await getCollectionItemApi("assetInventorySessions", normalizedSessionId).catch(() => null)
+    );
+
+    if (!session) {
+      throw new Error("Сесію не знайдено");
+    }
+
+    if (normalizeSessionActive(session?.isActive)) {
+      throw new Error("Не можна видалити активну сесію інвентаризації");
+    }
+
+    await deleteCollectionItemApi("assetInventorySessions", normalizedSessionId);
+    return;
+  }
+
+  try {
+    const sessionRef = doc(db, "assetInventorySessions", normalizedSessionId);
+    const sessionSnap = await getDoc(sessionRef);
+
+    if (!sessionSnap.exists()) {
+      throw new Error("Сесію не знайдено");
+    }
+
+    const session = normalizeInventorySession({ id: sessionSnap.id, ...sessionSnap.data() });
+    if (normalizeSessionActive(session?.isActive)) {
+      throw new Error("Не можна видалити активну сесію інвентаризації");
+    }
+
+    await deleteDoc(sessionRef);
+  } catch (error) {
+    console.error("Помилка видалення сесії інвентаризації ОЗ:", error);
+    throw error;
+  }
+};
+
 export const subscribeToActiveAssetInventorySession = (scopeId, callback) => {
   if (isApiDataModeEnabled()) {
     return subscribeByPolling(async () => {

@@ -11,6 +11,9 @@
     "migration:server": "node scripts/custom-db/server.js"
   },
   "dependencies": {
+    "@capacitor/android": "^8.2.0",
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
     "@headlessui/react": "^2.2.9",
     "@tanstack/react-table": "^8.21.3",
     "@zxing/browser": "^0.1.5",

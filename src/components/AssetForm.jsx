@@ -981,15 +981,27 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
 
   return (
     <div className="card p-3 sm:p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+      <div className="sticky top-20 sm:top-11 z-20 -mx-3 sm:-mx-5 mb-3 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:px-5 sm:py-3">
+        <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           <h2 className="text-xl font-semibold text-slate-900">{isEdit ? "Редагування актива" : "Додати актив"}</h2>
-          <p className="text-sm text-slate-500 mt-1">
-            Крок {currentTabIndex + 1} з {tabs.length} • Заповнюйте поля послідовно
-          </p>
+          <div className="inline-flex items-center gap-2 text-sm text-slate-600 whitespace-nowrap">
+            <ClipboardCheck size={16} /> {completedTabs.length} / {tabs.length}
+          </div>
         </div>
-        <div className="inline-flex items-center gap-2 text-sm text-slate-600">
-          <ClipboardCheck size={16} /> {completedTabs.length} / {tabs.length} завершено
+        <div className="flex flex-nowrap items-center justify-end gap-2 whitespace-nowrap">
+          {!isLastTab && (
+            <button
+              type="button"
+              onClick={handleNext}
+              disabled={isBusy}
+              className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-2 text-sm font-bold text-white shadow-lg shadow-indigo-500/40 transition-all duration-200 hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Далі
+              <ChevronRight size={16} />
+            </button>
+          )}
+        </div>
         </div>
       </div>
 
@@ -1394,7 +1406,8 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
 
         {/* Навігаційні кнопки */}
         <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 border-t-2 border-indigo-700 pt-3 sm:pt-4">
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             {isEdit && typeof onCancel === "function" && (
               <button
                 type="button"
@@ -1418,26 +1431,14 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
               </button>
             )}
             
-            {!isLastTab && (
-              <button
-                type="button"
-                onClick={handleNext}
-                disabled={isBusy}
-                className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-5 py-2 sm:py-3 rounded-md sm:rounded-lg font-bold text-sm sm:text-base bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow-xl shadow-indigo-500/50"
-              >
-                Далі
-                <ChevronRight size={16} className="sm:w-[18px] sm:h-[18px]" />
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 sm:gap-3">
-            <div className="text-sm font-bold text-rose-400">
-              {Object.keys(errors).length > 0 && "Заповніть обовʼязкові поля"}
             </div>
+
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+              <div className="text-sm font-bold text-rose-400">
+                {Object.keys(errors).length > 0 && "Заповніть обовʼязкові поля"}
+              </div>
             
-            {isLastTab && (
-              <>
+              {isLastTab && (
                 <button
                   type="button"
                   onClick={async () => {
@@ -1457,16 +1458,23 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
                   <Printer size={16} className="sm:w-[18px] sm:h-[18px]" />
                   Друк QR
                 </button>
-                <button
-                  type="submit"
-                  disabled={isBusy}
-                  className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2 sm:py-3.5 rounded-md sm:rounded-lg font-bold text-sm sm:text-base border-2 transition-all duration-200 shadow-xl bg-gradient-to-r from-green-600 to-green-700 border-green-500 text-white hover:from-green-500 hover:to-green-600 hover:border-green-400 shadow-green-500/50 hover:shadow-green-400/70"
-                >
-                  {isBusy ? <Loader2 size={16} className="animate-spin sm:w-[18px] sm:h-[18px]" /> : <Save size={16} className="sm:w-[18px] sm:h-[18px]" />}
-                  Зберегти актив
-                </button>
-              </>
-            )}
+              )}
+
+              <button
+                type="submit"
+                disabled={isBusy || !isLastTab}
+                title={!isLastTab ? "Кнопка стане активною на останньому кроці" : undefined}
+                className={clsx(
+                  "inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 py-2 sm:py-3.5 rounded-md sm:rounded-lg font-bold text-sm sm:text-base border-2 transition-all duration-200 shadow-xl",
+                  isLastTab
+                    ? "bg-gradient-to-r from-green-600 to-green-700 border-green-500 text-white hover:from-green-500 hover:to-green-600 hover:border-green-400 shadow-green-500/50 hover:shadow-green-400/70"
+                    : "bg-slate-200 border-slate-300 text-slate-500 shadow-none cursor-not-allowed"
+                )}
+              >
+                {isBusy ? <Loader2 size={16} className="animate-spin sm:w-[18px] sm:h-[18px]" /> : <Save size={16} className="sm:w-[18px] sm:h-[18px]" />}
+                Зберегти актив
+              </button>
+            </div>
           </div>
         </div>
       </form>
