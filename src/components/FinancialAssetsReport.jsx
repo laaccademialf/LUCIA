@@ -1,5 +1,5 @@
 import { Clock, ChevronDown, ChevronRight } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip } from "recharts";
 import { parsePossiblyExcelDate } from "../utils/dateUtils";
 
@@ -223,13 +223,29 @@ const toggleOption = (selected, value) => {
 
 const FilterDropdown = ({ title, options, selected, onToggle, onSelectAll, onClear }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 });
+  const buttonRef = useState(null)[1];
+  const triggerRef = useRef(null);
   const selectedCount = selected.length;
+
+  const handleOpen = () => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setDropdownPos({
+        top: rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+      });
+    }
+    setIsOpen(!isOpen);
+  };
 
   return (
     <div className="relative">
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={handleOpen}
         className="w-full flex items-center justify-between gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:border-slate-400 hover:bg-slate-50 transition-colors"
       >
         <div className="flex items-center gap-2">
@@ -250,7 +266,14 @@ const FilterDropdown = ({ title, options, selected, onToggle, onSelectAll, onCle
             className="fixed inset-0 z-20"
             onClick={() => setIsOpen(false)}
           />
-          <div className="absolute top-full left-0 right-0 z-30 mt-1 rounded-md border border-slate-200 bg-white shadow-lg">
+          <div 
+            className="fixed z-30 rounded-md border border-slate-200 bg-white shadow-lg"
+            style={{
+              top: `${dropdownPos.top}px`,
+              left: `${dropdownPos.left}px`,
+              width: `${dropdownPos.width}px`,
+            }}
+          >
             <div className="border-b border-slate-200 p-2 flex items-center justify-between gap-1">
               <button
                 type="button"
