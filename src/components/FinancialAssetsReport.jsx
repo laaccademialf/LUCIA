@@ -1,6 +1,38 @@
+
+  const COLORS = ["#6366f1", "#8b5cf6", "#d946ef", "#ec4899", "#f43f5e", "#f97316", "#eab308", "#84cc16", "#22c55e", "#10b981"];
+  
+  const categoryDistribution = useMemo(() => {
+    const dist = {};
+    filteredAssets.forEach((asset) => {
+      const cat = asset.__category;
+      dist[cat] = (dist[cat] || 0) + getInventoryQuantity(asset);
+    });
+    return Object.entries(dist).map(([name, value]) => ({ name, value }));
+  }, [filteredAssets]);
+
+  const businessUnitDistribution = useMemo(() => {
+    const dist = {};
+    filteredAssets.forEach((asset) => {
+      const bu = asset.__businessUnit;
+      dist[bu] = (dist[bu] || 0) + getInventoryQuantity(asset);
+    });
+    return Object.entries(dist).map(([name, value]) => ({ name, value }));
+  }, [filteredAssets]);
+
+  const placementDistribution = useMemo(() => {
+    const dist = {};
+    filteredAssets.forEach((asset) => {
+      const pl = asset.__placement;
+      dist[pl] = (dist[pl] || 0) + getInventoryQuantity(asset);
+    });
+    return Object.entries(dist)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
+  }, [filteredAssets]);
 import { Clock, ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState, useRef } from "react";
-import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip } from "recharts";
+import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, PieChart, Pie, Cell, Legend } from "recharts";
 import { parsePossiblyExcelDate } from "../utils/dateUtils";
 
 const toNumber = (value) => {
@@ -314,6 +346,71 @@ const FilterDropdown = ({ title, options, selected, onToggle, onSelectAll, onCle
           </div>
         </>
       )}
+
+          {filteredAssets.length > 0 && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
+                <h3 className="text-lg font-semibold text-slate-900 mb-4">Розподіл активів по категоріях</h3>
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={categoryDistribution}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, value }) => `${name}: ${value}`}
+                      outerRadius={100}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {categoryDistribution.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value) => `${value} шт`} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
+                <h3 className="text-lg font-semibold text-slate-900 mb-4">Розподіл активів по бізнес-напрямам</h3>
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={businessUnitDistribution}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, value }) => `${name}: ${value}`}
+                      outerRadius={100}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {businessUnitDistribution.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value) => `${value} шт`} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {placementDistribution.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
+              <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи по розміщенню (топ-8)</h3>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={placementDistribution}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} interval={0} />
+                  <YAxis allowDecimals={false} />
+                  <Tooltip formatter={(value) => `${value} шт`} />
+                  <Bar dataKey="value" fill="#6366f1" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
     </div>
   );
 };
@@ -725,7 +822,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
 
       {topAssetsByWear.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">Топ активів з найбільшим износом</h3>
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи з максимальним зносом</h3>
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50">
