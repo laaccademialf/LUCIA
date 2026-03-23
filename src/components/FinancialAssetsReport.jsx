@@ -1,4 +1,4 @@
-import { Clock } from "lucide-react";
+import { Clock, ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip } from "recharts";
 import { parsePossiblyExcelDate } from "../utils/dateUtils";
@@ -82,6 +82,12 @@ const formatCurrency = (value) => {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(toNumber(value));
+};
+
+const getAssetWear = (asset) => {
+  const initial = toNumber(asset?.initialCost || asset?.initial_cost);
+  const residual = toNumber(asset?.residualValue || asset?.residual_value);
+  return initial - residual;
 };
 
 const buildCategoryRows = (rows) => {
@@ -215,97 +221,157 @@ const toggleOption = (selected, value) => {
   return [...selected, value];
 };
 
-const FilterChips = ({ title, options, selected, onToggle, onSelectAll, onClear }) => {
+const FilterDropdown = ({ title, options, selected, onToggle, onSelectAll, onClear }) => {
+  const [isOpen, setIsOpen] = useState(false);
   const selectedCount = selected.length;
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2">
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:border-slate-400 hover:bg-slate-50 transition-colors"
+      >
         <div className="flex items-center gap-2">
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-700">{title}</h4>
-          <span className="flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
+          <span className="truncate">{title}</span>
+          <span className="flex items-center rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-semibold text-indigo-700 whitespace-nowrap">
             {selectedCount}/{options.length}
           </span>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={onSelectAll}
-            className="text-[10px] font-semibold text-slate-500 underline hover:text-slate-700"
-          >
-            Все
-          </button>
-          <span className="text-slate-300">•</span>
-          <button
-            type="button"
-            onClick={onClear}
-            className="text-[10px] font-semibold text-slate-500 underline hover:text-slate-700"
-          >
-            Очистити
-          </button>
-        </div>
-      </div>
+        <ChevronDown
+          size={16}
+          className={`transition-transform flex-shrink-0 ${isOpen ? "rotate-180" : ""}`}
+        />
+      </button>
 
-      <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto">
-        {options.map((option) => {
-          const isSelected = selected.includes(option);
-          return (
-            <button
-              key={`${title}:${option}`}
-              type="button"
-              onClick={() => onToggle(option)}
-              className={[
-                "rounded-full px-2.5 py-1 text-xs font-medium transition-all whitespace-nowrap",
-                isSelected
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "bg-slate-100 text-slate-600 hover:bg-slate-200",
-              ].join(" ")}
-            >
-              {option}
-            </button>
-          );
-        })}
-      </div>
+      {isOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-20"
+            onClick={() => setIsOpen(false)}
+          />
+          <div className="absolute top-full left-0 right-0 z-30 mt-1 rounded-md border border-slate-200 bg-white shadow-lg">
+            <div className="border-b border-slate-200 p-2 flex items-center justify-between gap-1">
+              <button
+                type="button"
+                onClick={onSelectAll}
+                className="flex-1 rounded px-2 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition-colors"
+              >
+                Все
+              </button>
+              <button
+                type="button"
+                onClick={onClear}
+                className="flex-1 rounded px-2 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+              >
+                Очистити
+              </button>
+            </div>
+            <div className="max-h-64 overflow-y-auto p-2 space-y-1">
+              {options.map((option) => {
+                const isSelected = selected.includes(option);
+                return (
+                  <label
+                    key={option}
+                    className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-slate-50 cursor-pointer transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => {
+                        onToggle(option);
+                      }}
+                      className="w-4 h-4 rounded border-slate-300 text-indigo-600 cursor-pointer"
+                    />
+                    <span className="text-sm text-slate-700 flex-1">{option}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };
 
-const FinancialSummaryTable = ({ title, rows }) => (
-  <div className="overflow-x-auto rounded-lg border border-slate-200">
-    <table className="min-w-full text-sm">
-      <thead className="bg-slate-50">
-        <tr>
-          <th className="px-3 py-2 text-left font-semibold text-slate-800">{title}</th>
-          <th className="px-3 py-2 text-right font-semibold text-slate-800">Кількість в наявності</th>
-          <th className="px-3 py-2 text-right font-semibold text-slate-800">Первісна вартість (всіх ОС)</th>
-          <th className="px-3 py-2 text-right font-semibold text-slate-800">Оціночна вартість (остання інвент.)</th>
-          <th className="px-3 py-2 text-right font-semibold text-slate-800">Знос (дельта), грн</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr
-            key={row.key}
-            className={row.level === "category" ? "border-t border-slate-200 bg-slate-50/80" : "border-t border-slate-200"}
-          >
-            <td
-              className={[
-                "px-3 py-2 text-slate-900",
-                row.level === "category" ? "font-semibold" : "pl-8 text-slate-700",
-              ].join(" ")}
-            >
-              {row.level === "subcategory" ? `- ${row.label}` : row.label}
-            </td>
-            <td className="px-3 py-2 text-right text-slate-900">{row.quantity}</td>
-            <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(row.initialValue)}</td>
-            <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(row.estimatedValue)}</td>
-            <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(row.wear)}</td>
+const FinancialSummaryTable = ({ title, rows, collapsible = false, expandedRows = {}, onToggleRow = () => {} }) => {
+  const renderedRows = useMemo(() => {
+    if (!collapsible) return rows;
+    
+    const result = [];
+    rows.forEach((row) => {
+      result.push(row);
+      if (row.level === "category") {
+        const isExpanded = expandedRows[row.key] !== false;
+        if (!isExpanded) {
+          // Skip subcategories if category is collapsed
+          return;
+        }
+      }
+    });
+    
+    return result.filter((row) => {
+      if (row.level === "subcategory") {
+        // Find parent category key
+        const parentKey = row.key.split(":").slice(0, 2).join(":");
+        return expandedRows[parentKey] !== false;
+      }
+      return true;
+    });
+  }, [rows, collapsible, expandedRows]);
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-slate-200">
+      <table className="min-w-full text-sm">
+        <thead className="bg-slate-50">
+          <tr>
+            <th className="px-3 py-2 text-left font-semibold text-slate-800">{title}</th>
+            <th className="px-3 py-2 text-right font-semibold text-slate-800">Кількість в наявності</th>
+            <th className="px-3 py-2 text-right font-semibold text-slate-800">Первісна вартість (всіх ОС)</th>
+            <th className="px-3 py-2 text-right font-semibold text-slate-800">Оціночна вартість (остання інвент.)</th>
+            <th className="px-3 py-2 text-right font-semibold text-slate-800">Знос (дельта), грн</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-);
+        </thead>
+        <tbody>
+          {renderedRows.map((row) => {
+            const isExpanded = expandedRows[row.key] !== false;
+            const isCategory = row.level === "category";
+            
+            return (
+              <tr
+                key={row.key}
+                className={isCategory ? "border-t border-slate-200 bg-slate-50/80 cursor-pointer hover:bg-slate-100/80" : "border-t border-slate-200"}
+                onClick={() => isCategory && onToggleRow(row.key)}
+              >
+                <td
+                  className={[
+                    "px-3 py-2 text-slate-900",
+                    isCategory ? "font-semibold" : "pl-8 text-slate-700",
+                  ].join(" ")}
+                >
+                  <div className="flex items-center gap-2">
+                    {isCategory && (
+                      <div className="w-5">
+                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      </div>
+                    )}
+                    {row.level === "subcategory" ? `- ${row.label}` : row.label}
+                  </div>
+                </td>
+                <td className="px-3 py-2 text-right text-slate-900">{row.quantity}</td>
+                <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(row.initialValue)}</td>
+                <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(row.estimatedValue)}</td>
+                <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(row.wear)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
 
 export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
   const restaurantsById = useMemo(() => {
@@ -355,6 +421,8 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
   const [selectedCategories, setSelectedCategories] = useState([]);
   const [selectedStatuses, setSelectedStatuses] = useState([]);
   const [selectedPlacements, setSelectedPlacements] = useState([]);
+  const [expandedCategoryRows, setExpandedCategoryRows] = useState({});
+  const [expandedPlacementRows, setExpandedPlacementRows] = useState({});
 
   useEffect(() => {
     setSelectedRestaurants((prev) => syncSelection(prev, restaurantOptions));
@@ -432,12 +500,36 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
 
   const ageGroups = useMemo(() => buildAgeGroups(filteredAssets), [filteredAssets]);
 
+  const topAssetsByWear = useMemo(() => {
+    return [...filteredAssets]
+      .sort((a, b) => getAssetWear(b) - getAssetWear(a))
+      .slice(0, 10);
+  }, [filteredAssets]);
+
+  const writeOffAssets = useMemo(() => {
+    return filteredAssets.filter(isWriteOffAsset);
+  }, [filteredAssets]);
+
   const resetFilters = () => {
     setSelectedRestaurants(restaurantOptions);
     setSelectedBusinessUnits(businessUnitOptions);
     setSelectedCategories(categoryOptions);
     setSelectedStatuses(statusOptions);
     setSelectedPlacements(placementOptions);
+  };
+
+  const toggleCategoryRow = (key) => {
+    setExpandedCategoryRows((prev) => ({
+      ...prev,
+      [key]: prev[key] === false ? true : false,
+    }));
+  };
+
+  const togglePlacementRow = (key) => {
+    setExpandedPlacementRows((prev) => ({
+      ...prev,
+      [key]: prev[key] === false ? true : false,
+    }));
   };
 
   return (
@@ -462,8 +554,8 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
           <span className="font-semibold">Активів: <span className="text-slate-700 font-bold">{filteredAssets.length}</span></span>
         </div>
 
-        <div className="space-y-3 border-t border-slate-100 pt-4">
-          <FilterChips
+        <div className="space-y-2 border-t border-slate-100 pt-4 grid grid-cols-1 md:grid-cols-2 gap-2">
+          <FilterDropdown
             title="Заклади"
             options={restaurantOptions}
             selected={selectedRestaurants}
@@ -472,7 +564,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
             onClear={() => setSelectedRestaurants([])}
           />
 
-          <FilterChips
+          <FilterDropdown
             title="Бізнес-напрями"
             options={businessUnitOptions}
             selected={selectedBusinessUnits}
@@ -481,7 +573,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
             onClear={() => setSelectedBusinessUnits([])}
           />
 
-          <FilterChips
+          <FilterDropdown
             title="Категорії"
             options={categoryOptions}
             selected={selectedCategories}
@@ -490,7 +582,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
             onClear={() => setSelectedCategories([])}
           />
 
-          <FilterChips
+          <FilterDropdown
             title="Статуси"
             options={statusOptions}
             selected={selectedStatuses}
@@ -499,7 +591,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
             onClear={() => setSelectedStatuses([])}
           />
 
-          <FilterChips
+          <FilterDropdown
             title="Розміщення"
             options={placementOptions}
             selected={selectedPlacements}
@@ -537,7 +629,13 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
             </table>
           </div>
 
-          <FinancialSummaryTable title="По категоріях" rows={unitBlock.byCategory} />
+          <FinancialSummaryTable 
+            title="По категоріях" 
+            rows={unitBlock.byCategory}
+            collapsible={true}
+            expandedRows={expandedCategoryRows}
+            onToggleRow={toggleCategoryRow}
+          />
 
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="min-w-full text-sm">
@@ -592,6 +690,77 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
           </div>
         </div>
       ))}
+
+      {topAssetsByWear.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Топ активів з найбільшим износом</h3>
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Назва активу</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Категорія</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Розміщення</th>
+                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Первісна вартість</th>
+                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Знос, грн</th>
+                  <th className="px-3 py-2 text-right font-semibold text-slate-800">% знос</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topAssetsByWear.map((asset, idx) => {
+                  const wear = getAssetWear(asset);
+                  const initial = toNumber(asset?.initialCost || asset?.initial_cost);
+                  const wearPercent = initial > 0 ? ((wear / initial) * 100).toFixed(1) : 0;
+                  return (
+                    <tr key={`${asset.id}-${idx}`} className="border-t border-slate-200">
+                      <td className="px-3 py-2 text-slate-900">{normalizeText(asset?.name)}</td>
+                      <td className="px-3 py-2 text-slate-700">{asset.__category}</td>
+                      <td className="px-3 py-2 text-slate-700">{asset.__placement}</td>
+                      <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(initial)}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-red-600">{formatCurrency(wear)}</td>
+                      <td className="px-3 py-2 text-right font-semibold text-red-600">{wearPercent}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {writeOffAssets.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи до списання</h3>
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Назва активу</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Категорія</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Бізнес-напрям</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Розміщення</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Статус/Рішення</th>
+                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Кількість</th>
+                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Первісна вартість</th>
+                </tr>
+              </thead>
+              <tbody>
+                {writeOffAssets.map((asset, idx) => (
+                  <tr key={`${asset.id}-${idx}`} className="border-t border-slate-200">
+                    <td className="px-3 py-2 text-slate-900">{normalizeText(asset?.name)}</td>
+                    <td className="px-3 py-2 text-slate-700">{asset.__category}</td>
+                    <td className="px-3 py-2 text-slate-700">{asset.__businessUnit}</td>
+                    <td className="px-3 py-2 text-slate-700">{asset.__placement}</td>
+                    <td className="px-3 py-2 text-slate-700">{asset.__status}</td>
+                    <td className="px-3 py-2 text-right text-slate-900">{getInventoryQuantity(asset)}</td>
+                    <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(asset?.initialCost || asset?.initial_cost)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
         <h3 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
