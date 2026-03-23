@@ -86,6 +86,59 @@ const formatCurrency = (value) => {
 
 const COLORS = ["#6366f1", "#8b5cf6", "#d946ef", "#ec4899", "#f43f5e", "#f97316", "#eab308", "#84cc16", "#22c55e", "#10b981"];
 
+const renderPieLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, name, value }) => {
+  if (!percent || percent < 0.04) return null;
+
+  const radius = innerRadius + (outerRadius - innerRadius) * 0.55;
+  const x = cx + radius * Math.cos((-midAngle * Math.PI) / 180);
+  const y = cy + radius * Math.sin((-midAngle * Math.PI) / 180);
+
+  const shortName = String(name || "").length > 18 ? `${String(name).slice(0, 18)}...` : name;
+
+  return (
+    <text
+      x={x}
+      y={y}
+      fill="#fff"
+      textAnchor="middle"
+      dominantBaseline="central"
+      fontSize={11}
+      fontWeight={700}
+    >
+      <tspan x={x} dy="-0.35em">{shortName}</tspan>
+      <tspan x={x} dy="1.2em">{value}</tspan>
+    </text>
+  );
+};
+
+const PieLegendList = ({ items }) => {
+  const total = items.reduce((sum, item) => sum + toNumber(item.value), 0);
+
+  return (
+    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+      {items.map((item, index) => {
+        const percent = total > 0 ? Math.round((toNumber(item.value) / total) * 100) : 0;
+
+        return (
+          <div key={`${item.name}:${index}`} className="flex items-start justify-between gap-3 rounded-md bg-slate-50 px-3 py-2">
+            <div className="flex min-w-0 items-start gap-2">
+              <span
+                className="mt-1 h-3 w-3 flex-shrink-0 rounded-full"
+                style={{ backgroundColor: COLORS[index % COLORS.length] }}
+              />
+              <span className="min-w-0 truncate text-sm font-medium text-slate-700">{item.name}</span>
+            </div>
+            <div className="flex-shrink-0 text-right text-xs font-semibold text-slate-500">
+              <div>{item.value} шт</div>
+              <div>{percent}%</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 const getAssetWear = (asset) => {
   const initial = toNumber(asset?.initialCost || asset?.initial_cost);
   const residual = toNumber(asset?.residualValue || asset?.residual_value);
@@ -856,46 +909,54 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
           <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
             <h3 className="text-lg font-semibold text-slate-900 mb-4">Розподіл активів по категоріях</h3>
-            <ResponsiveContainer width="100%" height={320}>
-              <PieChart>
-                <Pie
-                  data={categoryDistribution}
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={108}
-                  dataKey="value"
-                  nameKey="name"
-                  labelLine={false}
-                >
-                  {categoryDistribution.map((entry, index) => (
-                    <Cell key={`${entry.name}:${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(value) => `${value} шт`} />
-              </PieChart>
-            </ResponsiveContainer>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+              <ResponsiveContainer width="100%" height={320}>
+                <PieChart>
+                  <Pie
+                    data={categoryDistribution}
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={108}
+                    dataKey="value"
+                    nameKey="name"
+                    labelLine={false}
+                    label={renderPieLabel}
+                  >
+                    {categoryDistribution.map((entry, index) => (
+                      <Cell key={`${entry.name}:${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value) => `${value} шт`} />
+                </PieChart>
+              </ResponsiveContainer>
+              <PieLegendList items={categoryDistribution} />
+            </div>
           </div>
 
           <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
             <h3 className="text-lg font-semibold text-slate-900 mb-4">Розподіл активів по бізнес-напрямах</h3>
-            <ResponsiveContainer width="100%" height={320}>
-              <PieChart>
-                <Pie
-                  data={businessUnitDistribution}
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={108}
-                  dataKey="value"
-                  nameKey="name"
-                  labelLine={false}
-                >
-                  {businessUnitDistribution.map((entry, index) => (
-                    <Cell key={`${entry.name}:${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(value) => `${value} шт`} />
-              </PieChart>
-            </ResponsiveContainer>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+              <ResponsiveContainer width="100%" height={320}>
+                <PieChart>
+                  <Pie
+                    data={businessUnitDistribution}
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={108}
+                    dataKey="value"
+                    nameKey="name"
+                    labelLine={false}
+                    label={renderPieLabel}
+                  >
+                    {businessUnitDistribution.map((entry, index) => (
+                      <Cell key={`${entry.name}:${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value) => `${value} шт`} />
+                </PieChart>
+              </ResponsiveContainer>
+              <PieLegendList items={businessUnitDistribution} />
+            </div>
           </div>
 
           <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm xl:col-span-2">
@@ -906,7 +967,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
                 <XAxis dataKey="name" angle={-20} textAnchor="end" height={70} interval={0} />
                 <YAxis allowDecimals={false} />
                 <Tooltip formatter={(value) => `${value} шт`} />
-                <Bar dataKey="value" fill="#14b8a6" radius={[8, 8, 0, 0]} />
+                <Bar dataKey="value" fill="#14b8a6" radius={[8, 8, 0, 0]} label={{ position: "top", fill: "#0f172a", fontSize: 12, fontWeight: 700 }} />
               </BarChart>
             </ResponsiveContainer>
           </div>
