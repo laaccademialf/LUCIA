@@ -299,7 +299,7 @@ const FinancialSummaryTable = ({ title, rows, collapsible = false, expandedRows 
   const renderedRows = useMemo(() => {
     if (!collapsible) return rows;
     
-    // Filter rows based on expand/collapse state
+    // Filter rows based on expand/collapse state - default to collapsed (only show if explicitly true)
     return rows.filter((row) => {
       if (row.level === "category") {
         return true; // Always show categories
@@ -311,8 +311,8 @@ const FinancialSummaryTable = ({ title, rows, collapsible = false, expandedRows 
         if (keyParts[0] === "sub" && keyParts.length >= 2) {
           const categoryName = keyParts[1];
           const parentKey = `cat:${categoryName}`;
-          // Show subcategory if parent is expanded (or not explicitly collapsed)
-          return expandedRows[parentKey] !== false;
+          // Show subcategory only if parent is explicitly expanded (true)
+          return expandedRows[parentKey] === true;
         }
       }
       return true;
@@ -333,7 +333,7 @@ const FinancialSummaryTable = ({ title, rows, collapsible = false, expandedRows 
         </thead>
         <tbody>
           {renderedRows.map((row) => {
-            const isExpanded = expandedRows[row.key] !== false;
+            const isExpanded = expandedRows[row.key] === true;
             const isCategory = row.level === "category";
             
             return (
@@ -369,7 +369,6 @@ const FinancialSummaryTable = ({ title, rows, collapsible = false, expandedRows 
     </div>
   );
 };
-
 
 export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
   const restaurantsById = useMemo(() => {
@@ -552,60 +551,62 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
           <span className="font-semibold">Активів: <span className="text-slate-700 font-bold">{filteredAssets.length}</span></span>
         </div>
 
-        <div className="border-t border-slate-100 pt-4 flex flex-wrap gap-2">
-          <div className="flex-1 min-w-xs">
-            <FilterDropdown
-              title="Заклади"
-              options={restaurantOptions}
-              selected={selectedRestaurants}
-              onToggle={(value) => setSelectedRestaurants((prev) => toggleOption(prev, value))}
-              onSelectAll={() => setSelectedRestaurants(restaurantOptions)}
-              onClear={() => setSelectedRestaurants([])}
-            />
-          </div>
+        <div className="border-t border-slate-100 pt-4 pb-2">
+          <div className="flex gap-2 overflow-x-auto">
+            <div className="flex-1 min-w-max">
+              <FilterDropdown
+                title="Заклади"
+                options={restaurantOptions}
+                selected={selectedRestaurants}
+                onToggle={(value) => setSelectedRestaurants((prev) => toggleOption(prev, value))}
+                onSelectAll={() => setSelectedRestaurants(restaurantOptions)}
+                onClear={() => setSelectedRestaurants([])}
+              />
+            </div>
 
-          <div className="flex-1 min-w-xs">
-            <FilterDropdown
-              title="Бізнес-напрями"
-              options={businessUnitOptions}
-              selected={selectedBusinessUnits}
-              onToggle={(value) => setSelectedBusinessUnits((prev) => toggleOption(prev, value))}
-              onSelectAll={() => setSelectedBusinessUnits(businessUnitOptions)}
-              onClear={() => setSelectedBusinessUnits([])}
-            />
-          </div>
+            <div className="flex-1 min-w-max">
+              <FilterDropdown
+                title="Бізнес-напрями"
+                options={businessUnitOptions}
+                selected={selectedBusinessUnits}
+                onToggle={(value) => setSelectedBusinessUnits((prev) => toggleOption(prev, value))}
+                onSelectAll={() => setSelectedBusinessUnits(businessUnitOptions)}
+                onClear={() => setSelectedBusinessUnits([])}
+              />
+            </div>
 
-          <div className="flex-1 min-w-xs">
-            <FilterDropdown
-              title="Категорії"
-              options={categoryOptions}
-              selected={selectedCategories}
-              onToggle={(value) => setSelectedCategories((prev) => toggleOption(prev, value))}
-              onSelectAll={() => setSelectedCategories(categoryOptions)}
-              onClear={() => setSelectedCategories([])}
-            />
-          </div>
+            <div className="flex-1 min-w-max">
+              <FilterDropdown
+                title="Категорії"
+                options={categoryOptions}
+                selected={selectedCategories}
+                onToggle={(value) => setSelectedCategories((prev) => toggleOption(prev, value))}
+                onSelectAll={() => setSelectedCategories(categoryOptions)}
+                onClear={() => setSelectedCategories([])}
+              />
+            </div>
 
-          <div className="flex-1 min-w-xs">
-            <FilterDropdown
-              title="Статуси"
-              options={statusOptions}
-              selected={selectedStatuses}
-              onToggle={(value) => setSelectedStatuses((prev) => toggleOption(prev, value))}
-              onSelectAll={() => setSelectedStatuses(statusOptions)}
-              onClear={() => setSelectedStatuses([])}
-            />
-          </div>
+            <div className="flex-1 min-w-max">
+              <FilterDropdown
+                title="Статуси"
+                options={statusOptions}
+                selected={selectedStatuses}
+                onToggle={(value) => setSelectedStatuses((prev) => toggleOption(prev, value))}
+                onSelectAll={() => setSelectedStatuses(statusOptions)}
+                onClear={() => setSelectedStatuses([])}
+              />
+            </div>
 
-          <div className="flex-1 min-w-xs">
-            <FilterDropdown
-              title="Розміщення"
-              options={placementOptions}
-              selected={selectedPlacements}
-              onToggle={(value) => setSelectedPlacements((prev) => toggleOption(prev, value))}
-              onSelectAll={() => setSelectedPlacements(placementOptions)}
-              onClear={() => setSelectedPlacements([])}
-            />
+            <div className="flex-1 min-w-max">
+              <FilterDropdown
+                title="Розміщення"
+                options={placementOptions}
+                selected={selectedPlacements}
+                onToggle={(value) => setSelectedPlacements((prev) => toggleOption(prev, value))}
+                onSelectAll={() => setSelectedPlacements(placementOptions)}
+                onClear={() => setSelectedPlacements([])}
+              />
+            </div>
           </div>
         </div>
       </div>
