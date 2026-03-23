@@ -1,38 +1,6 @@
-
-  const COLORS = ["#6366f1", "#8b5cf6", "#d946ef", "#ec4899", "#f43f5e", "#f97316", "#eab308", "#84cc16", "#22c55e", "#10b981"];
-  
-  const categoryDistribution = useMemo(() => {
-    const dist = {};
-    filteredAssets.forEach((asset) => {
-      const cat = asset.__category;
-      dist[cat] = (dist[cat] || 0) + getInventoryQuantity(asset);
-    });
-    return Object.entries(dist).map(([name, value]) => ({ name, value }));
-  }, [filteredAssets]);
-
-  const businessUnitDistribution = useMemo(() => {
-    const dist = {};
-    filteredAssets.forEach((asset) => {
-      const bu = asset.__businessUnit;
-      dist[bu] = (dist[bu] || 0) + getInventoryQuantity(asset);
-    });
-    return Object.entries(dist).map(([name, value]) => ({ name, value }));
-  }, [filteredAssets]);
-
-  const placementDistribution = useMemo(() => {
-    const dist = {};
-    filteredAssets.forEach((asset) => {
-      const pl = asset.__placement;
-      dist[pl] = (dist[pl] || 0) + getInventoryQuantity(asset);
-    });
-    return Object.entries(dist)
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 8);
-  }, [filteredAssets]);
-import { Clock, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowUpDown, Clock, ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState, useRef } from "react";
-import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, PieChart, Pie, Cell, Legend } from "recharts";
+import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip, PieChart, Pie, Cell } from "recharts";
 import { parsePossiblyExcelDate } from "../utils/dateUtils";
 
 const toNumber = (value) => {
@@ -115,6 +83,8 @@ const formatCurrency = (value) => {
     maximumFractionDigits: 0,
   }).format(toNumber(value));
 };
+
+const COLORS = ["#6366f1", "#8b5cf6", "#d946ef", "#ec4899", "#f43f5e", "#f97316", "#eab308", "#84cc16", "#22c55e", "#10b981"];
 
 const getAssetWear = (asset) => {
   const initial = toNumber(asset?.initialCost || asset?.initial_cost);
@@ -256,7 +226,6 @@ const toggleOption = (selected, value) => {
 const FilterDropdown = ({ title, options, selected, onToggle, onSelectAll, onClear }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 });
-  const buttonRef = useState(null)[1];
   const triggerRef = useRef(null);
   const selectedCount = selected.length;
 
@@ -346,71 +315,6 @@ const FilterDropdown = ({ title, options, selected, onToggle, onSelectAll, onCle
           </div>
         </>
       )}
-
-          {filteredAssets.length > 0 && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-                <h3 className="text-lg font-semibold text-slate-900 mb-4">Розподіл активів по категоріях</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={categoryDistribution}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, value }) => `${name}: ${value}`}
-                      outerRadius={100}
-                      fill="#8884d8"
-                      dataKey="value"
-                    >
-                      {categoryDistribution.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value) => `${value} шт`} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-
-              <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-                <h3 className="text-lg font-semibold text-slate-900 mb-4">Розподіл активів по бізнес-напрямам</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <PieChart>
-                    <Pie
-                      data={businessUnitDistribution}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, value }) => `${name}: ${value}`}
-                      outerRadius={100}
-                      fill="#8884d8"
-                      dataKey="value"
-                    >
-                      {businessUnitDistribution.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value) => `${value} шт`} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-
-          {placementDistribution.length > 0 && (
-            <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-              <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи по розміщенню (топ-8)</h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={placementDistribution}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} interval={0} />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip formatter={(value) => `${value} шт`} />
-                  <Bar dataKey="value" fill="#6366f1" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
     </div>
   );
 };
@@ -539,7 +443,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
   const [selectedStatuses, setSelectedStatuses] = useState([]);
   const [selectedPlacements, setSelectedPlacements] = useState([]);
   const [expandedCategoryRows, setExpandedCategoryRows] = useState({});
-  const [expandedPlacementRows, setExpandedPlacementRows] = useState({});
+  const [writeOffSort, setWriteOffSort] = useState({ key: "initialValue", direction: "desc" });
 
   useEffect(() => {
     setSelectedRestaurants((prev) => syncSelection(prev, restaurantOptions));
@@ -627,6 +531,81 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
     return filteredAssets.filter(isWriteOffAsset);
   }, [filteredAssets]);
 
+  const categoryDistribution = useMemo(() => {
+    const distribution = new Map();
+
+    filteredAssets.forEach((asset) => {
+      const category = asset.__category;
+      distribution.set(category, (distribution.get(category) || 0) + getInventoryQuantity(asset));
+    });
+
+    return Array.from(distribution.entries())
+      .map(([name, value]) => ({ name, value }))
+      .sort((left, right) => right.value - left.value);
+  }, [filteredAssets]);
+
+  const businessUnitDistribution = useMemo(() => {
+    const distribution = new Map();
+
+    filteredAssets.forEach((asset) => {
+      const businessUnit = asset.__businessUnit;
+      distribution.set(businessUnit, (distribution.get(businessUnit) || 0) + getInventoryQuantity(asset));
+    });
+
+    return Array.from(distribution.entries())
+      .map(([name, value]) => ({ name, value }))
+      .sort((left, right) => right.value - left.value);
+  }, [filteredAssets]);
+
+  const placementDistribution = useMemo(() => {
+    const distribution = new Map();
+
+    filteredAssets.forEach((asset) => {
+      const placement = asset.__placement;
+      distribution.set(placement, (distribution.get(placement) || 0) + getInventoryQuantity(asset));
+    });
+
+    return Array.from(distribution.entries())
+      .map(([name, value]) => ({ name, value }))
+      .sort((left, right) => right.value - left.value)
+      .slice(0, 8);
+  }, [filteredAssets]);
+
+  const sortedWriteOffAssets = useMemo(() => {
+    const getSortValue = (asset) => {
+      switch (writeOffSort.key) {
+        case "name":
+          return normalizeKey(asset?.name);
+        case "category":
+          return normalizeKey(asset.__category);
+        case "businessUnit":
+          return normalizeKey(asset.__businessUnit);
+        case "placement":
+          return normalizeKey(asset.__placement);
+        case "status":
+          return normalizeKey(asset.__status);
+        case "quantity":
+          return getInventoryQuantity(asset);
+        case "initialValue":
+        default:
+          return toNumber(asset?.initialCost || asset?.initial_cost);
+      }
+    };
+
+    return [...writeOffAssets].sort((left, right) => {
+      const leftValue = getSortValue(left);
+      const rightValue = getSortValue(right);
+
+      if (typeof leftValue === "string" && typeof rightValue === "string") {
+        const result = leftValue.localeCompare(rightValue, "uk");
+        return writeOffSort.direction === "asc" ? result : -result;
+      }
+
+      const result = leftValue > rightValue ? 1 : leftValue < rightValue ? -1 : 0;
+      return writeOffSort.direction === "asc" ? result : -result;
+    });
+  }, [writeOffAssets, writeOffSort]);
+
   const resetFilters = () => {
     setSelectedRestaurants(restaurantOptions);
     setSelectedBusinessUnits(businessUnitOptions);
@@ -642,10 +621,10 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
     }));
   };
 
-  const togglePlacementRow = (key) => {
-    setExpandedPlacementRows((prev) => ({
-      ...prev,
-      [key]: prev[key] === false ? true : false,
+  const toggleWriteOffSort = (key) => {
+    setWriteOffSort((prev) => ({
+      key,
+      direction: prev.key === key && prev.direction === "asc" ? "desc" : "asc",
     }));
   };
 
@@ -820,6 +799,22 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
         </div>
       ))}
 
+      <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
+          <Clock size={20} className="text-indigo-600" />
+          Структура активів за віком (роки з моменту введення)
+        </h3>
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={ageGroups}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="name" />
+            <YAxis allowDecimals={false} />
+            <Tooltip />
+            <Bar dataKey="value" fill="#6366f1" radius={[8, 8, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
       {topAssetsByWear.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи з максимальним зносом</h3>
@@ -857,6 +852,67 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
         </div>
       )}
 
+      {filteredAssets.length > 0 && (
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
+            <h3 className="text-lg font-semibold text-slate-900 mb-4">Розподіл активів по категоріях</h3>
+            <ResponsiveContainer width="100%" height={320}>
+              <PieChart>
+                <Pie
+                  data={categoryDistribution}
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={108}
+                  dataKey="value"
+                  nameKey="name"
+                  labelLine={false}
+                >
+                  {categoryDistribution.map((entry, index) => (
+                    <Cell key={`${entry.name}:${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(value) => `${value} шт`} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
+            <h3 className="text-lg font-semibold text-slate-900 mb-4">Розподіл активів по бізнес-напрямах</h3>
+            <ResponsiveContainer width="100%" height={320}>
+              <PieChart>
+                <Pie
+                  data={businessUnitDistribution}
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={108}
+                  dataKey="value"
+                  nameKey="name"
+                  labelLine={false}
+                >
+                  {businessUnitDistribution.map((entry, index) => (
+                    <Cell key={`${entry.name}:${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(value) => `${value} шт`} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm xl:col-span-2">
+            <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи по розміщенню</h3>
+            <ResponsiveContainer width="100%" height={320}>
+              <BarChart data={placementDistribution}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" angle={-20} textAnchor="end" height={70} interval={0} />
+                <YAxis allowDecimals={false} />
+                <Tooltip formatter={(value) => `${value} шт`} />
+                <Bar dataKey="value" fill="#14b8a6" radius={[8, 8, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
       {writeOffAssets.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
           <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи до списання</h3>
@@ -864,17 +920,17 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Назва активу</th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Категорія</th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Бізнес-напрям</th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Розміщення</th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Статус/Рішення</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Кількість</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Первісна вартість</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("name")} className="inline-flex items-center gap-1 hover:text-indigo-600">Назва активу <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("category")} className="inline-flex items-center gap-1 hover:text-indigo-600">Категорія <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("businessUnit")} className="inline-flex items-center gap-1 hover:text-indigo-600">Бізнес-напрям <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("placement")} className="inline-flex items-center gap-1 hover:text-indigo-600">Розміщення <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("status")} className="inline-flex items-center gap-1 hover:text-indigo-600">Статус/Рішення <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-right font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("quantity")} className="inline-flex items-center gap-1 hover:text-indigo-600">Кількість <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-right font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("initialValue")} className="inline-flex items-center gap-1 hover:text-indigo-600">Первісна вартість <ArrowUpDown size={14} /></button></th>
                 </tr>
               </thead>
               <tbody>
-                {writeOffAssets.map((asset, idx) => (
+                {sortedWriteOffAssets.map((asset, idx) => (
                   <tr key={`${asset.id}-${idx}`} className="border-t border-slate-200">
                     <td className="px-3 py-2 text-slate-900">{normalizeText(asset?.name)}</td>
                     <td className="px-3 py-2 text-slate-700">{asset.__category}</td>
@@ -890,22 +946,6 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
           </div>
         </div>
       )}
-
-      <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
-          <Clock size={20} className="text-indigo-600" />
-          Структура активів за віком (роки з моменту введення)
-        </h3>
-        <ResponsiveContainer width="100%" height={240}>
-          <BarChart data={ageGroups}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="name" />
-            <YAxis allowDecimals={false} />
-            <Tooltip />
-            <Bar dataKey="value" fill="#6366f1" />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
     </div>
   );
 };
