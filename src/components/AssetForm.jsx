@@ -181,6 +181,22 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
 
   const normalizeText = (value) => String(value || "").trim().toLowerCase();
 
+  const normalizeAccountingType = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+
+    const canonical = raw
+      .toUpperCase()
+      .replace(/O/g, "О")
+      .replace(/C/g, "С")
+      .replace(/Z/g, "З")
+      .replace(/3/g, "З");
+
+    if (canonical === "ОС") return "ОЗ";
+    if (canonical === "ОЗ") return "ОЗ";
+    return raw;
+  };
+
   const findRestaurantByLocation = (locationValue) => {
     const target = normalizeText(locationValue);
     if (!target) return null;
@@ -283,6 +299,12 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
           selectedAsset?.subCategory ??
           selectedAsset?.sub_category ??
           "",
+        type: normalizeAccountingType(
+          selectedAsset?.type ??
+          selectedAsset?.accountingType ??
+          selectedAsset?.accounting_type ??
+          defaultAsset.type
+        ),
         serialNumber:
           selectedAsset?.serialNumber ??
           selectedAsset?.serial_number ??
@@ -858,7 +880,7 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
       name: safeString(values.name).trim(),
       category: safeString(values.category).trim(),
       subCategory: safeString(values.subCategory).trim(),
-      type: safeString(values.type).trim(),
+      type: normalizeAccountingType(safeString(values.type).trim()),
       inventoryQuantity: effectiveInventoryQuantity ?? "",
       nextInventoryQuantity: "",
       serialNumber: safeString(values.serialNumber).trim(),
@@ -1071,7 +1093,7 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
                       // Автозаповнення полів з обраного активу
                       if (assetTemplate.category) setValue("category", assetTemplate.category);
                       if (assetTemplate.subCategory) setValue("subCategory", assetTemplate.subCategory);
-                      if (assetTemplate.type) setValue("type", assetTemplate.type);
+                      if (assetTemplate.type) setValue("type", normalizeAccountingType(assetTemplate.type));
                       if (assetTemplate.brand) setValue("brand", assetTemplate.brand);
                     }}
                   />
@@ -1093,7 +1115,10 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
               <Select
                 label="Тип обліку"
                 {...register("type")}
-                options={ensureCurrentOption(accountingTypes.length > 0 ? accountingTypes : ["ОС", "МШП"], selectedType)}
+                options={ensureCurrentOption(
+                  (accountingTypes.length > 0 ? accountingTypes : ["ОЗ", "МШП"]).map(normalizeAccountingType),
+                  normalizeAccountingType(selectedType)
+                )}
               />
               <Input
                 label="Первинна інвентаризаційна кількість"
