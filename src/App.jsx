@@ -89,6 +89,7 @@ const ProfileSettingsModal = lazy(() => import("./components/ProfileSettingsModa
 
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const APP_VERSION = "1.0.3";
+const LOGIN_AUDIT_MARKER_KEY = "lucia_login_audit_marker";
 const ADMIN_ONLY_NAV_IDS = new Set(["settings-permissions", "menu-admin", "security-audit"]);
 const NAV_ICON_MAP = {
   LayoutDashboard,
@@ -479,15 +480,29 @@ function App() {
   const [checklistReminderTick, setChecklistReminderTick] = useState(0);
   const seenMissedChecklistKeysRef = useRef(new Set());
   const userInteractedRef = useRef(false);
+  const authAuditRef = useRef("");
+
+  const getLoginAuditMarker = useCallback(() => {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") return "";
+
+    const sessionToken = String(localStorage.getItem("lucia_auth_session_token") || "").trim();
+    if (sessionToken) {
+      return `session:${sessionToken}`;
+    }
+
+    const actorKey = String(user?.uid || user?.id || user?.userId || user?.email || "").trim();
+    return actorKey ? `user:${actorKey}` : "";
+  }, [user?.uid, user?.id, user?.userId, user?.email]);
 
   const writeAuditLog = (payload) => {
     if (!user) return;
 
-    const actorName = user?.displayName || user?.fullName || user?.name || "";
+    const actorId = String(user?.uid || user?.id || user?.userId || user?.email || "").trim();
+    const actorName = user?.displayName || user?.fullName || user?.name || user?.email || actorId || "";
     const actorEmail = user?.email || "";
 
     void logAuditEvent({
-      actorId: user?.uid || "",
+      actorId,
       actorName,
       actorEmail,
       actorRole: user?.role || "",
@@ -499,6 +514,36 @@ function App() {
       console.warn("Audit log write failed:", error);
     });
   };
+
+  useEffect(() => {
+    if (!user) return;
+
+    const actorKey = String(user?.uid || user?.id || user?.email || "").trim();
+    if (!actorKey) return;
+    if (authAuditRef.current === actorKey) return;
+
+    const marker = getLoginAuditMarker();
+    if (marker && typeof window !== "undefined" && typeof sessionStorage !== "undefined") {
+      const existingMarker = String(sessionStorage.getItem(LOGIN_AUDIT_MARKER_KEY) || "").trim();
+      if (existingMarker === marker) {
+        authAuditRef.current = actorKey;
+        return;
+      }
+      sessionStorage.setItem(LOGIN_AUDIT_MARKER_KEY, marker);
+    }
+
+    authAuditRef.current = actorKey;
+
+    writeAuditLog({
+      action: "login",
+      entityType: "auth",
+      entityId: actorKey,
+      description: "Користувач увійшов у платформу",
+      details: {
+        lastLoginAt: new Date().toISOString(),
+      },
+    });
+  }, [user?.uid, user?.id, user?.email, getLoginAuditMarker]);
 
   const baseInput =
     "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
@@ -3194,6 +3239,7 @@ function App() {
             updateAsset={updateAssetInFirebase}
             addAsset={addAssetToFirebase}
             deleteAsset={deleteAssetFromFirebase}
+            onAuditEvent={writeAuditLog}
           />
         </div>
       );
@@ -3930,6 +3976,9 @@ function App() {
                 <button
                   onClick={async () => {
                     try {
+                      if (typeof window !== "undefined" && typeof sessionStorage !== "undefined") {
+                        sessionStorage.removeItem(LOGIN_AUDIT_MARKER_KEY);
+                      }
                       await logAuditEvent({
                         actorId: user?.uid || "",
                         actorName: user?.displayName || user?.fullName || user?.name || "",

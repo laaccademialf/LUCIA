@@ -8,7 +8,7 @@ import {
 } from "./collectionsAdapter";
 
 const AUDIT_COLLECTION = "platformAuditLogs";
-const AUDIT_LOGGING_ENABLED = false;
+const AUDIT_LOGGING_ENABLED = true;
 
 const normalizeValue = (value) => {
   if (value === undefined) return undefined;

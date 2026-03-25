@@ -134,7 +134,7 @@ function openPrintDocument({ title, bodyHtml }) {
   printWindow.document.close();
 }
 
-export default function AssetTransferWriteoffManager({ assets, restaurants, user, updateAsset, addAsset, deleteAsset }) {
+export default function AssetTransferWriteoffManager({ assets, restaurants, user, updateAsset, addAsset, deleteAsset, onAuditEvent }) {
   const [assetId, setAssetId] = useState("");
   const [assetSearch, setAssetSearch] = useState("");
   const [isAssetSearchOpen, setIsAssetSearchOpen] = useState(false);
@@ -147,6 +147,11 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
   const [submitting, setSubmitting] = useState(false);
   const [processingActionId, setProcessingActionId] = useState("");
   const [hiddenPendingKeys, setHiddenPendingKeys] = useState([]);
+
+  const writeAudit = (payload) => {
+    if (typeof onAuditEvent !== "function") return;
+    onAuditEvent(payload);
+  };
 
   const myRestaurantId = toNormalizedId(user?.restaurant);
   const myUserIds = useMemo(() => {
@@ -768,6 +773,12 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       setReason("");
       setTransferQuantity("1");
       setTargetRestaurantId("");
+      writeAudit({
+        action: "transfer_request_create",
+        entityType: "transfer_request",
+        entityId: String(selectedAsset?.id || ""),
+        description: `Створено запит на переміщення (${requestedQuantity} шт.) для активу ${String(selectedAsset?.invNumber || selectedAsset?.name || "")}`,
+      });
       alert(`Запит на переміщення (${requestedQuantity} шт.) відправлено на погодження.`);
       return;
     }
@@ -871,6 +882,12 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         setTransferQuantity("1");
         setEmployeeName("");
         setEmployeePosition("");
+        writeAudit({
+          action: "employee_assignment_create",
+          entityType: "employee_usage",
+          entityId: String(selectedAsset?.id || ""),
+          description: `Передано у користування (${requestedAssignQuantity} шт.) для ${normalizedEmployeeName}`,
+        });
         alert(`Передано у користування ${requestedAssignQuantity} шт. (додано до існуючого запису співробітника).`);
         return;
       }
@@ -943,6 +960,12 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       setTransferQuantity("1");
       setEmployeeName("");
       setEmployeePosition("");
+      writeAudit({
+        action: "employee_assignment_create",
+        entityType: "employee_usage",
+        entityId: String(selectedAsset?.id || ""),
+        description: `Передано у користування (${requestedAssignQuantity} шт.) для ${normalizedEmployeeName}`,
+      });
       alert(`Актив передано у користування співробітнику (${requestedAssignQuantity} шт.).`);
       return;
     }
@@ -985,6 +1008,12 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
     setEmployeeName("");
     setEmployeePosition("");
     setTransferQuantity("1");
+    writeAudit({
+      action: "writeoff_request_create",
+      entityType: "writeoff_request",
+      entityId: String(selectedAsset?.id || ""),
+      description: `Створено запит на списання (${requestedWriteOffQuantity} шт.) для активу ${String(selectedAsset?.invNumber || selectedAsset?.name || "")}`,
+    });
     alert(`Запит на списання (${requestedWriteOffQuantity} шт.) відправлено на погодження фінансовому директору.`);
   };
 
@@ -1013,6 +1042,12 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       }
 
       markPendingAsHandled(asset);
+      writeAudit({
+        action: "transfer_request_approve",
+        entityType: "transfer_request",
+        entityId: String(asset?.id || ""),
+        description: `Погоджено переміщення для активу ${String(asset?.invNumber || asset?.name || "")}`,
+      });
       alert(result?.message || "Переміщення виконано.");
     } finally {
       setProcessingActionId("");
@@ -1046,6 +1081,12 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       }
 
       markPendingAsHandled(asset);
+      writeAudit({
+        action: "transfer_request_reject",
+        entityType: "transfer_request",
+        entityId: String(asset?.id || ""),
+        description: `Відхилено переміщення для активу ${String(asset?.invNumber || asset?.name || "")}`,
+      });
       alert("Запит на переміщення відхилено.");
     } finally {
       setProcessingActionId("");
@@ -1078,6 +1119,12 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       }
 
       markPendingAsHandled(asset);
+      writeAudit({
+        action: "writeoff_request_approve",
+        entityType: "writeoff_request",
+        entityId: String(asset?.id || ""),
+        description: `Погоджено списання для активу ${String(asset?.invNumber || asset?.name || "")}`,
+      });
       alert(result?.message || "Списання підтверджено.");
     } finally {
       setProcessingActionId("");
@@ -1111,6 +1158,12 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       }
 
       markPendingAsHandled(asset);
+      writeAudit({
+        action: "writeoff_request_reject",
+        entityType: "writeoff_request",
+        entityId: String(asset?.id || ""),
+        description: `Відхилено списання для активу ${String(asset?.invNumber || asset?.name || "")}`,
+      });
       alert("Запит на списання відхилено.");
     } finally {
       setProcessingActionId("");

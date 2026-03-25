@@ -26,10 +26,17 @@ const getApiToken = () => {
   return runtimeToken || ENV_API_TOKEN;
 };
 
+const getAuthSessionToken = () => {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return "";
+  return String(localStorage.getItem("lucia_auth_session_token") || "").trim();
+};
+
 const headers = () => {
   const next = { "Content-Type": "application/json" };
   const token = getApiToken();
   if (token) next.Authorization = `Bearer ${token}`;
+  const sessionToken = getAuthSessionToken();
+  if (sessionToken) next["x-session-token"] = sessionToken;
   return next;
 };
 
