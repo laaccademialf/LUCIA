@@ -84,6 +84,7 @@ const ServiceRequestsModule = lazy(() => import("./components/ServiceRequestsMod
 const ChecklistModule = lazy(() => import("./components/ChecklistModule"));
 const TeamHiringModule = lazy(() => import("./components/TeamHiringModule"));
 const SecurityAuditModule = lazy(() => import("./components/SecurityAuditModule"));
+const PaymentRegistryModule = lazy(() => import("./components/PaymentRegistryModule"));
 const DatabaseConnectionsManager = lazy(() => import("./components/DatabaseConnectionsManager"));
 const ProfileSettingsModal = lazy(() => import("./components/ProfileSettingsModal"));
 
@@ -3620,6 +3621,34 @@ function App() {
               />
             );
           })()}
+        </div>
+      );
+    }
+
+    // Реєстр платежів
+    const isPaymentNav =
+      activeNavKey.includes("payment") ||
+      activeNavKey.includes("platezh") ||
+      activeNavKey.includes("platі") ||
+      activeNavKey.includes("paymentreg");
+    const isPaymentTab =
+      topTabKey.includes("payment") ||
+      topTabKey.includes("platezh") ||
+      topTabKey.includes("platі") ||
+      topTabKey.includes("mypayment") ||
+      topTabKey.includes("typical") ||
+      topTabKey.includes("typovi") ||
+      topTabKey.includes("paymentfields");
+
+    if (isPaymentNav || isPaymentTab) {
+      return (
+        <div className="grid grid-cols-1">
+          <PaymentRegistryModule
+            topTab={topTab}
+            restaurants={firebaseRestaurants}
+            user={user}
+            onAuditEvent={writeAuditLog}
+          />
         </div>
       );
     }
