@@ -1307,6 +1307,34 @@ function App() {
     ? hasAnyActiveAssetInventorySession
     : isAnyAccessibleAssetInventorySessionActive;
 
+  const handleUnmarkInventorized = useCallback(async (asset) => {
+    if (user?.role !== "admin") return;
+    const assetId = String(asset?.id || "");
+    if (!assetId) return;
+
+    const activeSessionIds = new Set(
+      Array.from(activeAssetInventorySessionsByScope.values())
+        .map((s) => String(s?.id || ""))
+        .filter(Boolean)
+    );
+    if (activeSessionIds.size === 0 && isAssetInventorySessionActive && assetInventorySession?.id) {
+      activeSessionIds.add(String(assetInventorySession.id));
+    }
+    if (activeSessionIds.size === 0) return;
+
+    const currentHistory = Array.isArray(asset?.inventoryChangeHistory) ? asset.inventoryChangeHistory : [];
+    const filteredHistory = currentHistory.filter(
+      (entry) => !activeSessionIds.has(String(entry?.inventorySessionId || ""))
+    );
+
+    if (filteredHistory.length === currentHistory.length) return;
+
+    const result = await updateAssetInFirebase(assetId, { inventoryChangeHistory: filteredHistory });
+    if (!result?.success) {
+      alert("Не вдалося зняти мітку інвентаризації.");
+    }
+  }, [user?.role, activeAssetInventorySessionsByScope, isAssetInventorySessionActive, assetInventorySession, updateAssetInFirebase]);
+
   const assetInventoryHistoryScopeLabel = assetInventoryHistoryScopeId === "*"
     ? (user?.role === "admin" ? "всі заклади" : "доступні заклади")
     : assetInventorySessionScopeId;
@@ -3400,6 +3428,7 @@ function App() {
                       : ""
                   }
                   onDelete={user?.role === 'admin' ? handleDeleteAsset : null}
+                  onUnmarkInventorized={user?.role === 'admin' ? handleUnmarkInventorized : null}
                   filters={filters}
                   setFilters={setFilters}
                   onExport={handleExport}

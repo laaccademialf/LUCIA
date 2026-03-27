@@ -9,7 +9,7 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { ArrowDownZA, ArrowUpAZ, Download, FileDown, Pencil, Trash2, Upload, SlidersHorizontal, X } from "lucide-react";
+import { ArrowDownZA, ArrowUpAZ, Download, FileDown, Pencil, Trash2, Upload, SlidersHorizontal, X, RotateCcw } from "lucide-react";
 import ColumnVisibilityDropdown from "./ColumnVisibilityDropdown";
 import clsx from "clsx";
 import { printAssetQrLabel } from "../utils/printQrLabel";
@@ -110,7 +110,7 @@ const ALL_FIELD_DEFS = [
   { key: "actions", header: "Дії" },
 ];
 
-export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, canEditAsset = null, editDisabledReason = "Редагування тимчасово недоступне", getEditDisabledReason = null, getRowClassName = null, mobileCardMode = false, isAssetInventorizedInSession = null, showInventoryStateFilter = false, inventoryStateFilterValue = undefined, onInventoryStateFilterChange = null }) {
+export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, canEditAsset = null, editDisabledReason = "Редагування тимчасово недоступне", getEditDisabledReason = null, getRowClassName = null, mobileCardMode = false, isAssetInventorizedInSession = null, showInventoryStateFilter = false, inventoryStateFilterValue = undefined, onInventoryStateFilterChange = null, onUnmarkInventorized = null }) {
   // Стан для видимих колонок
   const fileInputRef = useRef(null);
   const defaultVisible = ["invNumber", "name", "category", "locationName", "status", "decision", "actions"];
@@ -215,8 +215,18 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
           <Trash2 size={14} /> <span className="hidden sm:inline">Видалити</span><span className="sm:hidden">Вид.</span>
         </button>
       )}
+      {typeof onUnmarkInventorized === "function" && typeof isAssetInventorizedInSession === "function" && isAssetInventorizedInSession(asset) && (
+        <button
+          type="button"
+          onClick={() => onUnmarkInventorized(asset)}
+          title="Зняти мітку інвентаризації"
+          className="inline-flex items-center gap-1 rounded-md bg-amber-500 border border-amber-400 px-2 py-1 text-xs font-semibold text-white hover:bg-amber-400 transition whitespace-nowrap"
+        >
+          <RotateCcw size={14} /> <span className="hidden sm:inline">Зняти мітку</span><span className="sm:hidden">Мітку</span>
+        </button>
+      )}
     </div>
-  ), [onEdit, canEdit, canEditAsset, editDisabledReason, getEditDisabledReason, isAdminOnly, onDelete]);
+  ), [onEdit, canEdit, canEditAsset, editDisabledReason, getEditDisabledReason, isAdminOnly, onDelete, onUnmarkInventorized, isAssetInventorizedInSession]);
 
   const allColumns = useMemo(() => ALL_FIELD_DEFS.map((def) => {
     if (def.key === "actions") {
