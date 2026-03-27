@@ -70,6 +70,7 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
   const [completedTabs, setCompletedTabs] = useState([]);
   const [photos, setPhotos] = useState([]);
   const [processingPhotos, setProcessingPhotos] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState(-1);
   const [isSavingAsset, setIsSavingAsset] = useState(false);
   const isMountedRef = useRef(true);
   const submitLockRef = useRef(false);
@@ -1207,7 +1208,8 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
                       <img
                         src={photo.url}
                         alt={`Фото ${index + 1}`}
-                        className="w-full h-20 sm:h-32 object-cover rounded-md sm:rounded-lg border border-slate-300 sm:border-2 shadow"
+                        className="w-full h-20 sm:h-32 object-contain rounded-md sm:rounded-lg border border-slate-300 sm:border-2 shadow bg-slate-100 cursor-pointer hover:ring-2 hover:ring-indigo-400 transition"
+                        onClick={() => setLightboxIndex(index)}
                       />
                       <button
                         type="button"
@@ -1220,6 +1222,47 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
                       <p className="text-[10px] sm:text-xs text-slate-600 mt-0.5 sm:mt-1 truncate">{photo.name}</p>
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Lightbox */}
+              {lightboxIndex >= 0 && lightboxIndex < photos.length && (
+                <div
+                  className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+                  onClick={() => setLightboxIndex(-1)}
+                >
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setLightboxIndex(-1); }}
+                    className="absolute top-4 right-4 z-10 inline-flex items-center justify-center w-10 h-10 rounded-full bg-white/20 text-white hover:bg-white/40 transition"
+                  >
+                    <X size={24} />
+                  </button>
+                  {photos.length > 1 && lightboxIndex > 0 && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setLightboxIndex((i) => i - 1); }}
+                      className="absolute left-4 z-10 inline-flex items-center justify-center w-10 h-10 rounded-full bg-white/20 text-white hover:bg-white/40 transition text-2xl font-bold"
+                    >
+                      ‹
+                    </button>
+                  )}
+                  {photos.length > 1 && lightboxIndex < photos.length - 1 && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setLightboxIndex((i) => i + 1); }}
+                      className="absolute right-4 z-10 inline-flex items-center justify-center w-10 h-10 rounded-full bg-white/20 text-white hover:bg-white/40 transition text-2xl font-bold"
+                    >
+                      ›
+                    </button>
+                  )}
+                  <img
+                    src={photos[lightboxIndex]?.url}
+                    alt={`Фото ${lightboxIndex + 1}`}
+                    className="max-h-[85vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <p className="absolute bottom-6 text-white/80 text-sm">{lightboxIndex + 1} / {photos.length}</p>
                 </div>
               )}
 
