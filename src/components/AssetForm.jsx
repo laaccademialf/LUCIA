@@ -1005,26 +1005,32 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
     <div className="card p-3 sm:p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
       <div className="sticky top-20 sm:top-11 z-20 -mx-3 sm:-mx-5 mb-3 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:px-5 sm:py-3">
         <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-          <h2 className="text-xl font-semibold text-slate-900">{isEdit ? "Редагування актива" : "Додати актив"}</h2>
-          <div className="inline-flex items-center gap-2 text-sm text-slate-600 whitespace-nowrap">
-            <ClipboardCheck size={16} /> {completedTabs.length} / {tabs.length}
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <h2 className="text-xl font-semibold text-slate-900">{isEdit ? "Редагування актива" : "Додати актив"}</h2>
+            <div className="inline-flex items-center gap-2 text-sm text-slate-600 whitespace-nowrap">
+              <ClipboardCheck size={16} /> {completedTabs.length} / {tabs.length}
+            </div>
+          </div>
+          <div className="flex flex-nowrap items-center justify-end gap-2 whitespace-nowrap">
+            {!isLastTab && (
+              <button
+                type="button"
+                onClick={handleNext}
+                disabled={isBusy}
+                className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-2 text-sm font-bold text-white shadow-lg shadow-indigo-500/40 transition-all duration-200 hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Далі
+                <ChevronRight size={16} />
+              </button>
+            )}
           </div>
         </div>
-        <div className="flex flex-nowrap items-center justify-end gap-2 whitespace-nowrap">
-          {!isLastTab && (
-            <button
-              type="button"
-              onClick={handleNext}
-              disabled={isBusy}
-              className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-2 text-sm font-bold text-white shadow-lg shadow-indigo-500/40 transition-all duration-200 hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Далі
-              <ChevronRight size={16} />
-            </button>
-          )}
-        </div>
-        </div>
+        {isEdit && (invNumberValue || nameValue) && (
+          <div className="mt-1 truncate text-sm text-indigo-700 font-medium">
+            {invNumberValue && <span className="text-slate-500 mr-1.5">#{invNumberValue}</span>}
+            {nameValue}
+          </div>
+        )}
       </div>
 
       <div className="mt-3 sm:mt-4 flex gap-2 overflow-x-auto pb-1 snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden sm:grid sm:grid-cols-4 sm:gap-2 sm:overflow-visible sm:pb-0">
