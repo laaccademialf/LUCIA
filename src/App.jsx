@@ -1277,6 +1277,8 @@ function App() {
     return "Редагування тимчасово недоступне";
   }, [canEditAssetRow, isAssetWrittenOff, canOverrideWrittenOffEdit]);
 
+  const [optimisticallyUnmarkedIds, setOptimisticallyUnmarkedIds] = useState(new Set());
+
   const recentlyInventoriedAssetIds = useMemo(() => {
     const activeSessionIds = new Set(
       Array.from(activeAssetInventorySessionsByScope.values())
@@ -1292,16 +1294,18 @@ function App() {
 
     const ids = new Set();
     assets.forEach((asset) => {
+      const id = String(asset?.id || "");
+      if (!id || optimisticallyUnmarkedIds.has(id)) return;
       const history = Array.isArray(asset?.inventoryChangeHistory) ? asset.inventoryChangeHistory : [];
       const hasChangeInLastSession = history.some(
         (entry) => activeSessionIds.has(String(entry?.inventorySessionId || ""))
       );
-      if (hasChangeInLastSession && asset?.id) {
-        ids.add(String(asset.id));
+      if (hasChangeInLastSession) {
+        ids.add(id);
       }
     });
     return ids;
-  }, [assets, assetInventorySession, isAssetInventorySessionActive, activeAssetInventorySessionsByScope]);
+  }, [assets, assetInventorySession, isAssetInventorySessionActive, activeAssetInventorySessionsByScope, optimisticallyUnmarkedIds]);
 
   const shouldShowInventoryStateFilter = user?.role === "admin"
     ? hasAnyActiveAssetInventorySession
@@ -1311,6 +1315,13 @@ function App() {
     if (user?.role !== "admin") return;
     const assetId = String(asset?.id || "");
     if (!assetId) return;
+
+    // Optimistic: immediately hide green highlight
+    setOptimisticallyUnmarkedIds((prev) => {
+      const next = new Set(prev);
+      next.add(assetId);
+      return next;
+    });
 
     const activeSessionIds = new Set(
       Array.from(activeAssetInventorySessionsByScope.values())
@@ -1327,11 +1338,26 @@ function App() {
       (entry) => !activeSessionIds.has(String(entry?.inventorySessionId || ""))
     );
 
-    if (filteredHistory.length === currentHistory.length) return;
+    if (filteredHistory.length === currentHistory.length) {
+      return;
+    }
 
     const result = await updateAssetInFirebase(assetId, { inventoryChangeHistory: filteredHistory });
     if (!result?.success) {
+      // Revert optimistic update on failure
+      setOptimisticallyUnmarkedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(assetId);
+        return next;
+      });
       alert("Не вдалося зняти мітку інвентаризації.");
+    } else {
+      // Clean up optimistic set once Firebase data arrives
+      setOptimisticallyUnmarkedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(assetId);
+        return next;
+      });
     }
   }, [user?.role, activeAssetInventorySessionsByScope, isAssetInventorySessionActive, assetInventorySession, updateAssetInFirebase]);
 
