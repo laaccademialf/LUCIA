@@ -2595,10 +2595,27 @@ const handleAssetsApi = async (req, res, assetId) => {
     const status = String(requestUrl.searchParams.get("status") || "").trim();
     const category = String(requestUrl.searchParams.get("category") || "").trim();
     const decision = String(requestUrl.searchParams.get("decision") || "").trim();
+    const lite = String(requestUrl.searchParams.get("lite") || "").trim() === "1";
+
+    const HEAVY_FIELDS = ["photos", "inventoryChangeHistory", "inventory_change_history", "transferHistory", "transfer_history", "writeOffHistory", "write_off_history", "employeeUsageHistory", "employee_usage_history"];
+    const stripHeavyFields = (items) => items.map((item) => {
+      const out = { ...item };
+      for (const key of HEAVY_FIELDS) {
+        if (key in out) {
+          if (key === "photos" || key === "inventoryChangeHistory" || key === "inventory_change_history") {
+            out[key] = Array.isArray(out[key]) ? out[key].length : 0;
+          } else {
+            delete out[key];
+          }
+        }
+      }
+      return out;
+    });
 
     const hasPaging = Boolean(pageRaw || pageSizeRaw);
     if (!hasPaging && !search && !locationName && !status && !category && !decision) {
       const assets = await getAssetsData(dbConfig);
+      const responseData = lite ? stripHeavyFields(assets) : assets;
       logSlowAssetsGet({
         elapsedMs: Date.now() - startedAt,
         dbEngine: dbConfig.dbEngine,
@@ -2613,7 +2630,7 @@ const handleAssetsApi = async (req, res, assetId) => {
         hasCategory: false,
         hasDecision: false,
       });
-      return sendJson(res, 200, { ok: true, data: assets });
+      return sendJson(res, 200, { ok: true, data: responseData });
     }
 
     const pagePayload = await getAssetsPageData(dbConfig, {

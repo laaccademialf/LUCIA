@@ -151,14 +151,14 @@ export const useAssets = (enableRealtime = true) => {
         if (!enableRealtime || pollTimer) return;
         pollTimer = setInterval(() => {
           void fetchViaApi();
-        }, apiPollIntervalMs);
+        }, Math.max(apiPollIntervalMs, 5000));
       };
 
-      const fetchViaApi = async () => {
+      const fetchViaApi = async ({ lite = false } = {}) => {
         if (isStopped || isRequestInFlight) return;
         isRequestInFlight = true;
         try {
-          const data = await getAssetsApi();
+          const data = await getAssetsApi({ lite });
           if (isStopped) return;
           setAssetsAndCache(data);
           setError(null);
@@ -173,7 +173,13 @@ export const useAssets = (enableRealtime = true) => {
         }
       };
 
-      void fetchViaApi();
+      // Fast initial load: lite first, then full in background
+      (async () => {
+        await fetchViaApi({ lite: true });
+        if (!isStopped) {
+          await fetchViaApi({ lite: false });
+        }
+      })();
 
       if (enableRealtime) {
         const canUseSse = typeof window !== "undefined" && typeof EventSource !== "undefined";

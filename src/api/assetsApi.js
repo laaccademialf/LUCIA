@@ -39,8 +39,9 @@ const endpoint = (path) => `${getApiBase()}${path}`;
 
 export const isAssetsApiEnabled = () => Boolean(getApiBase());
 
-export const getAssetsApi = async () => {
-  const response = await fetch(endpoint("/api/assets"), {
+export const getAssetsApi = async ({ lite = false } = {}) => {
+  const url = lite ? endpoint("/api/assets?lite=1") : endpoint("/api/assets");
+  const response = await fetch(url, {
     method: "GET",
     headers: headers(),
   });
