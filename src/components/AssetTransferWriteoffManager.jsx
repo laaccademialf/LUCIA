@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Check, Download, Printer, X } from "lucide-react";
+import { Check, Download, Printer, X, Plus, Trash2 } from "lucide-react";
 
 const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
@@ -135,7 +135,7 @@ function openPrintDocument({ title, bodyHtml }) {
 }
 
 export default function AssetTransferWriteoffManager({ assets, restaurants, user, updateAsset, addAsset, deleteAsset, onAuditEvent }) {
-  const [assetId, setAssetId] = useState("");
+  const [selectedAssetIds, setSelectedAssetIds] = useState([]);
   const [assetSearch, setAssetSearch] = useState("");
   const [isAssetSearchOpen, setIsAssetSearchOpen] = useState(false);
   const [requestType, setRequestType] = useState("transfer");
@@ -208,52 +208,62 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
     return assets.filter((item) => String(item?.locationName || "") === String(myRestaurantName || ""));
   }, [assets, restaurants, user, myRestaurantId]);
 
-  const selectedAsset = useMemo(() => assets.find((item) => toNormalizedId(item.id) === toNormalizedId(assetId)) || null, [assets, assetId]);
+  const selectedAssets = useMemo(() => {
+    if (selectedAssetIds.length === 0) return [];
+    const idSet = new Set(selectedAssetIds.map(toNormalizedId));
+    return selectedAssetIds.map((id) => assets.find((a) => toNormalizedId(a.id) === toNormalizedId(id))).filter(Boolean);
+  }, [assets, selectedAssetIds]);
+
+  const selectedAsset = selectedAssets.length === 1 ? selectedAssets[0] : null;
 
   const filteredAssetsForRequest = useMemo(() => {
     const query = toLower(assetSearch);
-    if (!query) return assetsForRequest;
-
-    return assetsForRequest.filter((item) => {
-      const pool = [
-        item?.invNumber,
-        item?.name,
-        item?.category,
-        item?.subCategory,
-        item?.locationName,
-        item?.serialNumber,
-      ]
-        .map((value) => toLower(value))
-        .filter(Boolean)
-        .join(" ");
-
-      return pool.includes(query);
-    });
-  }, [assetsForRequest, assetSearch]);
-
-  const handleAssetSelect = (value) => {
-    setAssetId(String(value || ""));
-  };
+    const alreadySelected = new Set(selectedAssetIds.map(toNormalizedId));
+    const base = query
+      ? assetsForRequest.filter((item) => {
+          const pool = [
+            item?.invNumber,
+            item?.name,
+            item?.category,
+            item?.subCategory,
+            item?.locationName,
+            item?.serialNumber,
+          ]
+            .map((value) => toLower(value))
+            .filter(Boolean)
+            .join(" ");
+          return pool.includes(query);
+        })
+      : assetsForRequest;
+    return base.filter((item) => !alreadySelected.has(toNormalizedId(item.id)));
+  }, [assetsForRequest, assetSearch, selectedAssetIds]);
 
   const handleAssetSuggestionPick = (asset) => {
     if (!asset) return;
-    handleAssetSelect(asset.id);
-    const invNumber = String(asset?.invNumber || "").trim();
-    const assetName = String(asset?.name || "").trim();
-    setAssetSearch(invNumber && assetName ? `${invNumber} — ${assetName}` : invNumber || assetName);
+    setSelectedAssetIds((prev) => {
+      if (prev.some((id) => toNormalizedId(id) === toNormalizedId(asset.id))) return prev;
+      return [...prev, String(asset.id)];
+    });
+    setAssetSearch("");
     setIsAssetSearchOpen(false);
   };
 
-  const clearAssetSearch = () => {
+  const removeSelectedAsset = (removeId) => {
+    setSelectedAssetIds((prev) => prev.filter((id) => toNormalizedId(id) !== toNormalizedId(removeId)));
+  };
+
+  const clearAllSelectedAssets = () => {
+    setSelectedAssetIds([]);
     setAssetSearch("");
-    setAssetId("");
     setIsAssetSearchOpen(false);
   };
 
   const selectedAssetQuantity = useMemo(() => {
-    const raw = selectedAsset?.inventoryQuantity;
-    return toNonNegativeNumber(raw, 0);
-  }, [selectedAsset]);
+    if (selectedAssets.length === 1) {
+      return toNonNegativeNumber(selectedAssets[0]?.inventoryQuantity, 0);
+    }
+    return selectedAssets.reduce((sum, a) => sum + toNonNegativeNumber(a?.inventoryQuantity, 0), 0);
+  }, [selectedAssets]);
 
   const resolvePrimaryRequest = (asset) => {
     const candidates = [];
@@ -411,9 +421,10 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
   }, [assets, myUserIds, myUserEmails, user]);
 
   const activeRestaurants = useMemo(() => {
-    if (!selectedAsset) return restaurants;
-    return restaurants.filter((item) => String(item.name || "") !== String(selectedAsset.locationName || ""));
-  }, [restaurants, selectedAsset]);
+    if (selectedAssets.length === 0) return restaurants;
+    const excludeNames = new Set(selectedAssets.map((a) => String(a?.locationName || "")));
+    return restaurants.filter((item) => !excludeNames.has(String(item.name || "")));
+  }, [restaurants, selectedAssets]);
 
   const executeTransfer = async ({ asset, request, actor }) => {
     if (!asset || !request) {
@@ -703,13 +714,8 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
   };
 
   const submitRequest = async () => {
-    if (!selectedAsset) {
-      alert("Оберіть актив.");
-      return;
-    }
-
-    if ((requestType === "transfer" || requestType === "writeoff" || requestType === "assign") && selectedAssetQuantity <= 0) {
-      alert("Цей актив має нульову доступну кількість. Операція недоступна.");
+    if (selectedAssets.length === 0) {
+      alert("Оберіть хоча б один актив.");
       return;
     }
 
@@ -720,66 +726,66 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
 
     if (requestType === "transfer") {
       if (!targetRestaurantId) {
-        alert("Оберіть заклад, куди переміщуємо актив.");
+        alert("Оберіть заклад, куди переміщуємо активи.");
         return;
       }
-
-      const requestedQuantity = Number.parseInt(String(transferQuantity || ""), 10);
-      if (!Number.isFinite(requestedQuantity) || requestedQuantity <= 0) {
-        alert("Вкажіть коректну кількість для переміщення (ціле число більше 0).");
-        return;
-      }
-
-      if (requestedQuantity > selectedAssetQuantity) {
-        alert(`Неможливо перемістити ${requestedQuantity} шт. Доступно: ${selectedAssetQuantity} шт.`);
-        return;
-      }
-
       const toRestaurant = restaurants.find((item) => toNormalizedId(item.id) === toNormalizedId(targetRestaurantId));
       if (!toRestaurant) {
         alert("Не вдалося визначити заклад-отримувач.");
         return;
       }
 
-      const fromRestaurant = restaurants.find((item) => String(item.name || "") === String(selectedAsset.locationName || ""));
-      const payload = {
-        transferRequest: {
-          status: "pending",
-          requestedAt: nowIso,
-          requestedById,
-          requestedByEmail,
-          requestedByName,
-          reason: reason.trim(),
-          fromRestaurantId: toNormalizedId(fromRestaurant?.id),
-          fromRestaurantName: String(selectedAsset.locationName || ""),
-          toRestaurantId: toNormalizedId(toRestaurant.id),
-          toRestaurantName: String(toRestaurant.name || ""),
-          quantity: requestedQuantity,
-          sourceQuantity: selectedAssetQuantity,
-          oldInvNumber: String(selectedAsset?.invNumber || ""),
-        },
-      };
-
       setSubmitting(true);
-      const result = await updateAsset(selectedAsset.id, payload);
-      setSubmitting(false);
-      if (!result?.success) {
-        alert("Не вдалося створити запит на переміщення.");
-        return;
-      }
+      let successCount = 0;
+      let failCount = 0;
 
-      setAssetId("");
+      for (const asset of selectedAssets) {
+        const assetQty = toNonNegativeNumber(asset?.inventoryQuantity, 0);
+        if (assetQty <= 0) { failCount += 1; continue; }
+        const requestedQuantity = selectedAssets.length === 1
+          ? Math.min(Number.parseInt(String(transferQuantity || ""), 10) || 1, assetQty)
+          : assetQty;
+
+        const fromRestaurant = restaurants.find((item) => String(item.name || "") === String(asset.locationName || ""));
+        const payload = {
+          transferRequest: {
+            status: "pending",
+            requestedAt: nowIso,
+            requestedById,
+            requestedByEmail,
+            requestedByName,
+            reason: reason.trim(),
+            fromRestaurantId: toNormalizedId(fromRestaurant?.id),
+            fromRestaurantName: String(asset.locationName || ""),
+            toRestaurantId: toNormalizedId(toRestaurant.id),
+            toRestaurantName: String(toRestaurant.name || ""),
+            quantity: requestedQuantity,
+            sourceQuantity: assetQty,
+            oldInvNumber: String(asset?.invNumber || ""),
+          },
+        };
+        const result = await updateAsset(asset.id, payload);
+        if (result?.success) {
+          successCount += 1;
+          writeAudit({
+            action: "transfer_request_create",
+            entityType: "transfer_request",
+            entityId: String(asset?.id || ""),
+            description: `Створено запит на переміщення (${requestedQuantity} шт.) для активу ${String(asset?.invNumber || asset?.name || "")}`,
+          });
+        } else {
+          failCount += 1;
+        }
+      }
+      setSubmitting(false);
+      setSelectedAssetIds([]);
       setAssetSearch("");
       setReason("");
       setTransferQuantity("1");
       setTargetRestaurantId("");
-      writeAudit({
-        action: "transfer_request_create",
-        entityType: "transfer_request",
-        entityId: String(selectedAsset?.id || ""),
-        description: `Створено запит на переміщення (${requestedQuantity} шт.) для активу ${String(selectedAsset?.invNumber || selectedAsset?.name || "")}`,
-      });
-      alert(`Запит на переміщення (${requestedQuantity} шт.) відправлено на погодження.`);
+      const msg = [`Переміщення: ${successCount} запитів створено.`];
+      if (failCount > 0) msg.push(`Не вдалося: ${failCount}.`);
+      alert(msg.join(" "));
       return;
     }
 
@@ -789,6 +795,14 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         alert("Вкажіть ПІБ співробітника.");
         return;
       }
+      // For assign, process only the first selected asset (complex merge logic)
+      const asset = selectedAssets[0];
+      if (!asset) return;
+      const assetQty = toNonNegativeNumber(asset?.inventoryQuantity, 0);
+      if (assetQty <= 0) {
+        alert("Цей актив має нульову доступну кількість. Операція недоступна.");
+        return;
+      }
 
       const requestedAssignQuantity = Number.parseInt(String(transferQuantity || ""), 10);
       if (!Number.isFinite(requestedAssignQuantity) || requestedAssignQuantity <= 0) {
@@ -796,12 +810,12 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         return;
       }
 
-      if (requestedAssignQuantity > selectedAssetQuantity) {
-        alert(`Неможливо передати ${requestedAssignQuantity} шт. Доступно: ${selectedAssetQuantity} шт.`);
+      if (requestedAssignQuantity > assetQty) {
+        alert(`Неможливо передати ${requestedAssignQuantity} шт. Доступно: ${assetQty} шт.`);
         return;
       }
 
-      const sourceQuantity = toPositiveNumber(selectedAsset?.inventoryQuantity, selectedAssetQuantity);
+      const sourceQuantity = toPositiveNumber(asset?.inventoryQuantity, assetQty);
       const isFullAssign = requestedAssignQuantity >= sourceQuantity;
 
       const assignmentPayloadBase = {
@@ -829,13 +843,13 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       };
 
       const usageMergeCandidate = assets.find((candidate) => {
-        if (!candidate || String(candidate?.id || "") === String(selectedAsset?.id || "")) return false;
-        if (String(candidate?.locationName || "") !== String(selectedAsset?.locationName || "")) return false;
+        if (!candidate || String(candidate?.id || "") === String(asset?.id || "")) return false;
+        if (String(candidate?.locationName || "") !== String(asset?.locationName || "")) return false;
         if (candidate?.transferRequest?.status === "pending" || candidate?.writeOffRequest?.status === "pending") return false;
         if (String(candidate?.employeeUsage?.status || "") !== "active") return false;
         if (toLower(candidate?.employeeUsage?.employeeName) !== toLower(normalizedEmployeeName)) return false;
         if (toLower(candidate?.employeeUsage?.employeePosition) !== toLower(employeePosition.trim())) return false;
-        return isMergeCompatibleAsset(selectedAsset, candidate);
+        return isMergeCompatibleAsset(asset, candidate);
       });
 
       if (usageMergeCandidate) {
@@ -860,15 +874,15 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         }
 
         if (isFullAssign && typeof deleteAsset === "function") {
-          const deleteResult = await deleteAsset(selectedAsset.id);
+          const deleteResult = await deleteAsset(asset.id);
           if (!deleteResult?.success) {
             alert("Кількість передано, але не вдалося прибрати вихідний актив. Видаліть його вручну.");
             return;
           }
         } else {
-          const sourceUpdate = await updateAsset(selectedAsset.id, {
+          const sourceUpdate = await updateAsset(asset.id, {
             inventoryQuantity: Math.max(0, sourceQuantity - requestedAssignQuantity),
-            respPerson: sourceQuantity - requestedAssignQuantity > 0 ? String(selectedAsset?.respPerson || "") : "",
+            respPerson: sourceQuantity - requestedAssignQuantity > 0 ? String(asset?.respPerson || "") : "",
           });
           if (!sourceUpdate?.success) {
             alert("Кількість передано, але не вдалося оновити залишок вихідного активу.");
@@ -876,7 +890,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
           }
         }
 
-        setAssetId("");
+        setSelectedAssetIds([]);
         setAssetSearch("");
         setReason("");
         setTransferQuantity("1");
@@ -885,7 +899,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         writeAudit({
           action: "employee_assignment_create",
           entityType: "employee_usage",
-          entityId: String(selectedAsset?.id || ""),
+          entityId: String(asset?.id || ""),
           description: `Передано у користування (${requestedAssignQuantity} шт.) для ${normalizedEmployeeName}`,
         });
         alert(`Передано у користування ${requestedAssignQuantity} шт. (додано до існуючого запису співробітника).`);
@@ -899,14 +913,14 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
             quantity: sourceQuantity,
           },
           employeeUsageHistory: [
-            ...(Array.isArray(selectedAsset?.employeeUsageHistory) ? selectedAsset.employeeUsageHistory : []),
+            ...(Array.isArray(asset?.employeeUsageHistory) ? asset.employeeUsageHistory : []),
             assignmentPayloadBase,
           ],
           respPerson: normalizedEmployeeName,
         };
 
         setSubmitting(true);
-        const result = await updateAsset(selectedAsset.id, assignmentPayload);
+        const result = await updateAsset(asset.id, assignmentPayload);
         setSubmitting(false);
         if (!result?.success) {
           alert("Не вдалося передати актив у користування співробітнику.");
@@ -914,11 +928,11 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         }
       } else {
         const destinationUsageAsset = {
-          ...selectedAsset,
+          ...asset,
           inventoryQuantity: requestedAssignQuantity,
           employeeUsage: assignmentPayloadBase,
           employeeUsageHistory: [
-            ...(Array.isArray(selectedAsset?.employeeUsageHistory) ? selectedAsset.employeeUsageHistory : []),
+            ...(Array.isArray(asset?.employeeUsageHistory) ? asset.employeeUsageHistory : []),
             assignmentPayloadBase,
           ],
           respPerson: normalizedEmployeeName,
@@ -943,9 +957,9 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
           return;
         }
 
-        const sourceUpdate = await updateAsset(selectedAsset.id, {
+        const sourceUpdate = await updateAsset(asset.id, {
           inventoryQuantity: Math.max(0, sourceQuantity - requestedAssignQuantity),
-          respPerson: sourceQuantity - requestedAssignQuantity > 0 ? String(selectedAsset?.respPerson || "") : "",
+          respPerson: sourceQuantity - requestedAssignQuantity > 0 ? String(asset?.respPerson || "") : "",
         });
         setSubmitting(false);
         if (!sourceUpdate?.success) {
@@ -954,7 +968,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         }
       }
 
-      setAssetId("");
+      setSelectedAssetIds([]);
       setAssetSearch("");
       setReason("");
       setTransferQuantity("1");
@@ -963,58 +977,62 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
       writeAudit({
         action: "employee_assignment_create",
         entityType: "employee_usage",
-        entityId: String(selectedAsset?.id || ""),
+        entityId: String(asset?.id || ""),
         description: `Передано у користування (${requestedAssignQuantity} шт.) для ${normalizedEmployeeName}`,
       });
       alert(`Актив передано у користування співробітнику (${requestedAssignQuantity} шт.).`);
       return;
     }
 
-    const requestedWriteOffQuantity = Number.parseInt(String(transferQuantity || ""), 10);
-    if (!Number.isFinite(requestedWriteOffQuantity) || requestedWriteOffQuantity <= 0) {
-      alert("Вкажіть коректну кількість для списання (ціле число більше 0).");
-      return;
-    }
-
-    if (requestedWriteOffQuantity > selectedAssetQuantity) {
-      alert(`Неможливо списати ${requestedWriteOffQuantity} шт. Доступно: ${selectedAssetQuantity} шт.`);
-      return;
-    }
-
-    const writeOffPayload = {
-      writeOffRequest: {
-        status: "pending",
-        requestedAt: nowIso,
-        requestedById,
-        requestedByEmail,
-        requestedByName,
-        reason: reason.trim(),
-        quantity: requestedWriteOffQuantity,
-        sourceQuantity: selectedAssetQuantity,
-      },
-    };
-
+    // Writeoff — batch support
     setSubmitting(true);
-    const result = await updateAsset(selectedAsset.id, writeOffPayload);
-    setSubmitting(false);
-    if (!result?.success) {
-      alert("Не вдалося створити запит на списання.");
-      return;
+    let writeOffSuccess = 0;
+    let writeOffFail = 0;
+
+    for (const asset of selectedAssets) {
+      const assetQty = toNonNegativeNumber(asset?.inventoryQuantity, 0);
+      if (assetQty <= 0) { writeOffFail += 1; continue; }
+      const requestedWriteOffQuantity = selectedAssets.length === 1
+        ? Math.min(Number.parseInt(String(transferQuantity || ""), 10) || assetQty, assetQty)
+        : assetQty;
+
+      const writeOffPayload = {
+        writeOffRequest: {
+          status: "pending",
+          requestedAt: nowIso,
+          requestedById,
+          requestedByEmail,
+          requestedByName,
+          reason: reason.trim(),
+          quantity: requestedWriteOffQuantity,
+          sourceQuantity: assetQty,
+        },
+      };
+
+      const result = await updateAsset(asset.id, writeOffPayload);
+      if (result?.success) {
+        writeOffSuccess += 1;
+        writeAudit({
+          action: "writeoff_request_create",
+          entityType: "writeoff_request",
+          entityId: String(asset?.id || ""),
+          description: `Створено запит на списання (${requestedWriteOffQuantity} шт.) для активу ${String(asset?.invNumber || asset?.name || "")}`,
+        });
+      } else {
+        writeOffFail += 1;
+      }
     }
 
-    setAssetId("");
+    setSubmitting(false);
+    setSelectedAssetIds([]);
     setAssetSearch("");
     setReason("");
     setEmployeeName("");
     setEmployeePosition("");
     setTransferQuantity("1");
-    writeAudit({
-      action: "writeoff_request_create",
-      entityType: "writeoff_request",
-      entityId: String(selectedAsset?.id || ""),
-      description: `Створено запит на списання (${requestedWriteOffQuantity} шт.) для активу ${String(selectedAsset?.invNumber || selectedAsset?.name || "")}`,
-    });
-    alert(`Запит на списання (${requestedWriteOffQuantity} шт.) відправлено на погодження фінансовому директору.`);
+    const msg = [`Списання: ${writeOffSuccess} запитів створено.`];
+    if (writeOffFail > 0) msg.push(`Не вдалося: ${writeOffFail}.`);
+    alert(msg.join(" "));
   };
 
   const approveTransfer = async (asset) => {
@@ -1440,8 +1458,8 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         </p>
 
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div>
-            <label className="text-sm font-semibold">Актив</label>
+          <div className="md:col-span-2">
+            <label className="text-sm font-semibold">Додати активи</label>
             <div className="relative">
               <input
                 className={`${inputClass} pr-9`}
@@ -1450,7 +1468,6 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
                 onBlur={() => setTimeout(() => setIsAssetSearchOpen(false), 120)}
                 onChange={(e) => {
                   setAssetSearch(e.target.value);
-                  setAssetId("");
                   setIsAssetSearchOpen(true);
                 }}
                 placeholder="Пошук: інв. №, назва, категорія..."
@@ -1458,10 +1475,10 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
               {assetSearch.trim() && (
                 <button
                   type="button"
-                  aria-label="Очистити пошук активу"
+                  aria-label="Очистити пошук"
                   className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={clearAssetSearch}
+                  onClick={() => { setAssetSearch(""); setIsAssetSearchOpen(false); }}
                 >
                   <X size={14} />
                 </button>
@@ -1473,11 +1490,13 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
                       <button
                         key={String(item.id || item.invNumber || item.name)}
                         type="button"
-                        className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50"
+                        className="flex w-full items-center gap-2 border-b border-slate-100 px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50"
                         onMouseDown={() => handleAssetSuggestionPick(item)}
                       >
+                        <Plus size={14} className="shrink-0 text-emerald-600" />
                         <span className="font-semibold">{item.invNumber || "-"}</span>
-                        <span className="text-slate-500"> — {item.name || "Без назви"}</span>
+                        <span className="text-slate-500">— {item.name || "Без назви"}</span>
+                        <span className="ml-auto text-xs text-slate-400">{item.locationName || ""}</span>
                       </button>
                     ))
                   ) : (
@@ -1487,10 +1506,53 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
               )}
             </div>
             <p className="mt-1 text-xs text-slate-500">Знайдено: {filteredAssetsForRequest.length}</p>
-            {selectedAsset && (
-              <p className="mt-1 text-xs text-emerald-700">Обрано: {selectedAsset.invNumber} — {selectedAsset.name}</p>
-            )}
           </div>
+
+          {selectedAssets.length > 0 && (
+            <div className="md:col-span-2">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-semibold">Обрані активи ({selectedAssets.length})</label>
+                {selectedAssets.length > 1 && (
+                  <button type="button" onClick={clearAllSelectedAssets} className="text-xs text-red-600 hover:text-red-700 hover:underline">
+                    Очистити все
+                  </button>
+                )}
+              </div>
+              <div className="max-h-48 overflow-auto rounded-lg border border-slate-200">
+                <table className="min-w-full text-sm">
+                  <thead className="sticky top-0 bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="px-3 py-1.5 text-left">Інв. №</th>
+                      <th className="px-3 py-1.5 text-left">Назва</th>
+                      <th className="px-3 py-1.5 text-left">Локація</th>
+                      <th className="px-3 py-1.5 text-right">К-сть</th>
+                      <th className="px-3 py-1.5 w-10"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedAssets.map((a) => (
+                      <tr key={a.id} className="border-t border-slate-100 hover:bg-slate-50">
+                        <td className="px-3 py-1.5 font-medium">{a.invNumber || "-"}</td>
+                        <td className="px-3 py-1.5 truncate max-w-[200px]">{a.name || "Без назви"}</td>
+                        <td className="px-3 py-1.5 text-slate-500">{a.locationName || "-"}</td>
+                        <td className="px-3 py-1.5 text-right">{toNonNegativeNumber(a?.inventoryQuantity, 0)}</td>
+                        <td className="px-2 py-1.5">
+                          <button
+                            type="button"
+                            onClick={() => removeSelectedAsset(a.id)}
+                            className="rounded p-1 text-red-400 hover:bg-red-50 hover:text-red-600"
+                            title="Прибрати"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <div>
             <label className="text-sm font-semibold">Дія</label>
@@ -1513,7 +1575,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
             </div>
           )}
 
-          {(requestType === "transfer" || requestType === "writeoff" || requestType === "assign") && (
+          {(requestType === "transfer" || requestType === "writeoff" || requestType === "assign") && selectedAssets.length <= 1 && (
             <div>
               <label className="text-sm font-semibold">
                 {requestType === "transfer"
@@ -1525,7 +1587,7 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
               <input
                 type="number"
                 min={1}
-                max={selectedAssetQuantity}
+                max={selectedAssetQuantity || undefined}
                 step={1}
                 className={inputClass}
                 value={transferQuantity}
@@ -1533,6 +1595,12 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
                 placeholder="Наприклад: 2"
               />
               <p className="mt-1 text-xs text-slate-500">Доступно в активі: {selectedAssetQuantity} шт.</p>
+            </div>
+          )}
+
+          {(requestType === "transfer" || requestType === "writeoff") && selectedAssets.length > 1 && (
+            <div>
+              <p className="text-xs text-amber-700 mt-1">При груповій дії буде переміщена/списана повна кількість кожного активу.</p>
             </div>
           )}
 
@@ -1580,11 +1648,17 @@ export default function AssetTransferWriteoffManager({ assets, restaurants, user
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={submitting}
+            disabled={submitting || selectedAssets.length === 0}
             onClick={submitRequest}
             className="inline-flex items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-60"
           >
-            {submitting ? "Збереження..." : requestType === "assign" ? "Передати у користування" : "Відправити на погодження"}
+            {submitting
+              ? "Збереження..."
+              : requestType === "assign"
+                ? "Передати у користування"
+                : selectedAssets.length > 1
+                  ? `Відправити на погодження (${selectedAssets.length})`
+                  : "Відправити на погодження"}
           </button>
         </div>
       </div>
