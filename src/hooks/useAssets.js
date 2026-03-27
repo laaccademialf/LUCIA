@@ -20,8 +20,16 @@ import {
  * Підтримує realtime оновлення
  */
 export const useAssets = (enableRealtime = true) => {
-  const [assets, setAssets] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [assets, setAssets] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem("lucia_assets_cache");
+      if (cached) return JSON.parse(cached);
+    } catch { /* ignore */ }
+    return [];
+  });
+  const [loading, setLoading] = useState(() => {
+    try { return !sessionStorage.getItem("lucia_assets_cache"); } catch { return true; }
+  });
   const [error, setError] = useState(null);
   const apiPollIntervalMs = Math.max(
     1000,
@@ -122,6 +130,14 @@ export const useAssets = (enableRealtime = true) => {
 
   const normalizeAssets = (items) => (Array.isArray(items) ? items.map(normalizeAsset) : []);
 
+  const setAssetsAndCache = (items) => {
+    const normalized = normalizeAssets(items);
+    setAssets(normalized);
+    try {
+      sessionStorage.setItem("lucia_assets_cache", JSON.stringify(normalized));
+    } catch { /* quota exceeded — ignore */ }
+  };
+
   useEffect(() => {
     let unsubscribe;
     let unsubscribeAssetsEvents;
@@ -144,7 +160,7 @@ export const useAssets = (enableRealtime = true) => {
         try {
           const data = await getAssetsApi();
           if (isStopped) return;
-          setAssets(normalizeAssets(data));
+          setAssetsAndCache(data);
           setError(null);
           setLoading(false);
         } catch (err) {
@@ -191,7 +207,7 @@ export const useAssets = (enableRealtime = true) => {
       // Realtime підписка
       try {
         unsubscribe = subscribeToAssets((data) => {
-          setAssets(normalizeAssets(data));
+          setAssetsAndCache(data);
           setLoading(false);
         });
       } catch (err) {
@@ -204,7 +220,7 @@ export const useAssets = (enableRealtime = true) => {
       const fetchData = async () => {
         try {
           const data = await getAssets();
-          setAssets(normalizeAssets(data));
+          setAssetsAndCache(data);
           setLoading(false);
         } catch (err) {
           console.error("Помилка завантаження активів:", err);
@@ -229,7 +245,7 @@ export const useAssets = (enableRealtime = true) => {
   const refreshAssetsFromApi = async () => {
     if (!isAssetsApiEnabled()) return;
     const data = await getAssetsApi();
-    setAssets(normalizeAssets(data));
+    setAssetsAndCache(data);
   };
 
   const add = async (asset) => {

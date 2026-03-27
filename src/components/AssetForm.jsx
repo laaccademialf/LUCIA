@@ -687,23 +687,26 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
 
     setProcessingPhotos(true);
 
-    const preparedPhotos = [];
     let failedCount = 0;
 
-    for (const file of files) {
-      try {
-        if (!String(file.type || "").startsWith("image/")) {
+    const results = await Promise.all(
+      files.map(async (file) => {
+        try {
+          if (!String(file.type || "").startsWith("image/")) {
+            failedCount += 1;
+            return null;
+          }
+          const compressedDataUrl = await compressImageToDataUrl(file);
+          return { url: compressedDataUrl, name: file.name };
+        } catch (error) {
+          console.error("Помилка обробки фото:", error);
           failedCount += 1;
-          continue;
+          return null;
         }
+      })
+    );
 
-        const compressedDataUrl = await compressImageToDataUrl(file);
-        preparedPhotos.push({ url: compressedDataUrl, name: file.name });
-      } catch (error) {
-        console.error("Помилка обробки фото:", error);
-        failedCount += 1;
-      }
-    }
+    const preparedPhotos = results.filter(Boolean);
 
     if (preparedPhotos.length > 0) {
       setPhotos((prev) => [...prev, ...preparedPhotos]);
@@ -826,32 +829,29 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
 
     let resolvedPhotoUrls = safePhotoUrls;
     if (useApiPhotoUpload) {
-      const uploadResults = [];
       let uploadFailed = 0;
 
-      for (let index = 0; index < safePhotoUrls.length; index += 1) {
-        const photoUrl = String(safePhotoUrls[index] || "");
-
+      const uploadPromises = safePhotoUrls.map((rawUrl, index) => {
+        const photoUrl = String(rawUrl || "");
         if (!photoUrl.startsWith("data:image/")) {
-          uploadResults.push(photoUrl);
-          continue;
+          return Promise.resolve(photoUrl);
         }
-
-        try {
-          const sourceName = photos[index]?.name || `asset-photo-${index + 1}.jpg`;
-          const uploaded = await uploadAssetPhotoApi({ fileName: sourceName, dataUrl: photoUrl });
-          if (uploaded.url) {
-            uploadResults.push(uploaded.url);
-          } else {
+        const sourceName = photos[index]?.name || `asset-photo-${index + 1}.jpg`;
+        return uploadAssetPhotoApi({ fileName: sourceName, dataUrl: photoUrl })
+          .then((uploaded) => {
+            if (uploaded.url) return uploaded.url;
             uploadFailed += 1;
-          }
-        } catch (error) {
-          console.error("Помилка аплоаду фото активу:", error);
-          uploadFailed += 1;
-        }
-      }
+            return null;
+          })
+          .catch((error) => {
+            console.error("Помилка аплоаду фото активу:", error);
+            uploadFailed += 1;
+            return null;
+          });
+      });
 
-      resolvedPhotoUrls = uploadResults;
+      const results = await Promise.all(uploadPromises);
+      resolvedPhotoUrls = results.filter(Boolean);
 
       if (uploadFailed > 0) {
         alert(`Не вдалося зберегти ${uploadFailed} фото на сервері. Збереження продовжено для решти.`);
