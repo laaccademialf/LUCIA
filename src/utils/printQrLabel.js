@@ -60,117 +60,52 @@ const DPM = 8; // dots per mm at 203 DPI
 const LW = LABEL_WIDTH_MM * DPM; // 160 dots
 const LH = LABEL_HEIGHT_MM * DPM; // 240 dots
 
-/* ---------- Render entire label on one high-res canvas ---------- */
+/* ---------- Build ZPL payload (Zebra printer) ---------- */
 
-const SCALE = 8; // 8× supersampling for sharp text; QR stays pixel-perfect
-
-/**
- * Fit text into width, return { text, font } ready for fillText.
- */
-const fitLine = (ctx, text, maxW, startSize, minSize) => {
-  let txt = String(text);
-  for (let sz = startSize; sz >= minSize; sz -= 1) {
-    ctx.font = `bold ${sz}px Arial, Helvetica, sans-serif`;
-    if (ctx.measureText(txt).width <= maxW) return { text: txt, font: ctx.font };
-  }
-  ctx.font = `bold ${minSize}px Arial, Helvetica, sans-serif`;
-  while (txt.length > 1 && ctx.measureText(txt + "\u2026").width > maxW) txt = txt.slice(0, -1);
-  return { text: txt + "\u2026", font: ctx.font };
-};
-
-const buildTsplPayload = async ({ invNumber, name, qrValue }) => {
-  const QRCode = await getQRCodeModule();
-
-  /* --- High-res canvas (SCALE×) --- */
-  const cw = LW * SCALE; // 1280
-  const ch = LH * SCALE; // 1920
-  const canvas = document.createElement("canvas");
-  canvas.width = cw;
-  canvas.height = ch;
-  const ctx = canvas.getContext("2d");
-
-  // White background
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, cw, ch);
-  ctx.fillStyle = "#000";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-
-  const margin = 6 * SCALE;
-
-  // --- Name (top) ---
-  const nameFit = fitLine(ctx, String(name || ""), cw - margin, 24 * SCALE, 10 * SCALE);
-  ctx.font = nameFit.font;
-  ctx.fillText(nameFit.text, cw / 2, 4 * SCALE);
-  const nameBottom = 4 * SCALE + 28 * SCALE; // reserve ~28 dots for name line
-
-  // --- QR code (center, rendered pixel-perfect then drawn at SCALE) ---
-  const qrDots = Math.min(LW - 8, LH - 28 - 28 - 8); // max QR size in printer dots
-  const qrPx = qrDots * SCALE; // pixel size on hi-res canvas
-  const qrDataUrl = await QRCode.toDataURL(qrValue, {
-    margin: 0,
-    width: qrPx,
-    errorCorrectionLevel: "M",
-  });
-  const qrImg = await new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = qrDataUrl;
-  });
-  const qrX = Math.round((cw - qrPx) / 2);
-  const qrY = nameBottom + 2 * SCALE;
-  // Crisp QR: disable smoothing
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(qrImg, qrX, qrY, qrPx, qrPx);
-  ctx.imageSmoothingEnabled = true;
-
-  // --- Inv number (bottom) ---
-  const invFit = fitLine(ctx, `\u2116${invNumber}`, cw - margin, 20 * SCALE, 10 * SCALE);
-  ctx.font = invFit.font;
-  const invTextY = qrY + qrPx + 3 * SCALE;
-  ctx.fillText(invFit.text, cw / 2, invTextY);
-
-  /* --- Downsample to printer resolution & convert to 1-bit --- */
-  const imgData = ctx.getImageData(0, 0, cw, ch);
-  const px = imgData.data;
-  const widthBytes = Math.ceil(LW / 8); // 20
-  const bitmap = new Uint8Array(widthBytes * LH);
-  const blockArea = SCALE * SCALE;
-
-  for (let dy = 0; dy < LH; dy++) {
-    for (let dx = 0; dx < LW; dx++) {
-      let sum = 0;
-      for (let sy = 0; sy < SCALE; sy++) {
-        for (let sx = 0; sx < SCALE; sx++) {
-          const si = ((dy * SCALE + sy) * cw + (dx * SCALE + sx)) * 4;
-          sum += px[si] * 0.299 + px[si + 1] * 0.587 + px[si + 2] * 0.114;
-        }
-      }
-      if (sum / blockArea < 140) {
-        bitmap[dy * widthBytes + (dx >> 3)] |= 128 >> (dx & 7);
-      }
-    }
-  }
-
-  /* --- Single BITMAP TSPL command --- */
+const buildZplPayload = ({ invNumber, name, qrValue }) => {
   const { offsetX } = getPrinterConfig();
-  const bmpX = Math.max(0, offsetX); // configurable horizontal shift
-  const enc = new TextEncoder();
-  const header = enc.encode(
-    `SIZE ${LABEL_WIDTH_MM} mm, ${LABEL_HEIGHT_MM} mm\r\n` +
-    `GAP 2 mm, 0 mm\r\n` +
-    `DIRECTION 1\r\n` +
-    `CLS\r\n` +
-    `BITMAP ${bmpX},0,${widthBytes},${LH},0,`
-  );
-  const footer = enc.encode(`\r\nPRINT 1,1\r\n`);
+  const ox = Math.max(0, offsetX); // horizontal offset in dots
 
-  const result = new Uint8Array(header.length + bitmap.length + footer.length);
-  result.set(header, 0);
-  result.set(bitmap, header.length);
-  result.set(footer, header.length + bitmap.length);
-  return result;
+  // Truncate name to fit ~20mm at font size
+  const maxNameChars = 18;
+  let nameText = String(name || "");
+  if (nameText.length > maxNameChars) nameText = nameText.slice(0, maxNameChars - 1) + "\u2026";
+
+  const invText = `#${invNumber}`;
+
+  // ZPL coordinates (203 DPI, label 160×240 dots)
+  // Name: centered at top, font A, 20 dots high
+  const nameH = 22;
+  const nameW = 18;
+  const nameY = 4;
+
+  // QR: centered, magnification 3 (each module = 3 dots, ~63 dots for v2)
+  const qrMag = 3;
+  const qrY = nameY + nameH + 8;
+  const qrX = ox + 16; // slight padding from left
+
+  // Inv number: below QR
+  const invH = 20;
+  const invW = 16;
+  const invY = qrY + 100; // QR ~90 dots + gap
+
+  // ZPL uses ^FO (field origin), ^A (font), ^FD (field data)
+  // ^BQ = QR barcode; N = normal; 2 = model 2; mag factor
+  // ^CI28 = UTF-8 encoding for international chars
+  const zpl =
+    `^XA\n` +
+    `^CI28\n` +
+    `^PW${LW}\n` +
+    `^LL${LH}\n` +
+    // Name (top, centered using ^FB field block)
+    `^FO${ox + 0},${nameY}^A0N,${nameH},${nameW}^FB${LW},1,0,C^FD${nameText}^FS\n` +
+    // QR code
+    `^FO${qrX},${qrY}^BQN,2,${qrMag}^FDMA,${qrValue}^FS\n` +
+    // Inv number (bottom, centered)
+    `^FO${ox + 0},${invY}^A0N,${invH},${invW}^FB${LW},1,0,C^FD${invText}^FS\n` +
+    `^XZ\n`;
+
+  return new TextEncoder().encode(zpl);
 };
 
 /* ---------- Uint8Array to base64 ---------- */
@@ -186,18 +121,21 @@ const uint8ToBase64 = (bytes) => {
 
 /* ---------- silent print via server ---------- */
 
-const trySilentPrint = async (tsplPayload) => {
+const trySilentPrint = async (payload) => {
   const apiBase = getApiBaseUrl();
   const { ip, port } = getPrinterConfig();
 
-  if (!apiBase || !ip) return false;
+  if (!apiBase) { console.warn("Silent print skipped: no API base URL"); return false; }
+  if (!ip) { console.warn("Silent print skipped: no printer IP configured"); return false; }
+
+  console.log(`Silent print: ${apiBase}/api/print-label → ${ip}:${port} (${payload.length} bytes)`);
 
   try {
     const res = await fetch(`${apiBase}/api/print-label`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        data: uint8ToBase64(tsplPayload),
+        data: uint8ToBase64(payload),
         printerIp: ip,
         printerPort: port,
       }),
@@ -300,13 +238,14 @@ export const printAssetQrLabel = async ({ invNumber, name, qrValue }) => {
     throw new Error("Для друку QR потрібні інвентарний номер і назва активу");
   }
 
-  // 1) try silent print: full-label bitmap -> server -> raw TCP to printer
+  // 1) try silent print: ZPL -> server -> raw TCP to printer
   try {
-    const tspl = await buildTsplPayload({ invNumber: nInv, name: nName, qrValue: nQr });
-    const ok = await trySilentPrint(tspl);
+    const zpl = buildZplPayload({ invNumber: nInv, name: nName, qrValue: nQr });
+    const ok = await trySilentPrint(zpl);
     if (ok) return;
+    console.warn("Silent print returned false — falling back to browser print");
   } catch (err) {
-    console.warn("Silent TSPL print path failed:", err);
+    console.warn("Silent ZPL print path failed:", err);
   }
 
   // 2) fallback: browser print dialog
