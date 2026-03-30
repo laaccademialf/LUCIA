@@ -85,7 +85,7 @@ const buildZplPayload = ({ invNumber, name, qrValue, printerConfig }) => {
   const qrMag = 3;
   const qrSize = 75; // approximate QR block size with quiet zone
   const qrX = ox + 4;
-  const qrY = 8; // near top, visually centered with text block
+  const qrY = 20; // slightly below top edge
 
   // Text area: right of QR
   const textX = ox + qrX + qrSize + 4;
@@ -98,10 +98,10 @@ const buildZplPayload = ({ invNumber, name, qrValue, printerConfig }) => {
   const nameLineGap = 4; // extra spacing between lines
   const nameY = 8;
 
-  // Inv number: below name
+  // Inv number: below name with extra gap for long names
   const invH = 20;
   const invW = 18;
-  const invY = nameY + (nameH + nameLineGap) * nameMaxLines + 6;
+  const invY = nameY + (nameH + nameLineGap) * nameMaxLines + 14;
 
   const zpl =
     `^XA\n` +
