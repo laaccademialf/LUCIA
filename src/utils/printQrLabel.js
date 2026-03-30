@@ -56,67 +56,119 @@ const getApiBaseUrl = () => {
 const LABEL_WIDTH_MM = 20;
 const LABEL_HEIGHT_MM = 30;
 
+/* ---------- CP1251 encoding for Cyrillic ---------- */
+
+const CP1251_MAP = (() => {
+  const m = new Map();
+  // Ukrainian/Russian Cyrillic block mapped to CP1251 bytes
+  const ranges = [
+    [0x0410, 0x042F, 0xC0], // А-Я → 0xC0-0xDF
+    [0x0430, 0x044F, 0xE0], // а-я → 0xE0-0xFF
+  ];
+  for (const [from, to, base] of ranges) {
+    for (let cp = from; cp <= to; cp++) m.set(cp, base + (cp - from));
+  }
+  // Individual mappings for Ukrainian letters
+  m.set(0x0401, 0xA8); // Ё
+  m.set(0x0451, 0xB8); // ё
+  m.set(0x0404, 0xAA); // Є
+  m.set(0x0454, 0xBA); // є
+  m.set(0x0406, 0xB2); // І
+  m.set(0x0456, 0xB3); // і
+  m.set(0x0407, 0xAF); // Ї
+  m.set(0x0457, 0xBF); // ї
+  m.set(0x0490, 0xA5); // Ґ
+  m.set(0x0491, 0xB4); // ґ
+  m.set(0x2116, 0xB9); // №
+  return m;
+})();
+
+/** Encode string to CP1251 byte array (ASCII passthrough, Cyrillic mapped, unknown → '?') */
+const toCP1251 = (str) => {
+  const bytes = [];
+  for (let i = 0; i < str.length; i++) {
+    const cp = str.charCodeAt(i);
+    if (cp < 0x80) {
+      bytes.push(cp);
+    } else {
+      bytes.push(CP1251_MAP.get(cp) || 0x3F); // '?' for unknown
+    }
+  }
+  return new Uint8Array(bytes);
+};
+
 /* ---------- TSPL native commands (rendered by printer at full DPI) ---------- */
 
-/**
- * Truncate text to fit within maxDots width using the chosen TSPL font.
- * TSPL built-in font character widths (approximate):
- *   "1"=8, "2"=12, "3"=16, "4"=24, "5"=32  dots per char
- */
 const FONT_WIDTHS = { 1: 8, 2: 12, 3: 16, 4: 24, 5: 32 };
 
 const truncateForTspl = (text, font, maxDots) => {
   const cw = FONT_WIDTHS[font] || 16;
   const maxChars = Math.floor(maxDots / cw);
   if (text.length <= maxChars) return text;
-  return text.slice(0, Math.max(maxChars - 1, 1)) + "…";
+  return text.slice(0, Math.max(maxChars - 1, 1));
 };
 
 const buildTsplPayload = ({ invNumber, name, qrValue }) => {
-  /* Assume 203 DPI (8 dots/mm). Label = 160×240 dots.
-     If printer is 300 DPI (≈12 dots/mm) the SIZE command in mm
-     still works and QRCODE/TEXT scale automatically. */
-  const dotsPerMm = 8; // 203 DPI
-  const lw = LABEL_WIDTH_MM * dotsPerMm;   // 160
+  /* 203 DPI = 8 dots/mm. Label 20×30mm = 160×240 dots. */
+  const dotsPerMm = 8;
+  const lw = LABEL_WIDTH_MM * dotsPerMm; // 160
 
-  // --- Name (top, font "2" = 12×20 per char) ---
+  // --- Name (top, font "2" = 12×20 per char, 1 CP1251 byte = 1 glyph) ---
   const nameFont = "2";
   const nameText = truncateForTspl(String(name || ""), nameFont, lw - 8);
+  const nameBytes = toCP1251(nameText);
   const nameCharW = FONT_WIDTHS[nameFont];
-  const namePixelW = nameText.length * nameCharW;
+  const namePixelW = nameBytes.length * nameCharW; // count BYTES not JS chars
   const nameX = Math.max(0, Math.round((lw - namePixelW) / 2));
   const nameY = 4;
 
-  // --- QR code (center, native QRCODE command) ---
-  const qrCellSize = 4; // dots per module, good balance size/scannability
-  const qrY = nameY + 24; // below name line
-  // Estimate QR width for centering (version auto, ~25 modules for short data)
-  const qrModules = qrValue.length <= 17 ? 21 : qrValue.length <= 32 ? 25 : 29;
-  const qrPixelW = qrModules * qrCellSize;
-  const qrX = Math.max(0, Math.round((lw - qrPixelW) / 2));
+  // --- QR code (centered, cell size 3 for 20mm label) ---
+  const qrCellSize = 3;
+  const qrY = nameY + 24;
+  // QR version auto-selected: v1=21, v2=25, v3=29 modules
+  // Use worst case (29) for centering — small offset is better than left-bias
+  const qrEstW = 29 * qrCellSize; // 87 dots max estimate
+  const qrX = Math.max(0, Math.round((lw - qrEstW) / 2));
 
-  // --- Inv number (bottom, font "3" = 16×24 per char, bolder) ---
-  const invFont = "3";
-  const invText = truncateForTspl(`#${invNumber}`, invFont, lw - 8);
+  // --- Inv number (bottom, font "2") ---
+  const invFont = "2";
+  const invPrefix = "#";
+  const invText = truncateForTspl(invPrefix + invNumber, invFont, lw - 8);
+  const invBytes = toCP1251(invText);
   const invCharW = FONT_WIDTHS[invFont];
-  const invPixelW = invText.length * invCharW;
+  const invPixelW = invBytes.length * invCharW;
   const invX = Math.max(0, Math.round((lw - invPixelW) / 2));
-  const invY = qrY + qrPixelW + 8;
+  const invY = qrY + qrEstW + 8;
 
-  // Escape backslashes and quotes in data for TSPL
-  const esc = (s) => s.replace(/\\/g, "\\[\\]").replace(/"/g, "\\[\"]");
-
-  const tspl =
+  // Build TSPL as raw bytes: header (ASCII) + text fields (CP1251)
+  const enc = new TextEncoder();
+  const header = enc.encode(
     `SIZE ${LABEL_WIDTH_MM} mm, ${LABEL_HEIGHT_MM} mm\r\n` +
     `GAP 2 mm, 0 mm\r\n` +
     `DIRECTION 1\r\n` +
-    `CLS\r\n` +
-    `TEXT ${nameX},${nameY},"${nameFont}",0,1,1,"${esc(nameText)}"\r\n` +
-    `QRCODE ${qrX},${qrY},M,${qrCellSize},A,0,"${esc(qrValue)}"\r\n` +
-    `TEXT ${invX},${invY},"${invFont}",0,1,1,"${esc(invText)}"\r\n` +
-    `PRINT 1,1\r\n`;
+    `CODEPAGE 1251\r\n` +
+    `CLS\r\n`
+  );
 
-  return new TextEncoder().encode(tspl);
+  const nameCmd = enc.encode(`TEXT ${nameX},${nameY},"${nameFont}",0,1,1,"`);
+  const nameTail = enc.encode(`"\r\n`);
+
+  const qrLine = enc.encode(
+    `QRCODE ${qrX},${qrY},M,${qrCellSize},A,0,"${qrValue}"\r\n`
+  );
+
+  const invCmd = enc.encode(`TEXT ${invX},${invY},"${invFont}",0,1,1,"`);
+  const invTail = enc.encode(`"\r\n`);
+
+  const footer = enc.encode(`PRINT 1,1\r\n`);
+
+  // Concatenate: header + TEXT"<cp1251>" + QR + TEXT"<cp1251>" + PRINT
+  const parts = [header, nameCmd, nameBytes, nameTail, qrLine, invCmd, invBytes, invTail, footer];
+  const total = parts.reduce((s, p) => s + p.length, 0);
+  const result = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) { result.set(p, off); off += p.length; }
+  return result;
 };
 
 /* ---------- Uint8Array to base64 ---------- */
