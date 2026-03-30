@@ -114,6 +114,12 @@ export default function DatabaseConnectionsManager() {
   const [platformAdminEmail, setPlatformAdminEmail] = useState("");
   const [runtimePlatformAdmins, setRuntimePlatformAdmins] = useState(() => getRuntimePlatformAdminEmails());
 
+  // Printer settings
+  const [printerIp, setPrinterIp] = useState(() => localStorage.getItem("lucia_printer_ip") || "");
+  const [printerPort, setPrinterPort] = useState(() => localStorage.getItem("lucia_printer_port") || "9100");
+  const [printerOffsetX, setPrinterOffsetX] = useState(() => localStorage.getItem("lucia_printer_offset_x") || "0");
+  const [printerSaved, setPrinterSaved] = useState(false);
+
   const [sourceId, setSourceId] = useState("");
   const [targetId, setTargetId] = useState("");
   const [selectedCollections, setSelectedCollections] = useState(DEFAULT_COLLECTIONS);
@@ -767,6 +773,31 @@ export default function DatabaseConnectionsManager() {
             disabled={busy}
           >
             Очистити runtime-конфіг БД і перезавантажити
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow">
+        <h3 className="text-base font-semibold text-slate-900">🖨️ Принтер етикеток (TSPL)</h3>
+        <p className="mt-1 text-sm text-slate-600">Мережевий термотрансферний принтер для друку QR-етикеток. Етикетка 20×30 мм.</p>
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <Field label="IP-адреса принтера" value={printerIp} onChange={(e) => { setPrinterIp(e.target.value); setPrinterSaved(false); }} placeholder="192.168.1.100" />
+          <Field label="Порт" value={printerPort} onChange={(e) => { setPrinterPort(e.target.value); setPrinterSaved(false); }} placeholder="9100" />
+          <Field label="Зсув X (dots, 8 dots = 1мм)" value={printerOffsetX} onChange={(e) => { setPrinterOffsetX(e.target.value); setPrinterSaved(false); }} placeholder="0" />
+        </div>
+        {printerSaved && <p className="mt-2 text-sm text-emerald-600 font-semibold">Налаштування принтера збережено ✓</p>}
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => {
+              localStorage.setItem("lucia_printer_ip", printerIp.trim());
+              localStorage.setItem("lucia_printer_port", String(printerPort || "9100").trim());
+              localStorage.setItem("lucia_printer_offset_x", String(printerOffsetX || "0").trim());
+              setPrinterSaved(true);
+            }}
+            className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+          >
+            Зберегти принтер
           </button>
         </div>
       </div>
