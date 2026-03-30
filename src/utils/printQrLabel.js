@@ -67,48 +67,52 @@ const LW = LABEL_WIDTH_MM * DPM; // 160 dots
 const LH = LABEL_HEIGHT_MM * DPM; // 240 dots
 
 /* ---------- Build ZPL payload (Zebra printer) ---------- */
+/* Label 30×20 mm landscape (240×160 dots at 203 DPI)      */
 
 const buildZplPayload = ({ invNumber, name, qrValue, printerConfig }) => {
   const { offsetX } = printerConfig || getPrinterConfig();
-  const ox = Math.max(0, offsetX); // horizontal offset in dots
+  const ox = Math.max(0, offsetX);
 
-  // Truncate name to fit ~20mm at font size
-  const maxNameChars = 18;
-  let nameText = String(name || "");
-  if (nameText.length > maxNameChars) nameText = nameText.slice(0, maxNameChars - 1) + "\u2026";
+  // Landscape: width = 30mm (240 dots), height = 20mm (160 dots)
+  const PW = LH; // 240 dots (30mm)
+  const LL = LW; // 160 dots (20mm)
 
   const invText = `#${invNumber}`;
+  const nameText = String(name || "");
 
-  // ZPL coordinates (203 DPI, label 160×240 dots)
-  // Name: centered at top, font A, 20 dots high
-  const nameH = 22;
-  const nameW = 18;
+  // Layout: QR on the left, text on the right
+  // QR: magnification 3, ~69 dots (21 modules + 2 quiet zone × 3)
+  const qrMag = 3;
+  const qrSize = 75; // approximate QR block size with quiet zone
+  const qrX = ox + 4;
+  const qrY = Math.round((LL - qrSize) / 2); // vertically centered
+
+  // Text area: right of QR
+  const textX = ox + qrX + qrSize + 4;
+  const textW = PW - textX - 2; // remaining width for text
+
+  // Name: multi-line, smaller font to fit
+  const nameH = 18;
+  const nameW = 16;
+  const nameMaxLines = 3;
   const nameY = 4;
 
-  // QR: centered, magnification 3 (each module = 3 dots, ~63 dots for v2)
-  const qrMag = 3;
-  const qrY = nameY + nameH + 8;
-  const qrX = ox + 16; // slight padding from left
-
-  // Inv number: below QR
+  // Inv number: below name
   const invH = 20;
-  const invW = 16;
-  const invY = qrY + 100; // QR ~90 dots + gap
+  const invW = 18;
+  const invY = nameY + nameH * nameMaxLines + 10;
 
-  // ZPL uses ^FO (field origin), ^A (font), ^FD (field data)
-  // ^BQ = QR barcode; N = normal; 2 = model 2; mag factor
-  // ^CI28 = UTF-8 encoding for international chars
   const zpl =
     `^XA\n` +
     `^CI28\n` +
-    `^PW${LW}\n` +
-    `^LL${LH}\n` +
-    // Name (top, centered using ^FB field block)
-    `^FO${ox + 0},${nameY}^A0N,${nameH},${nameW}^FB${LW},1,0,C^FD${nameText}^FS\n` +
-    // QR code
+    `^PW${PW}\n` +
+    `^LL${LL}\n` +
+    // QR code (left, vertically centered)
     `^FO${qrX},${qrY}^BQN,2,${qrMag}^FDMA,${qrValue}^FS\n` +
-    // Inv number (bottom, centered)
-    `^FO${ox + 0},${invY}^A0N,${invH},${invW}^FB${LW},1,0,C^FD${invText}^FS\n` +
+    // Name (right of QR, up to 3 lines, left-aligned)
+    `^FO${textX},${nameY}^A0N,${nameH},${nameW}^FB${textW},${nameMaxLines},0,L^FD${nameText}^FS\n` +
+    // Inv number (right of QR, below name, left-aligned)
+    `^FO${textX},${invY}^A0N,${invH},${invW}^FB${textW},1,0,L^FD${invText}^FS\n` +
     `^XZ\n`;
 
   return new TextEncoder().encode(zpl);
