@@ -59,21 +59,30 @@ const DPM = 8; // dots per mm at 203 DPI
 const LW = LABEL_WIDTH_MM * DPM; // 160 dots
 const LH = LABEL_HEIGHT_MM * DPM; // 240 dots
 
-/* ---------- Render text line to 1-bit bitmap via canvas ---------- */
+/* ---------- Render entire label on one high-res canvas ---------- */
+
+const SCALE = 8; // 8× supersampling for sharp text; QR stays pixel-perfect
 
 /**
- * Renders text at SCALE× resolution then downsamples to printer dots.
- * High scale + area-average gives clean edges after 1-bit conversion.
- * Returns { bytes: Uint8Array, widthBytes, width, height, x, y }
+ * Fit text into width, return { text, font } ready for fillText.
  */
-const SCALE = 8; // 8× supersampling for sharp text
+const fitLine = (ctx, text, maxW, startSize, minSize) => {
+  let txt = String(text);
+  for (let sz = startSize; sz >= minSize; sz -= 1) {
+    ctx.font = `bold ${sz}px Arial, Helvetica, sans-serif`;
+    if (ctx.measureText(txt).width <= maxW) return { text: txt, font: ctx.font };
+  }
+  ctx.font = `bold ${minSize}px Arial, Helvetica, sans-serif`;
+  while (txt.length > 1 && ctx.measureText(txt + "\u2026").width > maxW) txt = txt.slice(0, -1);
+  return { text: txt + "\u2026", font: ctx.font };
+};
 
-const renderTextBitmap = (text, fontSize, maxWidthDots, yPos) => {
-  const h = Math.ceil(fontSize * 1.25); // target height in printer dots
-  const cw = maxWidthDots * SCALE;      // canvas width (high-res)
-  const ch = h * SCALE;                 // canvas height (high-res)
-  const fz = fontSize * SCALE;          // font size (high-res)
+const buildTsplPayload = async ({ invNumber, name, qrValue }) => {
+  const QRCode = await getQRCodeModule();
 
+  /* --- High-res canvas (SCALE×) --- */
+  const cw = LW * SCALE; // 1280
+  const ch = LH * SCALE; // 1920
   const canvas = document.createElement("canvas");
   canvas.width = cw;
   canvas.height = ch;
@@ -82,40 +91,54 @@ const renderTextBitmap = (text, fontSize, maxWidthDots, yPos) => {
   // White background
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, cw, ch);
-
-  // Fit text: shrink font until it fits
-  let sz = fz;
-  let txt = String(text);
-  ctx.textBaseline = "top";
-  ctx.textAlign = "center";
-
-  const margin = 4 * SCALE;
-  while (sz > 6 * SCALE) {
-    ctx.font = `bold ${sz}px Arial, Helvetica, sans-serif`;
-    if (ctx.measureText(txt).width <= cw - margin) break;
-    sz -= SCALE;
-  }
-  // If still doesn't fit, truncate
-  ctx.font = `bold ${sz}px Arial, Helvetica, sans-serif`;
-  if (ctx.measureText(txt).width > cw - margin) {
-    while (txt.length > 1 && ctx.measureText(txt + "\u2026").width > cw - margin) {
-      txt = txt.slice(0, -1);
-    }
-    txt = txt + "\u2026";
-  }
-
   ctx.fillStyle = "#000";
-  ctx.fillText(txt, cw / 2, SCALE);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
 
-  // Downsample SCALE×SCALE blocks → 1 printer dot using area average
+  const margin = 6 * SCALE;
+
+  // --- Name (top) ---
+  const nameFit = fitLine(ctx, String(name || ""), cw - margin, 24 * SCALE, 10 * SCALE);
+  ctx.font = nameFit.font;
+  ctx.fillText(nameFit.text, cw / 2, 4 * SCALE);
+  const nameBottom = 4 * SCALE + 28 * SCALE; // reserve ~28 dots for name line
+
+  // --- QR code (center, rendered pixel-perfect then drawn at SCALE) ---
+  const qrDots = Math.min(LW - 8, LH - 28 - 28 - 8); // max QR size in printer dots
+  const qrPx = qrDots * SCALE; // pixel size on hi-res canvas
+  const qrDataUrl = await QRCode.toDataURL(qrValue, {
+    margin: 0,
+    width: qrPx,
+    errorCorrectionLevel: "M",
+  });
+  const qrImg = await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = qrDataUrl;
+  });
+  const qrX = Math.round((cw - qrPx) / 2);
+  const qrY = nameBottom + 2 * SCALE;
+  // Crisp QR: disable smoothing
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(qrImg, qrX, qrY, qrPx, qrPx);
+  ctx.imageSmoothingEnabled = true;
+
+  // --- Inv number (bottom) ---
+  const invFit = fitLine(ctx, `\u2116${invNumber}`, cw - margin, 20 * SCALE, 10 * SCALE);
+  ctx.font = invFit.font;
+  const invTextY = qrY + qrPx + 3 * SCALE;
+  ctx.fillText(invFit.text, cw / 2, invTextY);
+
+  /* --- Downsample to printer resolution & convert to 1-bit --- */
   const imgData = ctx.getImageData(0, 0, cw, ch);
   const px = imgData.data;
-  const widthBytes = Math.ceil(maxWidthDots / 8);
-  const bitmap = new Uint8Array(widthBytes * h);
+  const widthBytes = Math.ceil(LW / 8); // 20
+  const bitmap = new Uint8Array(widthBytes * LH);
   const blockArea = SCALE * SCALE;
 
-  for (let dy = 0; dy < h; dy++) {
-    for (let dx = 0; dx < maxWidthDots; dx++) {
+  for (let dy = 0; dy < LH; dy++) {
+    for (let dx = 0; dx < LW; dx++) {
       let sum = 0;
       for (let sy = 0; sy < SCALE; sy++) {
         for (let sx = 0; sx < SCALE; sx++) {
@@ -123,56 +146,27 @@ const renderTextBitmap = (text, fontSize, maxWidthDots, yPos) => {
           sum += px[si] * 0.299 + px[si + 1] * 0.587 + px[si + 2] * 0.114;
         }
       }
-      const avg = sum / blockArea;
-      if (avg < 140) { // aggressive threshold — bolder, cleaner text
+      if (sum / blockArea < 140) {
         bitmap[dy * widthBytes + (dx >> 3)] |= 128 >> (dx & 7);
       }
     }
   }
 
-  return { bytes: bitmap, widthBytes, width: maxWidthDots, height: h, x: 0, y: yPos };
-};
-
-/* ---------- Build TSPL: text as BITMAP, QR as native QRCODE ---------- */
-
-const buildTsplPayload = ({ invNumber, name, qrValue }) => {
-  const pad = 4; // dots padding from edges
-
-  // --- Name bitmap (top, larger font) ---
-  const nameBmp = renderTextBitmap(String(name || ""), 24, LW, pad);
-
-  // --- QR code (native, centered) ---
-  const qrCellSize = 3;
-  const qrY = nameBmp.y + nameBmp.height + 2;
-  const qrModulesEst = 29;
-  const qrEstW = qrModulesEst * qrCellSize;
-  const qrX = Math.max(0, Math.round((LW - qrEstW) / 2));
-
-  // --- Inv number bitmap (bottom, larger font) ---
-  const invY = qrY + qrEstW + 4;
-  const invBmp = renderTextBitmap(`\u2116${invNumber}`, 20, LW, invY);
-
-  // Build TSPL command sequence
+  /* --- Single BITMAP TSPL command --- */
   const enc = new TextEncoder();
-  const cmds = enc.encode(
+  const header = enc.encode(
     `SIZE ${LABEL_WIDTH_MM} mm, ${LABEL_HEIGHT_MM} mm\r\n` +
     `GAP 2 mm, 0 mm\r\n` +
     `DIRECTION 1\r\n` +
     `CLS\r\n` +
-    `BITMAP 0,${nameBmp.y},${nameBmp.widthBytes},${nameBmp.height},0,`
+    `BITMAP 0,0,${widthBytes},${LH},0,`
   );
-
-  const afterName = enc.encode(
-    `\r\nQRCODE ${qrX},${qrY},M,${qrCellSize},A,0,"${qrValue}"\r\n` +
-    `BITMAP 0,${invBmp.y},${invBmp.widthBytes},${invBmp.height},0,`
-  );
-
   const footer = enc.encode(`\r\nPRINT 1,1\r\n`);
 
-  // Concatenate: header+BITMAP_cmd | name_bytes | afterName+BITMAP_cmd | inv_bytes | footer
-  const parts = [cmds, nameBmp.bytes, afterName, invBmp.bytes, footer];
-  const total = parts.reduce((s, p) => s + p.length, 0);
-  const result = new Uint8Array(total);
+  const result = new Uint8Array(header.length + bitmap.length + footer.length);
+  result.set(header, 0);
+  result.set(bitmap, header.length);
+  result.set(footer, header.length + bitmap.length);
   let off = 0;
   for (const p of parts) { result.set(p, off); off += p.length; }
   return result;
@@ -305,9 +299,9 @@ export const printAssetQrLabel = async ({ invNumber, name, qrValue }) => {
     throw new Error("Для друку QR потрібні інвентарний номер і назва активу");
   }
 
-  // 1) try silent print: native TSPL commands -> server -> raw TCP to printer
+  // 1) try silent print: full-label bitmap -> server -> raw TCP to printer
   try {
-    const tspl = buildTsplPayload({ invNumber: nInv, name: nName, qrValue: nQr });
+    const tspl = await buildTsplPayload({ invNumber: nInv, name: nName, qrValue: nQr });
     const ok = await trySilentPrint(tspl);
     if (ok) return;
   } catch (err) {
