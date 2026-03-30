@@ -285,22 +285,20 @@ export const printAssetQrLabel = async ({ invNumber, name, qrValue }) => {
 
   const zpl = buildZplPayload({ invNumber: nInv, name: nName, qrValue: nQr });
 
-  // 1) Print proxy: browser → LAN proxy → raw TCP to printer
-  try {
-    const ok = await tryLocalProxyPrint(zpl);
-    if (ok) return;
-    console.warn("Print proxy failed — trying server route");
-  } catch (err) {
-    console.warn("Print proxy error:", err);
-  }
-
-  // 2) Server route: browser → server API → raw TCP to printer
+  // 1) Server route: browser → server API → raw TCP to printer
   try {
     const ok = await trySilentPrint(zpl);
     if (ok) return;
-    console.warn("Server print returned false — falling back to browser print");
   } catch (err) {
-    console.warn("Server ZPL print path failed:", err);
+    console.warn("Server print failed:", err);
+  }
+
+  // 2) Print proxy: browser → LAN proxy → raw TCP to printer
+  try {
+    const ok = await tryLocalProxyPrint(zpl);
+    if (ok) return;
+  } catch (err) {
+    console.warn("Print proxy failed:", err);
   }
 
   // 3) Fallback: browser print dialog
