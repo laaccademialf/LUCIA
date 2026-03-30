@@ -43,6 +43,8 @@ export const useRestaurants = (enableRealtime = true) => {
       street: String(item.street || "").trim(),
       postalCode: String(item.postalCode || item.postal_code || "").trim(),
       notes: String(item.notes || item.note || "").trim(),
+      printerIp: String(item.printerIp || item.printer_ip || "").trim(),
+      printerPort: String(item.printerPort || item.printer_port || "").trim(),
       createdAt: item.createdAt || item.created_at || "",
       updatedAt: item.updatedAt || item.updated_at || "",
     };

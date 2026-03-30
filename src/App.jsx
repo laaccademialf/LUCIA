@@ -875,6 +875,9 @@ function App() {
           if (userRestaurant.printerPort) {
             localStorage.setItem("lucia_printer_port", String(userRestaurant.printerPort).trim());
           }
+        } else {
+          localStorage.removeItem("lucia_printer_ip");
+          localStorage.removeItem("lucia_printer_port");
         }
       }
     }
@@ -893,6 +896,9 @@ function App() {
       if (rest.printerPort) {
         localStorage.setItem("lucia_printer_port", String(rest.printerPort).trim());
       }
+    } else {
+      localStorage.removeItem("lucia_printer_ip");
+      localStorage.removeItem("lucia_printer_port");
     }
   }, [filters?.locationName, firebaseRestaurants, user?.role]);
 
