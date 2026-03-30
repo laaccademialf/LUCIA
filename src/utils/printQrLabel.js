@@ -63,16 +63,16 @@ const LH = LABEL_HEIGHT_MM * DPM; // 240 dots
 
 /**
  * Renders text at SCALE× resolution then downsamples to printer dots.
- * This produces much sharper 1-bit output than rendering at native 160px.
+ * High scale + area-average gives clean edges after 1-bit conversion.
  * Returns { bytes: Uint8Array, widthBytes, width, height, x, y }
  */
-const SCALE = 4; // render at 4× then downsample
+const SCALE = 8; // 8× supersampling for sharp text
 
 const renderTextBitmap = (text, fontSize, maxWidthDots, yPos) => {
-  const h = Math.ceil(fontSize * 1.3); // target height in printer dots
-  const cw = maxWidthDots * SCALE;     // canvas width (high-res)
-  const ch = h * SCALE;                // canvas height (high-res)
-  const fz = fontSize * SCALE;         // font size (high-res)
+  const h = Math.ceil(fontSize * 1.25); // target height in printer dots
+  const cw = maxWidthDots * SCALE;      // canvas width (high-res)
+  const ch = h * SCALE;                 // canvas height (high-res)
+  const fz = fontSize * SCALE;          // font size (high-res)
 
   const canvas = document.createElement("canvas");
   canvas.width = cw;
@@ -116,7 +116,6 @@ const renderTextBitmap = (text, fontSize, maxWidthDots, yPos) => {
 
   for (let dy = 0; dy < h; dy++) {
     for (let dx = 0; dx < maxWidthDots; dx++) {
-      // Average the SCALE×SCALE block of source pixels
       let sum = 0;
       for (let sy = 0; sy < SCALE; sy++) {
         for (let sx = 0; sx < SCALE; sx++) {
@@ -125,7 +124,7 @@ const renderTextBitmap = (text, fontSize, maxWidthDots, yPos) => {
         }
       }
       const avg = sum / blockArea;
-      if (avg < 160) { // slightly biased threshold for bolder text
+      if (avg < 140) { // aggressive threshold — bolder, cleaner text
         bitmap[dy * widthBytes + (dx >> 3)] |= 128 >> (dx & 7);
       }
     }
@@ -139,19 +138,19 @@ const renderTextBitmap = (text, fontSize, maxWidthDots, yPos) => {
 const buildTsplPayload = ({ invNumber, name, qrValue }) => {
   const pad = 4; // dots padding from edges
 
-  // --- Name bitmap (top) ---
-  const nameBmp = renderTextBitmap(String(name || ""), 18, LW, pad);
+  // --- Name bitmap (top, larger font) ---
+  const nameBmp = renderTextBitmap(String(name || ""), 24, LW, pad);
 
   // --- QR code (native, centered) ---
   const qrCellSize = 3;
   const qrY = nameBmp.y + nameBmp.height + 2;
-  const qrModulesEst = 29; // worst-case for centering
+  const qrModulesEst = 29;
   const qrEstW = qrModulesEst * qrCellSize;
   const qrX = Math.max(0, Math.round((LW - qrEstW) / 2));
 
-  // --- Inv number bitmap (bottom) ---
+  // --- Inv number bitmap (bottom, larger font) ---
   const invY = qrY + qrEstW + 4;
-  const invBmp = renderTextBitmap(`\u2116${invNumber}`, 16, LW, invY);
+  const invBmp = renderTextBitmap(`\u2116${invNumber}`, 20, LW, invY);
 
   // Build TSPL command sequence
   const enc = new TextEncoder();
