@@ -157,7 +157,9 @@ const buildTsplPayload = async ({ invNumber, name, qrValue }) => {
   const header = enc.encode(
     `SIZE ${LABEL_WIDTH_MM} mm, ${LABEL_HEIGHT_MM} mm\r\n` +
     `GAP 2 mm, 0 mm\r\n` +
-    `DIRECTION 1\r\n` +
+    `DIRECTION 0\r\n` +
+    `REFERENCE 0,0\r\n` +
+    `OFFSET 0 mm\r\n` +
     `CLS\r\n` +
     `BITMAP 0,0,${widthBytes},${LH},0,`
   );
