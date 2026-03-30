@@ -869,7 +869,7 @@ function App() {
         if (userRestaurant.schedule) {
           setSchedule(userRestaurant.schedule);
         }
-        // Автосинхронізація принтера закладу → localStorage
+        // Автосинхронізація принтера закладу → localStorage (для не-адмінів)
         if (userRestaurant.printerIp) {
           localStorage.setItem("lucia_printer_ip", String(userRestaurant.printerIp).trim());
           if (userRestaurant.printerPort) {
@@ -879,6 +879,22 @@ function App() {
       }
     }
   }, [restaurantsLoading, user, firebaseRestaurants, roleRestaurantIds, roleRestaurantsConfigured]);
+
+  // Синхронізація принтера по фільтру локації (для інвентаризації)
+  useEffect(() => {
+    if (user?.role === 'admin') return; // адмін бере IP з налаштувань БД
+    const locName = filters?.locationName;
+    if (!locName || !firebaseRestaurants.length) return;
+    const rest = firebaseRestaurants.find((r) =>
+      String(r?.name || "").trim().toLowerCase() === String(locName).trim().toLowerCase()
+    );
+    if (rest?.printerIp) {
+      localStorage.setItem("lucia_printer_ip", String(rest.printerIp).trim());
+      if (rest.printerPort) {
+        localStorage.setItem("lucia_printer_port", String(rest.printerPort).trim());
+      }
+    }
+  }, [filters?.locationName, firebaseRestaurants, user?.role]);
 
   // Допоміжна функція для отримання вкладок для конкретного підрозділу з menuStructure
   const getTabsForSection = (navId) => {
