@@ -85,33 +85,34 @@ const buildZplPayload = ({ invNumber, name, qrValue, printerConfig }) => {
   const qrMag = 3;
   const qrSize = 75; // approximate QR block size with quiet zone
   const qrX = ox + 4;
-  const qrY = Math.round((LL - qrSize) / 2); // vertically centered
+  const qrY = 8; // near top, visually centered with text block
 
   // Text area: right of QR
   const textX = ox + qrX + qrSize + 4;
   const textW = PW - textX - 2; // remaining width for text
 
-  // Name: multi-line, smaller font to fit
+  // Name: multi-line, font with line gap to prevent overlap
   const nameH = 18;
   const nameW = 16;
   const nameMaxLines = 3;
-  const nameY = 4;
+  const nameLineGap = 4; // extra spacing between lines
+  const nameY = 8;
 
   // Inv number: below name
   const invH = 20;
   const invW = 18;
-  const invY = nameY + nameH * nameMaxLines + 10;
+  const invY = nameY + (nameH + nameLineGap) * nameMaxLines + 6;
 
   const zpl =
     `^XA\n` +
     `^CI28\n` +
     `^PW${PW}\n` +
     `^LL${LL}\n` +
-    // QR code (left, vertically centered)
+    // QR code (left, near top)
     `^FO${qrX},${qrY}^BQN,2,${qrMag}^FDMA,${qrValue}^FS\n` +
-    // Name (right of QR, up to 3 lines, left-aligned)
-    `^FO${textX},${nameY}^A0N,${nameH},${nameW}^FB${textW},${nameMaxLines},0,L^FD${nameText}^FS\n` +
-    // Inv number (right of QR, below name, left-aligned)
+    // Name (right of QR, up to 3 lines with gap)
+    `^FO${textX},${nameY}^A0N,${nameH},${nameW}^FB${textW},${nameMaxLines},${nameLineGap},L^FD${nameText}^FS\n` +
+    // Inv number (right of QR, below name)
     `^FO${textX},${invY}^A0N,${invH},${invW}^FB${textW},1,0,L^FD${invText}^FS\n` +
     `^XZ\n`;
 
