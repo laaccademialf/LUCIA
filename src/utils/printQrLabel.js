@@ -1,5 +1,10 @@
 /* ------------------------------------------------------------------ *
- *  printQrLabel – thermal-transfer network printer (TSPL, 20×30 mm)  *
+ *  printQrLabel – thermal-transfer network printer (ZPL, 20×30 mm)   *
+ *                                                                     *
+ *  Priority chain:                                                    *
+ *    1. Print proxy  (any device → LAN proxy PC → printer)            *
+ *    2. Server route (browser → server API → printer)                 *
+ *    3. Browser print dialog (fallback HTML page)                     *
  * ------------------------------------------------------------------ */
 
 let qrCodeModulePromise;
@@ -27,9 +32,10 @@ const getPrinterConfig = () => {
       ip: String(localStorage.getItem("lucia_printer_ip") || "").trim(),
       port: parseInt(localStorage.getItem("lucia_printer_port") || "9100", 10) || 9100,
       offsetX: parseInt(localStorage.getItem("lucia_printer_offset_x") || "0", 10) || 0,
+      proxyUrl: String(localStorage.getItem("lucia_print_proxy_url") || "http://localhost:6101").trim(),
     };
   } catch {
-    return { ip: "", port: 9100, offsetX: 0 };
+    return { ip: "", port: 9100, offsetX: 0, proxyUrl: "http://localhost:6101" };
   }
 };
 
@@ -117,6 +123,45 @@ const uint8ToBase64 = (bytes) => {
     chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
   }
   return btoa(chunks.join(""));
+};
+
+/* ---------- silent print via local proxy (same LAN as printer) ---------- */
+
+const tryLocalProxyPrint = async (payload) => {
+  const { ip, port, proxyUrl } = getPrinterConfig();
+
+  if (!ip) { console.warn("Local proxy print skipped: no printer IP"); return false; }
+  if (!proxyUrl) { console.warn("Local proxy print skipped: no proxy URL"); return false; }
+
+  console.log(`Local proxy: ${proxyUrl}/print → ${ip}:${port} (${payload.length} bytes)`);
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+
+    const res = await fetch(`${proxyUrl}/print`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data: uint8ToBase64(payload),
+        printerIp: ip,
+        printerPort: port,
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn("Local proxy HTTP error:", res.status, body);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn("Local proxy not available:", err.message || err);
+    return false;
+  }
 };
 
 /* ---------- silent print via server ---------- */
@@ -238,16 +283,26 @@ export const printAssetQrLabel = async ({ invNumber, name, qrValue }) => {
     throw new Error("Для друку QR потрібні інвентарний номер і назва активу");
   }
 
-  // 1) try silent print: ZPL -> server -> raw TCP to printer
+  const zpl = buildZplPayload({ invNumber: nInv, name: nName, qrValue: nQr });
+
+  // 1) Print proxy: browser → LAN proxy → raw TCP to printer
   try {
-    const zpl = buildZplPayload({ invNumber: nInv, name: nName, qrValue: nQr });
-    const ok = await trySilentPrint(zpl);
+    const ok = await tryLocalProxyPrint(zpl);
     if (ok) return;
-    console.warn("Silent print returned false — falling back to browser print");
+    console.warn("Print proxy failed — trying server route");
   } catch (err) {
-    console.warn("Silent ZPL print path failed:", err);
+    console.warn("Print proxy error:", err);
   }
 
-  // 2) fallback: browser print dialog
+  // 2) Server route: browser → server API → raw TCP to printer
+  try {
+    const ok = await trySilentPrint(zpl);
+    if (ok) return;
+    console.warn("Server print returned false — falling back to browser print");
+  } catch (err) {
+    console.warn("Server ZPL print path failed:", err);
+  }
+
+  // 3) Fallback: browser print dialog
   await browserPrintLabel({ invNumber: nInv, name: nName, qrValue: nQr });
 };

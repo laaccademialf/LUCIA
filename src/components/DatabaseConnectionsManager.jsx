@@ -118,7 +118,9 @@ export default function DatabaseConnectionsManager() {
   const [printerIp, setPrinterIp] = useState(() => localStorage.getItem("lucia_printer_ip") || "");
   const [printerPort, setPrinterPort] = useState(() => localStorage.getItem("lucia_printer_port") || "9100");
   const [printerOffsetX, setPrinterOffsetX] = useState(() => localStorage.getItem("lucia_printer_offset_x") || "0");
+  const [printerProxyUrl, setPrinterProxyUrl] = useState(() => localStorage.getItem("lucia_print_proxy_url") || "http://localhost:6101");
   const [printerSaved, setPrinterSaved] = useState(false);
+  const [proxyStatus, setProxyStatus] = useState(null); // null | "checking" | "online" | "offline"
 
   const [sourceId, setSourceId] = useState("");
   const [targetId, setTargetId] = useState("");
@@ -778,27 +780,55 @@ export default function DatabaseConnectionsManager() {
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow">
-        <h3 className="text-base font-semibold text-slate-900">🖨️ Принтер етикеток (TSPL)</h3>
-        <p className="mt-1 text-sm text-slate-600">Мережевий термотрансферний принтер для друку QR-етикеток. Етикетка 20×30 мм.</p>
-        <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <h3 className="text-base font-semibold text-slate-900">🖨️ Принтер етикеток (ZPL)</h3>
+        <p className="mt-1 text-sm text-slate-600">
+          Мережевий принтер для друку QR-етикеток 20×30 мм. Щоб друкувати без діалогу, запустіть
+          {" "}<code className="text-xs bg-slate-100 px-1 rounded">start-print-proxy.bat</code>{" "}
+          на ПК у тій же мережі, що й принтер.
+        </p>
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <Field label="IP-адреса принтера" value={printerIp} onChange={(e) => { setPrinterIp(e.target.value); setPrinterSaved(false); }} placeholder="192.168.1.100" />
           <Field label="Порт" value={printerPort} onChange={(e) => { setPrinterPort(e.target.value); setPrinterSaved(false); }} placeholder="9100" />
           <Field label="Зсув X (dots, 8 dots = 1мм)" value={printerOffsetX} onChange={(e) => { setPrinterOffsetX(e.target.value); setPrinterSaved(false); }} placeholder="0" />
+          <Field label="Print Proxy URL" value={printerProxyUrl} onChange={(e) => { setPrinterProxyUrl(e.target.value); setPrinterSaved(false); }} placeholder="http://localhost:6101" />
         </div>
         {printerSaved && <p className="mt-2 text-sm text-emerald-600 font-semibold">Налаштування принтера збережено ✓</p>}
-        <div className="mt-3">
+        <div className="mt-3 flex flex-wrap gap-2 items-center">
           <button
             type="button"
             onClick={() => {
               localStorage.setItem("lucia_printer_ip", printerIp.trim());
               localStorage.setItem("lucia_printer_port", String(printerPort || "9100").trim());
               localStorage.setItem("lucia_printer_offset_x", String(printerOffsetX || "0").trim());
+              localStorage.setItem("lucia_print_proxy_url", printerProxyUrl.trim());
               setPrinterSaved(true);
             }}
             className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
           >
             Зберегти принтер
           </button>
+          <button
+            type="button"
+            onClick={async () => {
+              setProxyStatus("checking");
+              try {
+                const url = printerProxyUrl.trim().replace(/\/+$/, "");
+                const ctrl = new AbortController();
+                const t = setTimeout(() => ctrl.abort(), 3000);
+                const r = await fetch(`${url}/health`, { signal: ctrl.signal });
+                clearTimeout(t);
+                setProxyStatus(r.ok ? "online" : "offline");
+              } catch {
+                setProxyStatus("offline");
+              }
+            }}
+            className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Перевірити proxy
+          </button>
+          {proxyStatus === "checking" && <span className="text-sm text-slate-500">Перевіряю…</span>}
+          {proxyStatus === "online" && <span className="text-sm text-emerald-600 font-semibold">● Proxy онлайн</span>}
+          {proxyStatus === "offline" && <span className="text-sm text-rose-600 font-semibold">● Proxy недоступний — запустіть start-print-proxy.bat</span>}
         </div>
       </div>
 
