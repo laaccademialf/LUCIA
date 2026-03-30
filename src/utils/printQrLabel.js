@@ -26,9 +26,10 @@ const getPrinterConfig = () => {
     return {
       ip: String(localStorage.getItem("lucia_printer_ip") || "").trim(),
       port: parseInt(localStorage.getItem("lucia_printer_port") || "9100", 10) || 9100,
+      offsetX: parseInt(localStorage.getItem("lucia_printer_offset_x") || "0", 10) || 0,
     };
   } catch {
-    return { ip: "", port: 9100 };
+    return { ip: "", port: 9100, offsetX: 0 };
   }
 };
 
@@ -153,15 +154,15 @@ const buildTsplPayload = async ({ invNumber, name, qrValue }) => {
   }
 
   /* --- Single BITMAP TSPL command --- */
+  const { offsetX } = getPrinterConfig();
+  const bmpX = Math.max(0, offsetX); // configurable horizontal shift
   const enc = new TextEncoder();
   const header = enc.encode(
     `SIZE ${LABEL_WIDTH_MM} mm, ${LABEL_HEIGHT_MM} mm\r\n` +
     `GAP 2 mm, 0 mm\r\n` +
-    `DIRECTION 0\r\n` +
-    `REFERENCE 0,0\r\n` +
-    `OFFSET 0 mm\r\n` +
+    `DIRECTION 1\r\n` +
     `CLS\r\n` +
-    `BITMAP 0,0,${widthBytes},${LH},0,`
+    `BITMAP ${bmpX},0,${widthBytes},${LH},0,`
   );
   const footer = enc.encode(`\r\nPRINT 1,1\r\n`);
 

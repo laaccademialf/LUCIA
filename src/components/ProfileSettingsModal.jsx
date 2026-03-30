@@ -30,6 +30,7 @@ export default function ProfileSettingsModal({ open, onClose, user }) {
 
   const [printerIp, setPrinterIp] = useState("");
   const [printerPort, setPrinterPort] = useState("9100");
+  const [printerOffsetX, setPrinterOffsetX] = useState("0");
   const [printerSaved, setPrinterSaved] = useState(false);
 
   const [profileMessage, setProfileMessage] = useState("");
@@ -51,6 +52,7 @@ export default function ProfileSettingsModal({ open, onClose, user }) {
     setPasswordError("");
     setPrinterIp(localStorage.getItem("lucia_printer_ip") || "");
     setPrinterPort(localStorage.getItem("lucia_printer_port") || "9100");
+    setPrinterOffsetX(localStorage.getItem("lucia_printer_offset_x") || "0");
     setPrinterSaved(false);
   }, [open, user]);
 
@@ -256,6 +258,16 @@ export default function ProfileSettingsModal({ open, onClose, user }) {
                   className="w-24 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                 />
               </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">Зсув X (dots)</label>
+                <input
+                  type="number"
+                  value={printerOffsetX}
+                  onChange={(e) => { setPrinterOffsetX(e.target.value); setPrinterSaved(false); }}
+                  placeholder="0"
+                  className="w-24 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                />
+              </div>
             </div>
 
             {printerSaved && <p className="text-sm text-emerald-400">Налаштування принтера збережено</p>}
@@ -265,6 +277,7 @@ export default function ProfileSettingsModal({ open, onClose, user }) {
               onClick={() => {
                 localStorage.setItem("lucia_printer_ip", printerIp.trim());
                 localStorage.setItem("lucia_printer_port", String(printerPort || "9100").trim());
+                localStorage.setItem("lucia_printer_offset_x", String(printerOffsetX || "0").trim());
                 setPrinterSaved(true);
               }}
               className="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-500"
