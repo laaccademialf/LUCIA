@@ -311,3 +311,60 @@ export const printAssetQrLabel = async ({ invNumber, name, qrValue, restaurant }
   // 3) Fallback: browser print dialog
   await browserPrintLabel({ invNumber: nInv, name: nName, qrValue: nQr });
 };
+
+/* ---------- batch print (all filtered assets) ---------- */
+
+export const printBatchQrLabels = async (assets, { onProgress, restaurant } = {}) => {
+  if (!Array.isArray(assets) || assets.length === 0) {
+    throw new Error("Немає активів для друку");
+  }
+
+  const cfg = getPrinterConfig(restaurant);
+  if (!cfg.ip) {
+    throw new Error("IP принтера не налаштовано. Задайте IP у налаштуваннях ресторану або з'єднаннях БД.");
+  }
+
+  const results = { success: 0, failed: 0, errors: [] };
+
+  for (let i = 0; i < assets.length; i++) {
+    const asset = assets[i];
+    const invNumber = String(asset.invNumber || asset.inv_number || "").trim();
+    const name = String(asset.name || "").trim();
+    const qrValue = String(asset.qrCode || asset.qr_code || invNumber || "").trim();
+
+    if (!invNumber || !name) {
+      results.failed++;
+      results.errors.push(`#${i + 1}: немає інв. номера або назви`);
+      continue;
+    }
+
+    try {
+      const zpl = buildZplPayload({ invNumber, name, qrValue, printerConfig: cfg });
+
+      let printed = false;
+      try { printed = await trySilentPrint(zpl, cfg); } catch { /* ignore */ }
+      if (!printed) {
+        try { printed = await tryLocalProxyPrint(zpl, cfg); } catch { /* ignore */ }
+      }
+      if (!printed) {
+        results.failed++;
+        results.errors.push(`#${invNumber}: не вдалося надіслати на принтер`);
+        continue;
+      }
+
+      results.success++;
+    } catch (err) {
+      results.failed++;
+      results.errors.push(`#${invNumber}: ${err.message}`);
+    }
+
+    if (onProgress) onProgress(i + 1, assets.length);
+
+    // Small delay between labels to avoid overwhelming the printer
+    if (i < assets.length - 1) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+
+  return results;
+};

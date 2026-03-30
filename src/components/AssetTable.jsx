@@ -12,7 +12,8 @@ import {
 import { ArrowDownZA, ArrowUpAZ, Download, FileDown, Pencil, Trash2, Upload, SlidersHorizontal, X, RotateCcw } from "lucide-react";
 import ColumnVisibilityDropdown from "./ColumnVisibilityDropdown";
 import clsx from "clsx";
-import { printAssetQrLabel } from "../utils/printQrLabel";
+import { printAssetQrLabel, printBatchQrLabels } from "../utils/printQrLabel";
+import { Printer } from "lucide-react";
 
 // High-contrast badges on light backgrounds for readability
 const decisionColors = {
@@ -608,6 +609,32 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
                 <Upload size={14} /> <span className="hidden sm:inline">Імпорт</span><span className="sm:hidden">Імп.</span>
               </button>
             )}
+            <button
+              type="button"
+              onClick={async () => {
+                if (!filteredData.length) { alert("Немає активів за поточними фільтрами."); return; }
+                const count = filteredData.length;
+                if (!confirm(`Друкувати ${count} QR-етикеток?`)) return;
+                try {
+                  const results = await printBatchQrLabels(
+                    filteredData.map((asset) => ({
+                      invNumber: readAssetField(asset, "invNumber"),
+                      name: asset.name,
+                      qrCode: asset.qrCode,
+                    }))
+                  );
+                  const msg = `Надруковано: ${results.success}` +
+                    (results.failed ? `\nПомилок: ${results.failed}` : "") +
+                    (results.errors.length ? `\n${results.errors.slice(0, 5).join("\n")}` : "");
+                  alert(msg);
+                } catch (err) {
+                  alert(err.message || "Помилка пакетного друку");
+                }
+              }}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-slate-700 text-white hover:bg-slate-600 transition-all duration-200 shadow whitespace-nowrap"
+            >
+              <Printer size={14} /> <span className="hidden sm:inline">Друк всіх</span><span className="sm:hidden">Друк</span>
+            </button>
             <button type="button" onClick={handleExportClick} className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs bg-indigo-600 text-white hover:bg-indigo-500 transition-all duration-200 shadow whitespace-nowrap">
               <Download size={14} /> <span>Експорт</span>
             </button>
