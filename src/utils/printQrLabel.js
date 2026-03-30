@@ -55,115 +55,108 @@ const getApiBaseUrl = () => {
 
 const LABEL_WIDTH_MM = 20;
 const LABEL_HEIGHT_MM = 30;
+const DPM = 8; // dots per mm at 203 DPI
+const LW = LABEL_WIDTH_MM * DPM; // 160 dots
+const LH = LABEL_HEIGHT_MM * DPM; // 240 dots
 
-/* ---------- CP1251 encoding for Cyrillic ---------- */
+/* ---------- Render text line to 1-bit bitmap via canvas ---------- */
 
-const CP1251_MAP = (() => {
-  const m = new Map();
-  // Ukrainian/Russian Cyrillic block mapped to CP1251 bytes
-  const ranges = [
-    [0x0410, 0x042F, 0xC0], // А-Я → 0xC0-0xDF
-    [0x0430, 0x044F, 0xE0], // а-я → 0xE0-0xFF
-  ];
-  for (const [from, to, base] of ranges) {
-    for (let cp = from; cp <= to; cp++) m.set(cp, base + (cp - from));
+/**
+ * Renders a single line of text (with Cyrillic) at printer DPI resolution.
+ * Returns { bytes: Uint8Array, widthBytes, width, height, x, y }
+ * where bytes is 1-bit-per-pixel row-major (MSB first), ready for TSPL BITMAP.
+ */
+const renderTextBitmap = (text, fontSize, maxWidthDots, yPos) => {
+  const h = Math.ceil(fontSize * 1.3); // line height in dots
+  const canvas = document.createElement("canvas");
+  canvas.width = maxWidthDots;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+
+  // White background
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, maxWidthDots, h);
+
+  // Fit text: shrink font until it fits
+  let sz = fontSize;
+  let txt = String(text);
+  ctx.textBaseline = "top";
+  ctx.textAlign = "center";
+
+  while (sz > 6) {
+    ctx.font = `bold ${sz}px Arial, Helvetica, sans-serif`;
+    if (ctx.measureText(txt).width <= maxWidthDots - 4) break;
+    sz -= 1;
   }
-  // Individual mappings for Ukrainian letters
-  m.set(0x0401, 0xA8); // Ё
-  m.set(0x0451, 0xB8); // ё
-  m.set(0x0404, 0xAA); // Є
-  m.set(0x0454, 0xBA); // є
-  m.set(0x0406, 0xB2); // І
-  m.set(0x0456, 0xB3); // і
-  m.set(0x0407, 0xAF); // Ї
-  m.set(0x0457, 0xBF); // ї
-  m.set(0x0490, 0xA5); // Ґ
-  m.set(0x0491, 0xB4); // ґ
-  m.set(0x2116, 0xB9); // №
-  return m;
-})();
+  // If still doesn't fit, truncate
+  if (ctx.measureText(txt).width > maxWidthDots - 4) {
+    while (txt.length > 1 && ctx.measureText(txt + "\u2026").width > maxWidthDots - 4) {
+      txt = txt.slice(0, -1);
+    }
+    txt = txt + "\u2026";
+  }
 
-/** Encode string to CP1251 byte array (ASCII passthrough, Cyrillic mapped, unknown → '?') */
-const toCP1251 = (str) => {
-  const bytes = [];
-  for (let i = 0; i < str.length; i++) {
-    const cp = str.charCodeAt(i);
-    if (cp < 0x80) {
-      bytes.push(cp);
-    } else {
-      bytes.push(CP1251_MAP.get(cp) || 0x3F); // '?' for unknown
+  ctx.fillStyle = "#000";
+  ctx.font = `bold ${sz}px Arial, Helvetica, sans-serif`;
+  ctx.fillText(txt, maxWidthDots / 2, 1);
+
+  // Convert to 1-bit bitmap
+  const imgData = ctx.getImageData(0, 0, maxWidthDots, h);
+  const px = imgData.data;
+  const widthBytes = Math.ceil(maxWidthDots / 8);
+  const bitmap = new Uint8Array(widthBytes * h);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < maxWidthDots; x++) {
+      const i = (y * maxWidthDots + x) * 4;
+      const gray = px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
+      if (gray < 128) {
+        bitmap[y * widthBytes + (x >> 3)] |= 128 >> (x & 7);
+      }
     }
   }
-  return new Uint8Array(bytes);
+
+  return { bytes: bitmap, widthBytes, width: maxWidthDots, height: h, x: 0, y: yPos };
 };
 
-/* ---------- TSPL native commands (rendered by printer at full DPI) ---------- */
-
-const FONT_WIDTHS = { 1: 8, 2: 12, 3: 16, 4: 24, 5: 32 };
-
-const truncateForTspl = (text, font, maxDots) => {
-  const cw = FONT_WIDTHS[font] || 16;
-  const maxChars = Math.floor(maxDots / cw);
-  if (text.length <= maxChars) return text;
-  return text.slice(0, Math.max(maxChars - 1, 1));
-};
+/* ---------- Build TSPL: text as BITMAP, QR as native QRCODE ---------- */
 
 const buildTsplPayload = ({ invNumber, name, qrValue }) => {
-  /* 203 DPI = 8 dots/mm. Label 20×30mm = 160×240 dots. */
-  const dotsPerMm = 8;
-  const lw = LABEL_WIDTH_MM * dotsPerMm; // 160
+  const pad = 4; // dots padding from edges
 
-  // --- Name (top, font "2" = 12×20 per char, 1 CP1251 byte = 1 glyph) ---
-  const nameFont = "2";
-  const nameText = truncateForTspl(String(name || ""), nameFont, lw - 8);
-  const nameBytes = toCP1251(nameText);
-  const nameCharW = FONT_WIDTHS[nameFont];
-  const namePixelW = nameBytes.length * nameCharW; // count BYTES not JS chars
-  const nameX = Math.max(0, Math.round((lw - namePixelW) / 2));
-  const nameY = 4;
+  // --- Name bitmap (top) ---
+  const nameBmp = renderTextBitmap(String(name || ""), 18, LW, pad);
 
-  // --- QR code (centered, cell size 3 for 20mm label) ---
+  // --- QR code (native, centered) ---
   const qrCellSize = 3;
-  const qrY = nameY + 24;
-  // QR version auto-selected: v1=21, v2=25, v3=29 modules
-  // Use worst case (29) for centering — small offset is better than left-bias
-  const qrEstW = 29 * qrCellSize; // 87 dots max estimate
-  const qrX = Math.max(0, Math.round((lw - qrEstW) / 2));
+  const qrY = nameBmp.y + nameBmp.height + 2;
+  const qrModulesEst = 29; // worst-case for centering
+  const qrEstW = qrModulesEst * qrCellSize;
+  const qrX = Math.max(0, Math.round((LW - qrEstW) / 2));
 
-  // --- Inv number (bottom, font "2") ---
-  const invFont = "2";
-  const invPrefix = "#";
-  const invText = truncateForTspl(invPrefix + invNumber, invFont, lw - 8);
-  const invBytes = toCP1251(invText);
-  const invCharW = FONT_WIDTHS[invFont];
-  const invPixelW = invBytes.length * invCharW;
-  const invX = Math.max(0, Math.round((lw - invPixelW) / 2));
-  const invY = qrY + qrEstW + 8;
+  // --- Inv number bitmap (bottom) ---
+  const invY = qrY + qrEstW + 4;
+  const invBmp = renderTextBitmap(`\u2116${invNumber}`, 16, LW, invY);
 
-  // Build TSPL as raw bytes: header (ASCII) + text fields (CP1251)
+  // Build TSPL command sequence
   const enc = new TextEncoder();
-  const header = enc.encode(
+  const cmds = enc.encode(
     `SIZE ${LABEL_WIDTH_MM} mm, ${LABEL_HEIGHT_MM} mm\r\n` +
     `GAP 2 mm, 0 mm\r\n` +
     `DIRECTION 1\r\n` +
-    `CODEPAGE 1251\r\n` +
-    `CLS\r\n`
+    `CLS\r\n` +
+    `BITMAP 0,${nameBmp.y},${nameBmp.widthBytes},${nameBmp.height},0,`
   );
 
-  const nameCmd = enc.encode(`TEXT ${nameX},${nameY},"${nameFont}",0,1,1,"`);
-  const nameTail = enc.encode(`"\r\n`);
-
-  const qrLine = enc.encode(
-    `QRCODE ${qrX},${qrY},M,${qrCellSize},A,0,"${qrValue}"\r\n`
+  const afterName = enc.encode(
+    `\r\nQRCODE ${qrX},${qrY},M,${qrCellSize},A,0,"${qrValue}"\r\n` +
+    `BITMAP 0,${invBmp.y},${invBmp.widthBytes},${invBmp.height},0,`
   );
 
-  const invCmd = enc.encode(`TEXT ${invX},${invY},"${invFont}",0,1,1,"`);
-  const invTail = enc.encode(`"\r\n`);
+  const footer = enc.encode(`\r\nPRINT 1,1\r\n`);
 
-  const footer = enc.encode(`PRINT 1,1\r\n`);
-
-  // Concatenate: header + TEXT"<cp1251>" + QR + TEXT"<cp1251>" + PRINT
-  const parts = [header, nameCmd, nameBytes, nameTail, qrLine, invCmd, invBytes, invTail, footer];
+  // Concatenate: header+BITMAP_cmd | name_bytes | afterName+BITMAP_cmd | inv_bytes | footer
+  const parts = [cmds, nameBmp.bytes, afterName, invBmp.bytes, footer];
   const total = parts.reduce((s, p) => s + p.length, 0);
   const result = new Uint8Array(total);
   let off = 0;
