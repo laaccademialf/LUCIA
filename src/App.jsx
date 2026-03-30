@@ -869,6 +869,13 @@ function App() {
         if (userRestaurant.schedule) {
           setSchedule(userRestaurant.schedule);
         }
+        // Автосинхронізація принтера закладу → localStorage
+        if (userRestaurant.printerIp) {
+          localStorage.setItem("lucia_printer_ip", String(userRestaurant.printerIp).trim());
+          if (userRestaurant.printerPort) {
+            localStorage.setItem("lucia_printer_port", String(userRestaurant.printerPort).trim());
+          }
+        }
       }
     }
   }, [restaurantsLoading, user, firebaseRestaurants, roleRestaurantIds, roleRestaurantsConfigured]);
@@ -3029,6 +3036,34 @@ function App() {
                     setSelectedRestaurant((p) => ({ ...p, notes: e.target.value }))
                   }
                 />
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-sm font-semibold text-slate-700">🖨️ Принтер етикеток</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">IP принтера (публічна або локальна)</label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.printerIp || ""}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, printerIp: e.target.value }))
+                      }
+                      placeholder="напр. 192.168.22.59 або публічна IP"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Порт принтера</label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.printerPort || ""}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, printerPort: e.target.value }))
+                      }
+                      placeholder="9100"
+                    />
+                  </div>
+                </div>
               </div>
 
               <div className="flex justify-end gap-3">
