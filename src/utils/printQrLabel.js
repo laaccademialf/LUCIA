@@ -62,56 +62,71 @@ const LH = LABEL_HEIGHT_MM * DPM; // 240 dots
 /* ---------- Render text line to 1-bit bitmap via canvas ---------- */
 
 /**
- * Renders a single line of text (with Cyrillic) at printer DPI resolution.
+ * Renders text at SCALE× resolution then downsamples to printer dots.
+ * This produces much sharper 1-bit output than rendering at native 160px.
  * Returns { bytes: Uint8Array, widthBytes, width, height, x, y }
- * where bytes is 1-bit-per-pixel row-major (MSB first), ready for TSPL BITMAP.
  */
+const SCALE = 4; // render at 4× then downsample
+
 const renderTextBitmap = (text, fontSize, maxWidthDots, yPos) => {
-  const h = Math.ceil(fontSize * 1.3); // line height in dots
+  const h = Math.ceil(fontSize * 1.3); // target height in printer dots
+  const cw = maxWidthDots * SCALE;     // canvas width (high-res)
+  const ch = h * SCALE;                // canvas height (high-res)
+  const fz = fontSize * SCALE;         // font size (high-res)
+
   const canvas = document.createElement("canvas");
-  canvas.width = maxWidthDots;
-  canvas.height = h;
+  canvas.width = cw;
+  canvas.height = ch;
   const ctx = canvas.getContext("2d");
 
   // White background
   ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, maxWidthDots, h);
+  ctx.fillRect(0, 0, cw, ch);
 
   // Fit text: shrink font until it fits
-  let sz = fontSize;
+  let sz = fz;
   let txt = String(text);
   ctx.textBaseline = "top";
   ctx.textAlign = "center";
 
-  while (sz > 6) {
+  const margin = 4 * SCALE;
+  while (sz > 6 * SCALE) {
     ctx.font = `bold ${sz}px Arial, Helvetica, sans-serif`;
-    if (ctx.measureText(txt).width <= maxWidthDots - 4) break;
-    sz -= 1;
+    if (ctx.measureText(txt).width <= cw - margin) break;
+    sz -= SCALE;
   }
   // If still doesn't fit, truncate
-  if (ctx.measureText(txt).width > maxWidthDots - 4) {
-    while (txt.length > 1 && ctx.measureText(txt + "\u2026").width > maxWidthDots - 4) {
+  ctx.font = `bold ${sz}px Arial, Helvetica, sans-serif`;
+  if (ctx.measureText(txt).width > cw - margin) {
+    while (txt.length > 1 && ctx.measureText(txt + "\u2026").width > cw - margin) {
       txt = txt.slice(0, -1);
     }
     txt = txt + "\u2026";
   }
 
   ctx.fillStyle = "#000";
-  ctx.font = `bold ${sz}px Arial, Helvetica, sans-serif`;
-  ctx.fillText(txt, maxWidthDots / 2, 1);
+  ctx.fillText(txt, cw / 2, SCALE);
 
-  // Convert to 1-bit bitmap
-  const imgData = ctx.getImageData(0, 0, maxWidthDots, h);
+  // Downsample SCALE×SCALE blocks → 1 printer dot using area average
+  const imgData = ctx.getImageData(0, 0, cw, ch);
   const px = imgData.data;
   const widthBytes = Math.ceil(maxWidthDots / 8);
   const bitmap = new Uint8Array(widthBytes * h);
+  const blockArea = SCALE * SCALE;
 
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < maxWidthDots; x++) {
-      const i = (y * maxWidthDots + x) * 4;
-      const gray = px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
-      if (gray < 128) {
-        bitmap[y * widthBytes + (x >> 3)] |= 128 >> (x & 7);
+  for (let dy = 0; dy < h; dy++) {
+    for (let dx = 0; dx < maxWidthDots; dx++) {
+      // Average the SCALE×SCALE block of source pixels
+      let sum = 0;
+      for (let sy = 0; sy < SCALE; sy++) {
+        for (let sx = 0; sx < SCALE; sx++) {
+          const si = ((dy * SCALE + sy) * cw + (dx * SCALE + sx)) * 4;
+          sum += px[si] * 0.299 + px[si + 1] * 0.587 + px[si + 2] * 0.114;
+        }
+      }
+      const avg = sum / blockArea;
+      if (avg < 160) { // slightly biased threshold for bolder text
+        bitmap[dy * widthBytes + (dx >> 3)] |= 128 >> (dx & 7);
       }
     }
   }
