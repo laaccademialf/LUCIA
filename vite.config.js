@@ -46,10 +46,6 @@ export default defineConfig({
             return 'vendor-forms'
           }
 
-          if (id.includes('/jszip/')) {
-            return 'vendor-zip'
-          }
-
           if (id.includes('/lucide-react/')) {
             return 'vendor-icons'
           }

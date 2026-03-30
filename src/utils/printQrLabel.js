@@ -1,5 +1,8 @@
+/* ------------------------------------------------------------------ *
+ *  printQrLabel – thermal-transfer network printer (TSPL, 20×30 mm)  *
+ * ------------------------------------------------------------------ */
+
 let qrCodeModulePromise;
-let jsZipModulePromise;
 
 const getQRCodeModule = async () => {
   if (!qrCodeModulePromise) {
@@ -9,472 +12,249 @@ const getQRCodeModule = async () => {
   return mod?.default || mod;
 };
 
-const getJSZipModule = async () => {
-  if (!jsZipModulePromise) {
-    jsZipModulePromise = import("jszip");
-  }
-  const mod = await jsZipModulePromise;
-  return mod?.default || mod;
-};
+/* ---------- helpers ---------- */
 
 const isMobileDevice = () => {
   if (typeof navigator === "undefined") return false;
-  const ua = String(navigator.userAgent || "").toLowerCase();
-  return /iphone|ipad|ipod|android|mobile|phone/.test(ua);
+  return /iphone|ipad|ipod|android|mobile|phone/i.test(String(navigator.userAgent || ""));
 };
 
-const isAppleMobileDevice = () => {
-  if (typeof navigator === "undefined") return false;
-  return /iphone|ipad|ipod/i.test(String(navigator.userAgent || ""));
-};
+/* ---------- printer config ---------- */
 
-const isAndroidDevice = () => {
-  if (typeof navigator === "undefined") return false;
-  return /android/i.test(String(navigator.userAgent || ""));
-};
-
-const LBX_TEMPLATE_PUBLIC_PATH = "/brother-template.lbx";
-
-const sanitizeFileName = (value) => {
-  return String(value || "label")
-    .trim()
-    .replace(/\s+/g, "-")
-    .replace(/[^a-zA-Z0-9-_]/g, "")
-    .slice(0, 40) || "label";
-};
-
-const dataUrlToBlob = async (dataUrl) => {
-  const response = await fetch(dataUrl);
-  return response.blob();
-};
-
-const escapeXml = (value) => {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-};
-
-const truncateWithEllipsis = (value, maxChars) => {
-  const normalized = String(value || "").trim();
-  if (normalized.length <= maxChars) return normalized;
-  return `${normalized.slice(0, Math.max(0, maxChars - 3))}...`;
-};
-
-const getAdaptiveLbxTitleStyle = (name) => {
-  const len = String(name || "").trim().length;
-
-  if (len <= 18) {
-    return { fontPt: 16.0, maxChars: 26, charLen: 56 };
+const getPrinterConfig = () => {
+  try {
+    return {
+      ip: String(localStorage.getItem("lucia_printer_ip") || "").trim(),
+      port: parseInt(localStorage.getItem("lucia_printer_port") || "9100", 10) || 9100,
+    };
+  } catch {
+    return { ip: "", port: 9100 };
   }
-  if (len <= 26) {
-    return { fontPt: 14.5, maxChars: 30, charLen: 60 };
-  }
-  if (len <= 36) {
-    return { fontPt: 13.0, maxChars: 34, charLen: 64 };
-  }
-
-  return { fontPt: 11.8, maxChars: 38, charLen: 68 };
 };
 
-const fitSingleLineText = ({ ctx, text, maxWidth, startSize, minSize, fontWeight }) => {
-  const normalized = String(text || "").trim();
-  if (!normalized) {
-    return { text: "", size: minSize };
-  }
+const getApiBaseUrl = () => {
+  try {
+    const envUrl =
+      typeof import.meta !== "undefined"
+        ? import.meta.env?.VITE_DATA_API_BASE_URL
+        : "";
+    if (envUrl) return String(envUrl).replace(/\/+$/, "");
 
-  for (let size = startSize; size >= minSize; size -= 2) {
-    ctx.font = `${fontWeight} ${size}px Arial`;
-    if (ctx.measureText(normalized).width <= maxWidth) {
-      return { text: normalized, size };
+    const raw = localStorage.getItem("lucia_runtime_custom_config");
+    if (raw) {
+      const cfg = JSON.parse(raw);
+      if (cfg.apiBaseUrl) return String(cfg.apiBaseUrl).replace(/\/+$/, "");
     }
+  } catch {
+    /* ignore */
   }
-
-  ctx.font = `${fontWeight} ${minSize}px Arial`;
-  let next = normalized;
-  while (next.length > 0 && ctx.measureText(`${next}...`).width > maxWidth) {
-    next = next.slice(0, -1);
-  }
-
-  return { text: next ? `${next}...` : "...", size: minSize };
+  return "";
 };
 
-const generateBrotherLabelImage = async ({ invNumber, name, qrValue }) => {
-  const normalizedInvNumber = String(invNumber || "").trim();
-  const normalizedName = String(name || "").trim();
-  const valueToEncode = String(qrValue || normalizedInvNumber || normalizedName || "").trim();
+/* ---------- label dimensions ---------- */
 
-  if (!normalizedInvNumber || !normalizedName || !valueToEncode) {
-    throw new Error("Для друку QR потрібні інвентарний номер і назва активу");
+const LABEL_WIDTH_MM = 20;
+const LABEL_HEIGHT_MM = 30;
+
+/* ---------- TSPL native commands (rendered by printer at full DPI) ---------- */
+
+/**
+ * Truncate text to fit within maxDots width using the chosen TSPL font.
+ * TSPL built-in font character widths (approximate):
+ *   "1"=8, "2"=12, "3"=16, "4"=24, "5"=32  dots per char
+ */
+const FONT_WIDTHS = { 1: 8, 2: 12, 3: 16, 4: 24, 5: 32 };
+
+const truncateForTspl = (text, font, maxDots) => {
+  const cw = FONT_WIDTHS[font] || 16;
+  const maxChars = Math.floor(maxDots / cw);
+  if (text.length <= maxChars) return text;
+  return text.slice(0, Math.max(maxChars - 1, 1)) + "…";
+};
+
+const buildTsplPayload = ({ invNumber, name, qrValue }) => {
+  /* Assume 203 DPI (8 dots/mm). Label = 160×240 dots.
+     If printer is 300 DPI (≈12 dots/mm) the SIZE command in mm
+     still works and QRCODE/TEXT scale automatically. */
+  const dotsPerMm = 8; // 203 DPI
+  const lw = LABEL_WIDTH_MM * dotsPerMm;   // 160
+
+  // --- Name (top, font "2" = 12×20 per char) ---
+  const nameFont = "2";
+  const nameText = truncateForTspl(String(name || ""), nameFont, lw - 8);
+  const nameCharW = FONT_WIDTHS[nameFont];
+  const namePixelW = nameText.length * nameCharW;
+  const nameX = Math.max(0, Math.round((lw - namePixelW) / 2));
+  const nameY = 4;
+
+  // --- QR code (center, native QRCODE command) ---
+  const qrCellSize = 4; // dots per module, good balance size/scannability
+  const qrY = nameY + 24; // below name line
+  // Estimate QR width for centering (version auto, ~25 modules for short data)
+  const qrModules = qrValue.length <= 17 ? 21 : qrValue.length <= 32 ? 25 : 29;
+  const qrPixelW = qrModules * qrCellSize;
+  const qrX = Math.max(0, Math.round((lw - qrPixelW) / 2));
+
+  // --- Inv number (bottom, font "3" = 16×24 per char, bolder) ---
+  const invFont = "3";
+  const invText = truncateForTspl(`#${invNumber}`, invFont, lw - 8);
+  const invCharW = FONT_WIDTHS[invFont];
+  const invPixelW = invText.length * invCharW;
+  const invX = Math.max(0, Math.round((lw - invPixelW) / 2));
+  const invY = qrY + qrPixelW + 8;
+
+  // Escape backslashes and quotes in data for TSPL
+  const esc = (s) => s.replace(/\\/g, "\\[\\]").replace(/"/g, "\\[\"]");
+
+  const tspl =
+    `SIZE ${LABEL_WIDTH_MM} mm, ${LABEL_HEIGHT_MM} mm\r\n` +
+    `GAP 2 mm, 0 mm\r\n` +
+    `DIRECTION 1\r\n` +
+    `CLS\r\n` +
+    `TEXT ${nameX},${nameY},"${nameFont}",0,1,1,"${esc(nameText)}"\r\n` +
+    `QRCODE ${qrX},${qrY},M,${qrCellSize},A,0,"${esc(qrValue)}"\r\n` +
+    `TEXT ${invX},${invY},"${invFont}",0,1,1,"${esc(invText)}"\r\n` +
+    `PRINT 1,1\r\n`;
+
+  return new TextEncoder().encode(tspl);
+};
+
+/* ---------- Uint8Array to base64 ---------- */
+
+const uint8ToBase64 = (bytes) => {
+  const chunks = [];
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK)));
   }
+  return btoa(chunks.join(""));
+};
 
+/* ---------- silent print via server ---------- */
+
+const trySilentPrint = async (tsplPayload) => {
+  const apiBase = getApiBaseUrl();
+  const { ip, port } = getPrinterConfig();
+
+  if (!apiBase || !ip) return false;
+
+  try {
+    const res = await fetch(`${apiBase}/api/print-label`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data: uint8ToBase64(tsplPayload),
+        printerIp: ip,
+        printerPort: port,
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.warn("Silent print HTTP error:", res.status, body);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn("Silent print failed:", err);
+    return false;
+  }
+};
+
+/* ---------- browser print fallback (hidden iframe) ---------- */
+
+const browserPrintLabel = async ({ invNumber, name, qrValue }) => {
   const QRCode = await getQRCodeModule();
-  const qrDataUrl = await QRCode.toDataURL(valueToEncode, {
-    margin: 0,
-    width: 900,
+  const qrDataUrl = await QRCode.toDataURL(qrValue, {
+    margin: 1,
+    width: 400,
     errorCorrectionLevel: "M",
   });
 
-  const qrImage = await new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = qrDataUrl;
-  });
+  const escapedName = String(name || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const escapedInv = String(invNumber || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 
-  const canvas = document.createElement("canvas");
-  // 24mm tape-friendly aspect: long horizontal label with minimal side padding.
-  canvas.width = 1600;
-  canvas.height = 620;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("Не вдалося згенерувати зображення етикетки");
-  }
+  const html = `<!doctype html><html lang="uk"><head><meta charset="UTF-8"><title>QR</title>
+<style>
+  @page { size: 20mm 30mm; margin: 0; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:20mm; height:30mm; }
+  body { font-family: Arial, Helvetica, sans-serif; text-align:center; }
+  .l { width:20mm; height:30mm; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:0.5mm 1mm; }
+  .n { font-size:5pt; font-weight:700; line-height:1.15; word-break:break-all; max-height:4.5mm; overflow:hidden; }
+  .q { width:14mm; height:14mm; margin:0.5mm 0; image-rendering:pixelated; }
+  .i { font-size:5.5pt; font-weight:700; }
+</style></head><body>
+<div class="l">
+  <div class="n">${escapedName}</div>
+  <img class="q" src="${qrDataUrl}" />
+  <div class="i">\u2116${escapedInv}</div>
+</div>
+<script>
+  var img=document.querySelector('.q');
+  function go(){window.focus();window.print();}
+  img&&!img.complete?img.onload=go:setTimeout(go,80);
+</script>
+</body></html>`;
 
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  ctx.fillStyle = "#111827";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  const adaptiveName = fitSingleLineText({
-    ctx,
-    text: normalizedName,
-    maxWidth: canvas.width - 70,
-    startSize: 54,
-    minSize: 36,
-    fontWeight: 600,
-  });
-  ctx.font = `600 ${adaptiveName.size}px Arial`;
-  ctx.fillText(adaptiveName.text, canvas.width / 2, 16);
-
-  const invY = 16 + adaptiveName.size + 8;
-  ctx.font = "700 44px Arial";
-  ctx.fillText(`No ${normalizedInvNumber}`, canvas.width / 2, invY);
-
-  const qrSize = 430;
-  const qrX = (canvas.width - qrSize) / 2;
-  const qrY = invY + 54;
-  ctx.drawImage(qrImage, qrX, qrY, qrSize, qrSize);
-
-  const pngDataUrl = canvas.toDataURL("image/png");
-  const pngBlob = await dataUrlToBlob(pngDataUrl);
-  const fileName = `${sanitizeFileName(normalizedInvNumber)}-qr-label.png`;
-
-  return { pngDataUrl, pngBlob, fileName };
-};
-
-const generateBrotherLbxFile = async ({ invNumber, name, qrValue, androidSafe = false }) => {
-  const normalizedInvNumber = String(invNumber || "").trim();
-  const normalizedName = String(name || "").trim();
-  const valueToEncode = String(qrValue || normalizedInvNumber || normalizedName || "").trim();
-
-  if (!normalizedInvNumber || !normalizedName || !valueToEncode) {
-    throw new Error("Для LBX потрібні інвентарний номер і назва активу");
-  }
-
-  const response = await fetch(LBX_TEMPLATE_PUBLIC_PATH, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error("Не знайдено шаблон brother-template.lbx");
-  }
-
-  const templateBuffer = await response.arrayBuffer();
-  const JSZip = await getJSZipModule();
-  const zip = await JSZip.loadAsync(templateBuffer);
-
-  const labelXml = await zip.file("label.xml")?.async("string");
-  const propXml = await zip.file("prop.xml")?.async("string");
-
-  if (!labelXml || !propXml) {
-    throw new Error("Шаблон LBX пошкоджений");
-  }
-
-  let nextLabelXml = labelXml
-    .replace(
-      /(<barcode:barcode[\s\S]*?<pt:data>)([\s\S]*?)(<\/pt:data>)/,
-      `$1${escapeXml(valueToEncode)}$3`
-    );
-
-  if (androidSafe) {
-    // Android Brother app is stricter with LBX text/style internals.
-    // Keep structure close to template but allocate more room for full name + number.
-    const safeAndroidText = `${String(normalizedName || "").trim()}\n${String(normalizedInvNumber || "").trim()}`;
-    nextLabelXml = nextLabelXml
-      .replace(
-        /(<text:text[\s\S]*?<pt:data>)([\s\S]*?)(<\/pt:data>)/,
-        `$1${escapeXml(safeAndroidText)}$3`
-      )
-      .replace(
-        /(<barcode:barcode[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
-        `$147pt$331pt$529pt$729pt$9`
-      )
-      .replace(
-        /(<text:textControl[^>]*\s+autoLF=")([^"]+)("[^>]*>)/,
-        `$1true$3`
-      )
-      .replace(
-        /(<text:text[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
-        `$112.1pt$37.2pt$6106.3pt$723.6pt$9`
-      )
-      .replace(
-        /(<text:textAlign[^>]*\s+verticalAlignment=")([^"]+)("[^>]*>)/,
-        `$1TOP$3`
-      )
-      .replace(
-        /(<text:fontExt[^>]*\s+size=")([^"]+)("[^>]*>)/,
-        "$1" + "8.2pt" + "$3"
-      )
-      .replace(
-        /(<text:stringItem[^>]*\s+charLen=")([^"]+)("[^>]*>)/,
-        "$1" + "80" + "$3"
-      );
-  } else {
-    const adaptiveLbx = getAdaptiveLbxTitleStyle(normalizedName);
-    const safeName = truncateWithEllipsis(normalizedName, adaptiveLbx.maxChars);
-    nextLabelXml = nextLabelXml
-      .replace(
-        /(<barcode:barcode[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
-        `$147pt$330pt$529pt$729pt$9`
-      )
-      .replace(
-        /(<text:text[\s\S]*?<pt:data>)([\s\S]*?)(<\/pt:data>)/,
-        `$1${escapeXml(`${safeName}\nNo ${normalizedInvNumber}`)}$3`
-      )
-      .replace(
-        /(<text:textControl[^>]*\s+autoLF=")([^"]+)("[^>]*>)/,
-        `$1true$3`
-      )
-      .replace(
-        /(<text:text[\s\S]*?<pt:objectStyle\s+x=")([^"]+)("\s+y=")([^"]+)("\s+width=")([^"]+)("\s+height=")([^"]+)("[\s\S]*?<\/pt:objectStyle>)/,
-        `$112.1pt$38.8pt$6106.3pt$722.4pt$9`
-      )
-      .replace(
-        /(<text:textAlign[^>]*\s+verticalAlignment=")([^"]+)("[^>]*>)/,
-        `$1TOP$3`
-      )
-      .replace(
-        /(<text:fontExt[^>]*\s+size=")([^"]+)("[^>]*>)/,
-        `$1${adaptiveLbx.fontPt.toFixed(1)}pt$3`
-      )
-      .replace(
-        /(<text:stringItem[^>]*\s+charLen=")([^"]+)("[^>]*>)/,
-        `$1${adaptiveLbx.charLen}$3`
-      );
-  }
-
-  const nextPropXml = propXml
-    .replace(/(<dc:title>)([\s\S]*?)(<\/dc:title>)/, `$1${escapeXml(`LUCIA_${normalizedInvNumber}`)}$3`)
-    .replace(/(<dcterms:modified>)([\s\S]*?)(<\/dcterms:modified>)/, `$1${new Date().toISOString()}$3`);
-
-  zip.file("label.xml", nextLabelXml);
-  zip.file("prop.xml", nextPropXml);
-
-  const lbxBytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
-  const lbxMimeType = "application/octet-stream";
-  const lbxBlob = new Blob([lbxBytes], { type: lbxMimeType });
-  const lbxFileName = `${sanitizeFileName(normalizedInvNumber)}-label.lbx`;
-
-  return { lbxBlob, lbxFileName, lbxMimeType };
-};
-
-const downloadBlob = (blob, fileName, options = {}) => {
-  const { revokeDelayMs = 15_000 } = options;
-  const rawName = String(fileName || "label.lbx");
-  const withoutZipSuffix = rawName.replace(/\.lbx\.zip$/i, ".lbx").replace(/\.zip$/i, "");
-  const baseName = withoutZipSuffix.trim() || "label.lbx";
-  const safeFileName = baseName.toLowerCase().endsWith(".lbx")
-    ? baseName
-    : `${baseName}.lbx`;
-  const objectUrl = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = objectUrl;
-  link.download = safeFileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-
-  setTimeout(() => URL.revokeObjectURL(objectUrl), revokeDelayMs);
-};
-
-const shareBrotherFileDirect = async ({ blob, fileName, mimeType }) => {
-  if (typeof navigator === "undefined" || typeof navigator.share !== "function") {
-    return false;
-  }
-
-  try {
-    const files = [new File([blob], fileName, { type: mimeType })];
-    await navigator.share({ files });
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-export const printAssetQrLabel = async ({
-  invNumber,
-  name,
-  qrValue,
-}) => {
   if (isMobileDevice()) {
-    const isAndroid = isAndroidDevice();
-
-    if (isAndroid) {
-      // Android: requested flow - auto-download first, then auto-open app.
-      try {
-        const lbxGenerated = await generateBrotherLbxFile({ invNumber, name, qrValue, androidSafe: true });
-        downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName, { revokeDelayMs: 20_000 });
-        // Keep flow stable: browsers may dismiss download confirmation if we change focus immediately.
-        return;
-      } catch (error) {
-        console.warn("Android auto-download flow failed:", error);
-      }
-
+    const win = window.open("", "_blank");
+    if (!win) {
+      alert("Дозвольте pop-up у браузері для друку етикетки.");
       return;
     }
-
-    const generated = await generateBrotherLabelImage({ invNumber, name, qrValue });
-
-    try {
-      const lbxGenerated = await generateBrotherLbxFile({ invNumber, name, qrValue, androidSafe: false });
-
-      if (isAppleMobileDevice()) {
-        // iOS often hides Brother in Web Share targets for LBX; Files -> Brother works reliably.
-        downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
-        alert("LBX завантажено. Натисніть файл внизу Safari -> Поділитись -> iPrint&Label. Це найстабільніший сценарій на iPhone.");
-        return;
-      }
-
-      const lbxShared = await shareBrotherFileDirect({
-        blob: lbxGenerated.lbxBlob,
-        fileName: lbxGenerated.lbxFileName,
-        mimeType: lbxGenerated.lbxMimeType || "application/octet-stream",
-      });
-      if (lbxShared) {
-        return;
-      }
-
-      downloadBlob(lbxGenerated.lbxBlob, lbxGenerated.lbxFileName);
-      alert("LBX завантажено. Відкрийте Brother iPrint&Label і імпортуйте файл з Downloads/Files.");
-      return;
-    } catch (error) {
-      console.warn("LBX generation/share skipped:", error);
-    }
-
-    const shared = await shareBrotherFileDirect({
-      blob: generated.pngBlob,
-      fileName: generated.fileName,
-      mimeType: "image/png",
-    });
-
-    if (!shared) {
-      alert("Не вдалося відкрити меню Поділитись у браузері. Відкрийте цю сторінку в мобільному Chrome/Safari і натисніть QR ще раз.");
-    }
-
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
     return;
   }
 
-  const printWindow = window.open("", "_blank", "width=420,height=620");
-  if (!printWindow) {
-    throw new Error("Не вдалося відкрити вікно друку. Дозвольте pop-up у браузері.");
+  // Desktop: hidden iframe
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "position:fixed;left:-9999px;top:0;width:0;height:0;border:none;";
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentDocument || iframe.contentWindow?.document;
+  if (!doc) {
+    document.body.removeChild(iframe);
+    throw new Error("Не вдалося створити фрейм друку");
   }
 
-  const normalizedInvNumber = String(invNumber || "").trim();
-  const normalizedName = String(name || "").trim();
-  const valueToEncode = String(qrValue || normalizedInvNumber || normalizedName || "").trim();
+  doc.open();
+  doc.write(html);
+  doc.close();
 
-  if (!normalizedInvNumber || !normalizedName || !valueToEncode) {
-    printWindow.close();
+  setTimeout(() => {
+    try { document.body.removeChild(iframe); } catch { /* already removed */ }
+  }, 10_000);
+};
+
+/* ---------- main export ---------- */
+
+export const printAssetQrLabel = async ({ invNumber, name, qrValue }) => {
+  const nInv = String(invNumber || "").trim();
+  const nName = String(name || "").trim();
+  const nQr = String(qrValue || nInv || nName || "").trim();
+
+  if (!nInv || !nName || !nQr) {
     throw new Error("Для друку QR потрібні інвентарний номер і назва активу");
   }
 
-  const QRCode = await getQRCodeModule();
-  const qrDataUrl = await QRCode.toDataURL(valueToEncode, {
-    margin: 1,
-    width: 240,
-    errorCorrectionLevel: "M",
-  });
+  // 1) try silent print: native TSPL commands -> server -> raw TCP to printer
+  try {
+    const tspl = buildTsplPayload({ invNumber: nInv, name: nName, qrValue: nQr });
+    const ok = await trySilentPrint(tspl);
+    if (ok) return;
+  } catch (err) {
+    console.warn("Silent TSPL print path failed:", err);
+  }
 
-  const html = `
-<!doctype html>
-<html lang="uk">
-  <head>
-    <meta charset="UTF-8" />
-    <title>QR етикетка активу</title>
-    <style>
-      @page { size: 58mm auto; margin: 3mm; }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-        color: #0f172a;
-        background: #ffffff;
-      }
-      .label {
-        width: 52mm;
-        margin: 0 auto;
-        border: 1px dashed #cbd5e1;
-        border-radius: 2mm;
-        padding: 2.5mm;
-        text-align: center;
-      }
-      .title {
-        font-size: 9pt;
-        line-height: 1.25;
-        font-weight: 700;
-        word-break: break-word;
-      }
-      .inv {
-        margin-top: 1.5mm;
-        font-size: 8pt;
-        font-weight: 700;
-      }
-      .qr {
-        display: block;
-        width: 36mm;
-        height: 36mm;
-        margin: 2mm auto 0;
-      }
-      .hint {
-        margin-top: 2mm;
-        font-size: 7pt;
-        color: #475569;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="label">
-      <div class="title">${normalizedName}</div>
-      <div class="inv">Інв. №: ${normalizedInvNumber}</div>
-      <img id="qr-img" class="qr" src="${qrDataUrl}" alt="QR ${normalizedInvNumber}" />
-      <div class="hint">Якщо друк не стартував — натисніть Ctrl/Cmd+P</div>
-    </div>
-    <script>
-      (function() {
-        const img = document.getElementById('qr-img');
-        const start = () => {
-          setTimeout(() => {
-            window.focus();
-            window.print();
-          }, 120);
-        };
-
-        if (img && img.complete) {
-          start();
-        } else if (img) {
-          img.onload = start;
-          img.onerror = start;
-        } else {
-          start();
-        }
-      })();
-    </script>
-  </body>
-</html>
-`;
-
-  printWindow.document.open();
-  printWindow.document.write(html);
-  printWindow.document.close();
+  // 2) fallback: browser print dialog
+  await browserPrintLabel({ invNumber: nInv, name: nName, qrValue: nQr });
 };

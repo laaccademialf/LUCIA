@@ -2,6 +2,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import net from "node:net";
 
 const PORT = Number(process.env.MIGRATION_PORT || 8787);
 const HOST = process.env.MIGRATION_HOST || "0.0.0.0";
@@ -3126,6 +3127,39 @@ const server = http.createServer(async (req, res) => {
       return await handleAssetsApi(req, res, assetId);
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  if (pathname === "/api/print-label" && req.method === "POST") {
+    try {
+      const body = await parseJsonBody(req, 2 * 1024 * 1024);
+      const rawData = body.data; // base64-encoded TSPL payload
+      const printerIp = String(body.printerIp || process.env.PRINTER_IP || "").trim();
+      const printerPort = Number(body.printerPort || process.env.PRINTER_PORT || 9100);
+
+      if (!rawData || !printerIp) {
+        return sendJson(res, 400, { ok: false, error: "Missing data or printerIp" });
+      }
+
+      const buffer = Buffer.from(rawData, "base64");
+
+      await new Promise((resolve, reject) => {
+        const socket = new net.Socket();
+        socket.setTimeout(10_000);
+        socket.connect(printerPort, printerIp, () => {
+          socket.write(buffer, () => {
+            socket.end();
+            resolve();
+          });
+        });
+        socket.on("timeout", () => { socket.destroy(); reject(new Error("Printer connection timeout")); });
+        socket.on("error", (err) => reject(err));
+      });
+
+      return sendJson(res, 200, { ok: true });
+    } catch (error) {
+      console.error("[print-label] error:", error.message);
+      return sendJson(res, 500, { ok: false, error: `Print failed: ${error.message}` });
     }
   }
 

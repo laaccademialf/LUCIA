@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { X, User, KeyRound, Save } from "lucide-react";
+import { X, User, KeyRound, Save, Printer } from "lucide-react";
 import { changeCurrentUserPassword, updateCurrentUserProfile } from "../firebase/auth";
 
 const mapAuthError = (error) => {
@@ -28,6 +28,10 @@ export default function ProfileSettingsModal({ open, onClose, user }) {
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
 
+  const [printerIp, setPrinterIp] = useState("");
+  const [printerPort, setPrinterPort] = useState("9100");
+  const [printerSaved, setPrinterSaved] = useState(false);
+
   const [profileMessage, setProfileMessage] = useState("");
   const [profileError, setProfileError] = useState("");
   const [passwordMessage, setPasswordMessage] = useState("");
@@ -45,6 +49,9 @@ export default function ProfileSettingsModal({ open, onClose, user }) {
     setProfileError("");
     setPasswordMessage("");
     setPasswordError("");
+    setPrinterIp(localStorage.getItem("lucia_printer_ip") || "");
+    setPrinterPort(localStorage.getItem("lucia_printer_port") || "9100");
+    setPrinterSaved(false);
   }, [open, user]);
 
   const isEmailChanged = useMemo(() => {
@@ -218,6 +225,54 @@ export default function ProfileSettingsModal({ open, onClose, user }) {
               {savingPassword ? "Зміна..." : "Змінити пароль"}
             </button>
           </form>
+
+          <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4 space-y-3">
+            <div className="flex items-center gap-2 text-cyan-300">
+              <Printer size={16} />
+              <p className="font-semibold">Мережевий принтер етикеток</p>
+            </div>
+            <p className="text-xs text-slate-400">
+              Вкажіть IP-адресу принтера для прямого друку QR-етикеток без діалогу друку (TSPL, порт 9100).
+            </p>
+
+            <div className="grid grid-cols-[1fr_auto] gap-3">
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">IP-адреса принтера</label>
+                <input
+                  type="text"
+                  value={printerIp}
+                  onChange={(e) => { setPrinterIp(e.target.value); setPrinterSaved(false); }}
+                  placeholder="192.168.1.100"
+                  className="w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-1">Порт</label>
+                <input
+                  type="text"
+                  value={printerPort}
+                  onChange={(e) => { setPrinterPort(e.target.value); setPrinterSaved(false); }}
+                  placeholder="9100"
+                  className="w-24 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                />
+              </div>
+            </div>
+
+            {printerSaved && <p className="text-sm text-emerald-400">Налаштування принтера збережено</p>}
+
+            <button
+              type="button"
+              onClick={() => {
+                localStorage.setItem("lucia_printer_ip", printerIp.trim());
+                localStorage.setItem("lucia_printer_port", String(printerPort || "9100").trim());
+                setPrinterSaved(true);
+              }}
+              className="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-500"
+            >
+              <Save size={16} />
+              Зберегти принтер
+            </button>
+          </div>
         </div>
       </div>
     </div>
