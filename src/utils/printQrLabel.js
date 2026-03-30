@@ -167,8 +167,6 @@ const buildTsplPayload = async ({ invNumber, name, qrValue }) => {
   result.set(header, 0);
   result.set(bitmap, header.length);
   result.set(footer, header.length + bitmap.length);
-  let off = 0;
-  for (const p of parts) { result.set(p, off); off += p.length; }
   return result;
 };
 
