@@ -883,9 +883,8 @@ function App() {
     }
   }, [restaurantsLoading, user, firebaseRestaurants, roleRestaurantIds, roleRestaurantsConfigured]);
 
-  // Синхронізація принтера по фільтру локації (для інвентаризації)
+  // Синхронізація принтера по фільтру локації (для всіх користувачів)
   useEffect(() => {
-    if (user?.role === 'admin') return; // адмін бере IP з налаштувань БД
     const locName = filters?.locationName;
     if (!locName || !firebaseRestaurants.length) return;
     const rest = firebaseRestaurants.find((r) =>
@@ -900,7 +899,7 @@ function App() {
       localStorage.removeItem("lucia_printer_ip");
       localStorage.removeItem("lucia_printer_port");
     }
-  }, [filters?.locationName, firebaseRestaurants, user?.role]);
+  }, [filters?.locationName, firebaseRestaurants]);
 
   // Допоміжна функція для отримання вкладок для конкретного підрозділу з menuStructure
   const getTabsForSection = (navId) => {
