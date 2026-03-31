@@ -1,4 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  isCollectionsApiEnabled,
+  getCollectionItemApi,
+  updateCollectionItemApi,
+} from "../api/collectionsApi";
 import {
   addConnection,
   bootstrapFirebaseConnection,
@@ -121,6 +126,23 @@ export default function DatabaseConnectionsManager() {
   const [printerProxyUrl, setPrinterProxyUrl] = useState(() => localStorage.getItem("lucia_print_proxy_url") || "http://localhost:6101");
   const [printerSaved, setPrinterSaved] = useState(false);
   const [proxyStatus, setProxyStatus] = useState(null); // null | "checking" | "online" | "offline"
+
+  // Load admin printer settings from DB on mount
+  useEffect(() => {
+    if (!isCollectionsApiEnabled()) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const item = await getCollectionItemApi("settings", "adminPrinter");
+        if (cancelled || !item) return;
+        if (item.printerIp) { setPrinterIp(item.printerIp); localStorage.setItem("lucia_printer_ip", item.printerIp); }
+        if (item.printerPort) { setPrinterPort(item.printerPort); localStorage.setItem("lucia_printer_port", item.printerPort); }
+        if (item.printerOffsetX) { setPrinterOffsetX(item.printerOffsetX); localStorage.setItem("lucia_printer_offset_x", item.printerOffsetX); }
+        if (item.printerProxyUrl) { setPrinterProxyUrl(item.printerProxyUrl); localStorage.setItem("lucia_print_proxy_url", item.printerProxyUrl); }
+      } catch { /* settings may not exist yet */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const [sourceId, setSourceId] = useState("");
   const [targetId, setTargetId] = useState("");
@@ -796,11 +818,25 @@ export default function DatabaseConnectionsManager() {
         <div className="mt-3 flex flex-wrap gap-2 items-center">
           <button
             type="button"
-            onClick={() => {
+            onClick={async () => {
               localStorage.setItem("lucia_printer_ip", printerIp.trim());
               localStorage.setItem("lucia_printer_port", String(printerPort || "9100").trim());
               localStorage.setItem("lucia_printer_offset_x", String(printerOffsetX || "0").trim());
               localStorage.setItem("lucia_print_proxy_url", printerProxyUrl.trim());
+              // Save to DB for all admins
+              if (isCollectionsApiEnabled()) {
+                try {
+                  await updateCollectionItemApi("settings", "adminPrinter", {
+                    id: "adminPrinter",
+                    printerIp: printerIp.trim(),
+                    printerPort: String(printerPort || "9100").trim(),
+                    printerOffsetX: String(printerOffsetX || "0").trim(),
+                    printerProxyUrl: printerProxyUrl.trim(),
+                  });
+                } catch (err) {
+                  console.warn("Failed to save printer settings to DB:", err);
+                }
+              }
               setPrinterSaved(true);
             }}
             className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"

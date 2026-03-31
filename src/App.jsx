@@ -61,6 +61,7 @@ import { useChecklists } from "./hooks/useChecklists";
 import { useServiceRequests } from "./hooks/useServiceRequests";
 import { logAuditEvent } from "./firebase/audit";
 import { getCurrentRuntimeCustomConfig, getPrimaryConnection } from "./data/firebaseConnections";
+import { isCollectionsApiEnabled, getCollectionItemApi } from "./api/collectionsApi";
 
 const loadExcelHelpers = () => import("./utils/excelHelpers");
 
@@ -883,8 +884,9 @@ function App() {
     }
   }, [restaurantsLoading, user, firebaseRestaurants, roleRestaurantIds, roleRestaurantsConfigured]);
 
-  // Синхронізація принтера по фільтру локації (для всіх користувачів)
+  // Синхронізація принтера по фільтру локації (для не-адмінів; адмін бере з settings)
   useEffect(() => {
+    if (user?.role === 'admin') return;
     const locName = filters?.locationName;
     if (!locName || !firebaseRestaurants.length) return;
     const rest = firebaseRestaurants.find((r) =>
@@ -899,7 +901,33 @@ function App() {
       localStorage.removeItem("lucia_printer_ip");
       localStorage.removeItem("lucia_printer_port");
     }
-  }, [filters?.locationName, firebaseRestaurants]);
+  }, [filters?.locationName, firebaseRestaurants, user?.role]);
+
+  // Синхронізація принтера для адмінів з колекції settings (спільна для всіх адмінів)
+  useEffect(() => {
+    if (user?.role !== 'admin') return;
+    if (!isCollectionsApiEnabled()) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const item = await getCollectionItemApi("settings", "adminPrinter");
+        if (cancelled || !item) return;
+        if (item.printerIp) {
+          localStorage.setItem("lucia_printer_ip", String(item.printerIp).trim());
+        }
+        if (item.printerPort) {
+          localStorage.setItem("lucia_printer_port", String(item.printerPort).trim());
+        }
+        if (item.printerOffsetX) {
+          localStorage.setItem("lucia_printer_offset_x", String(item.printerOffsetX).trim());
+        }
+        if (item.printerProxyUrl) {
+          localStorage.setItem("lucia_print_proxy_url", String(item.printerProxyUrl).trim());
+        }
+      } catch { /* settings may not exist yet */ }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.role]);
 
   // Допоміжна функція для отримання вкладок для конкретного підрозділу з menuStructure
   const getTabsForSection = (navId) => {
