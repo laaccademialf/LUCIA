@@ -2593,6 +2593,140 @@ const handleAssetsBatchImport = async (req, res) => {
   const dbConfig = getAssetsRuntimeConfig();
   const results = { created: 0, updated: 0, failed: 0, errors: [] };
 
+  // --- MySQL: optimized single-connection batch ---
+  if (dbConfig.dbEngine === "mysql") {
+    const mysql = await import("mysql2/promise");
+    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
+    try {
+      const tableName = await resolveCollectionTableMySql(conn, "assets");
+      const isFlatTable = String(tableName || "").endsWith("_flat");
+
+      // Batch-fetch existing items for updates (single query)
+      const updateIds = items
+        .map((item) => String(item?.existingId || "").trim())
+        .filter(Boolean);
+
+      const existingMap = new Map();
+      if (updateIds.length > 0) {
+        const CHUNK = 500;
+        for (let offset = 0; offset < updateIds.length; offset += CHUNK) {
+          const chunk = updateIds.slice(offset, offset + CHUNK);
+          const ph = chunk.map(() => "?").join(", ");
+          const [rows] = await conn.execute(
+            `SELECT * FROM ${quoteIdentMySql(tableName)} WHERE id IN (${ph})`,
+            chunk
+          );
+          for (const row of rows) {
+            existingMap.set(String(row.id || ""), mapMySqlRowToDocument(row));
+          }
+        }
+      }
+
+      // Pre-process: normalize, flatten, aggregate column types
+      const processedItems = [];
+      const aggregatedTypeMap = {};
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        try {
+          const existingId = String(item?.existingId || "").trim();
+          const rawPayload = item.payload || item;
+
+          let normalized;
+          if (existingId) {
+            const prev = { ...(existingMap.get(existingId) || {}) };
+            delete prev.id;
+            normalized = {
+              ...prev,
+              ...normalizeAssetPayload(rawPayload),
+              updatedAt: new Date().toISOString(),
+            };
+          } else {
+            normalized = {
+              ...normalizeAssetPayload(rawPayload),
+              createdAt: rawPayload?.createdAt || new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+          }
+
+          const nextId = existingId || String(rawPayload?.id || "").trim() || randomId();
+          const flat = flattenScalarFields(normalized);
+
+          for (const [col, value] of Object.entries(flat)) {
+            aggregatedTypeMap[col] = mergeTypes(aggregatedTypeMap[col], detectValueType(value));
+          }
+
+          processedItems.push({ index: i, id: nextId, normalized, flat, isUpdate: Boolean(existingId) });
+        } catch (err) {
+          results.failed++;
+          if (results.errors.length < 20) {
+            results.errors.push(`#${i + 1}: ${err.message || "unknown error"}`);
+          }
+        }
+      }
+
+      // Ensure all needed columns exist in one pass
+      await ensureFlatColumnsMySql(conn, tableName, aggregatedTypeMap);
+      await ensureMySqlLongTextColumns(conn, tableName, ["inventory_change_history", "photos"]);
+
+      // Get column metadata once
+      const columnsAfterEnsure = await getMySqlColumns(conn, tableName);
+      const columnTypes = await getMySqlColumnTypes(conn, tableName);
+      const hasPayloadColumn = columnsAfterEnsure.has("payload");
+      const shouldPersistPayload = hasPayloadColumn && !isFlatTable;
+
+      // Insert/update all rows using the single connection
+      for (const processed of processedItems) {
+        try {
+          const { id, normalized, flat, isUpdate } = processed;
+          const scalarColumns = Object.keys(flat).filter((col) => columnsAfterEnsure.has(col));
+
+          const insertColumns = ["id", ...(shouldPersistPayload ? ["payload"] : []), ...scalarColumns];
+          const insertValues = [
+            id,
+            ...(shouldPersistPayload ? [JSON.stringify(normalized)] : []),
+            ...scalarColumns.map((col) =>
+              normalizeValueForMySqlColumnType(flat[col], columnTypes[col], aggregatedTypeMap[col])
+            ),
+          ];
+
+          const placeholders = insertColumns.map(() => "?").join(", ");
+          const updates = [
+            ...(shouldPersistPayload ? ["payload = VALUES(payload)"] : []),
+            ...scalarColumns.map((col) => `${quoteIdentMySql(col)} = VALUES(${quoteIdentMySql(col)})`),
+            ...(columnsAfterEnsure.has("updated_at") ? ["updated_at = CURRENT_TIMESTAMP"] : []),
+          ].join(", ");
+
+          if (!updates) {
+            await conn.execute(
+              `INSERT IGNORE INTO ${quoteIdentMySql(tableName)} (${insertColumns.map((col) => quoteIdentMySql(col)).join(", ")}) VALUES (${placeholders})`,
+              insertValues
+            );
+          } else {
+            await conn.execute(
+              `INSERT INTO ${quoteIdentMySql(tableName)} (${insertColumns.map((col) => quoteIdentMySql(col)).join(", ")}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updates}`,
+              insertValues
+            );
+          }
+
+          if (isUpdate) results.updated++;
+          else results.created++;
+        } catch (err) {
+          results.failed++;
+          if (results.errors.length < 20) {
+            results.errors.push(`#${processed.index + 1}: ${err.message || "unknown error"}`);
+          }
+        }
+      }
+    } finally {
+      await conn.end();
+    }
+
+    broadcastAssetsSse("assets-change", { type: "batch-import", at: nowIso(), created: results.created, updated: results.updated });
+    return sendJson(res, 200, { ok: true, ...results });
+  }
+
+  // --- Fallback for file/postgres engines: sequential ---
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     try {
@@ -2613,7 +2747,6 @@ const handleAssetsBatchImport = async (req, res) => {
   }
 
   broadcastAssetsSse("assets-change", { type: "batch-import", at: nowIso(), created: results.created, updated: results.updated });
-
   return sendJson(res, 200, { ok: true, ...results });
 };
 
