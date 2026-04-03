@@ -133,16 +133,30 @@ export const deleteAssetApi = async (id) => {
 };
 
 export const batchImportAssetsApi = async (items) => {
-  const response = await fetch(endpoint("/api/assets/batch"), {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ items }),
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`Assets batch import failed (${response.status}): ${body || "no body"}`);
+  const CHUNK_SIZE = 100;
+  const totals = { created: 0, updated: 0, failed: 0, errors: [] };
+
+  for (let offset = 0; offset < items.length; offset += CHUNK_SIZE) {
+    const chunk = items.slice(offset, offset + CHUNK_SIZE);
+    const response = await fetch(endpoint("/api/assets/batch"), {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ items: chunk }),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`Assets batch import failed (${response.status}): ${body || "no body"}`);
+    }
+    const result = await response.json();
+    totals.created += result.created || 0;
+    totals.updated += result.updated || 0;
+    totals.failed += result.failed || 0;
+    if (Array.isArray(result.errors)) {
+      totals.errors.push(...result.errors.map((e) => `[chunk ${Math.floor(offset / CHUNK_SIZE) + 1}] ${e}`));
+    }
   }
-  return response.json();
+
+  return totals;
 };
 
 export const uploadAssetPhotoApi = async ({ fileName, dataUrl }) => {
