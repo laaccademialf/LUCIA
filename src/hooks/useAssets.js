@@ -304,5 +304,6 @@ export const useAssets = (enableRealtime = true) => {
     addAsset: add,
     updateAsset: update,
     deleteAsset: remove,
+    refreshAssets: refreshAssetsFromApi,
   };
 };

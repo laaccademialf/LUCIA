@@ -62,6 +62,7 @@ import { useServiceRequests } from "./hooks/useServiceRequests";
 import { logAuditEvent } from "./firebase/audit";
 import { getCurrentRuntimeCustomConfig, getPrimaryConnection } from "./data/firebaseConnections";
 import { isCollectionsApiEnabled, getCollectionItemApi } from "./api/collectionsApi";
+import { batchImportAssetsApi, isAssetsApiEnabled } from "./api/assetsApi";
 
 const loadExcelHelpers = () => import("./utils/excelHelpers");
 
@@ -442,6 +443,7 @@ function App() {
                   addAsset: addAssetToFirebase,
                   updateAsset: updateAssetInFirebase,
                   deleteAsset: deleteAssetFromFirebase,
+                  refreshAssets: refreshAssetsFromApi,
                 } = useAssets();
               // Лічильники утиліт
               const [utilityMeters, setUtilityMeters] = useState([]);
@@ -2134,6 +2136,59 @@ function App() {
         });
       }
 
+      const sanitizeFirestoreValue = (value) => {
+        if (value === undefined) return undefined;
+        if (value === null) return null;
+        const valueType = typeof value;
+        if (valueType === "string" || valueType === "boolean") return value;
+        if (valueType === "number") return Number.isFinite(value) ? value : null;
+        if (value instanceof Date) return value.toISOString();
+        if (Array.isArray(value)) {
+          return value
+            .map((item) => sanitizeFirestoreValue(item))
+            .map((item) => (Array.isArray(item) ? item.join(", ") : item))
+            .filter((item) => item !== undefined);
+        }
+        if (valueType === "object") {
+          return Object.entries(value).reduce((acc, [key, nestedValue]) => {
+            const sanitized = sanitizeFirestoreValue(nestedValue);
+            if (sanitized !== undefined) { acc[key] = sanitized; }
+            return acc;
+          }, {});
+        }
+        return String(value);
+      };
+
+      // --- Batch import via API (one request for all rows) ---
+      if (isAssetsApiEnabled()) {
+        const batchItems = validRows.map((row) => {
+          const existing = existingByInvNumber.get(row.invNumber);
+          const mergedPayload = { ...existing, ...row.asset, invNumber: row.invNumber, name: row.name };
+          const sanitizedPayload = sanitizeFirestoreValue(mergedPayload);
+          return {
+            existingId: existing?.id || "",
+            payload: sanitizedPayload,
+          };
+        });
+
+        try {
+          const result = await batchImportAssetsApi(batchItems);
+          created = result.created || 0;
+          updated = result.updated || 0;
+          failed = result.failed || 0;
+          if (Array.isArray(result.errors)) {
+            errors.push(...result.errors);
+          }
+        } catch (batchErr) {
+          console.error("Batch import failed:", batchErr);
+          alert(`Помилка пакетного імпорту: ${batchErr.message}`);
+          return;
+        }
+
+        // Single refresh after entire batch
+        try { await refreshAssetsFromApi(); } catch { /* ignore */ }
+      } else {
+      // --- Fallback: sequential writes (Firebase / non-API mode) ---
       for (const row of validRows) {
         const importedAsset = row.asset;
         const invNumber = row.invNumber;
@@ -2141,36 +2196,6 @@ function App() {
         const existing = existingByInvNumber.get(invNumber);
 
         try {
-          const sanitizeFirestoreValue = (value) => {
-            if (value === undefined) return undefined;
-            if (value === null) return null;
-
-            const valueType = typeof value;
-            if (valueType === "string" || valueType === "boolean") return value;
-            if (valueType === "number") return Number.isFinite(value) ? value : null;
-
-            if (value instanceof Date) return value.toISOString();
-
-            if (Array.isArray(value)) {
-              return value
-                .map((item) => sanitizeFirestoreValue(item))
-                .map((item) => (Array.isArray(item) ? item.join(", ") : item))
-                .filter((item) => item !== undefined);
-            }
-
-            if (valueType === "object") {
-              return Object.entries(value).reduce((acc, [key, nestedValue]) => {
-                const sanitized = sanitizeFirestoreValue(nestedValue);
-                if (sanitized !== undefined) {
-                  acc[key] = sanitized;
-                }
-                return acc;
-              }, {});
-            }
-
-            return String(value);
-          };
-
           const mergedPayload = { ...existing, ...importedAsset, invNumber, name };
           const sanitizedPayload = sanitizeFirestoreValue(mergedPayload);
           let result;
@@ -2194,6 +2219,7 @@ function App() {
           failed += 1;
           errors.push(`Рядок ${row.rowNumber}: не вдалося імпортувати (${rowError?.message || "невідома помилка"}).`);
         }
+      }
       }
 
       const dbDuplicatesWarning = duplicatedInDb.size > 0

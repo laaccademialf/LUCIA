@@ -132,6 +132,19 @@ export const deleteAssetApi = async (id) => {
   }
 };
 
+export const batchImportAssetsApi = async (items) => {
+  const response = await fetch(endpoint("/api/assets/batch"), {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ items }),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Assets batch import failed (${response.status}): ${body || "no body"}`);
+  }
+  return response.json();
+};
+
 export const uploadAssetPhotoApi = async ({ fileName, dataUrl }) => {
   const response = await fetch(endpoint("/api/assets/photos"), {
     method: "POST",

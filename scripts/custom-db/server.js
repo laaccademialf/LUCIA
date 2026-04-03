@@ -2572,6 +2572,51 @@ const handleAuthAdminResetUserPassword = async (req, res) => {
   return sendJson(res, 200, { ok: true, defaultPassword });
 };
 
+/* ---------- Batch import assets (single HTTP request for N assets) ---------- */
+
+const handleAssetsBatchImport = async (req, res) => {
+  let body;
+  try {
+    body = await parseJsonBody(req, 50 * 1024 * 1024); // 50 MB limit for large imports
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  const items = Array.isArray(body?.items) ? body.items : [];
+  if (items.length === 0) {
+    return sendJson(res, 400, { ok: false, error: "items array is required and must not be empty" });
+  }
+  if (items.length > 5000) {
+    return sendJson(res, 400, { ok: false, error: "Maximum 5000 items per batch" });
+  }
+
+  const dbConfig = getAssetsRuntimeConfig();
+  const results = { created: 0, updated: 0, failed: 0, errors: [] };
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    try {
+      const existingId = String(item?.existingId || "").trim();
+      if (existingId) {
+        await updateAssetData(existingId, item.payload || item, dbConfig);
+        results.updated++;
+      } else {
+        await createAssetData(item.payload || item, dbConfig);
+        results.created++;
+      }
+    } catch (err) {
+      results.failed++;
+      if (results.errors.length < 20) {
+        results.errors.push(`#${i + 1}: ${err.message || "unknown error"}`);
+      }
+    }
+  }
+
+  broadcastAssetsSse("assets-change", { type: "batch-import", at: nowIso(), created: results.created, updated: results.updated });
+
+  return sendJson(res, 200, { ok: true, ...results });
+};
+
 const handleAssetsApi = async (req, res, assetId) => {
   if (!isAuthorized(req)) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
@@ -3090,6 +3135,17 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === "/settings/firebase-runtime" && method === "DELETE") {
     return handleDeleteRuntimeSettings(req, res);
+  }
+
+  if (pathname === "/api/assets/batch" && method === "POST") {
+    if (!isAuthorized(req)) {
+      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+    }
+    try {
+      return await handleAssetsBatchImport(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
   }
 
   if (pathname === "/api/assets") {
