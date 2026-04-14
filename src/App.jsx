@@ -3806,11 +3806,7 @@ function App() {
     const isBarWineTab =
       topTabKey.includes("asortment") ||
       topTabKey.includes("assortment") ||
-      topTabKey.includes("barvino") ||
-      topTabKey.includes("tipical") ||
-      topTabKey.includes("typical") ||
-      topTabKey.includes("stific") ||
-      topTabKey.includes("notic");
+      topTabKey.includes("barvino");
 
     if (isBarWineNav || isBarWineTab) {
       return (
@@ -3835,9 +3831,11 @@ function App() {
       topTabKey.includes("platezh") ||
       topTabKey.includes("platі") ||
       topTabKey.includes("mypayment") ||
-      topTabKey.includes("typical") ||
+      topTabKey.includes("paymenttypical") ||
       topTabKey.includes("typovi") ||
-      topTabKey.includes("paymentfields");
+      topTabKey.includes("paymentfields") ||
+      topTabKey.includes("paymentsbase") ||
+      topTabKey.includes("approvalpeople");
 
     if (isPaymentNav || isPaymentTab) {
       return (

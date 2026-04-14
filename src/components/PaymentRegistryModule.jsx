@@ -119,6 +119,16 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     }
   });
 
+  // Approval routes state (rules for who approves what)
+  const [approvalRoutes, setApprovalRoutes] = useState(() => {
+    try {
+      const saved = localStorage.getItem("lucia_payment_approval_routes");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   // Approval modal state
   const [approvalModal, setApprovalModal] = useState(null);
   const [approvalData, setApprovalData] = useState({ counterparty: "", iban: "", paidBy: "", comment: "" });
@@ -161,6 +171,56 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     saveCounterparties([...counterparties, entry]);
     return entry;
   }, [counterparties, saveCounterparties]);
+
+  // ─── Approval Routes CRUD ───
+  const saveApprovalRoutes = useCallback((list) => {
+    setApprovalRoutes(list);
+    try { localStorage.setItem("lucia_payment_approval_routes", JSON.stringify(list)); } catch { /* ignore */ }
+  }, []);
+
+  const addApprovalRoute = useCallback((route) => {
+    const id = `ar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const entry = { id, ...route, createdAt: new Date().toISOString() };
+    saveApprovalRoutes([...approvalRoutes, entry]);
+    return entry;
+  }, [approvalRoutes, saveApprovalRoutes]);
+
+  const updateApprovalRoute = useCallback((id, data) => {
+    saveApprovalRoutes(approvalRoutes.map((r) => r.id === id ? { ...r, ...data } : r));
+  }, [approvalRoutes, saveApprovalRoutes]);
+
+  const removeApprovalRoute = useCallback((id) => {
+    saveApprovalRoutes(approvalRoutes.filter((r) => r.id !== id));
+  }, [approvalRoutes, saveApprovalRoutes]);
+
+  const findApproverForPayment = useCallback((payment) => {
+    const amount = Number.parseFloat(payment.amount) || 0;
+    const category = String(payment.category || "").toLowerCase();
+    // Find most specific matching route (category+amount > category > amount > default)
+    let bestMatch = null;
+    let bestScore = -1;
+    for (const route of approvalRoutes) {
+      if (!route.approverName && !route.approverEmail) continue;
+      let score = 0;
+      const routeCategory = String(route.category || "").toLowerCase();
+      const routeMinAmount = Number.parseFloat(route.minAmount) || 0;
+      const routeMaxAmount = Number.parseFloat(route.maxAmount) || 0;
+      // Category match
+      if (routeCategory && routeCategory !== "усі" && routeCategory !== "all") {
+        if (category !== routeCategory) continue; // no match
+        score += 2;
+      }
+      // Amount range match
+      if (routeMinAmount > 0 && amount < routeMinAmount) continue;
+      if (routeMaxAmount > 0 && amount > routeMaxAmount) continue;
+      if (routeMinAmount > 0 || routeMaxAmount > 0) score += 1;
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = route;
+      }
+    }
+    return bestMatch;
+  }, [approvalRoutes]);
 
   const updateCounterparty = useCallback((id, data) => {
     saveCounterparties(counterparties.map((c) => c.id === id ? { ...c, ...data, updatedAt: new Date().toISOString() } : c));
@@ -668,7 +728,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
             </thead>
             <tbody>
               {filteredPayments.map((payment) => {
-                const canApprove = isFinance && (payment.status === "pending");
+                const matchedRoute = findApproverForPayment(payment);
+                const isAssignedApprover = matchedRoute && (
+                  (matchedRoute.approverEmail && matchedRoute.approverEmail.toLowerCase() === myEmail.toLowerCase()) ||
+                  (matchedRoute.approverName && matchedRoute.approverName === myName)
+                );
+                const canApprove = (isFinance || isAssignedApprover) && (payment.status === "pending");
                 const canSchedule = isFinance && payment.status === "approved";
                 const canMarkPaid = isFinance && (payment.status === "scheduled" || payment.status === "approved");
                 const canEdit = payment.status === "draft" || (payment.status === "pending" && payment.requestedById === myUserId);
@@ -890,6 +955,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   // ─── Render: База контрагентів ───
   const renderContractorsBase = () => <ContractorsBaseTab counterparties={counterparties} addCounterparty={addCounterparty} updateCounterparty={updateCounterparty} removeCounterparty={removeCounterparty} />;
 
+  // ─── Render: Погоджувачі ───
+  const renderApproversTab = () => <ApproversTab approvalRoutes={approvalRoutes} addApprovalRoute={addApprovalRoute} updateApprovalRoute={updateApprovalRoute} removeApprovalRoute={removeApprovalRoute} categories={typicalFields.categories} />;
+
   // ─── Tab Router ───
   const tabKey = String(topTab || "").toLowerCase();
 
@@ -903,6 +971,10 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   if (tabKey.includes("paymentsbase") || tabKey.includes("contractor") || tabKey.includes("контрагент") || tabKey.includes("counterpart")) {
     return renderContractorsBase();
+  }
+
+  if (tabKey.includes("approvalpeople") || tabKey.includes("погоджувач")) {
+    return renderApproversTab();
   }
 
   // Default: payment request / registry
@@ -1096,6 +1168,186 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
           </table>
         </div>
         <p className="mt-2 text-xs text-slate-400">Всього: {counterparties.length} контрагентів</p>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
+   APPROVERS TAB (Погоджувачі)
+   ═══════════════════════════════════════════════════ */
+
+function ApproversTab({ approvalRoutes, addApprovalRoute, updateApprovalRoute, removeApprovalRoute, categories }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editingRoute, setEditingRoute] = useState(null);
+  const [form, setForm] = useState({ category: "", minAmount: "", maxAmount: "", approverName: "", approverEmail: "" });
+
+  const resetForm = () => {
+    setForm({ category: "", minAmount: "", maxAmount: "", approverName: "", approverEmail: "" });
+    setEditingRoute(null);
+    setShowForm(false);
+  };
+
+  const openNew = () => { resetForm(); setShowForm(true); };
+
+  const openEdit = (route) => {
+    setForm({
+      category: route.category || "",
+      minAmount: route.minAmount || "",
+      maxAmount: route.maxAmount || "",
+      approverName: route.approverName || "",
+      approverEmail: route.approverEmail || "",
+    });
+    setEditingRoute(route);
+    setShowForm(true);
+  };
+
+  const handleSubmit = () => {
+    if (!form.approverName.trim() && !form.approverEmail.trim()) {
+      alert("Вкажіть ім'я або email погоджувача.");
+      return;
+    }
+    if (editingRoute) {
+      updateApprovalRoute(editingRoute.id, form);
+    } else {
+      addApprovalRoute(form);
+    }
+    resetForm();
+  };
+
+  const handleDelete = (route) => {
+    const label = route.approverName || route.approverEmail || "маршрут";
+    if (!window.confirm(`Видалити маршрут "${label}"?`)) return;
+    removeApprovalRoute(route.id);
+  };
+
+  const allCategories = ["Усі категорії", ...(categories || [])];
+
+  const formatAmount = (val) => {
+    const n = Number.parseFloat(val);
+    return n > 0 ? n.toLocaleString("uk-UA") : "—";
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className={cardClassLocal}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold flex items-center gap-2">
+              <Check size={18} /> Маршрутизація погоджень
+            </h3>
+            <p className="text-sm text-slate-500 mt-1">
+              Налаштуйте, хто погоджує платежі залежно від категорії та суми. Якщо правило не знайдено — погоджує фінансовий директор.
+            </p>
+          </div>
+          <button type="button" className={btnPrimaryLocal} onClick={openNew}>
+            <Plus size={14} /> Нове правило
+          </button>
+        </div>
+      </div>
+
+      {/* Form */}
+      {showForm && (
+        <div className={cardClassLocal}>
+          <h4 className="text-sm font-semibold mb-3">{editingRoute ? "Редагувати правило" : "Нове правило маршрутизації"}</h4>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div>
+              <label className="text-sm font-semibold">Категорія платежу</label>
+              <select className={inputClassLocal} value={form.category} onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}>
+                <option value="">Усі категорії</option>
+                {(categories || []).map((cat) => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <label className="text-sm font-semibold">Сума від (₴)</label>
+                <input type="number" min="0" className={inputClassLocal} value={form.minAmount} onChange={(e) => setForm((p) => ({ ...p, minAmount: e.target.value }))} placeholder="0" />
+              </div>
+              <div className="flex-1">
+                <label className="text-sm font-semibold">Сума до (₴)</label>
+                <input type="number" min="0" className={inputClassLocal} value={form.maxAmount} onChange={(e) => setForm((p) => ({ ...p, maxAmount: e.target.value }))} placeholder="∞" />
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Ім'я погоджувача *</label>
+              <input className={inputClassLocal} value={form.approverName} onChange={(e) => setForm((p) => ({ ...p, approverName: e.target.value }))} placeholder="Іванов Іван Іванович" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Email погоджувача</label>
+              <input type="email" className={inputClassLocal} value={form.approverEmail} onChange={(e) => setForm((p) => ({ ...p, approverEmail: e.target.value }))} placeholder="approver@company.ua" />
+            </div>
+          </div>
+          <div className="mt-4 flex gap-2">
+            <button type="button" className={btnPrimaryLocal} onClick={handleSubmit}>
+              <Save size={14} /> {editingRoute ? "Зберегти зміни" : "Додати правило"}
+            </button>
+            <button type="button" className={btnSecondaryLocal} onClick={resetForm}>Скасувати</button>
+          </div>
+        </div>
+      )}
+
+      {/* Table */}
+      <div className={cardClassLocal}>
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-slate-700">
+              <tr>
+                <th className="px-3 py-2 text-left">#</th>
+                <th className="px-3 py-2 text-left">Категорія</th>
+                <th className="px-3 py-2 text-left">Сума від</th>
+                <th className="px-3 py-2 text-left">Сума до</th>
+                <th className="px-3 py-2 text-left">Погоджувач</th>
+                <th className="px-3 py-2 text-left">Email</th>
+                <th className="px-3 py-2 text-left">Дії</th>
+              </tr>
+            </thead>
+            <tbody>
+              {approvalRoutes.map((route, idx) => (
+                <tr key={route.id} className="border-t border-slate-200 hover:bg-slate-50">
+                  <td className="px-3 py-2 text-slate-400">{idx + 1}</td>
+                  <td className="px-3 py-2">{route.category || "Усі категорії"}</td>
+                  <td className="px-3 py-2">{formatAmount(route.minAmount)}</td>
+                  <td className="px-3 py-2">{formatAmount(route.maxAmount)}</td>
+                  <td className="px-3 py-2 font-medium">{route.approverName || "—"}</td>
+                  <td className="px-3 py-2">{route.approverEmail || "—"}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex gap-1">
+                      <button type="button" className="p-1 hover:bg-slate-100 rounded" title="Редагувати" onClick={() => openEdit(route)}>
+                        <Edit3 size={15} className="text-slate-500" />
+                      </button>
+                      <button type="button" className="p-1 hover:bg-red-50 rounded" title="Видалити" onClick={() => handleDelete(route)}>
+                        <Trash2 size={15} className="text-red-400" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {approvalRoutes.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                    Правил маршрутизації ще немає. Додайте перше правило — інакше всі платежі погоджує фінансовий директор.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-2 text-xs text-slate-400">Всього: {approvalRoutes.length} правил</p>
+      </div>
+
+      {/* Info */}
+      <div className={cardClassLocal}>
+        <h4 className="text-sm font-semibold mb-2">Як працює маршрутизація?</h4>
+        <ul className="text-sm text-slate-600 space-y-1 list-disc pl-5">
+          <li><strong>Категорія + Сума</strong> — найвищий пріоритет (збіг і по категорії, і по діапазону суми)</li>
+          <li><strong>Тільки категорія</strong> — середній пріоритет</li>
+          <li><strong>Тільки сума</strong> — нижчий пріоритет</li>
+          <li><strong>Правило без обмежень</strong> — стандартний погоджувач (якщо немає більш точного правила)</li>
+          <li>Якщо жодне правило не підійшло, платіж погоджує <strong>фінансовий директор</strong></li>
+        </ul>
       </div>
     </div>
   );
