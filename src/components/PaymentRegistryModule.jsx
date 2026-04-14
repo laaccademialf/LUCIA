@@ -1175,6 +1175,45 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
                 <th className="px-3 py-2 text-left">Email</th>
                 <th className="px-3 py-2 text-left">Дії</th>
               </tr>
+            </thead>
+            <tbody>
+              {filtered.map((cp) => (
+                <tr key={cp.id} className="border-t border-slate-200 hover:bg-slate-50">
+                  <td className="px-3 py-2 font-medium">{cp.name}</td>
+                  <td className="px-3 py-2">{cp.edrpou || "—"}</td>
+                  <td className="px-3 py-2 font-mono text-xs max-w-[180px] truncate">{cp.iban || "—"}</td>
+                  <td className="px-3 py-2">{cp.contactPerson || "—"}</td>
+                  <td className="px-3 py-2">{cp.phone || "—"}</td>
+                  <td className="px-3 py-2">{cp.email || "—"}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex gap-1">
+                      <button type="button" className="p-1 hover:bg-slate-100 rounded" title="Редагувати" onClick={() => openEdit(cp)}>
+                        <Edit3 size={15} className="text-slate-500" />
+                      </button>
+                      <button type="button" className="p-1 hover:bg-red-50 rounded" title="Видалити" onClick={() => handleDelete(cp)}>
+                        <Trash2 size={15} className="text-red-400" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                    {counterparties.length === 0 ? "Контрагентів ще немає. Додайте першого." : "Нічого не знайдено."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-2 text-xs text-slate-400">Всього: {counterparties.length} контрагентів</p>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
    PAYERS BASE TAB (База платників)
    ═══════════════════════════════════════════════════ */
 
@@ -1356,45 +1395,6 @@ function PayersBaseTab({ payers, addPayer, updatePayer, removePayer }) {
           </table>
         </div>
         <p className="mt-2 text-xs text-slate-400">Всього: {payers.length} платників</p>
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════
-            </thead>
-            <tbody>
-              {filtered.map((cp) => (
-                <tr key={cp.id} className="border-t border-slate-200 hover:bg-slate-50">
-                  <td className="px-3 py-2 font-medium">{cp.name}</td>
-                  <td className="px-3 py-2">{cp.edrpou || "—"}</td>
-                  <td className="px-3 py-2 font-mono text-xs max-w-[180px] truncate">{cp.iban || "—"}</td>
-                  <td className="px-3 py-2">{cp.contactPerson || "—"}</td>
-                  <td className="px-3 py-2">{cp.phone || "—"}</td>
-                  <td className="px-3 py-2">{cp.email || "—"}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex gap-1">
-                      <button type="button" className="p-1 hover:bg-slate-100 rounded" title="Редагувати" onClick={() => openEdit(cp)}>
-                        <Edit3 size={15} className="text-slate-500" />
-                      </button>
-                      <button type="button" className="p-1 hover:bg-red-50 rounded" title="Видалити" onClick={() => handleDelete(cp)}>
-                        <Trash2 size={15} className="text-red-400" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
-                    {counterparties.length === 0 ? "Контрагентів ще немає. Додайте першого." : "Нічого не знайдено."}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        <p className="mt-2 text-xs text-slate-400">Всього: {counterparties.length} контрагентів</p>
       </div>
     </div>
   );
