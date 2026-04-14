@@ -1,6 +1,13 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { Check, X, Plus, Filter, Download, Printer, Clock3, FileText, Edit3, Trash2, Search, Save, Building2 } from "lucide-react";
 import { getUsers } from "../firebase/users";
+import {
+  isPaymentRequestsApiEnabled,
+  getPaymentRequestsApi,
+  addPaymentRequestApi,
+  updatePaymentRequestApi,
+  deletePaymentRequestApi,
+} from "../api/paymentRequestsApi.js";
 
 const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
@@ -95,6 +102,21 @@ const COLLECTION_NAME = "paymentRequests";
 export default function PaymentRegistryModule({ topTab, restaurants, user, onAuditEvent }) {
   // ─── State ───
   const [payments, setPayments] = useState([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const paymentsLoadedRef = useRef(false);
+
+  // Load payments from DB on mount
+  useEffect(() => {
+    if (paymentsLoadedRef.current) return;
+    if (!isPaymentRequestsApiEnabled()) return;
+    paymentsLoadedRef.current = true;
+    setPaymentsLoading(true);
+    getPaymentRequestsApi()
+      .then((data) => setPayments(Array.isArray(data) ? data : []))
+      .catch((err) => console.error("[PaymentRegistry] Failed to load payments:", err))
+      .finally(() => setPaymentsLoading(false));
+  }, []);
+
   const [typicalFields, setTypicalFields] = useState(() => {
     try {
       const saved = localStorage.getItem("lucia_payment_typical_fields");
@@ -382,20 +404,20 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     const status = asDraft ? "draft" : "pending";
 
     if (editingPayment) {
+      const updatedData = {
+        ...editingPayment,
+        ...formData,
+        amount,
+        status: editingPayment.status === "draft" ? status : editingPayment.status,
+        updatedAt: nowIso,
+        updatedById: myUserId,
+        updatedByName: myName,
+      };
       setPayments((prev) =>
-        prev.map((p) =>
-          p.id === editingPayment.id
-            ? {
-                ...p,
-                ...formData,
-                amount,
-                status: p.status === "draft" ? status : p.status,
-                updatedAt: nowIso,
-                updatedById: myUserId,
-                updatedByName: myName,
-              }
-            : p
-        )
+        prev.map((p) => (p.id === editingPayment.id ? updatedData : p))
+      );
+      updatePaymentRequestApi(editingPayment.id, updatedData).catch((err) =>
+        console.error("[PaymentRegistry] Failed to update payment:", err)
       );
       writeAudit({
         action: "payment_request_update",
@@ -418,6 +440,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         comments: [],
       };
       setPayments((prev) => [newPayment, ...prev]);
+      addPaymentRequestApi({ ...newPayment }).catch((err) =>
+        console.error("[PaymentRegistry] Failed to save payment:", err)
+      );
       writeAudit({
         action: "payment_request_create",
         entityType: "payment_request",
@@ -449,24 +474,24 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     }
     setProcessingId(payment.id);
     const nowIso = new Date().toISOString();
+    const updatedData = {
+      ...payment,
+      status: "approved",
+      counterparty: approvalData.counterparty.trim(),
+      iban: approvalData.iban.trim() || payment.iban,
+      paidBy: approvalData.paidBy.trim() || myName,
+      approvalComment: approvalData.comment.trim(),
+      updatedAt: nowIso,
+      approvals: [
+        ...(payment.approvals || []),
+        { action: "approved", at: nowIso, byId: myUserId, byName: myName, comment: approvalData.comment.trim() },
+      ],
+    };
     setPayments((prev) =>
-      prev.map((p) =>
-        p.id === payment.id
-          ? {
-              ...p,
-              status: "approved",
-              counterparty: approvalData.counterparty.trim(),
-              iban: approvalData.iban.trim() || p.iban,
-              paidBy: approvalData.paidBy.trim() || myName,
-              approvalComment: approvalData.comment.trim(),
-              updatedAt: nowIso,
-              approvals: [
-                ...(p.approvals || []),
-                { action: "approved", at: nowIso, byId: myUserId, byName: myName, comment: approvalData.comment.trim() },
-              ],
-            }
-          : p
-      )
+      prev.map((p) => (p.id === payment.id ? updatedData : p))
+    );
+    updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
+      console.error("[PaymentRegistry] Failed to update payment:", err)
     );
     writeAudit({
       action: "payment_request_approve",
@@ -484,21 +509,21 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (reason === null) return;
     setProcessingId(payment.id);
     const nowIso = new Date().toISOString();
+    const updatedData = {
+      ...payment,
+      status: "rejected",
+      updatedAt: nowIso,
+      rejectionReason: reason,
+      approvals: [
+        ...(payment.approvals || []),
+        { action: "rejected", at: nowIso, byId: myUserId, byName: myName, reason },
+      ],
+    };
     setPayments((prev) =>
-      prev.map((p) =>
-        p.id === payment.id
-          ? {
-              ...p,
-              status: "rejected",
-              updatedAt: nowIso,
-              rejectionReason: reason,
-              approvals: [
-                ...(p.approvals || []),
-                { action: "rejected", at: nowIso, byId: myUserId, byName: myName, reason },
-              ],
-            }
-          : p
-      )
+      prev.map((p) => (p.id === payment.id ? updatedData : p))
+    );
+    updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
+      console.error("[PaymentRegistry] Failed to update payment:", err)
     );
     writeAudit({
       action: "payment_request_reject",
@@ -513,12 +538,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (processingId) return;
     setProcessingId(payment.id);
     const nowIso = new Date().toISOString();
+    const updatedData = { ...payment, status: "scheduled", updatedAt: nowIso, scheduledAt: nowIso, scheduledByName: myName };
     setPayments((prev) =>
-      prev.map((p) =>
-        p.id === payment.id
-          ? { ...p, status: "scheduled", updatedAt: nowIso, scheduledAt: nowIso, scheduledByName: myName }
-          : p
-      )
+      prev.map((p) => (p.id === payment.id ? updatedData : p))
+    );
+    updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
+      console.error("[PaymentRegistry] Failed to update payment:", err)
     );
     writeAudit({
       action: "payment_schedule",
@@ -533,12 +558,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (processingId) return;
     setProcessingId(payment.id);
     const nowIso = new Date().toISOString();
+    const updatedData = { ...payment, status: "paid", updatedAt: nowIso, paidAt: nowIso, paidByName: myName };
     setPayments((prev) =>
-      prev.map((p) =>
-        p.id === payment.id
-          ? { ...p, status: "paid", updatedAt: nowIso, paidAt: nowIso, paidByName: myName }
-          : p
-      )
+      prev.map((p) => (p.id === payment.id ? updatedData : p))
+    );
+    updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
+      console.error("[PaymentRegistry] Failed to update payment:", err)
     );
     writeAudit({
       action: "payment_mark_paid",
@@ -552,12 +577,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const cancelPayment = (payment) => {
     if (!window.confirm(`Скасувати заявку "${payment.title}"?`)) return;
     const nowIso = new Date().toISOString();
+    const updatedData = { ...payment, status: "cancelled", updatedAt: nowIso, cancelledByName: myName };
     setPayments((prev) =>
-      prev.map((p) =>
-        p.id === payment.id
-          ? { ...p, status: "cancelled", updatedAt: nowIso, cancelledByName: myName }
-          : p
-      )
+      prev.map((p) => (p.id === payment.id ? updatedData : p))
+    );
+    updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
+      console.error("[PaymentRegistry] Failed to update payment:", err)
     );
     writeAudit({
       action: "payment_cancel",
