@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { Check, X, Plus, Filter, Download, Printer, Clock3, FileText } from "lucide-react";
+import { Check, X, Plus, Filter, Download, Printer, Clock3, FileText, Edit3, Trash2, Search, Save, Building2 } from "lucide-react";
 
 const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
@@ -109,6 +109,20 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const [editingPayment, setEditingPayment] = useState(null);
   const [processingId, setProcessingId] = useState("");
 
+  // Counterparties (contractors) state
+  const [counterparties, setCounterparties] = useState(() => {
+    try {
+      const saved = localStorage.getItem("lucia_payment_counterparties");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Approval modal state
+  const [approvalModal, setApprovalModal] = useState(null);
+  const [approvalData, setApprovalData] = useState({ counterparty: "", iban: "", paidBy: "", comment: "" });
+
   // Form state
   const [formData, setFormData] = useState({
     title: "",
@@ -133,6 +147,28 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (typeof onAuditEvent !== "function") return;
     onAuditEvent(payload);
   }, [onAuditEvent]);
+
+  // ─── Counterparties CRUD ───
+  const saveCounterparties = useCallback((list) => {
+    setCounterparties(list);
+    try { localStorage.setItem("lucia_payment_counterparties", JSON.stringify(list)); } catch { /* ignore */ }
+  }, []);
+
+  const addCounterparty = useCallback((cp) => {
+    const id = `cp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const now = new Date().toISOString();
+    const entry = { id, ...cp, createdAt: now, updatedAt: now };
+    saveCounterparties([...counterparties, entry]);
+    return entry;
+  }, [counterparties, saveCounterparties]);
+
+  const updateCounterparty = useCallback((id, data) => {
+    saveCounterparties(counterparties.map((c) => c.id === id ? { ...c, ...data, updatedAt: new Date().toISOString() } : c));
+  }, [counterparties, saveCounterparties]);
+
+  const removeCounterparty = useCallback((id) => {
+    saveCounterparties(counterparties.filter((c) => c.id !== id));
+  }, [counterparties, saveCounterparties]);
 
   const myUserId = String(user?.uid || user?.id || user?.userId || "").trim();
   const myName = user?.displayName || user?.fullName || user?.email || "Користувач";
@@ -247,10 +283,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       alert("Вкажіть коректну суму платежу.");
       return;
     }
-    if (!formData.counterparty.trim()) {
-      alert("Вкажіть контрагента (отримувача).");
-      return;
-    }
+
 
     const nowIso = new Date().toISOString();
     const status = asDraft ? "draft" : "pending";
@@ -304,8 +337,23 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   };
 
   // ─── Actions ───
-  const approvePayment = (payment) => {
-    if (processingId) return;
+  const openApprovalModal = (payment) => {
+    setApprovalData({
+      counterparty: payment.counterparty || "",
+      iban: payment.iban || "",
+      paidBy: "",
+      comment: "",
+    });
+    setApprovalModal(payment);
+  };
+
+  const confirmApproval = () => {
+    const payment = approvalModal;
+    if (!payment) return;
+    if (!approvalData.counterparty.trim()) {
+      alert("Вкажіть контрагента (отримувача) для погодження.");
+      return;
+    }
     setProcessingId(payment.id);
     const nowIso = new Date().toISOString();
     setPayments((prev) =>
@@ -314,10 +362,14 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           ? {
               ...p,
               status: "approved",
+              counterparty: approvalData.counterparty.trim(),
+              iban: approvalData.iban.trim() || p.iban,
+              paidBy: approvalData.paidBy.trim() || myName,
+              approvalComment: approvalData.comment.trim(),
               updatedAt: nowIso,
               approvals: [
                 ...(p.approvals || []),
-                { action: "approved", at: nowIso, byId: myUserId, byName: myName },
+                { action: "approved", at: nowIso, byId: myUserId, byName: myName, comment: approvalData.comment.trim() },
               ],
             }
           : p
@@ -327,9 +379,10 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       action: "payment_request_approve",
       entityType: "payment_request",
       entityId: payment.id,
-      description: `Погоджено платіж "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency})`,
+      description: `Погоджено платіж "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency}) — контрагент: ${approvalData.counterparty.trim()}`,
     });
     setProcessingId("");
+    setApprovalModal(null);
   };
 
   const rejectPayment = (payment) => {
@@ -491,8 +544,15 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               </select>
             </div>
             <div>
-              <label className="text-sm font-semibold">Контрагент (отримувач) *</label>
-              <input className={inputClass} value={formData.counterparty} onChange={(e) => handleFormChange("counterparty", e.target.value)} placeholder="ТОВ Ланч Сервіс" />
+              <label className="text-sm font-semibold">Контрагент (отримувач) <span className="text-xs font-normal text-slate-400">— заповнюється при погодженні</span></label>
+              <input list="counterparties-list" className={inputClass} value={formData.counterparty} onChange={(e) => {
+                handleFormChange("counterparty", e.target.value);
+                const match = counterparties.find((c) => c.name === e.target.value);
+                if (match?.iban && !formData.iban) handleFormChange("iban", match.iban);
+              }} placeholder="ТОВ Ланч Сервіс (необов'язково)" />
+              <datalist id="counterparties-list">
+                {counterparties.map((c) => <option key={c.id} value={c.name}>{c.name}{c.edrpou ? ` (${c.edrpou})` : ""}</option>)}
+              </datalist>
             </div>
             <div>
               <label className="text-sm font-semibold">IBAN / рахунок</label>
@@ -637,7 +697,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                       <div className="flex flex-wrap gap-1">
                         {canApprove && (
                           <>
-                            <button type="button" disabled={Boolean(processingId)} onClick={() => approvePayment(payment)} className={btnApprove}>
+                            <button type="button" disabled={Boolean(processingId)} onClick={() => openApprovalModal(payment)} className={btnApprove}>
                               <Check size={12} /> Погодити
                             </button>
                             <button type="button" disabled={Boolean(processingId)} onClick={() => rejectPayment(payment)} className={btnReject}>
@@ -681,6 +741,53 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           </table>
         </div>
       </div>
+
+      {/* Approval Modal */}
+      {approvalModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setApprovalModal(null)}>
+          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-lg mx-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-semibold mb-1">Погодження платежу</h3>
+            <p className="text-sm text-slate-500 mb-4">"{approvalModal.title}" — {formatMoney(approvalModal.amount)} {approvalModal.currency}</p>
+            <div className="grid grid-cols-1 gap-3">
+              <div>
+                <label className="text-sm font-semibold">Контрагент (отримувач) *</label>
+                <input
+                  list="approval-counterparties"
+                  className={inputClass}
+                  value={approvalData.counterparty}
+                  onChange={(e) => {
+                    setApprovalData((prev) => ({ ...prev, counterparty: e.target.value }));
+                    const match = counterparties.find((c) => c.name === e.target.value);
+                    if (match?.iban) setApprovalData((prev) => ({ ...prev, iban: match.iban }));
+                  }}
+                  placeholder="Оберіть або введіть контрагента"
+                />
+                <datalist id="approval-counterparties">
+                  {counterparties.map((c) => <option key={c.id} value={c.name}>{c.name}{c.edrpou ? ` (${c.edrpou})` : ""}</option>)}
+                </datalist>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">IBAN / рахунок</label>
+                <input className={inputClass} value={approvalData.iban} onChange={(e) => setApprovalData((prev) => ({ ...prev, iban: e.target.value }))} placeholder="UA..." />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Хто платить (юрособа / ФОП)</label>
+                <input className={inputClass} value={approvalData.paidBy} onChange={(e) => setApprovalData((prev) => ({ ...prev, paidBy: e.target.value }))} placeholder="ТОВ La Famiglia" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Коментар до погодження</label>
+                <textarea className={`${inputClass} min-h-[60px]`} value={approvalData.comment} onChange={(e) => setApprovalData((prev) => ({ ...prev, comment: e.target.value }))} placeholder="Додаткові примітки" />
+              </div>
+            </div>
+            <div className="mt-4 flex gap-2">
+              <button type="button" className={btnApprove} onClick={confirmApproval} disabled={Boolean(processingId)}>
+                <Check size={14} /> Погодити платіж
+              </button>
+              <button type="button" className={btnSecondary} onClick={() => setApprovalModal(null)}>Скасувати</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -780,6 +887,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     </div>
   );
 
+  // ─── Render: База контрагентів ───
+  const renderContractorsBase = () => <ContractorsBaseTab counterparties={counterparties} addCounterparty={addCounterparty} updateCounterparty={updateCounterparty} removeCounterparty={removeCounterparty} />;
+
   // ─── Tab Router ───
   const tabKey = String(topTab || "").toLowerCase();
 
@@ -791,6 +901,202 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     return renderTypicalFields();
   }
 
+  if (tabKey.includes("paymentsbase") || tabKey.includes("contractor") || tabKey.includes("контрагент") || tabKey.includes("counterpart")) {
+    return renderContractorsBase();
+  }
+
   // Default: payment request / registry
   return renderPaymentRequest();
+}
+
+/* ═══════════════════════════════════════════════════
+   CONTRACTORS BASE TAB
+   ═══════════════════════════════════════════════════ */
+
+const cardClassLocal = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
+const inputClassLocal = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
+const btnPrimaryLocal = "inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-60";
+const btnSecondaryLocal = "inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100";
+
+function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterparty, removeCounterparty }) {
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [editingCp, setEditingCp] = useState(null);
+  const [form, setForm] = useState({ name: "", edrpou: "", iban: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
+
+  const resetForm = () => {
+    setForm({ name: "", edrpou: "", iban: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
+    setEditingCp(null);
+    setShowForm(false);
+  };
+
+  const openNew = () => { resetForm(); setShowForm(true); };
+
+  const openEdit = (cp) => {
+    setForm({
+      name: cp.name || "",
+      edrpou: cp.edrpou || "",
+      iban: cp.iban || "",
+      contactPerson: cp.contactPerson || "",
+      phone: cp.phone || "",
+      email: cp.email || "",
+      address: cp.address || "",
+      notes: cp.notes || "",
+    });
+    setEditingCp(cp);
+    setShowForm(true);
+  };
+
+  const handleSubmit = () => {
+    if (!form.name.trim()) { alert("Вкажіть назву контрагента."); return; }
+    if (editingCp) {
+      updateCounterparty(editingCp.id, form);
+    } else {
+      addCounterparty(form);
+    }
+    resetForm();
+  };
+
+  const handleDelete = (cp) => {
+    if (!window.confirm(`Видалити контрагента "${cp.name}"?`)) return;
+    removeCounterparty(cp.id);
+  };
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    if (!q) return counterparties;
+    return counterparties.filter((c) =>
+      [c.name, c.edrpou, c.iban, c.contactPerson, c.phone, c.email, c.address]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [counterparties, search]);
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className={cardClassLocal}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold flex items-center gap-2"><Building2 size={18} /> База контрагентів</h3>
+            <p className="text-sm text-slate-500 mt-1">Ведіть реєстр контрагентів для швидкого вибору при створенні та погодженні платежів.</p>
+          </div>
+          <button type="button" className={btnPrimaryLocal} onClick={openNew}>
+            <Plus size={14} /> Новий контрагент
+          </button>
+        </div>
+      </div>
+
+      {/* Search */}
+      <div className={cardClassLocal}>
+        <div className="relative">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            className={`${inputClassLocal} !pl-9 !mt-0`}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Пошук за назвою, ЄДРПОУ, IBAN, контактною особою…"
+          />
+        </div>
+      </div>
+
+      {/* Form */}
+      {showForm && (
+        <div className={cardClassLocal}>
+          <h4 className="text-sm font-semibold mb-3">{editingCp ? "Редагувати контрагента" : "Новий контрагент"}</h4>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <label className="text-sm font-semibold">Назва (юрособа / ФОП) *</label>
+              <input className={inputClassLocal} value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} placeholder='ТОВ "Ланч Сервіс"' />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">ЄДРПОУ / ІПН</label>
+              <input className={inputClassLocal} value={form.edrpou} onChange={(e) => setForm((p) => ({ ...p, edrpou: e.target.value }))} placeholder="12345678" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">IBAN / розрахунковий рахунок</label>
+              <input className={inputClassLocal} value={form.iban} onChange={(e) => setForm((p) => ({ ...p, iban: e.target.value }))} placeholder="UA..." />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Контактна особа</label>
+              <input className={inputClassLocal} value={form.contactPerson} onChange={(e) => setForm((p) => ({ ...p, contactPerson: e.target.value }))} placeholder="Іванов Іван Іванович" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Телефон</label>
+              <input className={inputClassLocal} value={form.phone} onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} placeholder="+380..." />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Email</label>
+              <input type="email" className={inputClassLocal} value={form.email} onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))} placeholder="info@company.ua" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Адреса</label>
+              <input className={inputClassLocal} value={form.address} onChange={(e) => setForm((p) => ({ ...p, address: e.target.value }))} placeholder="м. Київ, вул. ..." />
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-sm font-semibold">Примітки</label>
+              <textarea className={`${inputClassLocal} min-h-[60px]`} value={form.notes} onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))} placeholder="Додаткова інформація" />
+            </div>
+          </div>
+          <div className="mt-4 flex gap-2">
+            <button type="button" className={btnPrimaryLocal} onClick={handleSubmit}>
+              <Save size={14} /> {editingCp ? "Зберегти зміни" : "Додати контрагента"}
+            </button>
+            <button type="button" className={btnSecondaryLocal} onClick={resetForm}>Скасувати</button>
+          </div>
+        </div>
+      )}
+
+      {/* Table */}
+      <div className={cardClassLocal}>
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-slate-700">
+              <tr>
+                <th className="px-3 py-2 text-left">Назва</th>
+                <th className="px-3 py-2 text-left">ЄДРПОУ</th>
+                <th className="px-3 py-2 text-left">IBAN</th>
+                <th className="px-3 py-2 text-left">Контактна особа</th>
+                <th className="px-3 py-2 text-left">Телефон</th>
+                <th className="px-3 py-2 text-left">Email</th>
+                <th className="px-3 py-2 text-left">Дії</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((cp) => (
+                <tr key={cp.id} className="border-t border-slate-200 hover:bg-slate-50">
+                  <td className="px-3 py-2 font-medium">{cp.name}</td>
+                  <td className="px-3 py-2">{cp.edrpou || "—"}</td>
+                  <td className="px-3 py-2 font-mono text-xs max-w-[180px] truncate">{cp.iban || "—"}</td>
+                  <td className="px-3 py-2">{cp.contactPerson || "—"}</td>
+                  <td className="px-3 py-2">{cp.phone || "—"}</td>
+                  <td className="px-3 py-2">{cp.email || "—"}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex gap-1">
+                      <button type="button" className="p-1 hover:bg-slate-100 rounded" title="Редагувати" onClick={() => openEdit(cp)}>
+                        <Edit3 size={15} className="text-slate-500" />
+                      </button>
+                      <button type="button" className="p-1 hover:bg-red-50 rounded" title="Видалити" onClick={() => handleDelete(cp)}>
+                        <Trash2 size={15} className="text-red-400" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                    {counterparties.length === 0 ? "Контрагентів ще немає. Додайте першого." : "Нічого не знайдено."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-2 text-xs text-slate-400">Всього: {counterparties.length} контрагентів</p>
+      </div>
+    </div>
+  );
 }
