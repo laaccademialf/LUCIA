@@ -294,7 +294,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     let result = [...payments];
 
     if (topTab === "mypayments" && !isFinance) {
-      result = result.filter((p) => p.requestedById === myUserId || p.requestedByEmail === myEmail);
+      result = result.filter(
+        (p) =>
+          (myUserId && p.requestedById === myUserId) ||
+          (myEmail && p.requestedByEmail === myEmail) ||
+          (myName && p.requestedByName === myName)
+      );
     }
 
     if (statusFilter !== "all") {
@@ -917,7 +922,10 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   // ─── Render: Мої платежі ───
   const renderMyPayments = () => {
     const myPayments = payments.filter(
-      (p) => p.requestedById === myUserId || p.requestedByEmail === myEmail
+      (p) =>
+        (myUserId && p.requestedById === myUserId) ||
+        (myEmail && p.requestedByEmail === myEmail) ||
+        (myName && p.requestedByName === myName)
     );
     const grouped = {
       active: myPayments.filter((p) => ["draft", "pending", "approved", "scheduled"].includes(p.status)),
