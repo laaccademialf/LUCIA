@@ -1,5 +1,6 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { Check, X, Plus, Filter, Download, Printer, Clock3, FileText, Edit3, Trash2, Search, Save, Building2 } from "lucide-react";
+import { getUsers } from "../firebase/users";
 
 const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
@@ -1181,6 +1182,29 @@ function ApproversTab({ approvalRoutes, addApprovalRoute, updateApprovalRoute, r
   const [showForm, setShowForm] = useState(false);
   const [editingRoute, setEditingRoute] = useState(null);
   const [form, setForm] = useState({ category: "", minAmount: "", maxAmount: "", approverName: "", approverEmail: "" });
+  const [users, setUsers] = useState([]);
+
+  useEffect(() => {
+    getUsers().then((list) => setUsers(list || [])).catch(() => {});
+  }, []);
+
+  const handleUserSelect = (e) => {
+    const userId = e.target.value;
+    if (!userId) {
+      setForm((p) => ({ ...p, approverName: "", approverEmail: "" }));
+      return;
+    }
+    const u = users.find((u) => u.id === userId);
+    if (u) {
+      setForm((p) => ({ ...p, approverName: u.displayName || u.email || "", approverEmail: u.email || "" }));
+    }
+  };
+
+  const selectedUserId = useMemo(() => {
+    if (!form.approverEmail) return "";
+    const match = users.find((u) => (u.email || "").toLowerCase() === form.approverEmail.toLowerCase());
+    return match?.id || "";
+  }, [form.approverEmail, users]);
 
   const resetForm = () => {
     setForm({ category: "", minAmount: "", maxAmount: "", approverName: "", approverEmail: "" });
@@ -1271,13 +1295,19 @@ function ApproversTab({ approvalRoutes, addApprovalRoute, updateApprovalRoute, r
                 <input type="number" min="0" className={inputClassLocal} value={form.maxAmount} onChange={(e) => setForm((p) => ({ ...p, maxAmount: e.target.value }))} placeholder="∞" />
               </div>
             </div>
-            <div>
-              <label className="text-sm font-semibold">Ім'я погоджувача *</label>
-              <input className={inputClassLocal} value={form.approverName} onChange={(e) => setForm((p) => ({ ...p, approverName: e.target.value }))} placeholder="Іванов Іван Іванович" />
-            </div>
-            <div>
-              <label className="text-sm font-semibold">Email погоджувача</label>
-              <input type="email" className={inputClassLocal} value={form.approverEmail} onChange={(e) => setForm((p) => ({ ...p, approverEmail: e.target.value }))} placeholder="approver@company.ua" />
+            <div className="md:col-span-2">
+              <label className="text-sm font-semibold">Погоджувач *</label>
+              <select className={inputClassLocal} value={selectedUserId} onChange={handleUserSelect}>
+                <option value="">— Оберіть користувача —</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.displayName || u.email}{u.position ? ` (${u.position})` : ""}{u.email ? ` — ${u.email}` : ""}
+                  </option>
+                ))}
+              </select>
+              {form.approverName && (
+                <p className="mt-1 text-xs text-slate-500">Обрано: {form.approverName}{form.approverEmail ? ` (${form.approverEmail})` : ""}</p>
+              )}
             </div>
           </div>
           <div className="mt-4 flex gap-2">
