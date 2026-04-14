@@ -66,6 +66,9 @@ const DEFAULT_COLLECTIONS = [
   "checklistExecutions",
   "serviceRequests",
   "platformAuditLogs",
+  "assortmentMatrixItems",
+  "assortmentMatrixTypicalFields",
+  "assortmentMatrixSpecifications",
 ];
 
 const CURRENT_RUNTIME_SOURCE_ID = "__current_runtime_firebase__";

@@ -87,6 +87,7 @@ const ChecklistModule = lazy(() => import("./components/ChecklistModule"));
 const TeamHiringModule = lazy(() => import("./components/TeamHiringModule"));
 const SecurityAuditModule = lazy(() => import("./components/SecurityAuditModule"));
 const PaymentRegistryModule = lazy(() => import("./components/PaymentRegistryModule"));
+const AssortmentMatrixModule = lazy(() => import("./components/AssortmentMatrixModule"));
 const DatabaseConnectionsManager = lazy(() => import("./components/DatabaseConnectionsManager"));
 const ProfileSettingsModal = lazy(() => import("./components/ProfileSettingsModal"));
 
@@ -3786,6 +3787,39 @@ function App() {
               />
             );
           })()}
+        </div>
+      );
+    }
+
+    // Бар та вино / Асортиментна матриця
+    const activeNavLabel = String(
+      navItems.flatMap((g) => g.children || []).find((c) => c.id === activeNav)?.label || ""
+    ).toLowerCase();
+
+    const isBarWineNav =
+      activeNavKey.includes("barvino") ||
+      activeNavKey.includes("asortment") ||
+      activeNavKey.includes("assortment") ||
+      activeNavLabel.includes("бар") ||
+      activeNavLabel.includes("вин") ||
+      activeNavLabel.includes("асортимент");
+    const isBarWineTab =
+      topTabKey.includes("asortment") ||
+      topTabKey.includes("assortment") ||
+      topTabKey.includes("barvino") ||
+      topTabKey.includes("tipical") ||
+      topTabKey.includes("typical") ||
+      topTabKey.includes("stific") ||
+      topTabKey.includes("notic");
+
+    if (isBarWineNav || isBarWineTab) {
+      return (
+        <div className="grid grid-cols-1">
+          <AssortmentMatrixModule
+            topTab={topTab}
+            restaurants={restaurants}
+            user={user}
+          />
         </div>
       );
     }
