@@ -120,6 +120,16 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     }
   });
 
+  // Payers (our side) state
+  const [payers, setPayers] = useState(() => {
+    try {
+      const saved = localStorage.getItem("lucia_payment_payers");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   // Approval routes state (rules for who approves what)
   const [approvalRoutes, setApprovalRoutes] = useState(() => {
     try {
@@ -172,6 +182,28 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     saveCounterparties([...counterparties, entry]);
     return entry;
   }, [counterparties, saveCounterparties]);
+
+  // ─── Payers CRUD ───
+  const savePayers = useCallback((list) => {
+    setPayers(list);
+    try { localStorage.setItem("lucia_payment_payers", JSON.stringify(list)); } catch { /* ignore */ }
+  }, []);
+
+  const addPayer = useCallback((p) => {
+    const id = `pyr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const now = new Date().toISOString();
+    const entry = { id, ...p, createdAt: now, updatedAt: now };
+    savePayers([...payers, entry]);
+    return entry;
+  }, [payers, savePayers]);
+
+  const updatePayer = useCallback((id, data) => {
+    savePayers(payers.map((p) => p.id === id ? { ...p, ...data, updatedAt: new Date().toISOString() } : p));
+  }, [payers, savePayers]);
+
+  const removePayer = useCallback((id) => {
+    savePayers(payers.filter((p) => p.id !== id));
+  }, [payers, savePayers]);
 
   // ─── Approval Routes CRUD ───
   const saveApprovalRoutes = useCallback((list) => {
@@ -956,6 +988,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   // ─── Render: База контрагентів ───
   const renderContractorsBase = () => <ContractorsBaseTab counterparties={counterparties} addCounterparty={addCounterparty} updateCounterparty={updateCounterparty} removeCounterparty={removeCounterparty} />;
 
+  // ─── Render: База платників ───
+  const renderPayersBase = () => <PayersBaseTab payers={payers} addPayer={addPayer} updatePayer={updatePayer} removePayer={removePayer} />;
+
   // ─── Render: Погоджувачі ───
   const renderApproversTab = () => <ApproversTab approvalRoutes={approvalRoutes} addApprovalRoute={addApprovalRoute} updateApprovalRoute={updateApprovalRoute} removeApprovalRoute={removeApprovalRoute} categories={typicalFields.categories} />;
 
@@ -972,6 +1007,10 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   if (tabKey.includes("paymentsbase") || tabKey.includes("contractor") || tabKey.includes("контрагент") || tabKey.includes("counterpart")) {
     return renderContractorsBase();
+  }
+
+  if (tabKey.includes("baseofplatniki") || tabKey.includes("платник")) {
+    return renderPayersBase();
   }
 
   if (tabKey.includes("approvalpeople") || tabKey.includes("погоджувач")) {
@@ -1136,6 +1175,193 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
                 <th className="px-3 py-2 text-left">Email</th>
                 <th className="px-3 py-2 text-left">Дії</th>
               </tr>
+   PAYERS BASE TAB (База платників)
+   ═══════════════════════════════════════════════════ */
+
+function PayersBaseTab({ payers, addPayer, updatePayer, removePayer }) {
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [editingPayer, setEditingPayer] = useState(null);
+  const [form, setForm] = useState({ name: "", edrpou: "", iban: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
+
+  const resetForm = () => {
+    setForm({ name: "", edrpou: "", iban: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
+    setEditingPayer(null);
+    setShowForm(false);
+  };
+
+  const openNew = () => { resetForm(); setShowForm(true); };
+
+  const openEdit = (p) => {
+    setForm({
+      name: p.name || "",
+      edrpou: p.edrpou || "",
+      iban: p.iban || "",
+      contactPerson: p.contactPerson || "",
+      phone: p.phone || "",
+      email: p.email || "",
+      address: p.address || "",
+      notes: p.notes || "",
+    });
+    setEditingPayer(p);
+    setShowForm(true);
+  };
+
+  const handleSubmit = () => {
+    if (!form.name.trim()) { alert("Вкажіть назву платника."); return; }
+    if (editingPayer) {
+      updatePayer(editingPayer.id, form);
+    } else {
+      addPayer(form);
+    }
+    resetForm();
+  };
+
+  const handleDelete = (p) => {
+    if (!window.confirm(`Видалити платника "${p.name}"?`)) return;
+    removePayer(p.id);
+  };
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    if (!q) return payers;
+    return payers.filter((p) =>
+      [p.name, p.edrpou, p.iban, p.contactPerson, p.phone, p.email, p.address]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [payers, search]);
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className={cardClassLocal}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold flex items-center gap-2"><Building2 size={18} /> База платників</h3>
+            <p className="text-sm text-slate-500 mt-1">Реєстр осіб та організацій з нашого боку, які здійснюють оплати. Вибирайте платника при створенні заявки на платіж.</p>
+          </div>
+          <button type="button" className={btnPrimaryLocal} onClick={openNew}>
+            <Plus size={14} /> Новий платник
+          </button>
+        </div>
+      </div>
+
+      {/* Search */}
+      <div className={cardClassLocal}>
+        <div className="relative">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            className={`${inputClassLocal} !pl-9 !mt-0`}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Пошук за назвою, ЄДРПОУ, IBAN, контактною особою…"
+          />
+        </div>
+      </div>
+
+      {/* Form */}
+      {showForm && (
+        <div className={cardClassLocal}>
+          <h4 className="text-sm font-semibold mb-3">{editingPayer ? "Редагувати платника" : "Новий платник"}</h4>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <label className="text-sm font-semibold">Назва (юрособа / ФОП) *</label>
+              <input className={inputClassLocal} value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} placeholder='ТОВ "La Accademia"' />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">ЄДРПОУ / ІПН</label>
+              <input className={inputClassLocal} value={form.edrpou} onChange={(e) => setForm((prev) => ({ ...prev, edrpou: e.target.value }))} placeholder="12345678" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">IBAN / розрахунковий рахунок</label>
+              <input className={inputClassLocal} value={form.iban} onChange={(e) => setForm((prev) => ({ ...prev, iban: e.target.value }))} placeholder="UA..." />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Контактна особа</label>
+              <input className={inputClassLocal} value={form.contactPerson} onChange={(e) => setForm((prev) => ({ ...prev, contactPerson: e.target.value }))} placeholder="Іванов Іван Іванович" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Телефон</label>
+              <input className={inputClassLocal} value={form.phone} onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))} placeholder="+380..." />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Email</label>
+              <input type="email" className={inputClassLocal} value={form.email} onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))} placeholder="info@company.ua" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Адреса</label>
+              <input className={inputClassLocal} value={form.address} onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))} placeholder="м. Київ, вул. ..." />
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-sm font-semibold">Примітки</label>
+              <textarea className={`${inputClassLocal} min-h-[60px]`} value={form.notes} onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))} placeholder="Додаткова інформація" />
+            </div>
+          </div>
+          <div className="mt-4 flex gap-2">
+            <button type="button" className={btnPrimaryLocal} onClick={handleSubmit}>
+              <Save size={14} /> {editingPayer ? "Зберегти зміни" : "Додати платника"}
+            </button>
+            <button type="button" className={btnSecondaryLocal} onClick={resetForm}>Скасувати</button>
+          </div>
+        </div>
+      )}
+
+      {/* Table */}
+      <div className={cardClassLocal}>
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-slate-700">
+              <tr>
+                <th className="px-3 py-2 text-left">Назва</th>
+                <th className="px-3 py-2 text-left">ЄДРПОУ</th>
+                <th className="px-3 py-2 text-left">IBAN</th>
+                <th className="px-3 py-2 text-left">Контактна особа</th>
+                <th className="px-3 py-2 text-left">Телефон</th>
+                <th className="px-3 py-2 text-left">Email</th>
+                <th className="px-3 py-2 text-left">Дії</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((p) => (
+                <tr key={p.id} className="border-t border-slate-200 hover:bg-slate-50">
+                  <td className="px-3 py-2 font-medium">{p.name}</td>
+                  <td className="px-3 py-2">{p.edrpou || "—"}</td>
+                  <td className="px-3 py-2 font-mono text-xs max-w-[180px] truncate">{p.iban || "—"}</td>
+                  <td className="px-3 py-2">{p.contactPerson || "—"}</td>
+                  <td className="px-3 py-2">{p.phone || "—"}</td>
+                  <td className="px-3 py-2">{p.email || "—"}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex gap-1">
+                      <button type="button" className="p-1 hover:bg-slate-100 rounded" title="Редагувати" onClick={() => openEdit(p)}>
+                        <Edit3 size={15} className="text-slate-500" />
+                      </button>
+                      <button type="button" className="p-1 hover:bg-red-50 rounded" title="Видалити" onClick={() => handleDelete(p)}>
+                        <Trash2 size={15} className="text-red-400" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                    {payers.length === 0 ? "Платників ще немає. Додайте першого." : "Нічого не знайдено."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-2 text-xs text-slate-400">Всього: {payers.length} платників</p>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════
             </thead>
             <tbody>
               {filtered.map((cp) => (

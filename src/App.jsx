@@ -3835,6 +3835,7 @@ function App() {
       topTabKey.includes("typovi") ||
       topTabKey.includes("paymentfields") ||
       topTabKey.includes("paymentsbase") ||
+      topTabKey.includes("baseofplatniki") ||
       topTabKey.includes("approvalpeople");
 
     if (isPaymentNav || isPaymentTab) {
