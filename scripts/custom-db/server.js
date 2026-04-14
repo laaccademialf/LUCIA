@@ -7,7 +7,14 @@ import net from "node:net";
 const PORT = Number(process.env.MIGRATION_PORT || 8787);
 const HOST = process.env.MIGRATION_HOST || "0.0.0.0";
 const TOKEN = String(process.env.CUSTOM_MIGRATION_TOKEN || "").trim();
-const ENGINE = String(process.env.MIGRATION_DB_ENGINE || "file").trim().toLowerCase();
+// Auto-detect engine: якщо MySQL credentials налаштовані — використовувати mysql замість file
+const _explicitEngine = String(process.env.MIGRATION_DB_ENGINE || "").trim().toLowerCase();
+const _hasMySqlCreds = Boolean(
+  String(process.env.MYSQL_HOST || "").trim() &&
+  String(process.env.MYSQL_USER || "").trim() &&
+  String(process.env.MYSQL_DATABASE || "").trim()
+);
+const ENGINE = _explicitEngine || (_hasMySqlCreds ? "mysql" : "file");
 const DATA_DIR = process.env.CUSTOM_MIGRATION_DATA_DIR || "./tmp/custom-db";
 const SETTINGS_FILE = process.env.RUNTIME_SETTINGS_FILE || "./tmp/custom-db/runtime-settings.json";
 const POSTGRES_URL = String(process.env.POSTGRES_URL || "").trim();
