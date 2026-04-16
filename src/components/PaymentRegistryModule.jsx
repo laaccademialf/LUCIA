@@ -8,6 +8,13 @@ import {
   updatePaymentRequestApi,
   deletePaymentRequestApi,
 } from "../api/paymentRequestsApi.js";
+import {
+  isPaymentSettingsApiEnabled,
+  getPayersApi, addPayerApi, updatePayerApi, deletePayerApi,
+  getCounterpartiesApi, addCounterpartyApi, updateCounterpartyApi, deleteCounterpartyApi,
+  getApprovalRoutesApi, addApprovalRouteApi, updateApprovalRouteApi, deleteApprovalRouteApi,
+  getTypicalFieldsApi, saveTypicalFieldsApi,
+} from "../api/paymentSettingsApi.js";
 
 const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
@@ -352,15 +359,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       .finally(() => setPaymentsLoading(false));
   }, []);
 
-  const [typicalFields, setTypicalFields] = useState(() => {
-    try {
-      const saved = localStorage.getItem("lucia_payment_typical_fields");
-      const parsed = JSON.parse(saved);
-      return { categories: parsed.categories || [...PAYMENT_CATEGORIES], defaultCurrency: parsed.defaultCurrency || "UAH", vatRates: parsed.vatRates || [7, 20] };
-    } catch {
-      return { categories: [...PAYMENT_CATEGORIES], defaultCurrency: "UAH", vatRates: [7, 20] };
-    }
-  });
+  const defaultTypicalFields = { categories: [...PAYMENT_CATEGORIES], defaultCurrency: "UAH", vatRates: [7, 20] };
+  const [typicalFields, setTypicalFields] = useState(defaultTypicalFields);
+  const typicalFieldsDbIdRef = useRef(null);
   const [statusFilter, setStatusFilter] = useState("all");
   const [urgencyFilter, setUrgencyFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -371,34 +372,40 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const [processingId, setProcessingId] = useState("");
 
   // Counterparties (contractors) state
-  const [counterparties, setCounterparties] = useState(() => {
-    try {
-      const saved = localStorage.getItem("lucia_payment_counterparties");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [counterparties, setCounterparties] = useState([]);
 
   // Payers (our side) state
-  const [payers, setPayers] = useState(() => {
-    try {
-      const saved = localStorage.getItem("lucia_payment_payers");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [payers, setPayers] = useState([]);
 
   // Approval routes state (rules for who approves what)
-  const [approvalRoutes, setApprovalRoutes] = useState(() => {
-    try {
-      const saved = localStorage.getItem("lucia_payment_approval_routes");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
+  const [approvalRoutes, setApprovalRoutes] = useState([]);
+
+  // Load settings from DB on mount
+  const settingsLoadedRef = useRef(false);
+  useEffect(() => {
+    if (settingsLoadedRef.current) return;
+    if (!isPaymentSettingsApiEnabled()) {
+      // Fallback: load from localStorage
+      try { const s = localStorage.getItem("lucia_payment_typical_fields"); if (s) { const p = JSON.parse(s); setTypicalFields({ categories: p.categories || [...PAYMENT_CATEGORIES], defaultCurrency: p.defaultCurrency || "UAH", vatRates: p.vatRates || [7, 20] }); } } catch { /* ignore */ }
+      try { const s = localStorage.getItem("lucia_payment_counterparties"); if (s) setCounterparties(JSON.parse(s)); } catch { /* ignore */ }
+      try { const s = localStorage.getItem("lucia_payment_payers"); if (s) setPayers(JSON.parse(s)); } catch { /* ignore */ }
+      try { const s = localStorage.getItem("lucia_payment_approval_routes"); if (s) setApprovalRoutes(JSON.parse(s)); } catch { /* ignore */ }
+      return;
     }
-  });
+    settingsLoadedRef.current = true;
+    Promise.allSettled([getPayersApi(), getCounterpartiesApi(), getApprovalRoutesApi(), getTypicalFieldsApi()])
+      .then(([payersRes, cpRes, routesRes, tfRes]) => {
+        if (payersRes.status === "fulfilled" && payersRes.value.length) setPayers(payersRes.value);
+        if (cpRes.status === "fulfilled" && cpRes.value.length) setCounterparties(cpRes.value);
+        if (routesRes.status === "fulfilled" && routesRes.value.length) setApprovalRoutes(routesRes.value);
+        if (tfRes.status === "fulfilled" && tfRes.value.length) {
+          const rec = tfRes.value[0];
+          typicalFieldsDbIdRef.current = rec.id || null;
+          setTypicalFields({ categories: rec.categories || [...PAYMENT_CATEGORIES], defaultCurrency: rec.defaultCurrency || "UAH", vatRates: rec.vatRates || [7, 20] });
+        }
+      })
+      .catch((err) => console.error("[PaymentRegistry] Failed to load settings:", err));
+  }, []);
 
   // Approval modal state
   const [approvalModal, setApprovalModal] = useState(null);
@@ -422,7 +429,6 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   // ─── Counterparties CRUD ───
   const saveCounterparties = useCallback((list) => {
     setCounterparties(list);
-    try { localStorage.setItem("lucia_payment_counterparties", JSON.stringify(list)); } catch { /* ignore */ }
   }, []);
 
   const addCounterparty = useCallback((cp) => {
@@ -430,13 +436,13 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     const now = new Date().toISOString();
     const entry = { id, ...cp, createdAt: now, updatedAt: now };
     saveCounterparties([...counterparties, entry]);
+    if (isPaymentSettingsApiEnabled()) addCounterpartyApi(entry).catch((err) => console.error("[PaymentRegistry] addCounterparty:", err));
     return entry;
   }, [counterparties, saveCounterparties]);
 
   // ─── Payers CRUD ───
   const savePayers = useCallback((list) => {
     setPayers(list);
-    try { localStorage.setItem("lucia_payment_payers", JSON.stringify(list)); } catch { /* ignore */ }
   }, []);
 
   const addPayer = useCallback((p) => {
@@ -444,36 +450,41 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     const now = new Date().toISOString();
     const entry = { id, ...p, createdAt: now, updatedAt: now };
     savePayers([...payers, entry]);
+    if (isPaymentSettingsApiEnabled()) addPayerApi(entry).catch((err) => console.error("[PaymentRegistry] addPayer:", err));
     return entry;
   }, [payers, savePayers]);
 
   const updatePayer = useCallback((id, data) => {
     savePayers(payers.map((p) => p.id === id ? { ...p, ...data, updatedAt: new Date().toISOString() } : p));
+    if (isPaymentSettingsApiEnabled()) updatePayerApi(id, data).catch((err) => console.error("[PaymentRegistry] updatePayer:", err));
   }, [payers, savePayers]);
 
   const removePayer = useCallback((id) => {
     savePayers(payers.filter((p) => p.id !== id));
+    if (isPaymentSettingsApiEnabled()) deletePayerApi(id).catch((err) => console.error("[PaymentRegistry] removePayer:", err));
   }, [payers, savePayers]);
 
   // ─── Approval Routes CRUD ───
   const saveApprovalRoutes = useCallback((list) => {
     setApprovalRoutes(list);
-    try { localStorage.setItem("lucia_payment_approval_routes", JSON.stringify(list)); } catch { /* ignore */ }
   }, []);
 
   const addApprovalRoute = useCallback((route) => {
     const id = `ar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const entry = { id, ...route, createdAt: new Date().toISOString() };
     saveApprovalRoutes([...approvalRoutes, entry]);
+    if (isPaymentSettingsApiEnabled()) addApprovalRouteApi(entry).catch((err) => console.error("[PaymentRegistry] addApprovalRoute:", err));
     return entry;
   }, [approvalRoutes, saveApprovalRoutes]);
 
   const updateApprovalRoute = useCallback((id, data) => {
     saveApprovalRoutes(approvalRoutes.map((r) => r.id === id ? { ...r, ...data } : r));
+    if (isPaymentSettingsApiEnabled()) updateApprovalRouteApi(id, data).catch((err) => console.error("[PaymentRegistry] updateApprovalRoute:", err));
   }, [approvalRoutes, saveApprovalRoutes]);
 
   const removeApprovalRoute = useCallback((id) => {
     saveApprovalRoutes(approvalRoutes.filter((r) => r.id !== id));
+    if (isPaymentSettingsApiEnabled()) deleteApprovalRouteApi(id).catch((err) => console.error("[PaymentRegistry] removeApprovalRoute:", err));
   }, [approvalRoutes, saveApprovalRoutes]);
 
   const findApproverForPayment = useCallback((payment) => {
@@ -507,10 +518,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   const updateCounterparty = useCallback((id, data) => {
     saveCounterparties(counterparties.map((c) => c.id === id ? { ...c, ...data, updatedAt: new Date().toISOString() } : c));
+    if (isPaymentSettingsApiEnabled()) updateCounterpartyApi(id, data).catch((err) => console.error("[PaymentRegistry] updateCounterparty:", err));
   }, [counterparties, saveCounterparties]);
 
   const removeCounterparty = useCallback((id) => {
     saveCounterparties(counterparties.filter((c) => c.id !== id));
+    if (isPaymentSettingsApiEnabled()) deleteCounterpartyApi(id).catch((err) => console.error("[PaymentRegistry] removeCounterparty:", err));
   }, [counterparties, saveCounterparties]);
 
   const myUserId = String(user?.uid || user?.id || user?.userId || "").trim();
@@ -1202,9 +1215,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   // ─── Typical Fields ───
   const saveTypicalFields = (updated) => {
     setTypicalFields(updated);
-    try {
-      localStorage.setItem("lucia_payment_typical_fields", JSON.stringify(updated));
-    } catch { /* ignore */ }
+    if (isPaymentSettingsApiEnabled()) {
+      saveTypicalFieldsApi(typicalFieldsDbIdRef.current, updated)
+        .then((newId) => { if (newId && !typicalFieldsDbIdRef.current) typicalFieldsDbIdRef.current = newId; })
+        .catch((err) => console.error("[PaymentRegistry] saveTypicalFields:", err));
+    }
   };
 
   const addCategory = () => {
