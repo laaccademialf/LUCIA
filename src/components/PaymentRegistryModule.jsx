@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { Check, X, Plus, Filter, Download, Printer, Clock3, FileText, Edit3, Trash2, Search, Save, Building2 } from "lucide-react";
+import { Check, X, Plus, Download, Clock3, FileText, Edit3, Trash2, Search, Save, Building2, RefreshCcw, Landmark, Pause, Play } from "lucide-react";
 import { getUsers } from "../firebase/users";
 import {
   isPaymentRequestsApiEnabled,
@@ -20,6 +20,7 @@ const PAYMENT_STATUSES = {
   draft: "Чернетка",
   pending: "На погодженні",
   approved: "Погоджено",
+  paused: "Призупинено",
   scheduled: "Заплановано до оплати",
   paid: "Оплачено",
   rejected: "Відхилено",
@@ -40,6 +41,15 @@ const PAYMENT_CATEGORIES = [
   "Інше",
 ];
 
+const RECORD_TYPE_PAYMENT_REQUEST = "payment_request";
+const RECORD_TYPE_RECURRING_TEMPLATE = "payment_recurring_template";
+
+const RECURRING_FREQUENCIES = {
+  monthly: "Щомісяця",
+  quarterly: "Щокварталу",
+  yearly: "Щороку",
+};
+
 const URGENCY_LEVELS = {
   low: "Низька",
   normal: "Звичайна",
@@ -51,6 +61,7 @@ const STATUS_COLORS = {
   draft: "bg-slate-100 text-slate-700",
   pending: "bg-amber-100 text-amber-800",
   approved: "bg-emerald-100 text-emerald-800",
+  paused: "bg-orange-100 text-orange-800",
   scheduled: "bg-blue-100 text-blue-800",
   paid: "bg-green-100 text-green-800",
   rejected: "bg-rose-100 text-rose-800",
@@ -95,9 +106,228 @@ const formatMoney = (value) => {
   return num.toLocaleString("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-const generateId = () => `pay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const parseAmountValue = (value) => {
+  const parsed = Number.parseFloat(String(value || "0").replace(/\s+/g, "").replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : NaN;
+};
 
-const COLLECTION_NAME = "paymentRequests";
+const generateId = (prefix = "pay") => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+const generatePaymentNumber = (restaurantName, restaurants, existingPayments) => {
+  const restaurant = (restaurants || []).find((r) => (r.name || r.id) === restaurantName);
+  const code = String(restaurant?.regNumber || "000").substring(0, 3).padStart(3, "0");
+  const prefix = `P${code}`;
+  let maxSeq = 0;
+  (existingPayments || []).forEach((p) => {
+    const pn = String(p.paymentNumber || "");
+    if (!pn.startsWith(prefix)) return;
+    const seq = Number.parseInt(pn.slice(prefix.length), 10);
+    if (Number.isFinite(seq) && seq > maxSeq) maxSeq = seq;
+  });
+  return `${prefix}${String(maxSeq + 1).padStart(9, "0")}`;
+};
+
+const padNumber = (value) => String(value).padStart(2, "0");
+
+const toDateOnly = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) return match[1];
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return `${parsed.getFullYear()}-${padNumber(parsed.getMonth() + 1)}-${padNumber(parsed.getDate())}`;
+};
+
+const getTodayDateOnly = () => toDateOnly(new Date().toISOString());
+
+const getLastDayOfMonth = (year, month) => new Date(year, month, 0).getDate();
+
+const getRecurringStepMonths = (frequency) => {
+  if (frequency === "quarterly") return 3;
+  if (frequency === "yearly") return 12;
+  return 1;
+};
+
+const getPreferredDay = (dayValue) => {
+  const parsed = Number.parseInt(String(dayValue || "1"), 10);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.max(1, Math.min(31, parsed));
+};
+
+const buildDateWithPreferredDay = (year, month, preferredDay) => {
+  const day = Math.min(getPreferredDay(preferredDay), getLastDayOfMonth(year, month));
+  return `${year}-${padNumber(month)}-${padNumber(day)}`;
+};
+
+const addMonthsWithPreferredDay = (dateValue, monthOffset, preferredDay) => {
+  const normalized = toDateOnly(dateValue);
+  if (!normalized) return "";
+  const [year, month] = normalized.split("-").map(Number);
+  const totalMonths = year * 12 + (month - 1) + monthOffset;
+  const nextYear = Math.floor(totalMonths / 12);
+  const nextMonth = (totalMonths % 12) + 1;
+  return buildDateWithPreferredDay(nextYear, nextMonth, preferredDay);
+};
+
+const resolveInitialRecurringOccurrence = (template) => {
+  const startDate = toDateOnly(template?.startDate) || getTodayDateOnly();
+  const preferredDay = getPreferredDay(template?.dayOfMonth);
+  const [year, month, day] = startDate.split("-").map(Number);
+  let candidate = buildDateWithPreferredDay(year, month, preferredDay);
+  while (candidate && candidate < startDate) {
+    candidate = addMonthsWithPreferredDay(candidate, getRecurringStepMonths(template?.frequency), preferredDay);
+  }
+  if (!candidate) {
+    return `${year}-${padNumber(month)}-${padNumber(day)}`;
+  }
+  return candidate;
+};
+
+const getNextRecurringOccurrence = (template, currentOccurrence) => {
+  return addMonthsWithPreferredDay(currentOccurrence, getRecurringStepMonths(template?.frequency), getPreferredDay(template?.dayOfMonth));
+};
+
+const buildRecurringOccurrenceKey = (templateId, occurrenceDate) => `${String(templateId || "").trim()}::${String(occurrenceDate || "").trim()}`;
+
+const createPaymentFormState = (defaultCurrency = "UAH") => ({
+  title: "",
+  description: "",
+  amount: "",
+  currency: defaultCurrency,
+  category: "",
+  urgency: "normal",
+  counterparty: "",
+  iban: "",
+  dueDate: "",
+  restaurant: "",
+  attachmentNote: "",
+  payerId: "",
+  paidBy: "",
+  expenseRestaurant: "",
+  vatMode: "none",
+  vatRate: "",
+  isRecurring: false,
+  frequency: "monthly",
+  dayOfMonth: "10",
+  startDate: "",
+  endDate: "",
+  noEndDate: true,
+});
+
+const createRecurringTemplateFormState = (defaultCurrency = "UAH") => ({
+  title: "",
+  description: "",
+  amount: "",
+  currency: defaultCurrency,
+  category: "",
+  urgency: "normal",
+  counterparty: "",
+  iban: "",
+  restaurant: "",
+  expenseRestaurant: "",
+  attachmentNote: "",
+  payerId: "",
+  paidBy: "",
+  startDate: getTodayDateOnly(),
+  endDate: "",
+  noEndDate: true,
+  frequency: "monthly",
+  dayOfMonth: "10",
+});
+
+const isRecurringTemplateRecord = (item) => String(item?.recordType || item?.type || "").toLowerCase() === RECORD_TYPE_RECURRING_TEMPLATE;
+
+const normalizePaymentRecord = (item) => ({
+  ...item,
+  recordType: RECORD_TYPE_PAYMENT_REQUEST,
+  approvals: Array.isArray(item?.approvals) ? item.approvals : [],
+  comments: Array.isArray(item?.comments) ? item.comments : [],
+  dueDate: toDateOnly(item?.dueDate) || "",
+  recurringOccurrenceDate: toDateOnly(item?.recurringOccurrenceDate) || "",
+});
+
+const normalizeRecurringTemplateRecord = (item) => {
+  const normalized = {
+    ...item,
+    recordType: RECORD_TYPE_RECURRING_TEMPLATE,
+    isActive: item?.isActive !== false,
+    frequency: RECURRING_FREQUENCIES[item?.frequency] ? item.frequency : "monthly",
+    dayOfMonth: String(getPreferredDay(item?.dayOfMonth)),
+    startDate: toDateOnly(item?.startDate) || toDateOnly(item?.nextOccurrenceDate) || getTodayDateOnly(),
+    endDate: toDateOnly(item?.endDate) || "",
+    nextOccurrenceDate: toDateOnly(item?.nextOccurrenceDate) || "",
+    totalGenerated: Number.parseInt(String(item?.totalGenerated || "0"), 10) || 0,
+  };
+
+  if (!normalized.nextOccurrenceDate) {
+    normalized.nextOccurrenceDate = resolveInitialRecurringOccurrence(normalized);
+  }
+
+  return normalized;
+};
+
+const createPaymentFromRecurringTemplate = (template, occurrenceDate, paymentNumber) => {
+  const nowIso = new Date().toISOString();
+  const amount = Number.isFinite(Number(template?.amount)) ? Number(template.amount) : parseAmountValue(template?.amount);
+  return {
+    id: generateId("pay"),
+    paymentNumber: paymentNumber || "",
+    recordType: RECORD_TYPE_PAYMENT_REQUEST,
+    title: template.title || "Регулярний платіж",
+    description: template.description || "",
+    amount: Number.isFinite(amount) ? amount : 0,
+    currency: template.currency || "UAH",
+    category: template.category || "",
+    urgency: template.urgency || "normal",
+    counterparty: template.counterparty || "",
+    iban: template.iban || "",
+    dueDate: occurrenceDate,
+    restaurant: template.restaurant || "",
+    expenseRestaurant: template.expenseRestaurant || template.restaurant || "",
+    attachmentNote: template.attachmentNote || "",
+    payerId: template.payerId || "",
+    paidBy: template.paidBy || "",
+    status: "approved",
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    requestedById: template.requestedById || "",
+    requestedByEmail: template.requestedByEmail || "",
+    requestedByName: template.requestedByName || "Система",
+    approvals: [],
+    comments: [],
+    recurringTemplateId: template.id,
+    recurringOccurrenceDate: occurrenceDate,
+    recurringFrequency: template.frequency,
+    recurringDayOfMonth: String(template.dayOfMonth || ""),
+  };
+};
+
+const paymentBelongsToUser = (payment, userId, email, name) => (
+  (userId && payment.requestedById === userId) ||
+  (email && payment.requestedByEmail === email) ||
+  (name && payment.requestedByName === name)
+);
+
+const escapeCsvCell = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+
+const downloadCsvFile = (filename, rows) => {
+  const csvContent = `\uFEFF${rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n")}`;
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(objectUrl);
+};
+
+const isTreasuryTabKey = (value) => {
+  const key = String(value || "").toLowerCase();
+  return key.includes("kaznachey") || key.includes("treasury") || key.includes("казнач");
+};
 
 export default function PaymentRegistryModule({ topTab, restaurants, user, onAuditEvent }) {
   // ─── State ───
@@ -112,7 +342,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     paymentsLoadedRef.current = true;
     setPaymentsLoading(true);
     getPaymentRequestsApi()
-      .then((data) => setPayments(Array.isArray(data) ? data : []))
+      .then((data) => {
+        const normalized = Array.isArray(data)
+          ? data.map((item) => (isRecurringTemplateRecord(item) ? normalizeRecurringTemplateRecord(item) : normalizePaymentRecord(item)))
+          : [];
+        setPayments(normalized);
+      })
       .catch((err) => console.error("[PaymentRegistry] Failed to load payments:", err))
       .finally(() => setPaymentsLoading(false));
   }, []);
@@ -120,9 +355,10 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const [typicalFields, setTypicalFields] = useState(() => {
     try {
       const saved = localStorage.getItem("lucia_payment_typical_fields");
-      return saved ? JSON.parse(saved) : { categories: [...PAYMENT_CATEGORIES], defaultCurrency: "UAH" };
+      const parsed = JSON.parse(saved);
+      return { categories: parsed.categories || [...PAYMENT_CATEGORIES], defaultCurrency: parsed.defaultCurrency || "UAH", vatRates: parsed.vatRates || [7, 20] };
     } catch {
-      return { categories: [...PAYMENT_CATEGORIES], defaultCurrency: "UAH" };
+      return { categories: [...PAYMENT_CATEGORIES], defaultCurrency: "UAH", vatRates: [7, 20] };
     }
   });
   const [statusFilter, setStatusFilter] = useState("all");
@@ -130,6 +366,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const [searchQuery, setSearchQuery] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editingPayment, setEditingPayment] = useState(null);
+  const [showRecurringForm, setShowRecurringForm] = useState(false);
+  const [editingRecurringTemplate, setEditingRecurringTemplate] = useState(null);
   const [processingId, setProcessingId] = useState("");
 
   // Counterparties (contractors) state
@@ -164,27 +402,17 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   // Approval modal state
   const [approvalModal, setApprovalModal] = useState(null);
-  const [approvalData, setApprovalData] = useState({ counterparty: "", iban: "", paidBy: "", comment: "" });
+  const [approvalData, setApprovalData] = useState({ counterparty: "", iban: "", paidBy: "", payerId: "", comment: "" });
 
   // Form state
-  const [formData, setFormData] = useState({
-    title: "",
-    description: "",
-    amount: "",
-    currency: "UAH",
-    category: "",
-    urgency: "normal",
-    counterparty: "",
-    iban: "",
-    dueDate: "",
-    restaurant: "",
-    attachmentNote: "",
-  });
+  const [formData, setFormData] = useState(() => createPaymentFormState("UAH"));
+  const [recurringFormData, setRecurringFormData] = useState(() => createRecurringTemplateFormState("UAH"));
 
   // Typical fields editor state
   const [newCategory, setNewCategory] = useState("");
 
   const isFinance = isFinanceLikeUser(user);
+  const isAdmin = user?.role === "admin";
 
   const writeAudit = useCallback((payload) => {
     if (typeof onAuditEvent !== "function") return;
@@ -288,10 +516,145 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const myUserId = String(user?.uid || user?.id || user?.userId || "").trim();
   const myName = user?.displayName || user?.fullName || user?.email || "Користувач";
   const myEmail = String(user?.email || "").trim();
+  const userRestaurant = useMemo(() => {
+    if (user?.role === "admin") return "";
+    const key = String(user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name || "").trim();
+    if (!key) return "";
+    const match = (restaurants || []).find((r) => {
+      const n = String(r?.name || "").trim().toLowerCase();
+      const i = String(r?.id || "").trim().toLowerCase();
+      return n === key.toLowerCase() || i === key.toLowerCase();
+    });
+    return match ? (match.name || match.id) : key;
+  }, [user, restaurants]);
+
+  const paymentRequests = useMemo(
+    () => payments.filter((item) => !isRecurringTemplateRecord(item)).map(normalizePaymentRecord),
+    [payments]
+  );
+
+  const recurringTemplates = useMemo(
+    () => payments.filter(isRecurringTemplateRecord).map(normalizeRecurringTemplateRecord),
+    [payments]
+  );
+
+  const payersById = useMemo(() => {
+    const next = new Map();
+    payers.forEach((payer) => {
+      if (payer?.id) next.set(String(payer.id), payer);
+    });
+    return next;
+  }, [payers]);
+
+  const getPayersForRestaurant = useCallback((restaurantName) => {
+    if (!restaurantName) return payers;
+    const matched = [];
+    const rest = [];
+    for (const p of payers) {
+      const ids = Array.isArray(p.restaurantIds) ? p.restaurantIds : [];
+      if (ids.length === 0 || ids.some((id) => String(id || "").toLowerCase() === String(restaurantName || "").toLowerCase())) {
+        matched.push(p);
+      } else {
+        rest.push(p);
+      }
+    }
+    return [...matched, ...rest];
+  }, [payers]);
+
+  const updateStoredRecord = useCallback((recordId, updater) => {
+    setPayments((prev) => prev.map((item) => (item.id === recordId ? updater(item) : item)));
+  }, []);
+
+  const appendStoredRecord = useCallback((record) => {
+    setPayments((prev) => [record, ...prev]);
+  }, []);
+
+  const replaceStoredRecords = useCallback((nextRecords) => {
+    setPayments((prev) => {
+      const existingById = new Map(prev.map((item) => [item.id, item]));
+      nextRecords.forEach((item) => {
+        existingById.set(item.id, item);
+      });
+      return Array.from(existingById.values()).sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!recurringTemplates.length) return;
+    const today = getTodayDateOnly();
+    const existingOccurrenceKeys = new Set(
+      paymentRequests
+        .filter((payment) => payment.recurringTemplateId && payment.recurringOccurrenceDate)
+        .map((payment) => buildRecurringOccurrenceKey(payment.recurringTemplateId, payment.recurringOccurrenceDate))
+    );
+
+    const paymentsToCreate = [];
+    const templatesToUpdate = [];
+
+    recurringTemplates.forEach((template) => {
+      if (!template.isActive) return;
+      let occurrenceDate = toDateOnly(template.nextOccurrenceDate) || resolveInitialRecurringOccurrence(template);
+      let generatedCount = 0;
+
+      while (occurrenceDate && occurrenceDate <= today) {
+        if (template.endDate && occurrenceDate > template.endDate) {
+          occurrenceDate = "";
+          break;
+        }
+
+        const occurrenceKey = buildRecurringOccurrenceKey(template.id, occurrenceDate);
+        if (!existingOccurrenceKeys.has(occurrenceKey)) {
+          const allExisting = [...paymentRequests, ...paymentsToCreate];
+          const pNum = generatePaymentNumber(template.restaurant || template.expenseRestaurant, restaurants, allExisting);
+          const generatedPayment = createPaymentFromRecurringTemplate(template, occurrenceDate, pNum);
+          paymentsToCreate.push(generatedPayment);
+          existingOccurrenceKeys.add(occurrenceKey);
+          generatedCount += 1;
+        }
+
+        const nextOccurrence = getNextRecurringOccurrence(template, occurrenceDate);
+        if (!nextOccurrence || nextOccurrence === occurrenceDate) {
+          occurrenceDate = "";
+          break;
+        }
+        occurrenceDate = nextOccurrence;
+      }
+
+      const shouldDeactivate = Boolean(template.endDate && occurrenceDate && occurrenceDate > template.endDate);
+      const normalizedNextOccurrence = shouldDeactivate ? "" : occurrenceDate;
+      if (generatedCount > 0 || normalizedNextOccurrence !== template.nextOccurrenceDate || shouldDeactivate !== !template.isActive) {
+        templatesToUpdate.push({
+          ...template,
+          nextOccurrenceDate: normalizedNextOccurrence,
+          isActive: shouldDeactivate ? false : template.isActive,
+          totalGenerated: (Number(template.totalGenerated) || 0) + generatedCount,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    });
+
+    if (!paymentsToCreate.length && !templatesToUpdate.length) return;
+
+    replaceStoredRecords([...paymentsToCreate, ...templatesToUpdate]);
+
+    paymentsToCreate.forEach((payment) => {
+      addPaymentRequestApi(payment).catch((err) => console.error("[PaymentRegistry] Failed to create recurring payment:", err));
+      writeAudit({
+        action: "payment_request_create_recurring",
+        entityType: "payment_request",
+        entityId: payment.id,
+        description: `Автоматично створено регулярний платіж "${payment.title}" на ${formatDate(payment.dueDate)}`,
+      });
+    });
+
+    templatesToUpdate.forEach((template) => {
+      updatePaymentRequestApi(template.id, template).catch((err) => console.error("[PaymentRegistry] Failed to update recurring template:", err));
+    });
+  }, [paymentRequests, recurringTemplates, replaceStoredRecords, writeAudit]);
 
   // ─── Filtering ───
   const filteredPayments = useMemo(() => {
-    let result = [...payments];
+    let result = [...paymentRequests];
 
     if (topTab === "mypayments" && !isFinance) {
       result = result.filter(
@@ -311,7 +674,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       result = result.filter((p) =>
-        [p.title, p.counterparty, p.category, p.description, p.iban, p.restaurant]
+        [p.paymentNumber, p.title, p.counterparty, p.category, p.description, p.iban, p.restaurant]
           .filter(Boolean)
           .join(" ")
           .toLowerCase()
@@ -321,7 +684,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
     result.sort((a, b) => {
       const urgencyOrder = { critical: 0, high: 1, normal: 2, low: 3 };
-      const statusOrder = { pending: 0, approved: 1, scheduled: 2, draft: 3, paid: 4, rejected: 5, cancelled: 6 };
+      const statusOrder = { pending: 0, approved: 1, scheduled: 2, paused: 3, draft: 4, paid: 5, rejected: 6, cancelled: 7 };
       const ua = urgencyOrder[a.urgency] ?? 4;
       const ub = urgencyOrder[b.urgency] ?? 4;
       if (ua !== ub) return ua - ub;
@@ -332,38 +695,34 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     });
 
     return result;
-  }, [payments, topTab, isFinance, myUserId, myEmail, statusFilter, urgencyFilter, searchQuery]);
+  }, [paymentRequests, topTab, isFinance, myUserId, myEmail, statusFilter, urgencyFilter, searchQuery]);
 
   // ─── Stats ───
   const stats = useMemo(() => {
-    const pending = payments.filter((p) => p.status === "pending").length;
-    const approved = payments.filter((p) => p.status === "approved" || p.status === "scheduled").length;
-    const totalPending = payments
+    const pending = paymentRequests.filter((p) => p.status === "pending").length;
+    const approved = paymentRequests.filter((p) => p.status === "approved" || p.status === "scheduled").length;
+    const totalPending = paymentRequests
       .filter((p) => p.status === "pending")
       .reduce((sum, p) => sum + (Number.parseFloat(p.amount) || 0), 0);
-    const totalApproved = payments
+    const totalApproved = paymentRequests
       .filter((p) => p.status === "approved" || p.status === "scheduled")
       .reduce((sum, p) => sum + (Number.parseFloat(p.amount) || 0), 0);
     return { pending, approved, totalPending, totalApproved };
-  }, [payments]);
+  }, [paymentRequests]);
 
   // ─── Form Handlers ───
   const resetForm = () => {
-    setFormData({
-      title: "",
-      description: "",
-      amount: "",
-      currency: typicalFields.defaultCurrency || "UAH",
-      category: "",
-      urgency: "normal",
-      counterparty: "",
-      iban: "",
-      dueDate: "",
-      restaurant: "",
-      attachmentNote: "",
-    });
+    const base = createPaymentFormState(typicalFields.defaultCurrency || "UAH");
+    setFormData({ ...base, restaurant: userRestaurant, expenseRestaurant: userRestaurant });
     setEditingPayment(null);
     setShowForm(false);
+  };
+
+  const resetRecurringForm = () => {
+    const base = createRecurringTemplateFormState(typicalFields.defaultCurrency || "UAH");
+    setRecurringFormData({ ...base, restaurant: userRestaurant, expenseRestaurant: userRestaurant });
+    setEditingRecurringTemplate(null);
+    setShowRecurringForm(false);
   };
 
   const openNewForm = () => {
@@ -383,14 +742,57 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       iban: payment.iban || "",
       dueDate: payment.dueDate || "",
       restaurant: payment.restaurant || "",
+      expenseRestaurant: payment.expenseRestaurant || payment.restaurant || "",
       attachmentNote: payment.attachmentNote || "",
+      payerId: payment.payerId || "",
+      paidBy: payment.paidBy || "",
+      isRecurring: false,
+      frequency: "monthly",
+      dayOfMonth: "10",
+      startDate: "",
+      endDate: "",
+      noEndDate: true,
     });
     setEditingPayment(payment);
     setShowForm(true);
   };
 
+  const openNewRecurringForm = () => {
+    resetRecurringForm();
+    setShowRecurringForm(true);
+  };
+
+  const openEditRecurringForm = (template) => {
+    setRecurringFormData({
+      title: template.title || "",
+      description: template.description || "",
+      amount: String(template.amount || ""),
+      currency: template.currency || typicalFields.defaultCurrency || "UAH",
+      category: template.category || "",
+      urgency: template.urgency || "normal",
+      counterparty: template.counterparty || "",
+      iban: template.iban || "",
+      restaurant: template.restaurant || "",
+      expenseRestaurant: template.expenseRestaurant || template.restaurant || "",
+      attachmentNote: template.attachmentNote || "",
+      payerId: template.payerId || "",
+      paidBy: template.paidBy || "",
+      startDate: template.startDate || getTodayDateOnly(),
+      endDate: template.endDate || "",
+      noEndDate: !template.endDate,
+      frequency: template.frequency || "monthly",
+      dayOfMonth: String(template.dayOfMonth || "10"),
+    });
+    setEditingRecurringTemplate(template);
+    setShowRecurringForm(true);
+  };
+
   const handleFormChange = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleRecurringFormChange = (field, value) => {
+    setRecurringFormData((prev) => ({ ...prev, [field]: value }));
   };
 
   const submitPayment = (asDraft = false) => {
@@ -404,6 +806,66 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       return;
     }
 
+    // Build VAT suffix for title
+    let vatSuffix = "";
+    if (formData.vatMode === "without") {
+      vatSuffix = ", без ПДВ";
+    } else if (formData.vatMode === "with" && formData.vatRate) {
+      const rate = Number.parseFloat(formData.vatRate);
+      const vatAmount = amount * rate / 100;
+      vatSuffix = `, в т.ч. ПДВ ${formData.vatRate}% - ${formatMoney(vatAmount)} грн`;
+    }
+    const titleWithVat = (formData.title || "").replace(/,\s*(без ПДВ|в т\.ч\. ПДВ\s*\d+(\.\d+)?%(\s*-\s*[\d\s]+[,.]?\d*\s*грн)?)$/g, "").trim() + vatSuffix;
+
+    // If recurring toggle is on — create a recurring template instead
+    if (formData.isRecurring && !editingPayment) {
+      if (!toDateOnly(formData.startDate)) {
+        alert("Вкажіть дату старту регулярного платежу.");
+        return;
+      }
+      const nowIso = new Date().toISOString();
+      const normalizedTemplate = normalizeRecurringTemplateRecord({
+        ...formData,
+        title: titleWithVat,
+        amount,
+        id: generateId("rec"),
+        recordType: RECORD_TYPE_RECURRING_TEMPLATE,
+        requestedById: myUserId,
+        requestedByEmail: myEmail,
+        requestedByName: myName,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        isActive: true,
+      });
+
+      // Immediately generate the first payment and send to treasury
+      const firstOccurrence = normalizedTemplate.nextOccurrenceDate || resolveInitialRecurringOccurrence(normalizedTemplate);
+      const firstPaymentNumber = generatePaymentNumber(formData.restaurant || formData.expenseRestaurant, restaurants, paymentRequests);
+      const firstPayment = createPaymentFromRecurringTemplate(normalizedTemplate, firstOccurrence, firstPaymentNumber);
+      const advancedTemplate = {
+        ...normalizedTemplate,
+        nextOccurrenceDate: getNextRecurringOccurrence(normalizedTemplate, firstOccurrence),
+        totalGenerated: 1,
+        updatedAt: nowIso,
+      };
+
+      replaceStoredRecords([advancedTemplate, firstPayment]);
+      addPaymentRequestApi(advancedTemplate).catch((err) =>
+        console.error("[PaymentRegistry] Failed to create recurring template:", err)
+      );
+      addPaymentRequestApi(firstPayment).catch((err) =>
+        console.error("[PaymentRegistry] Failed to create first recurring payment:", err)
+      );
+      writeAudit({
+        action: "payment_recurring_template_create",
+        entityType: "payment_recurring_template",
+        entityId: advancedTemplate.id,
+        description: `Створено регулярний платіж "${normalizedTemplate.title}" (${formatMoney(amount)} ${formData.currency}, ${RECURRING_FREQUENCIES[formData.frequency] || formData.frequency}) — перший платіж направлено казначею`,
+      });
+      resetForm();
+      return;
+    }
+
 
     const nowIso = new Date().toISOString();
     const status = asDraft ? "draft" : "pending";
@@ -412,15 +874,15 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       const updatedData = {
         ...editingPayment,
         ...formData,
+        title: titleWithVat,
+        recordType: RECORD_TYPE_PAYMENT_REQUEST,
         amount,
         status: editingPayment.status === "draft" ? status : editingPayment.status,
         updatedAt: nowIso,
         updatedById: myUserId,
         updatedByName: myName,
       };
-      setPayments((prev) =>
-        prev.map((p) => (p.id === editingPayment.id ? updatedData : p))
-      );
+      updateStoredRecord(editingPayment.id, () => updatedData);
       updatePaymentRequestApi(editingPayment.id, updatedData).catch((err) =>
         console.error("[PaymentRegistry] Failed to update payment:", err)
       );
@@ -431,9 +893,13 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         description: `Оновлено заявку на платіж "${formData.title.trim()}" (${formatMoney(amount)} ${formData.currency})`,
       });
     } else {
+      const paymentNumber = generatePaymentNumber(formData.restaurant || formData.expenseRestaurant, restaurants, paymentRequests);
       const newPayment = {
         id: generateId(),
+        paymentNumber,
+        recordType: RECORD_TYPE_PAYMENT_REQUEST,
         ...formData,
+        title: titleWithVat,
         amount,
         status,
         createdAt: nowIso,
@@ -444,7 +910,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         approvals: [],
         comments: [],
       };
-      setPayments((prev) => [newPayment, ...prev]);
+      appendStoredRecord(newPayment);
       addPaymentRequestApi({ ...newPayment }).catch((err) =>
         console.error("[PaymentRegistry] Failed to save payment:", err)
       );
@@ -459,12 +925,132 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     resetForm();
   };
 
+  const submitRecurringTemplate = () => {
+    if (!recurringFormData.title.trim()) {
+      alert("Вкажіть назву регулярного платежу.");
+      return;
+    }
+    const amount = parseAmountValue(recurringFormData.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert("Вкажіть коректну суму регулярного платежу.");
+      return;
+    }
+    if (!toDateOnly(recurringFormData.startDate)) {
+      alert("Вкажіть дату старту регулярного платежу.");
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const normalizedTemplate = normalizeRecurringTemplateRecord({
+      ...(editingRecurringTemplate || {}),
+      ...recurringFormData,
+      amount,
+      id: editingRecurringTemplate?.id || generateId("rec"),
+      recordType: RECORD_TYPE_RECURRING_TEMPLATE,
+      requestedById: editingRecurringTemplate?.requestedById || myUserId,
+      requestedByEmail: editingRecurringTemplate?.requestedByEmail || myEmail,
+      requestedByName: editingRecurringTemplate?.requestedByName || myName,
+      createdAt: editingRecurringTemplate?.createdAt || nowIso,
+      updatedAt: nowIso,
+      isActive: editingRecurringTemplate?.isActive ?? true,
+      nextOccurrenceDate: editingRecurringTemplate?.nextOccurrenceDate || undefined,
+    });
+
+    if (editingRecurringTemplate) {
+      updateStoredRecord(editingRecurringTemplate.id, () => normalizedTemplate);
+      updatePaymentRequestApi(editingRecurringTemplate.id, normalizedTemplate).catch((err) =>
+        console.error("[PaymentRegistry] Failed to update recurring template:", err)
+      );
+      writeAudit({
+        action: "payment_recurring_template_update",
+        entityType: "payment_recurring_template",
+        entityId: normalizedTemplate.id,
+        description: `Оновлено регулярний платіж "${normalizedTemplate.title}"`,
+      });
+    } else {
+      appendStoredRecord(normalizedTemplate);
+      addPaymentRequestApi(normalizedTemplate).catch((err) =>
+        console.error("[PaymentRegistry] Failed to create recurring template:", err)
+      );
+      writeAudit({
+        action: "payment_recurring_template_create",
+        entityType: "payment_recurring_template",
+        entityId: normalizedTemplate.id,
+        description: `Створено регулярний платіж "${normalizedTemplate.title}"`,
+      });
+    }
+
+    resetRecurringForm();
+  };
+
+  const toggleRecurringTemplateActive = (template) => {
+    const nowIso = new Date().toISOString();
+    const updatedTemplate = {
+      ...template,
+      isActive: !template.isActive,
+      nextOccurrenceDate: !template.isActive
+        ? toDateOnly(template.nextOccurrenceDate) || resolveInitialRecurringOccurrence(template)
+        : template.nextOccurrenceDate,
+      updatedAt: nowIso,
+    };
+    updateStoredRecord(template.id, () => updatedTemplate);
+    updatePaymentRequestApi(template.id, updatedTemplate).catch((err) =>
+      console.error("[PaymentRegistry] Failed to toggle recurring template:", err)
+    );
+  };
+
+  const runRecurringTemplateNow = (template) => {
+    const occurrenceDate = toDateOnly(template.nextOccurrenceDate) || resolveInitialRecurringOccurrence(template);
+    if (!occurrenceDate) return;
+    const existingPayment = paymentRequests.find(
+      (payment) => payment.recurringTemplateId === template.id && payment.recurringOccurrenceDate === occurrenceDate
+    );
+    if (existingPayment) {
+      alert("Платіж на найближчу дату вже створений.");
+      return;
+    }
+    const pNum = generatePaymentNumber(template.restaurant || template.expenseRestaurant, restaurants, paymentRequests);
+    const payment = createPaymentFromRecurringTemplate(template, occurrenceDate, pNum);
+    const updatedTemplate = {
+      ...template,
+      nextOccurrenceDate: getNextRecurringOccurrence(template, occurrenceDate),
+      totalGenerated: (Number(template.totalGenerated) || 0) + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    replaceStoredRecords([payment, updatedTemplate]);
+    addPaymentRequestApi(payment).catch((err) => console.error("[PaymentRegistry] Failed to create manual recurring payment:", err));
+    updatePaymentRequestApi(template.id, updatedTemplate).catch((err) => console.error("[PaymentRegistry] Failed to advance recurring template:", err));
+  };
+
+  const removeRecurringTemplate = (template) => {
+    if (!window.confirm(`Видалити регулярний платіж "${template.title}"?`)) return;
+    setPayments((prev) => prev.filter((item) => item.id !== template.id));
+    deletePaymentRequestApi(template.id).catch((err) =>
+      console.error("[PaymentRegistry] Failed to delete recurring template:", err)
+    );
+  };
+
+  const deletePayment = (payment) => {
+    if (!window.confirm(`Видалити заявку "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency})? Цю дію неможливо скасувати.`)) return;
+    setPayments((prev) => prev.filter((item) => item.id !== payment.id));
+    deletePaymentRequestApi(payment.id).catch((err) =>
+      console.error("[PaymentRegistry] Failed to delete payment:", err)
+    );
+    writeAudit({
+      action: "payment_request_delete",
+      entityType: "payment_request",
+      entityId: payment.id,
+      description: `Адмін видалив заявку "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency})`,
+    });
+  };
+
   // ─── Actions ───
   const openApprovalModal = (payment) => {
     setApprovalData({
       counterparty: payment.counterparty || "",
       iban: payment.iban || "",
-      paidBy: "",
+      paidBy: payment.paidBy || "",
+      payerId: payment.payerId || "",
       comment: "",
     });
     setApprovalModal(payment);
@@ -485,6 +1071,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       counterparty: approvalData.counterparty.trim(),
       iban: approvalData.iban.trim() || payment.iban,
       paidBy: approvalData.paidBy.trim() || myName,
+      payerId: approvalData.payerId || payment.payerId || "",
       approvalComment: approvalData.comment.trim(),
       updatedAt: nowIso,
       approvals: [
@@ -492,9 +1079,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         { action: "approved", at: nowIso, byId: myUserId, byName: myName, comment: approvalData.comment.trim() },
       ],
     };
-    setPayments((prev) =>
-      prev.map((p) => (p.id === payment.id ? updatedData : p))
-    );
+    updateStoredRecord(payment.id, () => updatedData);
     updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
       console.error("[PaymentRegistry] Failed to update payment:", err)
     );
@@ -524,9 +1109,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         { action: "rejected", at: nowIso, byId: myUserId, byName: myName, reason },
       ],
     };
-    setPayments((prev) =>
-      prev.map((p) => (p.id === payment.id ? updatedData : p))
-    );
+    updateStoredRecord(payment.id, () => updatedData);
     updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
       console.error("[PaymentRegistry] Failed to update payment:", err)
     );
@@ -539,14 +1122,37 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     setProcessingId("");
   };
 
+  const togglePaymentPaused = (payment) => {
+    if (processingId) return;
+    setProcessingId(payment.id);
+    const nowIso = new Date().toISOString();
+    const isPausing = payment.status !== "paused";
+    const newStatus = isPausing ? "paused" : (payment.statusBeforePause || "approved");
+    const updatedData = {
+      ...payment,
+      status: newStatus,
+      updatedAt: nowIso,
+      ...(isPausing ? { statusBeforePause: payment.status } : { statusBeforePause: null }),
+    };
+    updateStoredRecord(payment.id, () => updatedData);
+    updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
+      console.error("[PaymentRegistry] Failed to toggle payment pause:", err)
+    );
+    writeAudit({
+      action: isPausing ? "payment_pause" : "payment_resume",
+      entityType: "payment_request",
+      entityId: payment.id,
+      description: `${isPausing ? "Призупинено" : "Відновлено"} платіж "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency})`,
+    });
+    setProcessingId("");
+  };
+
   const schedulePayment = (payment) => {
     if (processingId) return;
     setProcessingId(payment.id);
     const nowIso = new Date().toISOString();
     const updatedData = { ...payment, status: "scheduled", updatedAt: nowIso, scheduledAt: nowIso, scheduledByName: myName };
-    setPayments((prev) =>
-      prev.map((p) => (p.id === payment.id ? updatedData : p))
-    );
+    updateStoredRecord(payment.id, () => updatedData);
     updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
       console.error("[PaymentRegistry] Failed to update payment:", err)
     );
@@ -564,9 +1170,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     setProcessingId(payment.id);
     const nowIso = new Date().toISOString();
     const updatedData = { ...payment, status: "paid", updatedAt: nowIso, paidAt: nowIso, paidByName: myName };
-    setPayments((prev) =>
-      prev.map((p) => (p.id === payment.id ? updatedData : p))
-    );
+    updateStoredRecord(payment.id, () => updatedData);
     updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
       console.error("[PaymentRegistry] Failed to update payment:", err)
     );
@@ -583,9 +1187,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (!window.confirm(`Скасувати заявку "${payment.title}"?`)) return;
     const nowIso = new Date().toISOString();
     const updatedData = { ...payment, status: "cancelled", updatedAt: nowIso, cancelledByName: myName };
-    setPayments((prev) =>
-      prev.map((p) => (p.id === payment.id ? updatedData : p))
-    );
+    updateStoredRecord(payment.id, () => updatedData);
     updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
       console.error("[PaymentRegistry] Failed to update payment:", err)
     );
@@ -637,11 +1239,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         </div>
         <div className="rounded-lg border border-green-200 bg-green-50 p-3">
           <div className="text-xs text-green-700">Оплачено</div>
-          <div className="mt-1 text-xl font-bold text-green-800">{payments.filter((p) => p.status === "paid").length}</div>
+          <div className="mt-1 text-xl font-bold text-green-800">{paymentRequests.filter((p) => p.status === "paid").length}</div>
         </div>
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
           <div className="text-xs text-slate-600">Всього заявок</div>
-          <div className="mt-1 text-xl font-bold text-slate-800">{payments.length}</div>
+          <div className="mt-1 text-xl font-bold text-slate-800">{paymentRequests.length}</div>
         </div>
       </div>
 
@@ -652,7 +1254,45 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="md:col-span-2">
               <label className="text-sm font-semibold">Назва / призначення платежу *</label>
-              <input className={inputClass} value={formData.title} onChange={(e) => handleFormChange("title", e.target.value)} placeholder="Наприклад: Оплата за продукти — ТОВ Ланч" />
+              <div className="flex gap-2 items-start">
+                <input className={`${inputClass} flex-1`} value={formData.title} onChange={(e) => handleFormChange("title", e.target.value)} placeholder="Наприклад: Оплата за продукти — ТОВ Ланч" />
+                <div className="mt-1 flex flex-col gap-1.5 min-w-[150px]">
+                  <div className="flex gap-1">
+                    <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors ${formData.vatMode === "none" ? "border-slate-500 bg-slate-100 text-slate-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => handleFormChange("vatMode", "none")}>—</button>
+                    <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors ${formData.vatMode === "without" ? "border-emerald-500 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => handleFormChange("vatMode", "without")}>Без ПДВ</button>
+                    <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors ${formData.vatMode === "with" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => { handleFormChange("vatMode", "with"); if (!formData.vatRate && typicalFields.vatRates?.length) handleFormChange("vatRate", String(typicalFields.vatRates[0])); }}>З ПДВ</button>
+                  </div>
+                  {formData.vatMode === "with" && (
+                    <select className={`${inputClass} !mt-0`} value={formData.vatRate} onChange={(e) => handleFormChange("vatRate", e.target.value)}>
+                      <option value="">Оберіть %</option>
+                      {(typicalFields.vatRates || []).map((rate) => (
+                        <option key={rate} value={String(rate)}>{rate}%</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Заклад</label>
+              <select className={inputClass} value={formData.restaurant} onChange={(e) => {
+                const val = e.target.value;
+                setFormData((prev) => ({ ...prev, restaurant: val, expenseRestaurant: prev.expenseRestaurant || val }));
+              }}>
+                <option value="">Оберіть заклад</option>
+                {(restaurants || []).map((r) => (
+                  <option key={r.id} value={r.name || r.id}>{r.name || r.id}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Витрати закладу <span className="text-xs font-normal text-slate-400">— для рознесення в 1С</span></label>
+              <select className={inputClass} value={formData.expenseRestaurant} onChange={(e) => handleFormChange("expenseRestaurant", e.target.value)}>
+                <option value="">Той самий заклад</option>
+                {(restaurants || []).map((r) => (
+                  <option key={r.id} value={r.name || r.id}>{r.name || r.id}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="text-sm font-semibold">Сума *</label>
@@ -682,6 +1322,19 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               <input className={inputClass} value={formData.iban} onChange={(e) => handleFormChange("iban", e.target.value)} placeholder="UA..." />
             </div>
             <div>
+              <label className="text-sm font-semibold">Платник</label>
+              <select className={inputClass} value={formData.payerId} onChange={(e) => {
+                const payerId = e.target.value;
+                const payer = payersById.get(payerId);
+                setFormData((prev) => ({ ...prev, payerId, paidBy: payer?.name || prev.paidBy || "" }));
+              }}>
+                <option value="">Оберіть платника</option>
+                {getPayersForRestaurant(formData.restaurant).map((payer) => (
+                  <option key={payer.id} value={payer.id}>{payer.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
               <label className="text-sm font-semibold">Категорія</label>
               <select className={inputClass} value={formData.category} onChange={(e) => handleFormChange("category", e.target.value)}>
                 <option value="">Оберіть категорію</option>
@@ -702,15 +1355,38 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               <label className="text-sm font-semibold">Бажана дата оплати</label>
               <input type="date" className={inputClass} value={formData.dueDate} onChange={(e) => handleFormChange("dueDate", e.target.value)} />
             </div>
-            <div>
-              <label className="text-sm font-semibold">Заклад</label>
-              <select className={inputClass} value={formData.restaurant} onChange={(e) => handleFormChange("restaurant", e.target.value)}>
-                <option value="">Оберіть заклад</option>
-                {(restaurants || []).map((r) => (
-                  <option key={r.id} value={r.name || r.id}>{r.name || r.id}</option>
-                ))}
-              </select>
+            <div className="md:col-span-2 flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+              <input type="checkbox" id="isRecurring" checked={formData.isRecurring} onChange={(e) => handleFormChange("isRecurring", e.target.checked)} className="h-4 w-4 accent-blue-600" />
+              <label htmlFor="isRecurring" className="text-sm font-semibold text-blue-800 cursor-pointer select-none">Регулярний платіж (автоматичне створення заявок за розкладом)</label>
             </div>
+            {formData.isRecurring && (
+              <>
+                <div>
+                  <label className="text-sm font-semibold">Періодичність</label>
+                  <select className={inputClass} value={formData.frequency} onChange={(e) => handleFormChange("frequency", e.target.value)}>
+                    {Object.entries(RECURRING_FREQUENCIES).map(([key, label]) => (
+                      <option key={key} value={key}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold">День місяця</label>
+                  <input type="number" min="1" max="31" className={inputClass} value={formData.dayOfMonth} onChange={(e) => handleFormChange("dayOfMonth", e.target.value)} />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold">Дата старту *</label>
+                  <input type="date" className={inputClass} value={formData.startDate} onChange={(e) => handleFormChange("startDate", e.target.value)} />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold">Дата завершення</label>
+                  <input type="date" className={inputClass} value={formData.endDate} onChange={(e) => handleFormChange("endDate", e.target.value)} disabled={formData.noEndDate} />
+                  <label className="mt-1 flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+                    <input type="checkbox" checked={formData.noEndDate} onChange={(e) => { handleFormChange("noEndDate", e.target.checked); if (e.target.checked) handleFormChange("endDate", ""); }} className="h-3.5 w-3.5 accent-blue-600" />
+                    Безстроковий (без дати завершення)
+                  </label>
+                </div>
+              </>
+            )}
             <div className="md:col-span-2">
               <label className="text-sm font-semibold">Опис / коментар</label>
               <textarea className={`${inputClass} min-h-[80px]`} value={formData.description} onChange={(e) => handleFormChange("description", e.target.value)} placeholder="Додаткова інформація до заявки" />
@@ -777,15 +1453,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-700">
               <tr>
-                <th className="px-3 py-2 text-left">Назва</th>
-                <th className="px-3 py-2 text-left">Контрагент</th>
+                <th className="px-3 py-2 text-left">Платіж</th>
                 <th className="px-3 py-2 text-right">Сума</th>
-                <th className="px-3 py-2 text-left">Категорія</th>
-                <th className="px-3 py-2 text-left">Терміновість</th>
                 <th className="px-3 py-2 text-left">Статус</th>
-                <th className="px-3 py-2 text-left">Дата оплати</th>
+                <th className="px-3 py-2 text-left">Дата</th>
                 <th className="px-3 py-2 text-left">Ініціатор</th>
-                <th className="px-3 py-2 text-left">Створено</th>
                 <th className="px-3 py-2 text-left">Дії</th>
               </tr>
             </thead>
@@ -799,28 +1471,36 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                 const canApprove = (isFinance || isAssignedApprover) && (payment.status === "pending");
                 const canSchedule = isFinance && payment.status === "approved";
                 const canMarkPaid = isFinance && (payment.status === "scheduled" || payment.status === "approved");
+                const canPause = isFinance && ["approved", "scheduled", "paused"].includes(payment.status);
                 const canEdit = payment.status === "draft" || (payment.status === "pending" && payment.requestedById === myUserId);
                 const canCancel = (payment.status === "draft" || payment.status === "pending") && (payment.requestedById === myUserId || isFinance);
 
                 return (
                   <tr key={payment.id} className="border-t border-slate-200 hover:bg-slate-50">
-                    <td className="px-3 py-2 font-medium max-w-[200px] truncate">{payment.title}</td>
-                    <td className="px-3 py-2 max-w-[150px] truncate">{payment.counterparty || "-"}</td>
-                    <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{formatMoney(payment.amount)} {payment.currency}</td>
-                    <td className="px-3 py-2">{payment.category || "-"}</td>
                     <td className="px-3 py-2">
-                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${URGENCY_COLORS[payment.urgency] || ""}`}>
-                        {URGENCY_LEVELS[payment.urgency] || payment.urgency}
-                      </span>
+                      <div className="font-medium">{payment.title}</div>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5 text-xs text-slate-500">
+                        {payment.paymentNumber && <span className="font-mono">{payment.paymentNumber}</span>}
+                        {payment.counterparty && <span>→ {payment.counterparty}</span>}
+                        {payment.category && <span className="text-slate-400">{payment.category}</span>}
+                      </div>
                     </td>
+                    <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{formatMoney(payment.amount)} {payment.currency}</td>
                     <td className="px-3 py-2">
                       <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_COLORS[payment.status] || ""}`}>
                         {PAYMENT_STATUSES[payment.status] || payment.status}
                       </span>
+                      {payment.urgency && payment.urgency !== "normal" && (
+                        <span className={`ml-1 inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${URGENCY_COLORS[payment.urgency] || ""}`}>
+                          {URGENCY_LEVELS[payment.urgency] || payment.urgency}
+                        </span>
+                      )}
                     </td>
-                    <td className="px-3 py-2 whitespace-nowrap">{formatDate(payment.dueDate)}</td>
-                    <td className="px-3 py-2 max-w-[120px] truncate">{payment.requestedByName || "-"}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">{formatDateTime(payment.createdAt)}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-xs">
+                      <div>{formatDate(payment.dueDate) || "—"}</div>
+                      <div className="text-slate-400">{formatDateTime(payment.createdAt)}</div>
+                    </td>
+                    <td className="px-3 py-2 text-xs">{payment.requestedByName || "-"}</td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1">
                         {canApprove && (
@@ -843,6 +1523,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                             <Check size={12} /> Оплачено
                           </button>
                         )}
+                        {canPause && (
+                          <button type="button" disabled={Boolean(processingId)} onClick={() => togglePaymentPaused(payment)} className={payment.status === "paused" ? btnApprove : btnSecondary}>
+                            {payment.status === "paused" ? <><Play size={12} /> Відновити</> : <><Pause size={12} /> Пауза</>}
+                          </button>
+                        )}
                         {canEdit && (
                           <button type="button" onClick={() => openEditForm(payment)} className={btnSecondary}>
                             Редагувати
@@ -853,6 +1538,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                             Скасувати
                           </button>
                         )}
+                        {isAdmin && (
+                          <button type="button" onClick={() => deletePayment(payment)} className={btnReject} title="Видалити назавжди">
+                            <Trash2 size={12} /> Видалити
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -861,7 +1551,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               {filteredPayments.length === 0 && (
                 <tr>
                   <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
-                    {payments.length === 0 ? "Заявок на платіж поки немає. Натисніть «Нова заявка» щоб створити першу." : "Нічого не знайдено за обраними фільтрами."}
+                    {paymentRequests.length === 0 ? "Заявок на платіж поки немає. Натисніть «Нова заявка» щоб створити першу." : "Нічого не знайдено за обраними фільтрами."}
                   </td>
                 </tr>
               )}
@@ -899,8 +1589,17 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                 <input className={inputClass} value={approvalData.iban} onChange={(e) => setApprovalData((prev) => ({ ...prev, iban: e.target.value }))} placeholder="UA..." />
               </div>
               <div>
-                <label className="text-sm font-semibold">Хто платить (юрособа / ФОП)</label>
-                <input className={inputClass} value={approvalData.paidBy} onChange={(e) => setApprovalData((prev) => ({ ...prev, paidBy: e.target.value }))} placeholder="ТОВ La Famiglia" />
+                <label className="text-sm font-semibold">Платник</label>
+                <select className={inputClass} value={approvalData.payerId} onChange={(e) => {
+                  const payerId = e.target.value;
+                  const payer = payersById.get(payerId);
+                  setApprovalData((prev) => ({ ...prev, payerId, paidBy: payer?.name || prev.paidBy || "" }));
+                }}>
+                  <option value="">Оберіть платника</option>
+                  {getPayersForRestaurant(approvalModal?.restaurant).map((payer) => (
+                    <option key={payer.id} value={payer.id}>{payer.name}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="text-sm font-semibold">Коментар до погодження</label>
@@ -921,36 +1620,37 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   // ─── Render: Мої платежі ───
   const renderMyPayments = () => {
-    const myPayments = payments.filter(
-      (p) =>
-        (myUserId && p.requestedById === myUserId) ||
-        (myEmail && p.requestedByEmail === myEmail) ||
-        (myName && p.requestedByName === myName)
-    );
+    const myPayments = paymentRequests.filter((payment) => paymentBelongsToUser(payment, myUserId, myEmail, myName));
     const grouped = {
       active: myPayments.filter((p) => ["draft", "pending", "approved", "scheduled"].includes(p.status)),
+      paused: myPayments.filter((p) => p.status === "paused"),
       completed: myPayments.filter((p) => p.status === "paid"),
       other: myPayments.filter((p) => ["rejected", "cancelled"].includes(p.status)),
     };
 
-    const renderSection = (title, items, emptyText) => (
+    const canPauseResume = (p) => ["approved", "scheduled", "paused"].includes(p.status);
+
+    const renderSection = (title, items, emptyText, { showPauseBtn = false } = {}) => (
       <div className={cardClass}>
         <h3 className="text-base font-semibold">{title} ({items.length})</h3>
         <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-700">
               <tr>
+                <th className="px-3 py-2 text-left">№</th>
                 <th className="px-3 py-2 text-left">Назва</th>
                 <th className="px-3 py-2 text-left">Контрагент</th>
                 <th className="px-3 py-2 text-right">Сума</th>
                 <th className="px-3 py-2 text-left">Статус</th>
                 <th className="px-3 py-2 text-left">Дата оплати</th>
                 <th className="px-3 py-2 text-left">Оновлено</th>
+                {showPauseBtn && <th className="px-3 py-2 text-left">Дії</th>}
               </tr>
             </thead>
             <tbody>
               {items.map((p) => (
                 <tr key={p.id} className="border-t border-slate-200">
+                  <td className="px-3 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">{p.paymentNumber || "—"}</td>
                   <td className="px-3 py-2 font-medium">{p.title}</td>
                   <td className="px-3 py-2">{p.counterparty || "-"}</td>
                   <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{formatMoney(p.amount)} {p.currency}</td>
@@ -961,11 +1661,20 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                   </td>
                   <td className="px-3 py-2 whitespace-nowrap">{formatDate(p.dueDate)}</td>
                   <td className="px-3 py-2 whitespace-nowrap">{formatDateTime(p.updatedAt)}</td>
+                  {showPauseBtn && (
+                    <td className="px-3 py-2">
+                      {canPauseResume(p) && (
+                        <button type="button" className={p.status === "paused" ? btnApprove : btnSecondary} disabled={Boolean(processingId)} onClick={() => togglePaymentPaused(p)}>
+                          {p.status === "paused" ? <><Play size={12} /> Відновити</> : <><Pause size={12} /> Пауза</>}
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-slate-500">{emptyText}</td>
+                  <td colSpan={showPauseBtn ? 8 : 7} className="px-3 py-6 text-center text-slate-500">{emptyText}</td>
                 </tr>
               )}
             </tbody>
@@ -974,11 +1683,537 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       </div>
     );
 
+    const myRecurringTemplates = recurringTemplates
+      .filter((template) => isFinance || paymentBelongsToUser(template, myUserId, myEmail, myName))
+      .sort((a, b) => new Date(a.nextOccurrenceDate || a.startDate || 0).getTime() - new Date(b.nextOccurrenceDate || b.startDate || 0).getTime());
+
     return (
       <div className="space-y-5">
-        {renderSection("Активні заявки", grouped.active, "Немає активних заявок")}
+        {renderSection("Активні заявки", grouped.active, "Немає активних заявок", { showPauseBtn: true })}
+        {grouped.paused.length > 0 && renderSection("Призупинені", grouped.paused, "", { showPauseBtn: true })}
         {renderSection("Оплачено", grouped.completed, "Оплачених заявок поки немає")}
         {grouped.other.length > 0 && renderSection("Відхилені / скасовані", grouped.other, "")}
+
+        {/* Recurring templates section */}
+        <div className={cardClass}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-base font-semibold">Регулярні платежі ({myRecurringTemplates.length})</h3>
+          </div>
+          <p className="mt-1 text-sm text-slate-600">Шаблони для автоматичного створення заявок за розкладом. Створити новий можна через &quot;Заявка на платіж&quot; → чекбокс &quot;Регулярний платіж&quot;.</p>
+          <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-700">
+                <tr>
+                  <th className="px-3 py-2 text-left">Назва</th>
+                  <th className="px-3 py-2 text-left">Контрагент</th>
+                  <th className="px-3 py-2 text-right">Сума</th>
+                  <th className="px-3 py-2 text-left">Частота</th>
+                  <th className="px-3 py-2 text-left">Наступна дата</th>
+                  <th className="px-3 py-2 text-left">Дії</th>
+                </tr>
+              </thead>
+              <tbody>
+                {myRecurringTemplates.map((template) => (
+                  <tr key={template.id} className="border-t border-slate-200 hover:bg-slate-50">
+                    <td className="px-3 py-2 font-medium">{template.title}</td>
+                    <td className="px-3 py-2">{template.counterparty || "-"}</td>
+                    <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{formatMoney(template.amount)} {template.currency}</td>
+                    <td className="px-3 py-2">{RECURRING_FREQUENCIES[template.frequency] || template.frequency}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{formatDate(template.nextOccurrenceDate)}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap gap-1">
+                        <button type="button" className={btnSecondary} onClick={() => runRecurringTemplateNow(template)}>
+                          <RefreshCcw size={12} /> Створити зараз
+                        </button>
+                        <button type="button" className={btnSecondary} onClick={() => openEditRecurringForm(template)}>
+                          Редагувати
+                        </button>
+                        <button type="button" className={btnReject} onClick={() => removeRecurringTemplate(template)}>
+                          Видалити
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {myRecurringTemplates.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-6 text-center text-slate-500">Регулярних платежів поки немає. Створіть через форму &quot;Заявка на платіж&quot;.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Edit recurring template form (inline) */}
+        {showRecurringForm && editingRecurringTemplate && (
+          <div className={cardClass}>
+            <h3 className="text-base font-semibold">Редагувати регулярний платіж</h3>
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <label className="text-sm font-semibold">Назва *</label>
+                <input className={inputClass} value={recurringFormData.title} onChange={(e) => handleRecurringFormChange("title", e.target.value)} placeholder="Оренда офісу / електроенергія / інтернет" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Сума *</label>
+                <input type="text" inputMode="decimal" className={inputClass} value={recurringFormData.amount} onChange={(e) => handleRecurringFormChange("amount", e.target.value)} placeholder="15000.00" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Валюта</label>
+                <select className={inputClass} value={recurringFormData.currency} onChange={(e) => handleRecurringFormChange("currency", e.target.value)}>
+                  <option value="UAH">UAH (₴)</option>
+                  <option value="USD">USD ($)</option>
+                  <option value="EUR">EUR (€)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Контрагент</label>
+                <input list="recurring-edit-counterparties-list" className={inputClass} value={recurringFormData.counterparty} onChange={(e) => {
+                  handleRecurringFormChange("counterparty", e.target.value);
+                  const match = counterparties.find((item) => item.name === e.target.value);
+                  if (match?.iban && !recurringFormData.iban) handleRecurringFormChange("iban", match.iban);
+                }} placeholder="Оберіть контрагента" />
+                <datalist id="recurring-edit-counterparties-list">
+                  {counterparties.map((counterparty) => <option key={counterparty.id} value={counterparty.name}>{counterparty.name}</option>)}
+                </datalist>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">IBAN</label>
+                <input className={inputClass} value={recurringFormData.iban} onChange={(e) => handleRecurringFormChange("iban", e.target.value)} placeholder="UA..." />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Періодичність</label>
+                <select className={inputClass} value={recurringFormData.frequency} onChange={(e) => handleRecurringFormChange("frequency", e.target.value)}>
+                  {Object.entries(RECURRING_FREQUENCIES).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">День місяця</label>
+                <input type="number" min="1" max="31" className={inputClass} value={recurringFormData.dayOfMonth} onChange={(e) => handleRecurringFormChange("dayOfMonth", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Дата старту *</label>
+                <input type="date" className={inputClass} value={recurringFormData.startDate} onChange={(e) => handleRecurringFormChange("startDate", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Дата завершення</label>
+                <input type="date" className={inputClass} value={recurringFormData.endDate} onChange={(e) => handleRecurringFormChange("endDate", e.target.value)} disabled={recurringFormData.noEndDate} />
+                <label className="mt-1 flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+                  <input type="checkbox" checked={recurringFormData.noEndDate} onChange={(e) => { handleRecurringFormChange("noEndDate", e.target.checked); if (e.target.checked) handleRecurringFormChange("endDate", ""); }} className="h-3.5 w-3.5 accent-blue-600" />
+                  Безстроковий
+                </label>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" className={btnPrimary} onClick={submitRecurringTemplate}>
+                <Save size={14} /> Зберегти
+              </button>
+              <button type="button" className={btnSecondary} onClick={resetRecurringForm}>Скасувати</button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderRecurringPayments = () => {
+    const treasuryTemplates = recurringTemplates
+      .filter((template) => isFinance || paymentBelongsToUser(template, myUserId, myEmail, myName))
+      .sort((a, b) => new Date(a.nextOccurrenceDate || a.startDate || 0).getTime() - new Date(b.nextOccurrenceDate || b.startDate || 0).getTime());
+
+    return (
+      <div className="space-y-5">
+        <div className={cardClass}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold">Регулярні платежі</h3>
+              <p className="mt-1 text-sm text-slate-600">Створюйте шаблони для щомісячних, квартальних і річних платежів. Система автоматично створює заявки на дату оплати.</p>
+            </div>
+            <button type="button" className={btnPrimary} onClick={openNewRecurringForm}>
+              <Plus size={14} /> Новий регулярний платіж
+            </button>
+          </div>
+        </div>
+
+        {showRecurringForm && (
+          <div className={cardClass}>
+            <h3 className="text-base font-semibold">{editingRecurringTemplate ? "Редагувати регулярний платіж" : "Новий регулярний платіж"}</h3>
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <label className="text-sm font-semibold">Назва *</label>
+                <input className={inputClass} value={recurringFormData.title} onChange={(e) => handleRecurringFormChange("title", e.target.value)} placeholder="Оренда офісу / електроенергія / інтернет" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Сума *</label>
+                <input type="text" inputMode="decimal" className={inputClass} value={recurringFormData.amount} onChange={(e) => handleRecurringFormChange("amount", e.target.value)} placeholder="15000.00" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Валюта</label>
+                <select className={inputClass} value={recurringFormData.currency} onChange={(e) => handleRecurringFormChange("currency", e.target.value)}>
+                  <option value="UAH">UAH (₴)</option>
+                  <option value="USD">USD ($)</option>
+                  <option value="EUR">EUR (€)</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Контрагент</label>
+                <input list="recurring-counterparties-list" className={inputClass} value={recurringFormData.counterparty} onChange={(e) => {
+                  handleRecurringFormChange("counterparty", e.target.value);
+                  const match = counterparties.find((item) => item.name === e.target.value);
+                  if (match?.iban && !recurringFormData.iban) handleRecurringFormChange("iban", match.iban);
+                }} placeholder="Оберіть контрагента" />
+                <datalist id="recurring-counterparties-list">
+                  {counterparties.map((counterparty) => <option key={counterparty.id} value={counterparty.name}>{counterparty.name}</option>)}
+                </datalist>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">IBAN</label>
+                <input className={inputClass} value={recurringFormData.iban} onChange={(e) => handleRecurringFormChange("iban", e.target.value)} placeholder="UA..." />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Періодичність</label>
+                <select className={inputClass} value={recurringFormData.frequency} onChange={(e) => handleRecurringFormChange("frequency", e.target.value)}>
+                  {Object.entries(RECURRING_FREQUENCIES).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">День місяця</label>
+                <input type="number" min="1" max="31" className={inputClass} value={recurringFormData.dayOfMonth} onChange={(e) => handleRecurringFormChange("dayOfMonth", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Дата старту *</label>
+                <input type="date" className={inputClass} value={recurringFormData.startDate} onChange={(e) => handleRecurringFormChange("startDate", e.target.value)} />
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Дата завершення</label>
+                <input type="date" className={inputClass} value={recurringFormData.endDate} onChange={(e) => handleRecurringFormChange("endDate", e.target.value)} disabled={recurringFormData.noEndDate} />
+                <label className="mt-1 flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+                  <input type="checkbox" checked={recurringFormData.noEndDate} onChange={(e) => { handleRecurringFormChange("noEndDate", e.target.checked); if (e.target.checked) handleRecurringFormChange("endDate", ""); }} className="h-3.5 w-3.5 accent-blue-600" />
+                  Безстроковий
+                </label>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Категорія</label>
+                <select className={inputClass} value={recurringFormData.category} onChange={(e) => handleRecurringFormChange("category", e.target.value)}>
+                  <option value="">Оберіть категорію</option>
+                  {typicalFields.categories.map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Терміновість</label>
+                <select className={inputClass} value={recurringFormData.urgency} onChange={(e) => handleRecurringFormChange("urgency", e.target.value)}>
+                  {Object.entries(URGENCY_LEVELS).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Заклад</label>
+                <select className={inputClass} value={recurringFormData.restaurant} onChange={(e) => {
+                  const val = e.target.value;
+                  setRecurringFormData((prev) => ({ ...prev, restaurant: val, expenseRestaurant: prev.expenseRestaurant || val }));
+                }}>
+                  <option value="">Оберіть заклад</option>
+                  {(restaurants || []).map((restaurant) => (
+                    <option key={restaurant.id} value={restaurant.name || restaurant.id}>{restaurant.name || restaurant.id}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Витрати закладу <span className="text-xs font-normal text-slate-400">— для рознесення в 1С</span></label>
+                <select className={inputClass} value={recurringFormData.expenseRestaurant} onChange={(e) => handleRecurringFormChange("expenseRestaurant", e.target.value)}>
+                  <option value="">Той самий заклад</option>
+                  {(restaurants || []).map((restaurant) => (
+                    <option key={restaurant.id} value={restaurant.name || restaurant.id}>{restaurant.name || restaurant.id}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Платник</label>
+                <select className={inputClass} value={recurringFormData.payerId} onChange={(e) => {
+                  const payerId = e.target.value;
+                  const payer = payersById.get(payerId);
+                  setRecurringFormData((prev) => ({ ...prev, payerId, paidBy: payer?.name || prev.paidBy || "" }));
+                }}>
+                  <option value="">Оберіть платника</option>
+                  {getPayersForRestaurant(recurringFormData.restaurant).map((payer) => (
+                    <option key={payer.id} value={payer.id}>{payer.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-sm font-semibold">Опис / коментар</label>
+                <textarea className={`${inputClass} min-h-[80px]`} value={recurringFormData.description} onChange={(e) => handleRecurringFormChange("description", e.target.value)} placeholder="Деталі регулярного платежу" />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-sm font-semibold">Примітка</label>
+                <input className={inputClass} value={recurringFormData.attachmentNote} onChange={(e) => handleRecurringFormChange("attachmentNote", e.target.value)} placeholder="Рахунок, договір, внутрішня примітка" />
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" className={btnPrimary} onClick={submitRecurringTemplate}>
+                <Save size={14} /> {editingRecurringTemplate ? "Зберегти" : "Створити шаблон"}
+              </button>
+              <button type="button" className={btnSecondary} onClick={resetRecurringForm}>Скасувати</button>
+            </div>
+          </div>
+        )}
+
+        <div className={cardClass}>
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-700">
+                <tr>
+                  <th className="px-3 py-2 text-left">Назва</th>
+                  <th className="px-3 py-2 text-left">Контрагент</th>
+                  <th className="px-3 py-2 text-right">Сума</th>
+                  <th className="px-3 py-2 text-left">Частота</th>
+                  <th className="px-3 py-2 text-left">Наступна дата</th>
+                  <th className="px-3 py-2 text-left">Дії</th>
+                </tr>
+              </thead>
+              <tbody>
+                {treasuryTemplates.map((template) => (
+                  <tr key={template.id} className="border-t border-slate-200 hover:bg-slate-50">
+                    <td className="px-3 py-2 font-medium">{template.title}</td>
+                    <td className="px-3 py-2">{template.counterparty || "-"}</td>
+                    <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{formatMoney(template.amount)} {template.currency}</td>
+                    <td className="px-3 py-2">{RECURRING_FREQUENCIES[template.frequency] || template.frequency}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{formatDate(template.nextOccurrenceDate)}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap gap-1">
+                        <button type="button" className={btnSecondary} onClick={() => runRecurringTemplateNow(template)}>
+                          <RefreshCcw size={12} /> Створити зараз
+                        </button>
+                        <button type="button" className={btnSecondary} onClick={() => openEditRecurringForm(template)}>
+                          Редагувати
+                        </button>
+                        <button type="button" className={btnReject} onClick={() => removeRecurringTemplate(template)}>
+                          Видалити
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {treasuryTemplates.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="px-3 py-8 text-center text-slate-500">Регулярних платежів поки немає.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderTreasuryTab = () => {
+    const treasuryQueue = paymentRequests
+      .filter((payment) => ["approved", "scheduled"].includes(payment.status) && payment.status !== "paused")
+      .sort((a, b) => new Date(a.dueDate || a.createdAt || 0).getTime() - new Date(b.dueDate || b.createdAt || 0).getTime());
+
+    const exportTreasuryCsv = () => {
+      if (!treasuryQueue.length) {
+        alert("Немає платежів для вивантаження.");
+        return;
+      }
+      const rows = [
+        ["№ Платежу", "ID", "Дата оплати", "Контрагент", "IBAN отримувача", "Сума", "Валюта", "Призначення", "Категорія", "Заклад", "Платник", "ЄДРПОУ платника", "IBAN платника", "МФО платника", "Статус"],
+        ...treasuryQueue.map((payment) => {
+          const payer = payersById.get(String(payment.payerId || ""));
+          return [
+            payment.paymentNumber || "",
+            payment.id,
+            payment.dueDate || "",
+            payment.counterparty || "",
+            payment.iban || "",
+            Number(payment.amount || 0).toFixed(2),
+            payment.currency || "UAH",
+            payment.description || payment.title || "",
+            payment.category || "",
+            payment.restaurant || "",
+            payment.paidBy || payer?.name || "",
+            payer?.edrpou || "",
+            payer?.iban || "",
+            payer?.mfo || "",
+            PAYMENT_STATUSES[payment.status] || payment.status,
+          ];
+        }),
+      ];
+      downloadCsvFile(`treasury-export-${getTodayDateOnly()}.csv`, rows);
+    };
+
+    const exportBankClientCsv = () => {
+      if (!treasuryQueue.length) {
+        alert("Немає платежів для вивантаження.");
+        return;
+      }
+      const formatBankDate = (dateStr) => {
+        if (!dateStr) return "";
+        const d = new Date(dateStr);
+        if (Number.isNaN(d.getTime())) return "";
+        return `${padNumber(d.getDate())}${padNumber(d.getMonth() + 1)}${d.getFullYear()}`;
+      };
+      const counterpartiesMap = new Map();
+      counterparties.forEach((c) => {
+        if (c.name) counterpartiesMap.set(c.name.trim().toLowerCase(), c);
+      });
+      const header = ["TYPE","DATE","NUM","MFO_P","ACCOUNT","EDRPOU_I","AMOUNT","DETAILS","EDRPOU_I","NAME_R","MFO_R","ACCOUNT","COUNTRY","ID_R"].join(";");
+      const lines = treasuryQueue.map((payment) => {
+        const payer = payersById.get(String(payment.payerId || ""));
+        const cKey = (payment.counterparty || "").trim().toLowerCase();
+        const cp = counterpartiesMap.get(cKey);
+        const amountKop = Math.round((Number(payment.amount) || 0) * 100);
+        const fields = [
+          "1",
+          formatBankDate(payment.dueDate),
+          "",
+          payer?.mfo || "",
+          payer?.iban || "",
+          payer?.edrpou || "",
+          String(amountKop),
+          (payment.title || payment.description || "").replace(/;/g, ","),
+          cp?.edrpou || "",
+          payment.counterparty || "",
+          cp?.mfo || "",
+          payment.iban || "",
+          "",
+          "",
+        ];
+        return fields.join(";");
+      });
+      const csvContent = `\uFEFF${header}\n${lines.join("\n")}`;
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `bank-import-${getTodayDateOnly()}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    };
+
+    const totalAmount = treasuryQueue.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+
+    return (
+      <div className="space-y-5">
+        <div className={cardClass}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold flex items-center gap-2"><Landmark size={18} /> Казначей</h3>
+              <p className="mt-1 text-sm text-slate-600">Тут збираються погоджені й заплановані платежі для вивантаження в клієнт-банк.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={btnPrimary} onClick={exportBankClientCsv}>
+                <Download size={14} /> Вивантажити для клієнт-банку
+              </button>
+              <button type="button" className={btnSecondary} onClick={exportTreasuryCsv}>
+                <Download size={14} /> Вивантажити CSV
+              </button>
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+              <div className="text-xs text-blue-700">Платежів у черзі</div>
+              <div className="mt-1 text-xl font-bold text-blue-900">{treasuryQueue.length}</div>
+            </div>
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+              <div className="text-xs text-emerald-700">Сума до оплати</div>
+              <div className="mt-1 text-xl font-bold text-emerald-900">{formatMoney(totalAmount)} грн</div>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="text-xs text-slate-600">Без обраного платника</div>
+              <div className="mt-1 text-xl font-bold text-slate-800">{treasuryQueue.filter((payment) => !payment.payerId && !payment.paidBy).length}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className={cardClass}>
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-700">
+                <tr>
+                  <th className="px-3 py-2 text-left">№</th>
+                  <th className="px-3 py-2 text-left">Назва</th>
+                  <th className="px-3 py-2 text-left">Контрагент</th>
+                  <th className="px-3 py-2 text-left">Платник</th>
+                  <th className="px-3 py-2 text-right">Сума</th>
+                  <th className="px-3 py-2 text-left">Дата оплати</th>
+                  <th className="px-3 py-2 text-left">Статус</th>
+                  <th className="px-3 py-2 text-left">Дії</th>
+                </tr>
+              </thead>
+              <tbody>
+                {treasuryQueue.map((payment) => {
+                  const payer = payersById.get(String(payment.payerId || ""));
+                  const assignPayer = (payerId) => {
+                    const selectedPayer = payersById.get(payerId);
+                    if (!selectedPayer) return;
+                    const updatedData = { ...payment, payerId, paidBy: selectedPayer.name, updatedAt: new Date().toISOString() };
+                    updateStoredRecord(payment.id, () => updatedData);
+                    updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
+                      console.error("[PaymentRegistry] Failed to assign payer:", err)
+                    );
+                  };
+                  return (
+                    <tr key={payment.id} className="border-t border-slate-200 hover:bg-slate-50">
+                      <td className="px-3 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">{payment.paymentNumber || "—"}</td>
+                      <td className="px-3 py-2 font-medium">{payment.title}</td>
+                      <td className="px-3 py-2">{payment.counterparty || "-"}</td>
+                      <td className="px-3 py-2">
+                        {payer ? (
+                          <span>{payer.name}</span>
+                        ) : (
+                          <select className="rounded border border-orange-300 bg-orange-50 px-2 py-1 text-xs" value="" onChange={(e) => assignPayer(e.target.value)}>
+                            <option value="">— Обрати платника —</option>
+                            {payers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          </select>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{formatMoney(payment.amount)} {payment.currency}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{formatDate(payment.dueDate)}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_COLORS[payment.status] || ""}`}>
+                          {PAYMENT_STATUSES[payment.status] || payment.status}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          {payment.status === "approved" && (
+                            <button type="button" className={btnSecondary} onClick={() => schedulePayment(payment)}>
+                              <Clock3 size={12} /> Запланувати
+                            </button>
+                          )}
+                          {(payment.status === "approved" || payment.status === "scheduled") && (
+                            <button type="button" className={btnApprove} onClick={() => markPaid(payment)}>
+                              <Check size={12} /> Оплачено
+                            </button>
+                          )}
+                          <button type="button" className={btnSecondary} disabled={Boolean(processingId)} onClick={() => togglePaymentPaused(payment)}>
+                            <Pause size={12} /> Пауза
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {treasuryQueue.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-8 text-center text-slate-500">Немає погоджених платежів для казначея.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     );
   };
@@ -1015,6 +2250,41 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           <option value="EUR">EUR (€)</option>
         </select>
       </div>
+
+      <div className={cardClass}>
+        <h3 className="text-base font-semibold">Ставки ПДВ</h3>
+        <p className="mt-1 text-sm text-slate-600">Управляйте переліком ставок ПДВ, які доступні при створенні заявки на платіж.</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(typicalFields.vatRates || []).map((rate) => (
+            <span key={rate} className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-3 py-1 text-sm text-blue-700 border border-blue-200">
+              {rate}%
+              <button type="button" onClick={() => saveTypicalFields({ ...typicalFields, vatRates: (typicalFields.vatRates || []).filter((r) => r !== rate) })} className="ml-1 rounded-full p-0.5 text-blue-400 hover:bg-blue-100 hover:text-blue-700">
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+        </div>
+        <div className="mt-3 flex gap-2">
+          <input type="number" min="0" max="100" step="0.01" className={`${inputClass} max-w-[120px]`} id="newVatRateInput" placeholder="Напр. 20" onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            const val = Number.parseFloat(e.target.value);
+            if (!Number.isFinite(val) || val < 0) return;
+            if ((typicalFields.vatRates || []).includes(val)) { alert("Така ставка вже існує."); return; }
+            saveTypicalFields({ ...typicalFields, vatRates: [...(typicalFields.vatRates || []), val].sort((a, b) => a - b) });
+            e.target.value = "";
+          }} />
+          <button type="button" className={btnPrimary} onClick={() => {
+            const input = document.getElementById("newVatRateInput");
+            const val = Number.parseFloat(input?.value);
+            if (!Number.isFinite(val) || val < 0) { alert("Введіть коректну ставку."); return; }
+            if ((typicalFields.vatRates || []).includes(val)) { alert("Така ставка вже існує."); return; }
+            saveTypicalFields({ ...typicalFields, vatRates: [...(typicalFields.vatRates || []), val].sort((a, b) => a - b) });
+            if (input) input.value = "";
+          }}>
+            <Plus size={14} /> Додати
+          </button>
+        </div>
+      </div>
     </div>
   );
 
@@ -1022,7 +2292,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const renderContractorsBase = () => <ContractorsBaseTab counterparties={counterparties} addCounterparty={addCounterparty} updateCounterparty={updateCounterparty} removeCounterparty={removeCounterparty} />;
 
   // ─── Render: База платників ───
-  const renderPayersBase = () => <PayersBaseTab payers={payers} addPayer={addPayer} updatePayer={updatePayer} removePayer={removePayer} />;
+  const renderPayersBase = () => <PayersBaseTab payers={payers} addPayer={addPayer} updatePayer={updatePayer} removePayer={removePayer} restaurants={restaurants} />;
 
   // ─── Render: Погоджувачі ───
   const renderApproversTab = () => <ApproversTab approvalRoutes={approvalRoutes} addApprovalRoute={addApprovalRoute} updateApprovalRoute={updateApprovalRoute} removeApprovalRoute={removeApprovalRoute} categories={typicalFields.categories} />;
@@ -1050,6 +2320,10 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     return renderApproversTab();
   }
 
+  if (isTreasuryTabKey(tabKey)) {
+    return renderTreasuryTab();
+  }
+
   // Default: payment request / registry
   return renderPaymentRequest();
 }
@@ -1067,10 +2341,10 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editingCp, setEditingCp] = useState(null);
-  const [form, setForm] = useState({ name: "", edrpou: "", iban: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
+  const [form, setForm] = useState({ name: "", edrpou: "", iban: "", mfo: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
 
   const resetForm = () => {
-    setForm({ name: "", edrpou: "", iban: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
+    setForm({ name: "", edrpou: "", iban: "", mfo: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
     setEditingCp(null);
     setShowForm(false);
   };
@@ -1082,6 +2356,7 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
       name: cp.name || "",
       edrpou: cp.edrpou || "",
       iban: cp.iban || "",
+      mfo: cp.mfo || "",
       contactPerson: cp.contactPerson || "",
       phone: cp.phone || "",
       email: cp.email || "",
@@ -1111,7 +2386,7 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
     const q = search.toLowerCase().trim();
     if (!q) return counterparties;
     return counterparties.filter((c) =>
-      [c.name, c.edrpou, c.iban, c.contactPerson, c.phone, c.email, c.address]
+      [c.name, c.edrpou, c.iban, c.mfo, c.contactPerson, c.phone, c.email, c.address]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
@@ -1165,6 +2440,10 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
               <input className={inputClassLocal} value={form.iban} onChange={(e) => setForm((p) => ({ ...p, iban: e.target.value }))} placeholder="UA..." />
             </div>
             <div>
+              <label className="text-sm font-semibold">МФО банку</label>
+              <input className={inputClassLocal} value={form.mfo} onChange={(e) => setForm((p) => ({ ...p, mfo: e.target.value }))} placeholder="123456" />
+            </div>
+            <div>
               <label className="text-sm font-semibold">Контактна особа</label>
               <input className={inputClassLocal} value={form.contactPerson} onChange={(e) => setForm((p) => ({ ...p, contactPerson: e.target.value }))} placeholder="Іванов Іван Іванович" />
             </div>
@@ -1203,6 +2482,7 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
                 <th className="px-3 py-2 text-left">Назва</th>
                 <th className="px-3 py-2 text-left">ЄДРПОУ</th>
                 <th className="px-3 py-2 text-left">IBAN</th>
+                <th className="px-3 py-2 text-left">МФО</th>
                 <th className="px-3 py-2 text-left">Контактна особа</th>
                 <th className="px-3 py-2 text-left">Телефон</th>
                 <th className="px-3 py-2 text-left">Email</th>
@@ -1215,6 +2495,7 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
                   <td className="px-3 py-2 font-medium">{cp.name}</td>
                   <td className="px-3 py-2">{cp.edrpou || "—"}</td>
                   <td className="px-3 py-2 font-mono text-xs max-w-[180px] truncate">{cp.iban || "—"}</td>
+                  <td className="px-3 py-2">{cp.mfo || "—"}</td>
                   <td className="px-3 py-2">{cp.contactPerson || "—"}</td>
                   <td className="px-3 py-2">{cp.phone || "—"}</td>
                   <td className="px-3 py-2">{cp.email || "—"}</td>
@@ -1232,7 +2513,7 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
               ))}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                  <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
                     {counterparties.length === 0 ? "Контрагентів ще немає. Додайте першого." : "Нічого не знайдено."}
                   </td>
                 </tr>
@@ -1250,14 +2531,14 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
    PAYERS BASE TAB (База платників)
    ═══════════════════════════════════════════════════ */
 
-function PayersBaseTab({ payers, addPayer, updatePayer, removePayer }) {
+function PayersBaseTab({ payers, addPayer, updatePayer, removePayer, restaurants }) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editingPayer, setEditingPayer] = useState(null);
-  const [form, setForm] = useState({ name: "", edrpou: "", iban: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
+  const [form, setForm] = useState({ name: "", edrpou: "", iban: "", mfo: "", contactPerson: "", phone: "", email: "", address: "", notes: "", restaurantIds: [] });
 
   const resetForm = () => {
-    setForm({ name: "", edrpou: "", iban: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
+    setForm({ name: "", edrpou: "", iban: "", mfo: "", contactPerson: "", phone: "", email: "", address: "", notes: "", restaurantIds: [] });
     setEditingPayer(null);
     setShowForm(false);
   };
@@ -1269,11 +2550,13 @@ function PayersBaseTab({ payers, addPayer, updatePayer, removePayer }) {
       name: p.name || "",
       edrpou: p.edrpou || "",
       iban: p.iban || "",
+      mfo: p.mfo || "",
       contactPerson: p.contactPerson || "",
       phone: p.phone || "",
       email: p.email || "",
       address: p.address || "",
       notes: p.notes || "",
+      restaurantIds: Array.isArray(p.restaurantIds) ? p.restaurantIds : [],
     });
     setEditingPayer(p);
     setShowForm(true);
@@ -1298,7 +2581,7 @@ function PayersBaseTab({ payers, addPayer, updatePayer, removePayer }) {
     const q = search.toLowerCase().trim();
     if (!q) return payers;
     return payers.filter((p) =>
-      [p.name, p.edrpou, p.iban, p.contactPerson, p.phone, p.email, p.address]
+      [p.name, p.edrpou, p.iban, p.mfo, p.contactPerson, p.phone, p.email, p.address, ...(Array.isArray(p.restaurantIds) ? p.restaurantIds : [])]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
@@ -1352,6 +2635,10 @@ function PayersBaseTab({ payers, addPayer, updatePayer, removePayer }) {
               <input className={inputClassLocal} value={form.iban} onChange={(e) => setForm((prev) => ({ ...prev, iban: e.target.value }))} placeholder="UA..." />
             </div>
             <div>
+              <label className="text-sm font-semibold">МФО банку</label>
+              <input className={inputClassLocal} value={form.mfo} onChange={(e) => setForm((prev) => ({ ...prev, mfo: e.target.value }))} placeholder="123456" />
+            </div>
+            <div>
               <label className="text-sm font-semibold">Контактна особа</label>
               <input className={inputClassLocal} value={form.contactPerson} onChange={(e) => setForm((prev) => ({ ...prev, contactPerson: e.target.value }))} placeholder="Іванов Іван Іванович" />
             </div>
@@ -1366,6 +2653,30 @@ function PayersBaseTab({ payers, addPayer, updatePayer, removePayer }) {
             <div>
               <label className="text-sm font-semibold">Адреса</label>
               <input className={inputClassLocal} value={form.address} onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))} placeholder="м. Київ, вул. ..." />
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-sm font-semibold">Заклади <span className="text-xs font-normal text-slate-400">— до яких закладів прив'язаний платник</span></label>
+              <div className="mt-1 flex flex-wrap gap-2">
+                {(restaurants || []).map((r) => {
+                  const rName = r.name || r.id;
+                  const isChecked = form.restaurantIds.includes(rName);
+                  return (
+                    <label key={r.id} className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm cursor-pointer select-none transition-colors ${isChecked ? "border-blue-400 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                      <input type="checkbox" checked={isChecked} onChange={() => {
+                        setForm((prev) => ({
+                          ...prev,
+                          restaurantIds: isChecked
+                            ? prev.restaurantIds.filter((id) => id !== rName)
+                            : [...prev.restaurantIds, rName],
+                        }));
+                      }} className="h-3.5 w-3.5 accent-blue-600" />
+                      {rName}
+                    </label>
+                  );
+                })}
+              </div>
+              {(restaurants || []).length === 0 && <p className="mt-1 text-xs text-slate-400">Закладів не знайдено</p>}
+              {form.restaurantIds.length === 0 && (restaurants || []).length > 0 && <p className="mt-1 text-xs text-slate-400">Доступний для всіх закладів (жоден не обрано)</p>}
             </div>
             <div className="md:col-span-2">
               <label className="text-sm font-semibold">Примітки</label>
@@ -1390,6 +2701,8 @@ function PayersBaseTab({ payers, addPayer, updatePayer, removePayer }) {
                 <th className="px-3 py-2 text-left">Назва</th>
                 <th className="px-3 py-2 text-left">ЄДРПОУ</th>
                 <th className="px-3 py-2 text-left">IBAN</th>
+                <th className="px-3 py-2 text-left">МФО</th>
+                <th className="px-3 py-2 text-left">Заклади</th>
                 <th className="px-3 py-2 text-left">Контактна особа</th>
                 <th className="px-3 py-2 text-left">Телефон</th>
                 <th className="px-3 py-2 text-left">Email</th>
@@ -1402,6 +2715,8 @@ function PayersBaseTab({ payers, addPayer, updatePayer, removePayer }) {
                   <td className="px-3 py-2 font-medium">{p.name}</td>
                   <td className="px-3 py-2">{p.edrpou || "—"}</td>
                   <td className="px-3 py-2 font-mono text-xs max-w-[180px] truncate">{p.iban || "—"}</td>
+                  <td className="px-3 py-2">{p.mfo || "—"}</td>
+                  <td className="px-3 py-2 text-xs">{Array.isArray(p.restaurantIds) && p.restaurantIds.length > 0 ? p.restaurantIds.join(", ") : <span className="text-slate-400">Всі</span>}</td>
                   <td className="px-3 py-2">{p.contactPerson || "—"}</td>
                   <td className="px-3 py-2">{p.phone || "—"}</td>
                   <td className="px-3 py-2">{p.email || "—"}</td>
@@ -1419,7 +2734,7 @@ function PayersBaseTab({ payers, addPayer, updatePayer, removePayer }) {
               ))}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                  <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
                     {payers.length === 0 ? "Платників ще немає. Додайте першого." : "Нічого не знайдено."}
                   </td>
                 </tr>

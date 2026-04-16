@@ -64,6 +64,7 @@ import { getCurrentRuntimeCustomConfig, getPrimaryConnection } from "./data/fire
 import { isCollectionsApiEnabled, getCollectionItemApi } from "./api/collectionsApi";
 import { batchImportAssetsApi, isAssetsApiEnabled } from "./api/assetsApi";
 
+
 const loadExcelHelpers = () => import("./utils/excelHelpers");
 
 const RolesPositionsManager = lazy(() =>
@@ -279,6 +280,8 @@ const ASSET_FIELD_LABELS = {
 
 const getAssetFieldLabel = (field) => ASSET_FIELD_LABELS[String(field || "")] || String(field || "-");
 const normalizeLowerText = (value) => String(value || "").trim().toLowerCase();
+
+
 
 const getPlannedTime = (item, scheduleByDay, dayKey) => {
   const mode = item?.timeMode || "before_open";
@@ -952,7 +955,8 @@ function App() {
 
   // Вкладки для поточного activeNav — з menuStructure, але фільтруються згідно з userPermissions
   const topTabs = useMemo(() => {
-    const allTabs = getTabsForSection(activeNav).map((tab) => {
+    const tabsFromMenu = getTabsForSection(activeNav);
+    const allTabs = tabsFromMenu.map((tab) => {
       if (activeNav === "ops-checklists" && tab.id === "openingchecklist") {
         return { ...tab, label: "Чеклисти" };
       }
@@ -3836,7 +3840,9 @@ function App() {
       topTabKey.includes("paymentfields") ||
       topTabKey.includes("paymentsbase") ||
       topTabKey.includes("baseofplatniki") ||
-      topTabKey.includes("approvalpeople");
+      topTabKey.includes("approvalpeople") ||
+      topTabKey.includes("kaznachey") ||
+      topTabKey.includes("treasury");
 
     if (isPaymentNav || isPaymentTab) {
       return (
