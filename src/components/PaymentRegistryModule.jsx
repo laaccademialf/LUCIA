@@ -253,6 +253,14 @@ const createRecurringTemplateFormState = (defaultCurrency = "UAH") => ({
   dayOfMonth: "10",
 });
 
+const normalizeTypicalFieldsState = (value) => ({
+  categories: Array.isArray(value?.categories) ? value.categories : [...PAYMENT_CATEGORIES],
+  articles: Array.isArray(value?.articles) ? value.articles : [...DEFAULT_ARTICLES],
+  subArticles: Array.isArray(value?.subArticles) ? value.subArticles : Array.isArray(value?.sub_articles) ? value.sub_articles : [],
+  defaultCurrency: String(value?.defaultCurrency || value?.default_currency || "UAH").trim() || "UAH",
+  vatRates: Array.isArray(value?.vatRates) ? value.vatRates : Array.isArray(value?.vat_rates) ? value.vat_rates : [7, 20],
+});
+
 const isRecurringTemplateRecord = (item) => {
   const explicitType = String(item?.recordType || item?.type || "").toLowerCase();
   if (explicitType === RECORD_TYPE_RECURRING_TEMPLATE) return true;
@@ -418,7 +426,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       .finally(() => setPaymentsLoading(false));
   }, []);
 
-  const defaultTypicalFields = { categories: [...PAYMENT_CATEGORIES], articles: [...DEFAULT_ARTICLES], subArticles: [], defaultCurrency: "UAH", vatRates: [7, 20] };
+  const defaultTypicalFields = normalizeTypicalFieldsState({});
   const [typicalFields, setTypicalFields] = useState(defaultTypicalFields);
   const typicalFieldsDbIdRef = useRef(null);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -449,7 +457,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (settingsLoadedRef.current) return;
     if (!isPaymentSettingsApiEnabled()) {
       // Fallback: load from localStorage
-      try { const s = localStorage.getItem("lucia_payment_typical_fields"); if (s) { const p = JSON.parse(s); setTypicalFields({ categories: p.categories || [...PAYMENT_CATEGORIES], articles: p.articles || [...DEFAULT_ARTICLES], subArticles: p.subArticles || [], defaultCurrency: p.defaultCurrency || "UAH", vatRates: p.vatRates || [7, 20] }); } } catch { /* ignore */ }
+      try { const s = localStorage.getItem("lucia_payment_typical_fields"); if (s) { const p = JSON.parse(s); setTypicalFields(normalizeTypicalFieldsState(p)); } } catch { /* ignore */ }
       try { const s = localStorage.getItem("lucia_payment_counterparties"); if (s) setCounterparties(JSON.parse(s)); } catch { /* ignore */ }
       try { const s = localStorage.getItem("lucia_payment_payers"); if (s) setPayers(JSON.parse(s)); } catch { /* ignore */ }
       try { const s = localStorage.getItem("lucia_payment_approval_routes"); if (s) setApprovalRoutes(JSON.parse(s)); } catch { /* ignore */ }
@@ -464,7 +472,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         if (tfRes.status === "fulfilled" && tfRes.value.length) {
           const rec = tfRes.value[0];
           typicalFieldsDbIdRef.current = rec.id || null;
-          setTypicalFields({ categories: rec.categories || [...PAYMENT_CATEGORIES], articles: rec.articles || [...DEFAULT_ARTICLES], subArticles: rec.subArticles || [], defaultCurrency: rec.defaultCurrency || "UAH", vatRates: rec.vatRates || [7, 20] });
+          setTypicalFields(normalizeTypicalFieldsState(rec));
         }
       })
       .catch((err) => console.error("[PaymentRegistry] Failed to load settings:", err));
