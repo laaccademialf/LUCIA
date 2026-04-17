@@ -1728,6 +1728,13 @@ const sanitizeColumnName = (raw) => {
 
 const MAX_MYSQL_IDENTIFIER_LENGTH = 64;
 
+// Поля, які завжди зберігаються як JSON (не розгортаються рекурсивно)
+const ALWAYS_JSON_FIELDS = new Set([
+  "assignmentTypes", "assignment_types",
+  "pricingByRestaurantId", "pricing_by_restaurant_id",
+  "pricingByRestaurantGroup", "pricing_by_restaurant_group",
+]);
+
 const flattenScalarFields = (input, prefix = "", out = {}) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) return out;
 
@@ -1751,9 +1758,8 @@ const flattenScalarFields = (input, prefix = "", out = {}) => {
     }
     if (typeof value === "object") {
       const colName = sanitizeColumnName(nextKey);
-      // Якщо ім'я колонки вже довге або вкладений об'єкт має динамічні ключі —
-      // зберегти як JSON замість рекурсивного розгортання
-      if (colName.length >= MAX_MYSQL_IDENTIFIER_LENGTH - 20) {
+      // Зберегти як JSON якщо: поле у списку динамічних, або ім'я занадто довге
+      if (ALWAYS_JSON_FIELDS.has(key) || prefix && ALWAYS_JSON_FIELDS.has(prefix) || colName.length >= MAX_MYSQL_IDENTIFIER_LENGTH - 20) {
         out[colName] = JSON.stringify(value);
       } else {
         flattenScalarFields(value, nextKey, out);
