@@ -62,11 +62,13 @@ const toNumber = (value) => {
 
 const roundMoney = (value) => Number(toNumber(value).toFixed(2));
 
+const roundToTen = (value) => Math.round(toNumber(value) / 10) * 10;
+
 const computeSalePriceFromMarkup = (baseAmount, markupPercent) => {
   const base = toNumber(baseAmount);
   const markup = toNumber(markupPercent);
   if (base <= 0) return 0;
-  return roundMoney(base * (1 + markup / 100));
+  return roundToTen(base * (1 + markup / 100));
 };
 
 const computePortionCost = (purchasePrice, bottleVolumeMl, portionVolumeMl) => {
@@ -230,8 +232,8 @@ const buildAutoPricingByRestaurantGroup = ({
     });
 
     const markupPct = toNumber(matchedRule?.markupPercent);
-    const calculatedPrice = markupPct > 0 ? roundMoney(portionCostPrice * (1 + markupPct / 100)) : 0;
-    const targetPortionPrice = Math.max(calculatedPrice, toNumber(group.minimumPortionPrice));
+    const calculatedPrice = markupPct > 0 ? roundToTen(portionCostPrice * (1 + markupPct / 100)) : 0;
+    const targetPortionPrice = Math.max(calculatedPrice, roundToTen(group.minimumPortionPrice));
 
     return {
       restaurantGroupId: group.id,
@@ -2384,7 +2386,7 @@ const ProductCatalogForm = ({ product, categories, measurementUnits, saleUnits, 
 
   useEffect(() => {
     const nextBottleSalePrice = computeSalePriceFromMarkup(form.purchasePrice, form.bottleMarkup);
-    const currentBottleSalePrice = roundMoney(form.bottleSalePrice);
+    const currentBottleSalePrice = roundToTen(form.bottleSalePrice);
     if (nextBottleSalePrice !== currentBottleSalePrice) {
       set("bottleSalePrice", String(nextBottleSalePrice || ""));
     }
@@ -2400,7 +2402,7 @@ const ProductCatalogForm = ({ product, categories, measurementUnits, saleUnits, 
 
   useEffect(() => {
     const nextPortionSalePrice = computeSalePriceFromMarkup(form.portionCostPrice, form.portionMarkup);
-    const currentPortionSalePrice = roundMoney(form.portionSalePrice);
+    const currentPortionSalePrice = roundToTen(form.portionSalePrice);
     if (!shouldUseTypicalMarkup && nextPortionSalePrice !== currentPortionSalePrice) {
       set("portionSalePrice", String(nextPortionSalePrice || ""));
     }
@@ -2412,7 +2414,7 @@ const ProductCatalogForm = ({ product, categories, measurementUnits, saleUnits, 
     const baseEntry = sortedEntries[0] || null;
     const nextPortionSalePrice = baseEntry?.portionSalePrice || 0;
     const nextPortionMarkup = baseEntry?.portionMarkup || 0;
-    if (roundMoney(form.portionSalePrice) !== roundMoney(nextPortionSalePrice)) {
+    if (roundToTen(form.portionSalePrice) !== roundToTen(nextPortionSalePrice)) {
       set("portionSalePrice", String(nextPortionSalePrice || ""));
     }
     if (roundMoney(form.portionMarkup) !== roundMoney(nextPortionMarkup)) {
