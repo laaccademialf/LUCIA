@@ -1391,7 +1391,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         const colContract = headers.findIndex((h) => h === "Договор" || h === "Договір");
         const colCounterparty = headers.findIndex((h) => h === "Контрагент");
         const colOrg = headers.findIndex((h) => h === "Организация" || h === "Організація");
-        const colDebtDays = headers.findIndex((h) => h.includes("Срок долга") && !h.includes("договор"));
+        const colDebtDays = headers.findIndex((h) => h.includes("Срок долга") && !h.includes("договор") && !h.includes("договір"));
+        const colContractDays = headers.findIndex((h) => h.includes("Срок долга") && (h.includes("договор") || h.includes("договір")));
         const colDebt = headers.findIndex((h) => h.includes("Задолженность") || h.includes("Заборгованість"));
 
         // Пропускаємо рядок підзаголовків (якщо є — "До 7 дней" тощо)
@@ -1407,21 +1408,34 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         const nowIso = new Date().toISOString();
         const today = nowIso.slice(0, 10);
         let imported = 0;
+        let skippedByTerm = 0;
         const newPayments = [];
 
         for (let i = dataStartRow; i < allRows.length; i++) {
           const row = allRows[i];
-          const counterparty = String(row[colCounterparty] || "").trim();
+          // Пропускаємо повністю порожні рядки
+          if (!row || row.every((cell) => cell === "" || cell === null || cell === undefined)) continue;
+
+          const counterparty = String(row[colCounterparty >= 0 ? colCounterparty : 3] || "").trim();
           const debtAmount = Number.parseFloat(String(row[colDebt >= 0 ? colDebt : 9] || "0").replace(/\s/g, "").replace(",", "."));
           if (!counterparty || !Number.isFinite(debtAmount) || debtAmount <= 0) continue;
+
+          const debtDays = Number.parseInt(String(row[colDebtDays >= 0 ? colDebtDays : 7] || "0"), 10) || 0;
+          const contractDays = Number.parseInt(String(row[colContractDays >= 0 ? colContractDays : 8] || "0"), 10) || 0;
+
+          // Фільтр: створюємо заявку тільки якщо залишок до кінцевого терміну < 3 днів
+          const daysRemaining = contractDays - debtDays;
+          if (daysRemaining >= 3) {
+            skippedByTerm++;
+            continue;
+          }
 
           const document = String(row[colDoc >= 0 ? colDoc : 0] || "").trim();
           const edrpou = String(row[colEdrpou >= 0 ? colEdrpou : 1] || "").trim();
           const contract = String(row[colContract >= 0 ? colContract : 2] || "").trim();
           const organization = String(row[colOrg >= 0 ? colOrg : 5] || "").trim();
-          const debtDays = Number.parseInt(String(row[colDebtDays >= 0 ? colDebtDays : 7] || "0"), 10) || 0;
 
-          const urgency = debtDays > 60 ? "critical" : debtDays > 30 ? "high" : debtDays > 14 ? "normal" : "low";
+          const urgency = daysRemaining < 0 ? "critical" : daysRemaining === 0 ? "high" : "normal";
 
           const title = `Оплата заборгованості: ${counterparty}` + (contract ? ` (${contract})` : "");
           const description = [
@@ -1429,7 +1443,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
             edrpou ? `ЄДРПОУ: ${edrpou}` : "",
             contract ? `Договір: ${contract}` : "",
             organization ? `Організація: ${organization}` : "",
-            debtDays > 0 ? `Строк боргу: ${debtDays} днів` : "",
+            `Строк боргу: ${debtDays} дн. / Строк договору: ${contractDays} дн. (залишок: ${daysRemaining} дн.)`,
           ].filter(Boolean).join("\n");
 
           const paymentNumber = generatePaymentNumber("", restaurants, [...paymentRequests, ...newPayments]);
@@ -1472,7 +1486,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               at: nowIso,
               byId: "system",
               byName: "Імпорт з 1С (старіння заборгованості)",
-              comment: `Автоматично створено з файлу 1С. Борг: ${debtDays} днів.`,
+              comment: `Автоматично створено з файлу 1С. Борг: ${debtDays} дн., договір: ${contractDays} дн., залишок: ${daysRemaining} дн.`,
             }],
             comments: [],
             importedFrom: "1c_debt_aging",
@@ -1484,12 +1498,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         }
 
         if (imported === 0) {
-          alert("У файлі не знайдено рядків заборгованості з коректною сумою.");
+          alert(`У файлі не знайдено заборгованостей, що потребують оплати (залишок до терміну < 3 днів).${skippedByTerm > 0 ? `\nПропущено ${skippedByTerm} позицій (ще є час до кінцевого терміну).` : ""}`);
           return;
         }
 
         const totalAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
-        if (!confirm(`Буде створено ${imported} заявок на оплату заборгованості на загальну суму ${formatMoney(totalAmount)} грн.\n\nПродовжити?`)) {
+        if (!confirm(`Буде створено ${imported} заявок на оплату заборгованості на загальну суму ${formatMoney(totalAmount)} грн.${skippedByTerm > 0 ? `\nПропущено ${skippedByTerm} позицій (залишок до терміну ≥ 3 днів).` : ""}\n\nПродовжити?`)) {
           return;
         }
 
