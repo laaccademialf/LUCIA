@@ -261,6 +261,13 @@ const normalizeTypicalFieldsState = (value) => ({
   vatRates: Array.isArray(value?.vatRates) ? value.vatRates : Array.isArray(value?.vat_rates) ? value.vat_rates : [7, 20],
 });
 
+const normalizeCounterpartyRecord = (value) => ({
+  ...value,
+  contactPerson: String(value?.contactPerson || value?.contact_person || "").trim(),
+  vatMode: String(value?.vatMode || value?.vat_mode || "none").trim() || "none",
+  vatRate: String(value?.vatRate || value?.vat_rate || "").trim(),
+});
+
 const isRecurringTemplateRecord = (item) => {
   const explicitType = String(item?.recordType || item?.type || "").toLowerCase();
   if (explicitType === RECORD_TYPE_RECURRING_TEMPLATE) return true;
@@ -462,7 +469,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (!isPaymentSettingsApiEnabled()) {
       // Fallback: load from localStorage
       try { const s = localStorage.getItem("lucia_payment_typical_fields"); if (s) { const p = JSON.parse(s); setTypicalFields(normalizeTypicalFieldsState(p)); } } catch { /* ignore */ }
-      try { const s = localStorage.getItem("lucia_payment_counterparties"); if (s) setCounterparties(JSON.parse(s)); } catch { /* ignore */ }
+      try { const s = localStorage.getItem("lucia_payment_counterparties"); if (s) setCounterparties(JSON.parse(s).map(normalizeCounterpartyRecord)); } catch { /* ignore */ }
       try { const s = localStorage.getItem("lucia_payment_payers"); if (s) setPayers(JSON.parse(s)); } catch { /* ignore */ }
       try { const s = localStorage.getItem("lucia_payment_approval_routes"); if (s) setApprovalRoutes(JSON.parse(s)); } catch { /* ignore */ }
       return;
@@ -471,7 +478,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     Promise.allSettled([getPayersApi(), getCounterpartiesApi(), getApprovalRoutesApi(), getTypicalFieldsApi()])
       .then(([payersRes, cpRes, routesRes, tfRes]) => {
         if (payersRes.status === "fulfilled" && payersRes.value.length) setPayers(payersRes.value);
-        if (cpRes.status === "fulfilled" && cpRes.value.length) setCounterparties(cpRes.value);
+        if (cpRes.status === "fulfilled" && cpRes.value.length) setCounterparties(cpRes.value.map(normalizeCounterpartyRecord));
         if (routesRes.status === "fulfilled" && routesRes.value.length) setApprovalRoutes(routesRes.value);
         if (tfRes.status === "fulfilled" && tfRes.value.length) {
           const rec = tfRes.value[0];
@@ -507,7 +514,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   // ─── Counterparties CRUD ───
   const saveCounterparties = useCallback((list) => {
-    setCounterparties(list);
+    setCounterparties(list.map(normalizeCounterpartyRecord));
   }, []);
 
   const addCounterparty = useCallback((cp) => {
@@ -1679,8 +1686,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                       )}
                     </td>
                     <td className="px-3 py-2 text-xs">{isRecurringTemplate ? (payment.registryInitiator || "-") : (payment.requestedByName || "-")}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap gap-1">
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <div className="flex flex-nowrap gap-1 [&>*]:shrink-0">
                         {isRecurringTemplate && (
                           <button type="button" disabled={Boolean(processingId) || !canCreateFromRecurringTemplate(payment)} onClick={() => runRecurringTemplateNow(payment)} className={btnSecondary} title={!canCreateFromRecurringTemplate(payment) ? "Спочатку завершіть або скасуйте поточний платіж з цього шаблону" : ""}>
                             <RefreshCcw size={12} /> Створити зараз
