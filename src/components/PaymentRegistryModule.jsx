@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { Check, X, Plus, Download, Upload, Clock3, FileText, Edit3, Trash2, Search, Save, Building2, RefreshCcw, Landmark, Pause, Play } from "lucide-react";
+import { Check, X, Plus, Download, Upload, Clock3, FileText, Edit3, Trash2, Search, Save, Building2, RefreshCcw, Landmark, Pause, Play, Send } from "lucide-react";
 import * as XLSX from "xlsx";
 import { getUsers } from "../firebase/users";
 import {
@@ -452,6 +452,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const [treasuryDateFrom, setTreasuryDateFrom] = useState("");
   const [treasuryDateTo, setTreasuryDateTo] = useState("");
   const [scheduleModal, setScheduleModal] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
 
   // Counterparties (contractors) state
   const [counterparties, setCounterparties] = useState([]);
@@ -1161,6 +1162,99 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     });
   };
 
+  const launchPayment = (payment) => {
+    if (processingId) return;
+    if (payment.status !== "draft") return;
+    setProcessingId(payment.id);
+    const nowIso = new Date().toISOString();
+    const updatedData = {
+      ...payment,
+      status: "approved",
+      updatedAt: nowIso,
+      approvals: [
+        ...(payment.approvals || []),
+        { action: "approved", at: nowIso, byId: myUserId, byName: myName, comment: "Запущено вручну" },
+      ],
+    };
+    updateStoredRecord(payment.id, () => updatedData);
+    updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
+      console.error("[PaymentRegistry] Failed to launch payment:", err)
+    );
+    writeAudit({
+      action: "payment_request_launch",
+      entityType: "payment_request",
+      entityId: payment.id,
+      description: `Запущено заявку "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency})`,
+    });
+    setProcessingId("");
+  };
+
+  const bulkLaunchSelected = () => {
+    if (selectedIds.size === 0) return;
+    const drafts = paymentRequests.filter((p) => selectedIds.has(p.id) && p.status === "draft");
+    if (drafts.length === 0) { alert("Серед виділених немає чернеток для запуску."); return; }
+    if (!confirm(`Запустити ${drafts.length} заявок на оплату?`)) return;
+    const nowIso = new Date().toISOString();
+    drafts.forEach((payment) => {
+      const updatedData = {
+        ...payment,
+        status: "approved",
+        updatedAt: nowIso,
+        approvals: [
+          ...(payment.approvals || []),
+          { action: "approved", at: nowIso, byId: myUserId, byName: myName, comment: "Масовий запуск" },
+        ],
+      };
+      updateStoredRecord(payment.id, () => updatedData);
+      updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
+        console.error("[PaymentRegistry] Failed to launch payment:", err)
+      );
+    });
+    writeAudit({
+      action: "payment_request_bulk_launch",
+      entityType: "payment_request",
+      entityId: "",
+      description: `Масово запущено ${drafts.length} заявок`,
+    });
+    setSelectedIds(new Set());
+  };
+
+  const bulkDeleteSelected = () => {
+    if (selectedIds.size === 0) return;
+    const toDelete = paymentRequests.filter((p) => selectedIds.has(p.id));
+    if (toDelete.length === 0) return;
+    if (!confirm(`Видалити ${toDelete.length} заявок? Цю дію неможливо скасувати.`)) return;
+    setPayments((prev) => prev.filter((item) => !selectedIds.has(item.id)));
+    toDelete.forEach((payment) => {
+      deletePaymentRequestApi(payment.id).catch((err) =>
+        console.error("[PaymentRegistry] Failed to delete payment:", err)
+      );
+    });
+    writeAudit({
+      action: "payment_request_bulk_delete",
+      entityType: "payment_request",
+      entityId: "",
+      description: `Масово видалено ${toDelete.length} заявок`,
+    });
+    setSelectedIds(new Set());
+  };
+
+  const toggleSelectPayment = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const visibleIds = filteredPayments.filter((p) => !isRecurringTemplateRecord(p)).map((p) => p.id);
+    setSelectedIds((prev) => {
+      const allSelected = visibleIds.length > 0 && visibleIds.every((id) => prev.has(id));
+      return allSelected ? new Set() : new Set(visibleIds);
+    });
+  };
+
   // ─── Actions ───
   const openApprovalModal = (payment) => {
     setApprovalData({
@@ -1472,7 +1566,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
             restaurant: organization || "",
             expenseRestaurant: organization || "",
             dueDate: today,
-            status: "approved",
+            status: "draft",
             createdAt: nowIso,
             updatedAt: nowIso,
             requestedById: myUserId,
@@ -1481,13 +1575,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
             ownerUserId: myUserId,
             ownerEmail: myEmail,
             ownerName: myName,
-            approvals: [{
-              action: "auto_approved",
-              at: nowIso,
-              byId: "system",
-              byName: "Імпорт з 1С (старіння заборгованості)",
-              comment: `Автоматично створено з файлу 1С. Борг: ${debtDays} дн., договір: ${contractDays} дн., залишок: ${daysRemaining} дн.`,
-            }],
+            approvals: [],
             comments: [],
             importedFrom: "1c_debt_aging",
             importedAt: nowIso,
@@ -1521,7 +1609,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           description: `Імпортовано ${imported} заявок на оплату заборгованості з файлу 1С (${formatMoney(totalAmount)} грн)`,
         });
 
-        alert(`Імпортовано ${imported} заявок на оплату заборгованості.`);
+        // Виділити імпортовані заявки
+        setSelectedIds(new Set(newPayments.map((p) => p.id)));
+        alert(`Імпортовано ${imported} чернеток. Перевірте та натисніть «Запустити» щоб відправити на оплату.`);
       } catch (err) {
         console.error("[PaymentRegistry] Import debt aging error:", err);
         alert("Помилка при обробці файлу: " + (err.message || err));
@@ -1801,11 +1891,30 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       <div className={cardClass}>
         <div className="flex items-center justify-between gap-2 mb-3">
           <h3 className="text-base font-semibold">Реєстр платежів ({filteredPayments.length})</h3>
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-600">Виділено: {selectedIds.size}</span>
+              <button type="button" onClick={bulkLaunchSelected} className={btnApprove} title="Запустити виділені чернетки на оплату">
+                <Send size={12} /> Запустити
+              </button>
+              {isAdmin && (
+                <button type="button" onClick={bulkDeleteSelected} className={btnReject} title="Видалити виділені">
+                  <Trash2 size={12} /> Видалити
+                </button>
+              )}
+              <button type="button" onClick={() => setSelectedIds(new Set())} className={btnSecondary} title="Зняти виділення">
+                <X size={12} /> Скинути
+              </button>
+            </div>
+          )}
         </div>
         <div className="overflow-x-auto rounded-lg border border-slate-200">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-700">
               <tr>
+                <th className="px-2 py-2 w-8">
+                  <input type="checkbox" checked={filteredPayments.filter((p) => !isRecurringTemplateRecord(p)).length > 0 && filteredPayments.filter((p) => !isRecurringTemplateRecord(p)).every((p) => selectedIds.has(p.id))} onChange={toggleSelectAll} className="rounded border-slate-300" />
+                </th>
                 <th className="px-3 py-2 text-left">Платіж</th>
                 <th className="px-3 py-2 text-right">Сума</th>
                 <th className="px-3 py-2 text-left">Статус</th>
@@ -1832,7 +1941,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                 const canCancel = !isRecurringTemplate && (payment.status === "draft" || payment.status === "pending") && (payment.requestedById === myUserId || isFinance);
 
                 return (
-                  <tr key={payment.id} className="border-t border-slate-200 hover:bg-slate-50">
+                  <tr key={payment.id} className={`border-t border-slate-200 hover:bg-slate-50${selectedIds.has(payment.id) ? " bg-indigo-50" : ""}`}>
+                    <td className="px-2 py-2 w-8">
+                      {!isRecurringTemplate && (
+                        <input type="checkbox" checked={selectedIds.has(payment.id)} onChange={() => toggleSelectPayment(payment.id)} className="rounded border-slate-300" />
+                      )}
+                    </td>
                     <td className="px-3 py-2">
                       <div className="font-medium">{payment.title}</div>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5 text-xs text-slate-500">
@@ -1866,6 +1980,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                     <td className="px-3 py-2 text-xs">{isRecurringTemplate ? (payment.registryInitiator || "-") : (payment.requestedByName || "-")}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
                       <div className="flex flex-nowrap gap-1 [&>*]:shrink-0">
+                        {!isRecurringTemplate && payment.status === "draft" && (
+                          <button type="button" disabled={Boolean(processingId)} onClick={() => launchPayment(payment)} className={btnApprove} title="Запустити на оплату">
+                            <Send size={12} /> Запустити
+                          </button>
+                        )}
                         {isRecurringTemplate && (
                           <button type="button" disabled={Boolean(processingId) || !canCreateFromRecurringTemplate(payment)} onClick={() => runRecurringTemplateNow(payment)} className={btnSecondary} title={!canCreateFromRecurringTemplate(payment) ? "Спочатку завершіть або скасуйте поточний платіж з цього шаблону" : ""}>
                             <RefreshCcw size={12} /> Створити зараз
