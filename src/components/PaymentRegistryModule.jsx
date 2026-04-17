@@ -606,6 +606,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   // ─── Filtering ───
   const filteredPayments = useMemo(() => {
     const visibleTemplates = recurringTemplates.filter((template) => {
+      if ((Number(template.totalGenerated) || 0) > 0) {
+        return false;
+      }
       if (topTab === "mypayments" && !isFinance) {
         return paymentBelongsToUser(template, myUserId, myEmail, myName);
       }
