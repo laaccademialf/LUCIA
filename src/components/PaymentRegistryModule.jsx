@@ -605,7 +605,14 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   // ─── Filtering ───
   const filteredPayments = useMemo(() => {
-    let result = [...paymentRequests];
+    const visibleTemplates = recurringTemplates.filter((template) => {
+      if (topTab === "mypayments" && !isFinance) {
+        return paymentBelongsToUser(template, myUserId, myEmail, myName);
+      }
+      return true;
+    });
+
+    let result = [...paymentRequests, ...visibleTemplates];
 
     if (topTab === "mypayments" && !isFinance) {
       result = result.filter(
@@ -617,7 +624,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     }
 
     if (statusFilter !== "all") {
-      result = result.filter((p) => p.status === statusFilter);
+      result = result.filter((p) => !isRecurringTemplateRecord(p) && p.status === statusFilter);
     }
     if (urgencyFilter !== "all") {
       result = result.filter((p) => p.urgency === urgencyFilter);
@@ -625,7 +632,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       result = result.filter((p) =>
-        [p.paymentNumber, p.title, p.counterparty, p.category, p.description, p.iban, p.restaurant]
+        [p.paymentNumber, p.title, p.counterparty, p.category, p.description, p.iban, p.restaurant, p.nextOccurrenceDate, p.frequency]
           .filter(Boolean)
           .join(" ")
           .toLowerCase()
@@ -639,14 +646,14 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       const ua = urgencyOrder[a.urgency] ?? 4;
       const ub = urgencyOrder[b.urgency] ?? 4;
       if (ua !== ub) return ua - ub;
-      const sa = statusOrder[a.status] ?? 7;
-      const sb = statusOrder[b.status] ?? 7;
+      const sa = isRecurringTemplateRecord(a) ? 8 : (statusOrder[a.status] ?? 7);
+      const sb = isRecurringTemplateRecord(b) ? 8 : (statusOrder[b.status] ?? 7);
       if (sa !== sb) return sa - sb;
-      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+      return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime();
     });
 
     return result;
-  }, [paymentRequests, topTab, isFinance, myUserId, myEmail, statusFilter, urgencyFilter, searchQuery]);
+  }, [paymentRequests, recurringTemplates, topTab, isFinance, myUserId, myEmail, myName, statusFilter, urgencyFilter, searchQuery]);
 
   // ─── Stats ───
   const stats = useMemo(() => {
@@ -777,18 +784,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         return;
       }
       const nowIso = new Date().toISOString();
-      const templateId = generateId("rec");
-      const firstOccurrenceDate = resolveInitialRecurringOccurrence({
-        ...formData,
-        startDate: formData.startDate,
-        dayOfMonth: formData.dayOfMonth,
-        frequency: formData.frequency,
-      });
       const normalizedTemplate = normalizeRecurringTemplateRecord({
         ...formData,
         title: titleWithVat,
         amount,
-        id: templateId,
+        id: generateId("rec"),
         recordType: RECORD_TYPE_RECURRING_TEMPLATE,
         requestedById: myUserId,
         requestedByEmail: myEmail,
@@ -796,34 +796,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         createdAt: nowIso,
         updatedAt: nowIso,
         isActive: true,
-        nextOccurrenceDate: getNextRecurringOccurrence(formData, firstOccurrenceDate),
-        totalGenerated: 1,
       });
-      const paymentNumber = generatePaymentNumber(formData.restaurant || formData.expenseRestaurant, restaurants, paymentRequests);
-      const initialPayment = {
-        ...createPaymentFromRecurringTemplate(normalizedTemplate, firstOccurrenceDate, paymentNumber),
-        status: asDraft ? "draft" : "approved",
-        dueDate: firstOccurrenceDate,
-        createdAt: nowIso,
-        updatedAt: nowIso,
-        requestedById: myUserId,
-        requestedByEmail: myEmail,
-        requestedByName: myName,
-      };
 
-      replaceStoredRecords([initialPayment, normalizedTemplate]);
-      addPaymentRequestApi(initialPayment).catch((err) =>
-        console.error("[PaymentRegistry] Failed to save initial recurring payment:", err)
-      );
+      appendStoredRecord(normalizedTemplate);
       addPaymentRequestApi(normalizedTemplate).catch((err) =>
         console.error("[PaymentRegistry] Failed to create recurring template:", err)
       );
-      writeAudit({
-        action: "payment_request_create",
-        entityType: "payment_request",
-        entityId: initialPayment.id,
-        description: `Створено заявку на платіж "${formData.title.trim()}" (${formatMoney(amount)} ${formData.currency})`,
-      });
       writeAudit({
         action: "payment_recurring_template_create",
         entityType: "payment_recurring_template",
@@ -1471,15 +1449,18 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
             </thead>
             <tbody>
               {filteredPayments.map((payment) => {
+                const isRecurringTemplate = isRecurringTemplateRecord(payment);
                 const matchedRoute = findApproverForPayment(payment);
                 const isAssignedApprover = matchedRoute && (
                   (matchedRoute.approverEmail && matchedRoute.approverEmail.toLowerCase() === myEmail.toLowerCase()) ||
                   (matchedRoute.approverName && matchedRoute.approverName === myName)
                 );
-                const canApprove = (isFinance || isAssignedApprover) && (payment.status === "pending");
-                const canPause = isFinance && ["approved", "scheduled", "paused"].includes(payment.status);
-                const canEdit = payment.status === "draft" || (payment.status === "pending" && payment.requestedById === myUserId);
-                const canCancel = (payment.status === "draft" || payment.status === "pending") && (payment.requestedById === myUserId || isFinance);
+                const canApprove = !isRecurringTemplate && (isFinance || isAssignedApprover) && (payment.status === "pending");
+                const canPause = !isRecurringTemplate && isFinance && ["approved", "scheduled", "paused"].includes(payment.status);
+                const canEdit = isRecurringTemplate
+                  ? (isFinance || paymentBelongsToUser(payment, myUserId, myEmail, myName))
+                  : (payment.status === "draft" || (payment.status === "pending" && payment.requestedById === myUserId));
+                const canCancel = !isRecurringTemplate && (payment.status === "draft" || payment.status === "pending") && (payment.requestedById === myUserId || isFinance);
 
                 return (
                   <tr key={payment.id} className="border-t border-slate-200 hover:bg-slate-50">
@@ -1487,28 +1468,34 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                       <div className="font-medium">{payment.title}</div>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5 text-xs text-slate-500">
                         {payment.paymentNumber && <span className="font-mono">{payment.paymentNumber}</span>}
+                        {isRecurringTemplate && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">Регулярний</span>}
                         {payment.counterparty && <span>→ {payment.counterparty}</span>}
                         {payment.category && <span className="text-slate-400">{payment.category}</span>}
                       </div>
                     </td>
                     <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{formatMoney(payment.amount)} {payment.currency}</td>
                     <td className="px-3 py-2">
-                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_COLORS[payment.status] || ""}`}>
-                        {PAYMENT_STATUSES[payment.status] || payment.status}
+                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${isRecurringTemplate ? "bg-blue-100 text-blue-800" : (STATUS_COLORS[payment.status] || "")}`}>
+                        {isRecurringTemplate ? "Очікує запуску" : (PAYMENT_STATUSES[payment.status] || payment.status)}
                       </span>
-                      {payment.urgency && payment.urgency !== "normal" && (
+                      {!isRecurringTemplate && payment.urgency && payment.urgency !== "normal" && (
                         <span className={`ml-1 inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${URGENCY_COLORS[payment.urgency] || ""}`}>
                           {URGENCY_LEVELS[payment.urgency] || payment.urgency}
                         </span>
                       )}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap text-xs">
-                      <div>{formatDate(payment.dueDate) || "—"}</div>
+                      <div>{formatDate(isRecurringTemplate ? payment.nextOccurrenceDate : payment.dueDate) || "—"}</div>
                       <div className="text-slate-400">{formatDateTime(payment.createdAt)}</div>
                     </td>
                     <td className="px-3 py-2 text-xs">{payment.requestedByName || "-"}</td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1">
+                        {isRecurringTemplate && (
+                          <button type="button" disabled={Boolean(processingId)} onClick={() => runRecurringTemplateNow(payment)} className={btnSecondary}>
+                            <RefreshCcw size={12} /> Створити зараз
+                          </button>
+                        )}
                         {canApprove && (
                           <>
                             <button type="button" disabled={Boolean(processingId)} onClick={() => openApprovalModal(payment)} className={btnApprove}>
@@ -1525,7 +1512,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                           </button>
                         )}
                         {canEdit && (
-                          <button type="button" onClick={() => openEditForm(payment)} className={btnSecondary}>
+                          <button type="button" onClick={() => (isRecurringTemplate ? openEditRecurringForm(payment) : openEditForm(payment))} className={btnSecondary}>
                             Редагувати
                           </button>
                         )}
@@ -1535,7 +1522,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                           </button>
                         )}
                         {isAdmin && (
-                          <button type="button" onClick={() => deletePayment(payment)} className={btnReject} title="Видалити назавжди">
+                          <button type="button" onClick={() => (isRecurringTemplate ? removeRecurringTemplate(payment) : deletePayment(payment))} className={btnReject} title="Видалити назавжди">
                             <Trash2 size={12} /> Видалити
                           </button>
                         )}
@@ -1547,7 +1534,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               {filteredPayments.length === 0 && (
                 <tr>
                   <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
-                    {paymentRequests.length === 0 ? "Заявок на платіж поки немає. Натисніть «Нова заявка» щоб створити першу." : "Нічого не знайдено за обраними фільтрами."}
+                    {paymentRequests.length === 0 && recurringTemplates.length === 0 ? "Заявок на платіж поки немає. Натисніть «Нова заявка» щоб створити першу." : "Нічого не знайдено за обраними фільтрами."}
                   </td>
                 </tr>
               )}
