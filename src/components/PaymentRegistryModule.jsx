@@ -802,7 +802,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       const paymentNumber = generatePaymentNumber(formData.restaurant || formData.expenseRestaurant, restaurants, paymentRequests);
       const initialPayment = {
         ...createPaymentFromRecurringTemplate(normalizedTemplate, firstOccurrenceDate, paymentNumber),
-        status: asDraft ? "draft" : "pending",
+        status: asDraft ? "draft" : "approved",
         dueDate: firstOccurrenceDate,
         createdAt: nowIso,
         updatedAt: nowIso,
