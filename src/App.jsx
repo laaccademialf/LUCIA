@@ -3810,13 +3810,53 @@ function App() {
     const isBarWineTab =
       topTabKey.includes("asortment") ||
       topTabKey.includes("assortment") ||
-      topTabKey.includes("barvino");
+      topTabKey.includes("barvino") ||
+      topTabKey.includes("markup") ||
+      topTabKey.includes("nadc") ||
+      topTabKey.includes("цінк");
+
+    const currentTopTabLabel = String(topTabs.find((tab) => tab.id === topTab)?.label || "");
+
+    const normalizedBarWineTopTab = (() => {
+      const value = String(topTab || "").toLowerCase().trim();
+      const label = currentTopTabLabel.toLowerCase().trim();
+      if (label.includes("надцін") || label.includes("націн") || label.includes("цінк")) return "markups";
+      if (value === "assortmentmatrix" || value === "test1" || value.includes("assortmentmatrix")) return "matrix";
+      if (
+        value === "barvinositifications" ||
+        value === "barvinospecifications" ||
+        value === "barvinospecification" ||
+        value === "test2" ||
+        (value.includes("barvino") && (value.includes("spec") || value.includes("sitif") || value.includes("stif") || value.includes("notic")))
+      ) {
+        return "specifications";
+      }
+      if (
+        value === "barvinotipicalform" ||
+        value === "test3" ||
+        (value.includes("barvino") && (value.includes("tipical") || value.includes("typical") || value.includes("field") || value.includes("form")))
+      ) {
+        return "typicalFields";
+      }
+      if (
+        value.includes("markup") ||
+        value.includes("markups") ||
+        value.includes("nadc") ||
+        value.includes("nacink") ||
+        value.includes("nacinka") ||
+        value.includes("цінк")
+      ) {
+        return "markups";
+      }
+      return topTab;
+    })();
 
     if (isBarWineNav || isBarWineTab) {
       return (
         <div className="grid grid-cols-1">
           <AssortmentMatrixModule
-            topTab={topTab}
+            topTab={normalizedBarWineTopTab}
+            topTabLabel={currentTopTabLabel}
             restaurants={restaurants}
             user={user}
           />

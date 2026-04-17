@@ -757,8 +757,7 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
       const tableName = await resolveCollectionTableMySql(conn, collection);
       const existingColumns = await getMySqlColumns(conn, tableName);
       const hasPayloadColumn = existingColumns.has("payload");
-      const isFlatTable = String(tableName || "").endsWith("_flat");
-      const shouldPersistPayload = hasPayloadColumn && !isFlatTable;
+      const shouldPersistPayload = hasPayloadColumn;
 
       // Compatibility mode: some flat tables were created without payload column.
       // For permissions collections in _flat mode, keep nested permissions/restaurants
