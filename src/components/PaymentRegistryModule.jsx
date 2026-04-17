@@ -661,22 +661,40 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   // ─── Filtering ───
   const filteredPayments = useMemo(() => {
+    const recurringTemplatesBySeries = new Map(
+      recurringTemplates.map((template) => [String(template.recurringSeriesKey || template.id || "").trim(), template])
+    );
+
     const visibleTemplates = recurringTemplates.filter((template) => {
-      const templateSeriesKey = String(template.recurringSeriesKey || template.id || "").trim();
-      const hasGeneratedPayment = paymentRequests.some((payment) => {
-        const paymentSeriesKey = String(payment.recurringSeriesKey || payment.recurringTemplateId || "").trim();
-        return Boolean(templateSeriesKey) && paymentSeriesKey === templateSeriesKey;
-      });
-      if (hasGeneratedPayment || (Number(template.totalGenerated) || 0) > 0) {
-        return false;
-      }
       if (topTab === "mypayments" && !isFinance) {
         return paymentBelongsToUser(template, myUserId, myEmail, myName);
       }
       return true;
+    }).map((template) => {
+      const templateSeriesKey = String(template.recurringSeriesKey || template.id || "").trim();
+      const linkedPayments = paymentRequests
+        .filter((payment) => {
+          const paymentSeriesKey = String(payment.recurringSeriesKey || payment.recurringTemplateId || "").trim();
+          return Boolean(templateSeriesKey) && paymentSeriesKey === templateSeriesKey;
+        })
+        .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+      const linkedPayment = linkedPayments[0] || null;
+      return {
+        ...template,
+        linkedPayment,
+        registryStatus: linkedPayment?.status || "template",
+        registryDate: linkedPayment ? (getEffectivePaymentDate(linkedPayment) || linkedPayment.dueDate || "") : (template.nextOccurrenceDate || ""),
+        registryInitiator: linkedPayment?.requestedByName || template.requestedByName || template.ownerName || "-",
+      };
     });
 
-    let result = [...paymentRequests, ...visibleTemplates];
+    const standalonePayments = paymentRequests.filter((payment) => {
+      const paymentSeriesKey = String(payment.recurringSeriesKey || payment.recurringTemplateId || "").trim();
+      if (!paymentSeriesKey) return true;
+      return !recurringTemplatesBySeries.has(paymentSeriesKey);
+    });
+
+    let result = [...standalonePayments, ...visibleTemplates];
 
     if (topTab === "mypayments" && !isFinance) {
       result = result.filter(
@@ -688,7 +706,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     }
 
     if (statusFilter !== "all") {
-      result = result.filter((p) => !isRecurringTemplateRecord(p) && p.status === statusFilter);
+      result = result.filter((p) => !isRecurringTemplateRecord(p) ? p.status === statusFilter : p.registryStatus === statusFilter);
     }
     if (urgencyFilter !== "all") {
       result = result.filter((p) => p.urgency === urgencyFilter);
@@ -710,8 +728,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       const ua = urgencyOrder[a.urgency] ?? 4;
       const ub = urgencyOrder[b.urgency] ?? 4;
       if (ua !== ub) return ua - ub;
-      const sa = isRecurringTemplateRecord(a) ? 8 : (statusOrder[a.status] ?? 7);
-      const sb = isRecurringTemplateRecord(b) ? 8 : (statusOrder[b.status] ?? 7);
+      const sa = isRecurringTemplateRecord(a) ? (statusOrder[a.registryStatus] ?? 8) : (statusOrder[a.status] ?? 7);
+      const sb = isRecurringTemplateRecord(b) ? (statusOrder[b.registryStatus] ?? 8) : (statusOrder[b.status] ?? 7);
       if (sa !== sb) return sa - sb;
       return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime();
     });
@@ -1598,13 +1616,15 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
             <tbody>
               {filteredPayments.map((payment) => {
                 const isRecurringTemplate = isRecurringTemplateRecord(payment);
+                const linkedPayment = isRecurringTemplate ? payment.linkedPayment || null : null;
+                const actionPayment = linkedPayment || payment;
                 const matchedRoute = findApproverForPayment(payment);
                 const isAssignedApprover = matchedRoute && (
                   (matchedRoute.approverEmail && matchedRoute.approverEmail.toLowerCase() === myEmail.toLowerCase()) ||
                   (matchedRoute.approverName && matchedRoute.approverName === myName)
                 );
                 const canApprove = !isRecurringTemplate && (isFinance || isAssignedApprover) && (payment.status === "pending");
-                const canPause = !isRecurringTemplate && isFinance && ["approved", "scheduled", "paused"].includes(payment.status);
+                const canPause = Boolean(actionPayment) && isFinance && ["approved", "scheduled", "paused"].includes(actionPayment.status);
                 const canEdit = isRecurringTemplate
                   ? (isFinance || paymentBelongsToUser(payment, myUserId, myEmail, myName))
                   : (payment.status === "draft" || (payment.status === "pending" && payment.requestedById === myUserId));
@@ -1615,16 +1635,19 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                     <td className="px-3 py-2">
                       <div className="font-medium">{payment.title}</div>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5 text-xs text-slate-500">
-                        {payment.paymentNumber && <span className="font-mono">{payment.paymentNumber}</span>}
+                        {(linkedPayment?.paymentNumber || payment.paymentNumber) && <span className="font-mono">{linkedPayment?.paymentNumber || payment.paymentNumber}</span>}
                         {isRecurringTemplate && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">Регулярний</span>}
                         {payment.counterparty && <span>→ {payment.counterparty}</span>}
                         {payment.category && <span className="text-slate-400">{payment.category}</span>}
                       </div>
+                      {isRecurringTemplate && linkedPayment && (
+                        <div className="mt-1 text-xs text-slate-500">Активний платіж: {PAYMENT_STATUSES[linkedPayment.status] || linkedPayment.status}</div>
+                      )}
                     </td>
-                    <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{formatMoney(payment.amount)} {payment.currency}</td>
+                    <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{formatMoney(linkedPayment?.amount ?? payment.amount)} {linkedPayment?.currency || payment.currency}</td>
                     <td className="px-3 py-2">
-                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${isRecurringTemplate ? "bg-blue-100 text-blue-800" : (STATUS_COLORS[payment.status] || "")}`}>
-                        {isRecurringTemplate ? "Очікує запуску" : (PAYMENT_STATUSES[payment.status] || payment.status)}
+                      <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${isRecurringTemplate ? (linkedPayment ? (STATUS_COLORS[linkedPayment.status] || "bg-blue-100 text-blue-800") : "bg-blue-100 text-blue-800") : (STATUS_COLORS[payment.status] || "")}`}>
+                        {isRecurringTemplate ? (linkedPayment ? (PAYMENT_STATUSES[linkedPayment.status] || linkedPayment.status) : "Очікує запуску") : (PAYMENT_STATUSES[payment.status] || payment.status)}
                       </span>
                       {!isRecurringTemplate && payment.urgency && payment.urgency !== "normal" && (
                         <span className={`ml-1 inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${URGENCY_COLORS[payment.urgency] || ""}`}>
@@ -1633,10 +1656,13 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                       )}
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap text-xs">
-                      <div>{formatDate(isRecurringTemplate ? payment.nextOccurrenceDate : payment.dueDate) || "—"}</div>
-                      <div className="text-slate-400">{formatDateTime(payment.createdAt)}</div>
+                      <div>{formatDate(isRecurringTemplate ? (payment.registryDate || payment.nextOccurrenceDate) : payment.dueDate) || "—"}</div>
+                      <div className="text-slate-400">{formatDateTime((linkedPayment || payment).createdAt)}</div>
+                      {isRecurringTemplate && linkedPayment && payment.nextOccurrenceDate && (
+                        <div className="text-slate-400">Наступний запуск: {formatDate(payment.nextOccurrenceDate)}</div>
+                      )}
                     </td>
-                    <td className="px-3 py-2 text-xs">{payment.requestedByName || "-"}</td>
+                    <td className="px-3 py-2 text-xs">{isRecurringTemplate ? (payment.registryInitiator || "-") : (payment.requestedByName || "-")}</td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1">
                         {isRecurringTemplate && (
@@ -1655,8 +1681,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                           </>
                         )}
                         {canPause && (
-                          <button type="button" disabled={Boolean(processingId)} onClick={() => togglePaymentPaused(payment)} className={payment.status === "paused" ? btnApprove : btnSecondary}>
-                            {payment.status === "paused" ? <><Play size={12} /> Відновити</> : <><Pause size={12} /> Пауза</>}
+                          <button type="button" disabled={Boolean(processingId)} onClick={() => togglePaymentPaused(actionPayment)} className={actionPayment.status === "paused" ? btnApprove : btnSecondary}>
+                            {actionPayment.status === "paused" ? <><Play size={12} /> Відновити</> : <><Pause size={12} /> Пауза</>}
                           </button>
                         )}
                         {canEdit && (
