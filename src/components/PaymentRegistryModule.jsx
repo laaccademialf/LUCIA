@@ -1359,6 +1359,164 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     saveTypicalFields({ ...typicalFields, categories: typicalFields.categories.filter((c) => c !== cat) });
   };
 
+  // ─── Імпорт файлу старіння заборгованості з 1С ───
+  const importDebtAgingFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const ws = workbook.Sheets[workbook.SheetNames[0]];
+        const allRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+
+        // Знаходимо рядок заголовків (містить "Документ" і "Контрагент")
+        let headerRowIndex = -1;
+        for (let i = 0; i < Math.min(allRows.length, 15); i++) {
+          const row = allRows[i];
+          if (row.some((cell) => String(cell).trim() === "Документ") && row.some((cell) => String(cell).includes("Контрагент"))) {
+            headerRowIndex = i;
+            break;
+          }
+        }
+        if (headerRowIndex < 0) {
+          alert("Не вдалося розпізнати структуру файлу. Потрібен файл 'Старіння заборгованості' з 1С.");
+          return;
+        }
+
+        const headers = allRows[headerRowIndex].map((h) => String(h).trim());
+        const colDoc = headers.findIndex((h) => h === "Документ");
+        const colEdrpou = headers.findIndex((h) => h.includes("ЕГРПОУ") || h.includes("ЄДРПОУ"));
+        const colContract = headers.findIndex((h) => h === "Договор" || h === "Договір");
+        const colCounterparty = headers.findIndex((h) => h === "Контрагент");
+        const colOrg = headers.findIndex((h) => h === "Организация" || h === "Організація");
+        const colDebtDays = headers.findIndex((h) => h.includes("Срок долга") && !h.includes("договор"));
+        const colDebt = headers.findIndex((h) => h.includes("Задолженность") || h.includes("Заборгованість"));
+
+        // Пропускаємо рядок підзаголовків (якщо є — "До 7 дней" тощо)
+        let dataStartRow = headerRowIndex + 1;
+        if (dataStartRow < allRows.length) {
+          const nextRow = allRows[dataStartRow];
+          const firstCell = String(nextRow?.[0] || "").trim();
+          if (!firstCell || firstCell.startsWith("До") || firstCell.startsWith("От") || firstCell.startsWith("Від")) {
+            dataStartRow++;
+          }
+        }
+
+        const nowIso = new Date().toISOString();
+        const today = nowIso.slice(0, 10);
+        let imported = 0;
+        const newPayments = [];
+
+        for (let i = dataStartRow; i < allRows.length; i++) {
+          const row = allRows[i];
+          const counterparty = String(row[colCounterparty] || "").trim();
+          const debtAmount = Number.parseFloat(String(row[colDebt >= 0 ? colDebt : 9] || "0").replace(/\s/g, "").replace(",", "."));
+          if (!counterparty || !Number.isFinite(debtAmount) || debtAmount <= 0) continue;
+
+          const document = String(row[colDoc >= 0 ? colDoc : 0] || "").trim();
+          const edrpou = String(row[colEdrpou >= 0 ? colEdrpou : 1] || "").trim();
+          const contract = String(row[colContract >= 0 ? colContract : 2] || "").trim();
+          const organization = String(row[colOrg >= 0 ? colOrg : 5] || "").trim();
+          const debtDays = Number.parseInt(String(row[colDebtDays >= 0 ? colDebtDays : 7] || "0"), 10) || 0;
+
+          const urgency = debtDays > 60 ? "critical" : debtDays > 30 ? "high" : debtDays > 14 ? "normal" : "low";
+
+          const title = `Оплата заборгованості: ${counterparty}` + (contract ? ` (${contract})` : "");
+          const description = [
+            document ? `Документ: ${document}` : "",
+            edrpou ? `ЄДРПОУ: ${edrpou}` : "",
+            contract ? `Договір: ${contract}` : "",
+            organization ? `Організація: ${organization}` : "",
+            debtDays > 0 ? `Строк боргу: ${debtDays} днів` : "",
+          ].filter(Boolean).join("\n");
+
+          const paymentNumber = generatePaymentNumber("", restaurants, [...paymentRequests, ...newPayments]);
+          const matchedCounterparty = counterparties.find((c) =>
+            c.name?.toLowerCase() === counterparty.toLowerCase()
+            || (edrpou && String(c.edrpou || "") === edrpou)
+          );
+
+          const payment = {
+            id: generateId("debt"),
+            paymentNumber,
+            recordType: RECORD_TYPE_PAYMENT_REQUEST,
+            type: RECORD_TYPE_PAYMENT_REQUEST,
+            title,
+            description,
+            amount: Math.round(debtAmount * 100) / 100,
+            currency: "UAH",
+            counterparty,
+            iban: matchedCounterparty?.iban || "",
+            edrpou,
+            category: "203 Постачальники продуктів",
+            articleCode: "203",
+            urgency,
+            vatMode: "none",
+            vatRate: "",
+            restaurant: organization || "",
+            expenseRestaurant: organization || "",
+            dueDate: today,
+            status: "approved",
+            createdAt: nowIso,
+            updatedAt: nowIso,
+            requestedById: myUserId,
+            requestedByEmail: myEmail,
+            requestedByName: myName,
+            ownerUserId: myUserId,
+            ownerEmail: myEmail,
+            ownerName: myName,
+            approvals: [{
+              action: "auto_approved",
+              at: nowIso,
+              byId: "system",
+              byName: "Імпорт з 1С (старіння заборгованості)",
+              comment: `Автоматично створено з файлу 1С. Борг: ${debtDays} днів.`,
+            }],
+            comments: [],
+            importedFrom: "1c_debt_aging",
+            importedAt: nowIso,
+          };
+
+          newPayments.push(payment);
+          imported++;
+        }
+
+        if (imported === 0) {
+          alert("У файлі не знайдено рядків заборгованості з коректною сумою.");
+          return;
+        }
+
+        const totalAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
+        if (!confirm(`Буде створено ${imported} заявок на оплату заборгованості на загальну суму ${formatMoney(totalAmount)} грн.\n\nПродовжити?`)) {
+          return;
+        }
+
+        newPayments.forEach((payment) => {
+          appendStoredRecord(payment);
+          addPaymentRequestApi({ ...payment }).catch((err) =>
+            console.error("[PaymentRegistry] Failed to save debt payment:", err)
+          );
+        });
+
+        writeAudit({
+          action: "debt_aging_import",
+          entityType: "payment_request",
+          entityId: "",
+          description: `Імпортовано ${imported} заявок на оплату заборгованості з файлу 1С (${formatMoney(totalAmount)} грн)`,
+        });
+
+        alert(`Імпортовано ${imported} заявок на оплату заборгованості.`);
+      } catch (err) {
+        console.error("[PaymentRegistry] Import debt aging error:", err);
+        alert("Помилка при обробці файлу: " + (err.message || err));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
+
   // ─── Render: Заявка на платіж ───
   const renderPaymentRequest = () => (
     <div className="space-y-5">
@@ -1586,9 +1744,15 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       )}
 
       {!showForm && (
-        <button type="button" className={btnPrimary} onClick={openNewForm}>
-          <Plus size={14} /> Нова заявка на платіж
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className={btnPrimary} onClick={openNewForm}>
+            <Plus size={14} /> Нова заявка на платіж
+          </button>
+          <label className={`${btnSecondary} cursor-pointer`}>
+            <Upload size={14} /> Імпорт боргів з 1С
+            <input type="file" accept=".xlsx,.xls" className="hidden" onChange={importDebtAgingFile} />
+          </label>
+        </div>
       )}
 
       {/* Filters */}
