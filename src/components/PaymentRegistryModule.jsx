@@ -1031,6 +1031,14 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     const occurrenceDate = toDateOnly(template.nextOccurrenceDate) || resolveInitialRecurringOccurrence(template);
     if (!occurrenceDate) return;
     const recurringSeriesKey = String(template.recurringSeriesKey || template.id || "").trim();
+    const hasOpenRecurringPayment = paymentRequests.some((payment) => {
+      const paymentSeriesKey = String(payment.recurringSeriesKey || payment.recurringTemplateId || "").trim();
+      return Boolean(recurringSeriesKey) && paymentSeriesKey === recurringSeriesKey && !["paid", "rejected", "cancelled"].includes(payment.status);
+    });
+    if (hasOpenRecurringPayment) {
+      alert("За цим регулярним шаблоном вже є активний або призупинений платіж. Спочатку завершіть, оплатіть або скасуйте його.");
+      return;
+    }
     const existingPayment = paymentRequests.find(
       (payment) => {
         const paymentSeriesKey = String(payment.recurringSeriesKey || payment.recurringTemplateId || "").trim();
@@ -1052,6 +1060,15 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     replaceStoredRecords([payment, updatedTemplate]);
     addPaymentRequestApi(payment).catch((err) => console.error("[PaymentRegistry] Failed to create manual recurring payment:", err));
     updatePaymentRequestApi(template.id, updatedTemplate).catch((err) => console.error("[PaymentRegistry] Failed to advance recurring template:", err));
+  };
+
+  const canCreateFromRecurringTemplate = (template) => {
+    const recurringSeriesKey = String(template?.recurringSeriesKey || template?.id || "").trim();
+    if (!recurringSeriesKey) return true;
+    return !paymentRequests.some((payment) => {
+      const paymentSeriesKey = String(payment.recurringSeriesKey || payment.recurringTemplateId || "").trim();
+      return paymentSeriesKey === recurringSeriesKey && !["paid", "rejected", "cancelled"].includes(payment.status);
+    });
   };
 
   const removeRecurringTemplate = (template) => {
@@ -1596,7 +1613,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1">
                         {isRecurringTemplate && (
-                          <button type="button" disabled={Boolean(processingId)} onClick={() => runRecurringTemplateNow(payment)} className={btnSecondary}>
+                          <button type="button" disabled={Boolean(processingId) || !canCreateFromRecurringTemplate(payment)} onClick={() => runRecurringTemplateNow(payment)} className={btnSecondary} title={!canCreateFromRecurringTemplate(payment) ? "Спочатку завершіть або скасуйте поточний платіж з цього шаблону" : ""}>
                             <RefreshCcw size={12} /> Створити зараз
                           </button>
                         )}
@@ -1817,7 +1834,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                     <td className="px-3 py-2 whitespace-nowrap">{formatDate(template.nextOccurrenceDate)}</td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1">
-                        <button type="button" className={btnSecondary} onClick={() => runRecurringTemplateNow(template)}>
+                        <button type="button" className={btnSecondary} onClick={() => runRecurringTemplateNow(template)} disabled={!canCreateFromRecurringTemplate(template)} title={!canCreateFromRecurringTemplate(template) ? "Спочатку завершіть або скасуйте поточний платіж з цього шаблону" : ""}>
                           <RefreshCcw size={12} /> Створити зараз
                         </button>
                         <button type="button" className={btnSecondary} onClick={() => openEditRecurringForm(template)}>
@@ -2083,7 +2100,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                     <td className="px-3 py-2 whitespace-nowrap">{formatDate(template.nextOccurrenceDate)}</td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1">
-                        <button type="button" className={btnSecondary} onClick={() => runRecurringTemplateNow(template)}>
+                        <button type="button" className={btnSecondary} onClick={() => runRecurringTemplateNow(template)} disabled={!canCreateFromRecurringTemplate(template)} title={!canCreateFromRecurringTemplate(template) ? "Спочатку завершіть або скасуйте поточний платіж з цього шаблону" : ""}>
                           <RefreshCcw size={12} /> Створити зараз
                         </button>
                         <button type="button" className={btnSecondary} onClick={() => openEditRecurringForm(template)}>
