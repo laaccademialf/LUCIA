@@ -252,11 +252,37 @@ const createRecurringTemplateFormState = (defaultCurrency = "UAH") => ({
   dayOfMonth: "10",
 });
 
-const isRecurringTemplateRecord = (item) => String(item?.recordType || item?.type || "").toLowerCase() === RECORD_TYPE_RECURRING_TEMPLATE;
+const isRecurringTemplateRecord = (item) => {
+  const explicitType = String(item?.recordType || item?.type || "").toLowerCase();
+  if (explicitType === RECORD_TYPE_RECURRING_TEMPLATE) return true;
+  if (explicitType === RECORD_TYPE_PAYMENT_REQUEST) return false;
+
+  const hasRecurringSchedule = Boolean(
+    (item?.frequency && RECURRING_FREQUENCIES[item.frequency]) ||
+    item?.nextOccurrenceDate ||
+    item?.startDate ||
+    item?.dayOfMonth ||
+    typeof item?.isActive === "boolean" ||
+    item?.totalGenerated
+  );
+
+  const hasPaymentWorkflow = Boolean(
+    item?.status ||
+    item?.paymentNumber ||
+    item?.approvals ||
+    item?.requestedById ||
+    item?.requestedByEmail ||
+    item?.paidAt ||
+    item?.scheduledAt
+  );
+
+  return hasRecurringSchedule && !hasPaymentWorkflow;
+};
 
 const normalizePaymentRecord = (item) => ({
   ...item,
   recordType: RECORD_TYPE_PAYMENT_REQUEST,
+  type: RECORD_TYPE_PAYMENT_REQUEST,
   approvals: Array.isArray(item?.approvals) ? item.approvals : [],
   comments: Array.isArray(item?.comments) ? item.comments : [],
   dueDate: toDateOnly(item?.dueDate) || "",
@@ -268,6 +294,7 @@ const normalizeRecurringTemplateRecord = (item) => {
   const normalized = {
     ...item,
     recordType: RECORD_TYPE_RECURRING_TEMPLATE,
+    type: RECORD_TYPE_RECURRING_TEMPLATE,
     isActive: item?.isActive !== false,
     frequency: RECURRING_FREQUENCIES[item?.frequency] ? item.frequency : "monthly",
     dayOfMonth: String(getPreferredDay(item?.dayOfMonth)),
@@ -291,6 +318,7 @@ const createPaymentFromRecurringTemplate = (template, occurrenceDate, paymentNum
     id: generateId("pay"),
     paymentNumber: paymentNumber || "",
     recordType: RECORD_TYPE_PAYMENT_REQUEST,
+    type: RECORD_TYPE_PAYMENT_REQUEST,
     title: template.title || "Регулярний платіж",
     description: template.description || "",
     amount: Number.isFinite(amount) ? amount : 0,
@@ -802,6 +830,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         amount,
         id: generateId("rec"),
         recordType: RECORD_TYPE_RECURRING_TEMPLATE,
+        type: RECORD_TYPE_RECURRING_TEMPLATE,
         requestedById: myUserId,
         requestedByEmail: myEmail,
         requestedByName: myName,
@@ -834,6 +863,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         ...formData,
         title: titleWithVat,
         recordType: RECORD_TYPE_PAYMENT_REQUEST,
+        type: RECORD_TYPE_PAYMENT_REQUEST,
         amount,
         status: editingPayment.status === "draft" ? status : editingPayment.status,
         updatedAt: nowIso,
@@ -856,6 +886,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         id: generateId(),
         paymentNumber,
         recordType: RECORD_TYPE_PAYMENT_REQUEST,
+        type: RECORD_TYPE_PAYMENT_REQUEST,
         ...formData,
         title: titleWithVat,
         amount,
@@ -905,6 +936,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       amount,
       id: editingRecurringTemplate?.id || generateId("rec"),
       recordType: RECORD_TYPE_RECURRING_TEMPLATE,
+      type: RECORD_TYPE_RECURRING_TEMPLATE,
       requestedById: editingRecurringTemplate?.requestedById || myUserId,
       requestedByEmail: editingRecurringTemplate?.requestedByEmail || myEmail,
       requestedByName: editingRecurringTemplate?.requestedByName || myName,
