@@ -1448,7 +1448,6 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                   (matchedRoute.approverName && matchedRoute.approverName === myName)
                 );
                 const canApprove = (isFinance || isAssignedApprover) && (payment.status === "pending");
-                const canSchedule = isFinance && payment.status === "approved";
                 const canPause = isFinance && ["approved", "scheduled", "paused"].includes(payment.status);
                 const canEdit = payment.status === "draft" || (payment.status === "pending" && payment.requestedById === myUserId);
                 const canCancel = (payment.status === "draft" || payment.status === "pending") && (payment.requestedById === myUserId || isFinance);
@@ -1490,11 +1489,6 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                               <X size={12} /> Відхилити
                             </button>
                           </>
-                        )}
-                        {canSchedule && (
-                          <button type="button" disabled={Boolean(processingId)} onClick={() => schedulePayment(payment)} className={btnSecondary}>
-                            <Clock3 size={12} /> Запланувати
-                          </button>
                         )}
                         {canPause && (
                           <button type="button" disabled={Boolean(processingId)} onClick={() => togglePaymentPaused(payment)} className={payment.status === "paused" ? btnApprove : btnSecondary}>
