@@ -34,18 +34,20 @@ const PAYMENT_STATUSES = {
   cancelled: "Скасовано",
 };
 
-const PAYMENT_CATEGORIES = [
-  "Оренда",
-  "Комунальні послуги",
-  "Постачальники продуктів",
-  "Обладнання",
-  "Ремонт та обслуговування",
-  "Зарплата",
-  "Податки та збори",
-  "Маркетинг",
-  "Транспорт",
-  "Канцелярія",
-  "Інше",
+const PAYMENT_CATEGORIES = [];
+
+const DEFAULT_ARTICLES = [
+  { code: "201", name: "Оренда" },
+  { code: "202", name: "Комунальні послуги" },
+  { code: "203", name: "Постачальники продуктів" },
+  { code: "204", name: "Ремонт та обслуговування" },
+  { code: "205", name: "Зарплата" },
+  { code: "206", name: "Податки та збори" },
+  { code: "207", name: "Маркетинг" },
+  { code: "208", name: "Обладнання" },
+  { code: "209", name: "Транспорт" },
+  { code: "210", name: "Канцелярія" },
+  { code: "299", name: "Інше" },
 ];
 
 const RECORD_TYPE_PAYMENT_REQUEST = "payment_request";
@@ -203,6 +205,8 @@ const createPaymentFormState = (defaultCurrency = "UAH") => ({
   amount: "",
   currency: defaultCurrency,
   category: "",
+  articleCode: "",
+  subArticleCode: "",
   urgency: "normal",
   counterparty: "",
   iban: "",
@@ -212,6 +216,7 @@ const createPaymentFormState = (defaultCurrency = "UAH") => ({
   payerId: "",
   paidBy: "",
   expenseRestaurant: "",
+  expenseRestaurants: [],
   vatMode: "none",
   vatRate: "",
   isRecurring: false,
@@ -228,11 +233,14 @@ const createRecurringTemplateFormState = (defaultCurrency = "UAH") => ({
   amount: "",
   currency: defaultCurrency,
   category: "",
+  articleCode: "",
+  subArticleCode: "",
   urgency: "normal",
   counterparty: "",
   iban: "",
   restaurant: "",
   expenseRestaurant: "",
+  expenseRestaurants: [],
   attachmentNote: "",
   payerId: "",
   paidBy: "",
@@ -286,6 +294,8 @@ const createPaymentFromRecurringTemplate = (template, occurrenceDate, paymentNum
     amount: Number.isFinite(amount) ? amount : 0,
     currency: template.currency || "UAH",
     category: template.category || "",
+    articleCode: template.articleCode || "",
+    subArticleCode: template.subArticleCode || "",
     urgency: template.urgency || "normal",
     counterparty: template.counterparty || "",
     iban: template.iban || "",
@@ -359,7 +369,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       .finally(() => setPaymentsLoading(false));
   }, []);
 
-  const defaultTypicalFields = { categories: [...PAYMENT_CATEGORIES], defaultCurrency: "UAH", vatRates: [7, 20] };
+  const defaultTypicalFields = { categories: [...PAYMENT_CATEGORIES], articles: [...DEFAULT_ARTICLES], subArticles: [], defaultCurrency: "UAH", vatRates: [7, 20] };
   const [typicalFields, setTypicalFields] = useState(defaultTypicalFields);
   const typicalFieldsDbIdRef = useRef(null);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -386,7 +396,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (settingsLoadedRef.current) return;
     if (!isPaymentSettingsApiEnabled()) {
       // Fallback: load from localStorage
-      try { const s = localStorage.getItem("lucia_payment_typical_fields"); if (s) { const p = JSON.parse(s); setTypicalFields({ categories: p.categories || [...PAYMENT_CATEGORIES], defaultCurrency: p.defaultCurrency || "UAH", vatRates: p.vatRates || [7, 20] }); } } catch { /* ignore */ }
+      try { const s = localStorage.getItem("lucia_payment_typical_fields"); if (s) { const p = JSON.parse(s); setTypicalFields({ categories: p.categories || [...PAYMENT_CATEGORIES], articles: p.articles || [...DEFAULT_ARTICLES], subArticles: p.subArticles || [], defaultCurrency: p.defaultCurrency || "UAH", vatRates: p.vatRates || [7, 20] }); } } catch { /* ignore */ }
       try { const s = localStorage.getItem("lucia_payment_counterparties"); if (s) setCounterparties(JSON.parse(s)); } catch { /* ignore */ }
       try { const s = localStorage.getItem("lucia_payment_payers"); if (s) setPayers(JSON.parse(s)); } catch { /* ignore */ }
       try { const s = localStorage.getItem("lucia_payment_approval_routes"); if (s) setApprovalRoutes(JSON.parse(s)); } catch { /* ignore */ }
@@ -401,7 +411,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         if (tfRes.status === "fulfilled" && tfRes.value.length) {
           const rec = tfRes.value[0];
           typicalFieldsDbIdRef.current = rec.id || null;
-          setTypicalFields({ categories: rec.categories || [...PAYMENT_CATEGORIES], defaultCurrency: rec.defaultCurrency || "UAH", vatRates: rec.vatRates || [7, 20] });
+          setTypicalFields({ categories: rec.categories || [...PAYMENT_CATEGORIES], articles: rec.articles || [...DEFAULT_ARTICLES], subArticles: rec.subArticles || [], defaultCurrency: rec.defaultCurrency || "UAH", vatRates: rec.vatRates || [7, 20] });
         }
       })
       .catch((err) => console.error("[PaymentRegistry] Failed to load settings:", err));
@@ -592,79 +602,6 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     });
   }, []);
 
-  useEffect(() => {
-    if (!recurringTemplates.length) return;
-    const today = getTodayDateOnly();
-    const existingOccurrenceKeys = new Set(
-      paymentRequests
-        .filter((payment) => payment.recurringTemplateId && payment.recurringOccurrenceDate)
-        .map((payment) => buildRecurringOccurrenceKey(payment.recurringTemplateId, payment.recurringOccurrenceDate))
-    );
-
-    const paymentsToCreate = [];
-    const templatesToUpdate = [];
-
-    recurringTemplates.forEach((template) => {
-      if (!template.isActive) return;
-      let occurrenceDate = toDateOnly(template.nextOccurrenceDate) || resolveInitialRecurringOccurrence(template);
-      let generatedCount = 0;
-
-      while (occurrenceDate && occurrenceDate <= today) {
-        if (template.endDate && occurrenceDate > template.endDate) {
-          occurrenceDate = "";
-          break;
-        }
-
-        const occurrenceKey = buildRecurringOccurrenceKey(template.id, occurrenceDate);
-        if (!existingOccurrenceKeys.has(occurrenceKey)) {
-          const allExisting = [...paymentRequests, ...paymentsToCreate];
-          const pNum = generatePaymentNumber(template.restaurant || template.expenseRestaurant, restaurants, allExisting);
-          const generatedPayment = createPaymentFromRecurringTemplate(template, occurrenceDate, pNum);
-          paymentsToCreate.push(generatedPayment);
-          existingOccurrenceKeys.add(occurrenceKey);
-          generatedCount += 1;
-        }
-
-        const nextOccurrence = getNextRecurringOccurrence(template, occurrenceDate);
-        if (!nextOccurrence || nextOccurrence === occurrenceDate) {
-          occurrenceDate = "";
-          break;
-        }
-        occurrenceDate = nextOccurrence;
-      }
-
-      const shouldDeactivate = Boolean(template.endDate && occurrenceDate && occurrenceDate > template.endDate);
-      const normalizedNextOccurrence = shouldDeactivate ? "" : occurrenceDate;
-      if (generatedCount > 0 || normalizedNextOccurrence !== template.nextOccurrenceDate || shouldDeactivate !== !template.isActive) {
-        templatesToUpdate.push({
-          ...template,
-          nextOccurrenceDate: normalizedNextOccurrence,
-          isActive: shouldDeactivate ? false : template.isActive,
-          totalGenerated: (Number(template.totalGenerated) || 0) + generatedCount,
-          updatedAt: new Date().toISOString(),
-        });
-      }
-    });
-
-    if (!paymentsToCreate.length && !templatesToUpdate.length) return;
-
-    replaceStoredRecords([...paymentsToCreate, ...templatesToUpdate]);
-
-    paymentsToCreate.forEach((payment) => {
-      addPaymentRequestApi(payment).catch((err) => console.error("[PaymentRegistry] Failed to create recurring payment:", err));
-      writeAudit({
-        action: "payment_request_create_recurring",
-        entityType: "payment_request",
-        entityId: payment.id,
-        description: `Автоматично створено регулярний платіж "${payment.title}" на ${formatDate(payment.dueDate)}`,
-      });
-    });
-
-    templatesToUpdate.forEach((template) => {
-      updatePaymentRequestApi(template.id, template).catch((err) => console.error("[PaymentRegistry] Failed to update recurring template:", err));
-    });
-  }, [paymentRequests, recurringTemplates, replaceStoredRecords, writeAudit]);
-
   // ─── Filtering ───
   const filteredPayments = useMemo(() => {
     let result = [...paymentRequests];
@@ -828,7 +765,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       const vatAmount = amount * rate / 100;
       vatSuffix = `, в т.ч. ПДВ ${formData.vatRate}% - ${formatMoney(vatAmount)} грн`;
     }
-    const titleWithVat = (formData.title || "").replace(/,\s*(без ПДВ|в т\.ч\. ПДВ\s*\d+(\.\d+)?%(\s*-\s*[\d\s]+[,.]?\d*\s*грн)?)$/g, "").trim() + vatSuffix;
+    const titleBase = (formData.title || "").replace(/,\s*(без ПДВ|в т\.ч\. ПДВ\s*\d+(\.\d+)?%(\s*-\s*[\d\s]+[,.]?\d*\s*грн)?)(\s*\/\/.*)?$/g, "").replace(/\s*\/\/.*$/, "").trim() + vatSuffix;
+    const codeSuffix = [formData.articleCode, formData.subArticleCode].filter(Boolean).join("//");
+    const titleWithVat = codeSuffix ? `${titleBase} //${codeSuffix}` : titleBase;
 
     // If recurring toggle is on — create a recurring template instead
     if (formData.isRecurring && !editingPayment) {
@@ -851,29 +790,15 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         isActive: true,
       });
 
-      // Immediately generate the first payment and send to treasury
-      const firstOccurrence = normalizedTemplate.nextOccurrenceDate || resolveInitialRecurringOccurrence(normalizedTemplate);
-      const firstPaymentNumber = generatePaymentNumber(formData.restaurant || formData.expenseRestaurant, restaurants, paymentRequests);
-      const firstPayment = createPaymentFromRecurringTemplate(normalizedTemplate, firstOccurrence, firstPaymentNumber);
-      const advancedTemplate = {
-        ...normalizedTemplate,
-        nextOccurrenceDate: getNextRecurringOccurrence(normalizedTemplate, firstOccurrence),
-        totalGenerated: 1,
-        updatedAt: nowIso,
-      };
-
-      replaceStoredRecords([advancedTemplate, firstPayment]);
-      addPaymentRequestApi(advancedTemplate).catch((err) =>
+      appendStoredRecord(normalizedTemplate);
+      addPaymentRequestApi(normalizedTemplate).catch((err) =>
         console.error("[PaymentRegistry] Failed to create recurring template:", err)
-      );
-      addPaymentRequestApi(firstPayment).catch((err) =>
-        console.error("[PaymentRegistry] Failed to create first recurring payment:", err)
       );
       writeAudit({
         action: "payment_recurring_template_create",
         entityType: "payment_recurring_template",
-        entityId: advancedTemplate.id,
-        description: `Створено регулярний платіж "${normalizedTemplate.title}" (${formatMoney(amount)} ${formData.currency}, ${RECURRING_FREQUENCIES[formData.frequency] || formData.frequency}) — перший платіж направлено казначею`,
+        entityId: normalizedTemplate.id,
+        description: `Створено регулярний платіж "${normalizedTemplate.title}" (${formatMoney(amount)} ${formData.currency}, ${RECURRING_FREQUENCIES[formData.frequency] || formData.frequency})`,
       });
       resetForm();
       return;
@@ -1301,10 +1226,28 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               </select>
             </div>
             <div>
-              <label className="text-sm font-semibold">Витрати закладу <span className="text-xs font-normal text-slate-400">— для рознесення в 1С</span></label>
-              <select className={inputClass} value={formData.expenseRestaurant} onChange={(e) => handleFormChange("expenseRestaurant", e.target.value)}>
-                <option value="">Той самий заклад</option>
-                {(restaurants || []).map((r) => (
+              <label className="text-sm font-semibold">Витрати закладу <span className="text-xs font-normal text-slate-400">— для рознесення в 1С (можна декілька)</span></label>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {(formData.expenseRestaurants || []).map((r) => (
+                  <span key={r} className="inline-flex items-center gap-1 rounded-full bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 text-xs text-indigo-700">
+                    {r}
+                    <button type="button" onClick={() => setFormData((prev) => ({ ...prev, expenseRestaurants: prev.expenseRestaurants.filter((x) => x !== r) }))} className="ml-0.5 rounded-full p-0.5 text-indigo-400 hover:bg-indigo-100 hover:text-indigo-700">
+                      <X size={10} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <select className={inputClass} value="" onChange={(e) => {
+                const val = e.target.value;
+                if (!val) return;
+                setFormData((prev) => ({
+                  ...prev,
+                  expenseRestaurants: prev.expenseRestaurants.includes(val) ? prev.expenseRestaurants : [...prev.expenseRestaurants, val],
+                  expenseRestaurant: val,
+                }));
+              }}>
+                <option value="">Додати заклад…</option>
+                {(restaurants || []).filter((r) => !(formData.expenseRestaurants || []).includes(r.name || r.id)).map((r) => (
                   <option key={r.id} value={r.name || r.id}>{r.name || r.id}</option>
                 ))}
               </select>
@@ -1326,7 +1269,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               <input list="counterparties-list" className={inputClass} value={formData.counterparty} onChange={(e) => {
                 handleFormChange("counterparty", e.target.value);
                 const match = counterparties.find((c) => c.name === e.target.value);
-                if (match?.iban && !formData.iban) handleFormChange("iban", match.iban);
+                if (match) {
+                  if (match.iban && !formData.iban) handleFormChange("iban", match.iban);
+                  if (match.vatMode && match.vatMode !== "none") {
+                    setFormData((prev) => ({ ...prev, vatMode: match.vatMode, vatRate: match.vatRate || prev.vatRate }));
+                  }
+                }
               }} placeholder="ТОВ Ланч Сервіс (необов'язково)" />
               <datalist id="counterparties-list">
                 {counterparties.map((c) => <option key={c.id} value={c.name}>{c.name}{c.edrpou ? ` (${c.edrpou})` : ""}</option>)}
@@ -1350,11 +1298,24 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               </select>
             </div>
             <div>
-              <label className="text-sm font-semibold">Категорія</label>
-              <select className={inputClass} value={formData.category} onChange={(e) => handleFormChange("category", e.target.value)}>
-                <option value="">Оберіть категорію</option>
-                {typicalFields.categories.map((cat) => (
-                  <option key={cat} value={cat}>{cat}</option>
+              <label className="text-sm font-semibold">Стаття РГК</label>
+              <select className={inputClass} value={formData.articleCode} onChange={(e) => {
+                const code = e.target.value;
+                const art = (typicalFields.articles || []).find((a) => a.code === code);
+                setFormData((prev) => ({ ...prev, articleCode: code, category: art ? `${art.code} ${art.name}` : "", subArticleCode: "" }));
+              }}>
+                <option value="">Оберіть статтю</option>
+                {(typicalFields.articles || []).map((art) => (
+                  <option key={art.code} value={art.code}>{art.code} {art.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-semibold">Підстаття РГК</label>
+              <select className={inputClass} value={formData.subArticleCode} onChange={(e) => handleFormChange("subArticleCode", e.target.value)}>
+                <option value="">Оберіть підстаттю</option>
+                {(typicalFields.subArticles || []).filter((sa) => sa.articleCode === formData.articleCode).map((sa) => (
+                  <option key={sa.code} value={sa.code}>{sa.code} {sa.name}</option>
                 ))}
               </select>
             </div>
@@ -2237,21 +2198,112 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const renderTypicalFields = () => (
     <div className="space-y-5">
       <div className={cardClass}>
-        <h3 className="text-base font-semibold">Категорії платежів</h3>
-        <p className="mt-1 text-sm text-slate-600">Управляйте переліком категорій, які доступні при створенні заявки на платіж.</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {typicalFields.categories.map((cat) => (
-            <span key={cat} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-700">
-              {cat}
-              <button type="button" onClick={() => removeCategory(cat)} className="ml-1 rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700">
-                <X size={12} />
-              </button>
-            </span>
-          ))}
+        <h3 className="text-base font-semibold">Статті РГК</h3>
+        <p className="mt-1 text-sm text-slate-600">Управляйте переліком статей РГК. Код + Назва.</p>
+        <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-slate-700">
+              <tr>
+                <th className="px-3 py-2 text-left w-24">Код</th>
+                <th className="px-3 py-2 text-left">Назва</th>
+                <th className="px-3 py-2 text-left w-16">Дії</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(typicalFields.articles || []).map((art) => (
+                <tr key={art.code} className="border-t border-slate-200">
+                  <td className="px-3 py-1.5 font-mono text-xs">{art.code}</td>
+                  <td className="px-3 py-1.5">{art.name}</td>
+                  <td className="px-3 py-1.5">
+                    <button type="button" onClick={() => saveTypicalFields({ ...typicalFields, articles: typicalFields.articles.filter((a) => a.code !== art.code) })} className="p-1 hover:bg-red-50 rounded">
+                      <X size={14} className="text-red-400" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
         <div className="mt-3 flex gap-2">
-          <input className={`${inputClass} max-w-xs`} value={newCategory} onChange={(e) => setNewCategory(e.target.value)} placeholder="Нова категорія" onKeyDown={(e) => e.key === "Enter" && addCategory()} />
-          <button type="button" className={btnPrimary} onClick={addCategory}>
+          <input className={`${inputClass} max-w-[100px]`} id="newArticleCode" placeholder="Код" />
+          <input className={`${inputClass} max-w-xs`} id="newArticleName" placeholder="Назва статті" onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            const code = document.getElementById("newArticleCode")?.value?.trim();
+            const name = e.target.value.trim();
+            if (!code || !name) return;
+            if ((typicalFields.articles || []).some((a) => a.code === code)) { alert("Стаття з таким кодом вже існує."); return; }
+            saveTypicalFields({ ...typicalFields, articles: [...(typicalFields.articles || []), { code, name }] });
+            document.getElementById("newArticleCode").value = "";
+            e.target.value = "";
+          }} />
+          <button type="button" className={btnPrimary} onClick={() => {
+            const code = document.getElementById("newArticleCode")?.value?.trim();
+            const name = document.getElementById("newArticleName")?.value?.trim();
+            if (!code || !name) { alert("Вкажіть код і назву статті."); return; }
+            if ((typicalFields.articles || []).some((a) => a.code === code)) { alert("Стаття з таким кодом вже існує."); return; }
+            saveTypicalFields({ ...typicalFields, articles: [...(typicalFields.articles || []), { code, name }] });
+            document.getElementById("newArticleCode").value = "";
+            document.getElementById("newArticleName").value = "";
+          }}>
+            <Plus size={14} /> Додати
+          </button>
+        </div>
+      </div>
+
+      <div className={cardClass}>
+        <h3 className="text-base font-semibold">Підстатті РГК</h3>
+        <p className="mt-1 text-sm text-slate-600">Підстатті прив'язуються до статей. Код + Назва + Стаття-батько.</p>
+        <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-slate-700">
+              <tr>
+                <th className="px-3 py-2 text-left w-24">Код</th>
+                <th className="px-3 py-2 text-left">Назва</th>
+                <th className="px-3 py-2 text-left">Стаття</th>
+                <th className="px-3 py-2 text-left w-16">Дії</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(typicalFields.subArticles || []).map((sa) => {
+                const parent = (typicalFields.articles || []).find((a) => a.code === sa.articleCode);
+                return (
+                  <tr key={sa.code} className="border-t border-slate-200">
+                    <td className="px-3 py-1.5 font-mono text-xs">{sa.code}</td>
+                    <td className="px-3 py-1.5">{sa.name}</td>
+                    <td className="px-3 py-1.5 text-xs text-slate-500">{parent ? `${parent.code} ${parent.name}` : sa.articleCode}</td>
+                    <td className="px-3 py-1.5">
+                      <button type="button" onClick={() => saveTypicalFields({ ...typicalFields, subArticles: typicalFields.subArticles.filter((s) => s.code !== sa.code) })} className="p-1 hover:bg-red-50 rounded">
+                        <X size={14} className="text-red-400" />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {(!typicalFields.subArticles || typicalFields.subArticles.length === 0) && (
+                <tr><td colSpan={4} className="px-3 py-4 text-center text-slate-400 text-xs">Підстатей поки немає</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-3 flex gap-2 flex-wrap">
+          <select className={`${inputClass} max-w-[200px]`} id="newSubArticleParent">
+            <option value="">Стаття-батько</option>
+            {(typicalFields.articles || []).map((art) => (
+              <option key={art.code} value={art.code}>{art.code} {art.name}</option>
+            ))}
+          </select>
+          <input className={`${inputClass} max-w-[100px]`} id="newSubArticleCode" placeholder="Код" />
+          <input className={`${inputClass} max-w-xs`} id="newSubArticleName" placeholder="Назва підстатті" />
+          <button type="button" className={btnPrimary} onClick={() => {
+            const articleCode = document.getElementById("newSubArticleParent")?.value?.trim();
+            const code = document.getElementById("newSubArticleCode")?.value?.trim();
+            const name = document.getElementById("newSubArticleName")?.value?.trim();
+            if (!articleCode || !code || !name) { alert("Вкажіть статтю-батька, код і назву підстатті."); return; }
+            if ((typicalFields.subArticles || []).some((s) => s.code === code)) { alert("Підстаття з таким кодом вже існує."); return; }
+            saveTypicalFields({ ...typicalFields, subArticles: [...(typicalFields.subArticles || []), { code, name, articleCode }] });
+            document.getElementById("newSubArticleCode").value = "";
+            document.getElementById("newSubArticleName").value = "";
+          }}>
             <Plus size={14} /> Додати
           </button>
         </div>
@@ -2310,7 +2362,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const renderPayersBase = () => <PayersBaseTab payers={payers} addPayer={addPayer} updatePayer={updatePayer} removePayer={removePayer} restaurants={restaurants} />;
 
   // ─── Render: Погоджувачі ───
-  const renderApproversTab = () => <ApproversTab approvalRoutes={approvalRoutes} addApprovalRoute={addApprovalRoute} updateApprovalRoute={updateApprovalRoute} removeApprovalRoute={removeApprovalRoute} categories={typicalFields.categories} />;
+  const renderApproversTab = () => <ApproversTab approvalRoutes={approvalRoutes} addApprovalRoute={addApprovalRoute} updateApprovalRoute={updateApprovalRoute} removeApprovalRoute={removeApprovalRoute} categories={typicalFields.articles ? typicalFields.articles.map((a) => `${a.code} ${a.name}`) : typicalFields.categories} />;
 
   // ─── Tab Router ───
   const tabKey = String(topTab || "").toLowerCase();
@@ -2356,10 +2408,10 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editingCp, setEditingCp] = useState(null);
-  const [form, setForm] = useState({ name: "", edrpou: "", iban: "", mfo: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
+  const [form, setForm] = useState({ name: "", edrpou: "", iban: "", mfo: "", vatMode: "none", vatRate: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
 
   const resetForm = () => {
-    setForm({ name: "", edrpou: "", iban: "", mfo: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
+    setForm({ name: "", edrpou: "", iban: "", mfo: "", vatMode: "none", vatRate: "", contactPerson: "", phone: "", email: "", address: "", notes: "" });
     setEditingCp(null);
     setShowForm(false);
   };
@@ -2372,6 +2424,8 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
       edrpou: cp.edrpou || "",
       iban: cp.iban || "",
       mfo: cp.mfo || "",
+      vatMode: cp.vatMode || "none",
+      vatRate: cp.vatRate || "",
       contactPerson: cp.contactPerson || "",
       phone: cp.phone || "",
       email: cp.email || "",
@@ -2457,6 +2511,17 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
             <div>
               <label className="text-sm font-semibold">МФО банку</label>
               <input className={inputClassLocal} value={form.mfo} onChange={(e) => setForm((p) => ({ ...p, mfo: e.target.value }))} placeholder="123456" />
+            </div>
+            <div>
+              <label className="text-sm font-semibold">ПДВ за замовчуванням</label>
+              <div className="flex gap-1 mt-1">
+                <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors ${form.vatMode === "none" ? "border-slate-500 bg-slate-100 text-slate-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => setForm((p) => ({ ...p, vatMode: "none", vatRate: "" }))}>—</button>
+                <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors ${form.vatMode === "without" ? "border-emerald-500 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => setForm((p) => ({ ...p, vatMode: "without", vatRate: "" }))}>Без ПДВ</button>
+                <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors ${form.vatMode === "with" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => setForm((p) => ({ ...p, vatMode: "with", vatRate: p.vatRate || "20" }))}>З ПДВ</button>
+              </div>
+              {form.vatMode === "with" && (
+                <input type="number" min="0" max="100" step="0.01" className={inputClassLocal} value={form.vatRate} onChange={(e) => setForm((p) => ({ ...p, vatRate: e.target.value }))} placeholder="Ставка %" />
+              )}
             </div>
             <div>
               <label className="text-sm font-semibold">Контактна особа</label>
