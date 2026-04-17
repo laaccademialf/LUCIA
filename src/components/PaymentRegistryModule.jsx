@@ -1072,11 +1072,38 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   };
 
   const removeRecurringTemplate = (template) => {
-    if (!window.confirm(`Видалити регулярний платіж "${template.title}"?`)) return;
-    setPayments((prev) => prev.filter((item) => item.id !== template.id));
+    const recurringSeriesKey = String(template?.recurringSeriesKey || template?.id || "").trim();
+    const linkedOpenPayments = payments.filter((item) => {
+      if (isRecurringTemplateRecord(item)) return false;
+      const paymentSeriesKey = String(item?.recurringSeriesKey || item?.recurringTemplateId || "").trim();
+      return Boolean(recurringSeriesKey) && paymentSeriesKey === recurringSeriesKey && item.status !== "paid";
+    });
+
+    const confirmText = linkedOpenPayments.length
+      ? `Видалити регулярний платіж "${template.title}" разом з ${linkedOpenPayments.length} пов'язаними незавершеними платежами?`
+      : `Видалити регулярний платіж "${template.title}"?`;
+    if (!window.confirm(confirmText)) return;
+
+    const removableIds = new Set([template.id, ...linkedOpenPayments.map((item) => item.id)]);
+    setPayments((prev) => prev.filter((item) => !removableIds.has(item.id)));
     deletePaymentRequestApi(template.id).catch((err) =>
       console.error("[PaymentRegistry] Failed to delete recurring template:", err)
     );
+
+    linkedOpenPayments.forEach((payment) => {
+      deletePaymentRequestApi(payment.id).catch((err) =>
+        console.error("[PaymentRegistry] Failed to delete linked recurring payment:", err)
+      );
+    });
+
+    writeAudit({
+      action: "payment_recurring_template_delete",
+      entityType: "payment_recurring_template",
+      entityId: template.id,
+      description: linkedOpenPayments.length
+        ? `Видалено регулярний платіж "${template.title}" разом з ${linkedOpenPayments.length} незавершеними платежами`
+        : `Видалено регулярний платіж "${template.title}"`,
+    });
   };
 
   const deletePayment = (payment) => {
