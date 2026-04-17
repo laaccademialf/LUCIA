@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { Check, X, Plus, Download, Clock3, FileText, Edit3, Trash2, Search, Save, Building2, RefreshCcw, Landmark, Pause, Play } from "lucide-react";
+import { Check, X, Plus, Download, Upload, Clock3, FileText, Edit3, Trash2, Search, Save, Building2, RefreshCcw, Landmark, Pause, Play } from "lucide-react";
+import * as XLSX from "xlsx";
 import { getUsers } from "../firebase/users";
 import {
   isPaymentRequestsApiEnabled,
@@ -1191,8 +1192,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       {showForm && (
         <div className={cardClass}>
           <h3 className="text-base font-semibold">{editingPayment ? "Редагувати заявку" : "Нова заявка на платіж"}</h3>
-          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="md:col-span-2">
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="md:col-span-3">
               <label className="text-sm font-semibold">Назва / призначення платежу *</label>
               <div className="flex gap-2 items-start">
                 <input className={`${inputClass} flex-1`} value={formData.title} onChange={(e) => handleFormChange("title", e.target.value)} placeholder="Наприклад: Оплата за продукти — ТОВ Ланч" />
@@ -1221,33 +1222,6 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               }}>
                 <option value="">Оберіть заклад</option>
                 {(restaurants || []).map((r) => (
-                  <option key={r.id} value={r.name || r.id}>{r.name || r.id}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-sm font-semibold">Витрати закладу <span className="text-xs font-normal text-slate-400">— для рознесення в 1С (можна декілька)</span></label>
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                {(formData.expenseRestaurants || []).map((r) => (
-                  <span key={r} className="inline-flex items-center gap-1 rounded-full bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 text-xs text-indigo-700">
-                    {r}
-                    <button type="button" onClick={() => setFormData((prev) => ({ ...prev, expenseRestaurants: prev.expenseRestaurants.filter((x) => x !== r) }))} className="ml-0.5 rounded-full p-0.5 text-indigo-400 hover:bg-indigo-100 hover:text-indigo-700">
-                      <X size={10} />
-                    </button>
-                  </span>
-                ))}
-              </div>
-              <select className={inputClass} value="" onChange={(e) => {
-                const val = e.target.value;
-                if (!val) return;
-                setFormData((prev) => ({
-                  ...prev,
-                  expenseRestaurants: prev.expenseRestaurants.includes(val) ? prev.expenseRestaurants : [...prev.expenseRestaurants, val],
-                  expenseRestaurant: val,
-                }));
-              }}>
-                <option value="">Додати заклад…</option>
-                {(restaurants || []).filter((r) => !(formData.expenseRestaurants || []).includes(r.name || r.id)).map((r) => (
                   <option key={r.id} value={r.name || r.id}>{r.name || r.id}</option>
                 ))}
               </select>
@@ -1331,9 +1305,38 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               <label className="text-sm font-semibold">Бажана дата оплати</label>
               <input type="date" className={inputClass} value={formData.dueDate} onChange={(e) => handleFormChange("dueDate", e.target.value)} />
             </div>
-            <div className="md:col-span-2 flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+            <div className="md:col-span-2">
+              <label className="text-sm font-semibold">Витрати закладу <span className="text-xs font-normal text-slate-400">— для рознесення в 1С (можна декілька)</span></label>
+              <div className="flex gap-2 items-start">
+                <select className={`${inputClass} max-w-[220px]`} value="" onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) return;
+                  setFormData((prev) => ({
+                    ...prev,
+                    expenseRestaurants: prev.expenseRestaurants.includes(val) ? prev.expenseRestaurants : [...prev.expenseRestaurants, val],
+                    expenseRestaurant: val,
+                  }));
+                }}>
+                  <option value="">Додати заклад…</option>
+                  {(restaurants || []).filter((r) => !(formData.expenseRestaurants || []).includes(r.name || r.id)).map((r) => (
+                    <option key={r.id} value={r.name || r.id}>{r.name || r.id}</option>
+                  ))}
+                </select>
+                <div className="mt-1 flex flex-wrap gap-1.5 flex-1">
+                  {(formData.expenseRestaurants || []).map((r) => (
+                    <span key={r} className="inline-flex items-center gap-1 rounded-full bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 text-xs text-indigo-700">
+                      {r}
+                      <button type="button" onClick={() => setFormData((prev) => ({ ...prev, expenseRestaurants: prev.expenseRestaurants.filter((x) => x !== r) }))} className="ml-0.5 rounded-full p-0.5 text-indigo-400 hover:bg-indigo-100 hover:text-indigo-700">
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="md:col-span-3 flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
               <input type="checkbox" id="isRecurring" checked={formData.isRecurring} onChange={(e) => handleFormChange("isRecurring", e.target.checked)} className="h-4 w-4 accent-blue-600" />
-              <label htmlFor="isRecurring" className="text-sm font-semibold text-blue-800 cursor-pointer select-none">Регулярний платіж (автоматичне створення заявок за розкладом)</label>
+              <label htmlFor="isRecurring" className="text-sm font-semibold text-blue-800 cursor-pointer select-none">Регулярний платіж (створення заявок за розкладом)</label>
             </div>
             {formData.isRecurring && (
               <>
@@ -1365,11 +1368,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
             )}
             <div className="md:col-span-2">
               <label className="text-sm font-semibold">Опис / коментар</label>
-              <textarea className={`${inputClass} min-h-[80px]`} value={formData.description} onChange={(e) => handleFormChange("description", e.target.value)} placeholder="Додаткова інформація до заявки" />
+              <textarea className={`${inputClass} min-h-[60px]`} value={formData.description} onChange={(e) => handleFormChange("description", e.target.value)} placeholder="Додаткова інформація до заявки" />
             </div>
-            <div className="md:col-span-2">
+            <div>
               <label className="text-sm font-semibold">Примітка до вкладення</label>
-              <input className={inputClass} value={formData.attachmentNote} onChange={(e) => handleFormChange("attachmentNote", e.target.value)} placeholder="Наприклад: рахунок-фактура додано в 1С" />
+              <input className={inputClass} value={formData.attachmentNote} onChange={(e) => handleFormChange("attachmentNote", e.target.value)} placeholder="Рахунок-фактура в 1С" />
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
@@ -2463,6 +2466,70 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
     );
   }, [counterparties, search]);
 
+  const exportToExcel = () => {
+    const rows = counterparties.map((c) => ({
+      "Назва": c.name || "",
+      "ЄДРПОУ": c.edrpou || "",
+      "IBAN": c.iban || "",
+      "МФО": c.mfo || "",
+      "ПДВ": c.vatMode === "with" ? `${c.vatRate || 20}%` : c.vatMode === "without" ? "без ПДВ" : "",
+      "Контактна особа": c.contactPerson || "",
+      "Телефон": c.phone || "",
+      "Email": c.email || "",
+      "Адреса": c.address || "",
+      "Примітки": c.notes || "",
+    }));
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Контрагенти");
+    XLSX.writeFile(wb, "counterparties.xlsx");
+  };
+
+  const downloadTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([{ "Назва": "", "ЄДРПОУ": "", "IBAN": "", "МФО": "", "ПДВ": "", "Контактна особа": "", "Телефон": "", "Email": "", "Адреса": "", "Примітки": "" }]);
+    XLSX.utils.book_append_sheet(wb, ws, "Контрагенти");
+    XLSX.writeFile(wb, "counterparties_template.xlsx");
+  };
+
+  const importFromExcel = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const data = new Uint8Array(evt.target.result);
+      const workbook = XLSX.read(data, { type: "array" });
+      const ws = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      let added = 0;
+      rows.forEach((row) => {
+        const name = String(row["Назва"] || row["назва"] || row["Name"] || "").trim();
+        if (!name) return;
+        const pdv = String(row["ПДВ"] || row["пдв"] || "").trim().toLowerCase();
+        let vatMode = "none";
+        let vatRate = "";
+        if (pdv.includes("без")) { vatMode = "without"; }
+        else if (pdv.includes("%")) { vatMode = "with"; vatRate = pdv.replace(/[^0-9.,]/g, "").replace(",", "."); }
+        addCounterparty({
+          name,
+          edrpou: String(row["ЄДРПОУ"] || row["єдрпоу"] || "").trim(),
+          iban: String(row["IBAN"] || row["iban"] || "").trim(),
+          mfo: String(row["МФО"] || row["мфо"] || "").trim(),
+          vatMode, vatRate,
+          contactPerson: String(row["Контактна особа"] || "").trim(),
+          phone: String(row["Телефон"] || "").trim(),
+          email: String(row["Email"] || row["email"] || "").trim(),
+          address: String(row["Адреса"] || "").trim(),
+          notes: String(row["Примітки"] || "").trim(),
+        });
+        added++;
+      });
+      alert(`Імпортовано ${added} контрагентів.`);
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -2472,9 +2539,21 @@ function ContractorsBaseTab({ counterparties, addCounterparty, updateCounterpart
             <h3 className="text-base font-semibold flex items-center gap-2"><Building2 size={18} /> База контрагентів</h3>
             <p className="text-sm text-slate-500 mt-1">Ведіть реєстр контрагентів для швидкого вибору при створенні та погодженні платежів.</p>
           </div>
-          <button type="button" className={btnPrimaryLocal} onClick={openNew}>
-            <Plus size={14} /> Новий контрагент
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={btnPrimaryLocal} onClick={openNew}>
+              <Plus size={14} /> Новий контрагент
+            </button>
+            <button type="button" className={btnSecondaryLocal} onClick={exportToExcel}>
+              <Download size={14} /> Excel
+            </button>
+            <label className={`${btnSecondaryLocal} cursor-pointer`}>
+              <Upload size={14} /> Імпорт
+              <input type="file" accept=".xlsx,.xls" className="hidden" onChange={importFromExcel} />
+            </label>
+            <button type="button" className={btnSecondaryLocal} onClick={downloadTemplate}>
+              <FileText size={14} /> Шаблон
+            </button>
+          </div>
         </div>
       </div>
 
@@ -2657,6 +2736,67 @@ function PayersBaseTab({ payers, addPayer, updatePayer, removePayer, restaurants
     removePayer(p.id);
   };
 
+  const exportToExcel = () => {
+    const rows = payers.map((p) => ({
+      "Назва": p.name || "",
+      "ЄДРПОУ": p.edrpou || "",
+      "IBAN": p.iban || "",
+      "МФО": p.mfo || "",
+      "Контактна особа": p.contactPerson || "",
+      "Телефон": p.phone || "",
+      "Email": p.email || "",
+      "Адреса": p.address || "",
+      "Примітки": p.notes || "",
+      "Заклади": Array.isArray(p.restaurantIds) ? p.restaurantIds.join(", ") : "",
+    }));
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, "Платники");
+    XLSX.writeFile(wb, "payers.xlsx");
+  };
+
+  const downloadTemplate = () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([{ "Назва": "", "ЄДРПОУ": "", "IBAN": "", "МФО": "", "Контактна особа": "", "Телефон": "", "Email": "", "Адреса": "", "Примітки": "", "Заклади": "" }]);
+    XLSX.utils.book_append_sheet(wb, ws, "Платники");
+    XLSX.writeFile(wb, "payers_template.xlsx");
+  };
+
+  const importFromExcel = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const data = new Uint8Array(evt.target.result);
+      const workbook = XLSX.read(data, { type: "array" });
+      const ws = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      let added = 0;
+      rows.forEach((row) => {
+        const name = String(row["Назва"] || row["назва"] || row["Name"] || "").trim();
+        if (!name) return;
+        const restaurantsStr = String(row["Заклади"] || row["заклади"] || "").trim();
+        const restaurantIds = restaurantsStr ? restaurantsStr.split(",").map((s) => s.trim()).filter(Boolean) : [];
+        addPayer({
+          name,
+          edrpou: String(row["ЄДРПОУ"] || row["єдрпоу"] || "").trim(),
+          iban: String(row["IBAN"] || row["iban"] || "").trim(),
+          mfo: String(row["МФО"] || row["мфо"] || "").trim(),
+          contactPerson: String(row["Контактна особа"] || "").trim(),
+          phone: String(row["Телефон"] || "").trim(),
+          email: String(row["Email"] || row["email"] || "").trim(),
+          address: String(row["Адреса"] || "").trim(),
+          notes: String(row["Примітки"] || "").trim(),
+          restaurantIds,
+        });
+        added++;
+      });
+      alert(`Імпортовано ${added} платників.`);
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
     if (!q) return payers;
@@ -2678,9 +2818,21 @@ function PayersBaseTab({ payers, addPayer, updatePayer, removePayer, restaurants
             <h3 className="text-base font-semibold flex items-center gap-2"><Building2 size={18} /> База платників</h3>
             <p className="text-sm text-slate-500 mt-1">Реєстр осіб та організацій з нашого боку, які здійснюють оплати. Вибирайте платника при створенні заявки на платіж.</p>
           </div>
-          <button type="button" className={btnPrimaryLocal} onClick={openNew}>
-            <Plus size={14} /> Новий платник
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={btnPrimaryLocal} onClick={openNew}>
+              <Plus size={14} /> Новий платник
+            </button>
+            <button type="button" className={btnSecondaryLocal} onClick={exportToExcel}>
+              <Download size={14} /> Excel
+            </button>
+            <label className={`${btnSecondaryLocal} cursor-pointer`}>
+              <Upload size={14} /> Імпорт
+              <input type="file" accept=".xlsx,.xls" className="hidden" onChange={importFromExcel} />
+            </label>
+            <button type="button" className={btnSecondaryLocal} onClick={downloadTemplate}>
+              <FileText size={14} /> Шаблон
+            </button>
+          </div>
         </div>
       </div>
 
