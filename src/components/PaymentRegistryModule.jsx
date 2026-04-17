@@ -777,11 +777,18 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         return;
       }
       const nowIso = new Date().toISOString();
+      const templateId = generateId("rec");
+      const firstOccurrenceDate = resolveInitialRecurringOccurrence({
+        ...formData,
+        startDate: formData.startDate,
+        dayOfMonth: formData.dayOfMonth,
+        frequency: formData.frequency,
+      });
       const normalizedTemplate = normalizeRecurringTemplateRecord({
         ...formData,
         title: titleWithVat,
         amount,
-        id: generateId("rec"),
+        id: templateId,
         recordType: RECORD_TYPE_RECURRING_TEMPLATE,
         requestedById: myUserId,
         requestedByEmail: myEmail,
@@ -789,12 +796,34 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         createdAt: nowIso,
         updatedAt: nowIso,
         isActive: true,
+        nextOccurrenceDate: getNextRecurringOccurrence(formData, firstOccurrenceDate),
+        totalGenerated: 1,
       });
+      const paymentNumber = generatePaymentNumber(formData.restaurant || formData.expenseRestaurant, restaurants, paymentRequests);
+      const initialPayment = {
+        ...createPaymentFromRecurringTemplate(normalizedTemplate, firstOccurrenceDate, paymentNumber),
+        status: asDraft ? "draft" : "pending",
+        dueDate: firstOccurrenceDate,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        requestedById: myUserId,
+        requestedByEmail: myEmail,
+        requestedByName: myName,
+      };
 
-      appendStoredRecord(normalizedTemplate);
+      replaceStoredRecords([initialPayment, normalizedTemplate]);
+      addPaymentRequestApi(initialPayment).catch((err) =>
+        console.error("[PaymentRegistry] Failed to save initial recurring payment:", err)
+      );
       addPaymentRequestApi(normalizedTemplate).catch((err) =>
         console.error("[PaymentRegistry] Failed to create recurring template:", err)
       );
+      writeAudit({
+        action: "payment_request_create",
+        entityType: "payment_request",
+        entityId: initialPayment.id,
+        description: `Створено заявку на платіж "${formData.title.trim()}" (${formatMoney(amount)} ${formData.currency})`,
+      });
       writeAudit({
         action: "payment_recurring_template_create",
         entityType: "payment_recurring_template",
