@@ -1195,17 +1195,15 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="md:col-span-3">
               <label className="text-sm font-semibold">Назва / призначення платежу *</label>
-              <div className="flex gap-2 items-start">
+              <div className="flex gap-2 items-center">
                 <input className={`${inputClass} flex-1`} value={formData.title} onChange={(e) => handleFormChange("title", e.target.value)} placeholder="Наприклад: Оплата за продукти — ТОВ Ланч" />
-                <div className="mt-1 flex flex-col gap-1.5 min-w-[150px]">
-                  <div className="flex gap-1">
-                    <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors ${formData.vatMode === "none" ? "border-slate-500 bg-slate-100 text-slate-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => handleFormChange("vatMode", "none")}>—</button>
-                    <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors ${formData.vatMode === "without" ? "border-emerald-500 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => handleFormChange("vatMode", "without")}>Без ПДВ</button>
-                    <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors ${formData.vatMode === "with" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => { handleFormChange("vatMode", "with"); if (!formData.vatRate && typicalFields.vatRates?.length) handleFormChange("vatRate", String(typicalFields.vatRates[0])); }}>З ПДВ</button>
-                  </div>
+                <div className="flex gap-1 items-center shrink-0">
+                  <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors whitespace-nowrap ${formData.vatMode === "none" ? "border-slate-500 bg-slate-100 text-slate-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => handleFormChange("vatMode", "none")}>—</button>
+                  <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors whitespace-nowrap ${formData.vatMode === "without" ? "border-emerald-500 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => handleFormChange("vatMode", "without")}>Без ПДВ</button>
+                  <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors whitespace-nowrap ${formData.vatMode === "with" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => { handleFormChange("vatMode", "with"); if (!formData.vatRate && typicalFields.vatRates?.length) handleFormChange("vatRate", String(typicalFields.vatRates[0])); }}>З ПДВ</button>
                   {formData.vatMode === "with" && (
-                    <select className={`${inputClass} !mt-0`} value={formData.vatRate} onChange={(e) => handleFormChange("vatRate", e.target.value)}>
-                      <option value="">Оберіть %</option>
+                    <select className={`${inputClass} !mt-0 w-20`} value={formData.vatRate} onChange={(e) => handleFormChange("vatRate", e.target.value)}>
+                      <option value="">%</option>
                       {(typicalFields.vatRates || []).map((rate) => (
                         <option key={rate} value={String(rate)}>{rate}%</option>
                       ))}
