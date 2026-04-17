@@ -1337,8 +1337,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               <label htmlFor="isRecurring" className="text-sm font-semibold text-blue-800 cursor-pointer select-none">Регулярний платіж (створення заявок за розкладом)</label>
             </div>
             {formData.isRecurring && (
-              <>
-                <div>
+              <div className="md:col-span-3 grid grid-cols-1 gap-3 md:grid-cols-5">
+                <div className="md:col-span-2 lg:col-span-1">
                   <label className="text-sm font-semibold">Періодичність</label>
                   <select className={inputClass} value={formData.frequency} onChange={(e) => handleFormChange("frequency", e.target.value)}>
                     {Object.entries(RECURRING_FREQUENCIES).map(([key, label]) => (
@@ -1357,12 +1357,14 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                 <div>
                   <label className="text-sm font-semibold">Дата завершення</label>
                   <input type="date" className={inputClass} value={formData.endDate} onChange={(e) => handleFormChange("endDate", e.target.value)} disabled={formData.noEndDate} />
-                  <label className="mt-1 flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+                </div>
+                <div className="flex items-end">
+                  <label className="flex min-h-[42px] w-full items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs text-slate-600 cursor-pointer select-none">
                     <input type="checkbox" checked={formData.noEndDate} onChange={(e) => { handleFormChange("noEndDate", e.target.checked); if (e.target.checked) handleFormChange("endDate", ""); }} className="h-3.5 w-3.5 accent-blue-600" />
-                    Безстроковий (без дати завершення)
+                    Безстроковий
                   </label>
                 </div>
-              </>
+              </div>
             )}
             <div className="md:col-span-2">
               <label className="text-sm font-semibold">Опис / коментар</label>
