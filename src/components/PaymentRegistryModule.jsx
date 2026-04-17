@@ -260,6 +260,7 @@ const normalizePaymentRecord = (item) => ({
   approvals: Array.isArray(item?.approvals) ? item.approvals : [],
   comments: Array.isArray(item?.comments) ? item.comments : [],
   dueDate: toDateOnly(item?.dueDate) || "",
+  scheduledForDate: toDateOnly(item?.scheduledForDate) || "",
   recurringOccurrenceDate: toDateOnly(item?.recurringOccurrenceDate) || "",
 });
 
@@ -381,6 +382,10 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const [showRecurringForm, setShowRecurringForm] = useState(false);
   const [editingRecurringTemplate, setEditingRecurringTemplate] = useState(null);
   const [processingId, setProcessingId] = useState("");
+  const [treasuryDatePreset, setTreasuryDatePreset] = useState("all");
+  const [treasuryDateFrom, setTreasuryDateFrom] = useState("");
+  const [treasuryDateTo, setTreasuryDateTo] = useState("");
+  const [scheduleModal, setScheduleModal] = useState(null);
 
   // Counterparties (contractors) state
   const [counterparties, setCounterparties] = useState([]);
@@ -436,6 +441,10 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (typeof onAuditEvent !== "function") return;
     onAuditEvent(payload);
   }, [onAuditEvent]);
+
+  const getEffectivePaymentDate = useCallback((payment) => {
+    return toDateOnly(payment?.scheduledForDate) || toDateOnly(payment?.dueDate) || "";
+  }, []);
 
   // ─── Counterparties CRUD ───
   const saveCounterparties = useCallback((list) => {
@@ -1096,11 +1105,16 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     setProcessingId("");
   };
 
-  const schedulePayment = (payment) => {
+  const schedulePayment = (payment, scheduledForDate) => {
     if (processingId) return;
+    const plannedDate = toDateOnly(scheduledForDate) || getEffectivePaymentDate(payment) || getTodayDateOnly();
+    if (!plannedDate) {
+      alert("Оберіть дату планування платежу.");
+      return;
+    }
     setProcessingId(payment.id);
     const nowIso = new Date().toISOString();
-    const updatedData = { ...payment, status: "scheduled", updatedAt: nowIso, scheduledAt: nowIso, scheduledByName: myName };
+    const updatedData = { ...payment, status: "scheduled", updatedAt: nowIso, scheduledAt: nowIso, scheduledByName: myName, scheduledForDate: plannedDate };
     updateStoredRecord(payment.id, () => updatedData);
     updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
       console.error("[PaymentRegistry] Failed to update payment:", err)
@@ -1109,9 +1123,22 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       action: "payment_schedule",
       entityType: "payment_request",
       entityId: payment.id,
-      description: `Заплановано до оплати "${payment.title}"`,
+      description: `Заплановано до оплати "${payment.title}" на ${formatDate(plannedDate)}`,
     });
     setProcessingId("");
+  };
+
+  const openScheduleModal = (payment) => {
+    setScheduleModal({
+      payment,
+      date: toDateOnly(payment?.scheduledForDate) || toDateOnly(payment?.dueDate) || getTodayDateOnly(),
+    });
+  };
+
+  const confirmSchedulePayment = () => {
+    if (!scheduleModal?.payment) return;
+    schedulePayment(scheduleModal.payment, scheduleModal.date);
+    setScheduleModal(null);
   };
 
   const markPaid = (payment) => {
@@ -1644,8 +1671,16 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                     <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_COLORS[p.status] || ""}`}>
                       {PAYMENT_STATUSES[p.status] || p.status}
                     </span>
+                    {p.status === "scheduled" && p.scheduledForDate && (
+                      <div className="mt-1 text-xs text-blue-700">На {formatDate(p.scheduledForDate)}</div>
+                    )}
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap">{formatDate(p.dueDate)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <div>{formatDate(p.dueDate)}</div>
+                    {p.scheduledForDate && p.scheduledForDate !== p.dueDate && (
+                      <div className="text-xs text-slate-400">План: {formatDate(p.scheduledForDate)}</div>
+                    )}
+                  </td>
                   <td className="px-3 py-2 whitespace-nowrap">{formatDateTime(p.updatedAt)}</td>
                   {showPauseBtn && (
                     <td className="px-3 py-2">
@@ -2001,9 +2036,41 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   };
 
   const renderTreasuryTab = () => {
+    const addDaysToDate = (dateValue, days) => {
+      const normalized = toDateOnly(dateValue);
+      if (!normalized) return "";
+      const parsed = new Date(`${normalized}T00:00:00`);
+      if (Number.isNaN(parsed.getTime())) return "";
+      parsed.setDate(parsed.getDate() + days);
+      return toDateOnly(parsed.toISOString());
+    };
+
+    const today = getTodayDateOnly();
+    const tomorrow = addDaysToDate(today, 1);
+
+    const resolveTreasuryRange = () => {
+      if (treasuryDatePreset === "today") return { from: today, to: today };
+      if (treasuryDatePreset === "tomorrow") return { from: tomorrow, to: tomorrow };
+      if (treasuryDatePreset === "week") return { from: today, to: addDaysToDate(today, 7) };
+      if (treasuryDatePreset === "custom") return { from: treasuryDateFrom, to: treasuryDateTo };
+      return { from: "", to: "" };
+    };
+
+    const { from: treasuryRangeFrom, to: treasuryRangeTo } = resolveTreasuryRange();
+
     const treasuryQueue = paymentRequests
       .filter((payment) => ["approved", "scheduled"].includes(payment.status) && payment.status !== "paused")
-      .sort((a, b) => new Date(a.dueDate || a.createdAt || 0).getTime() - new Date(b.dueDate || b.createdAt || 0).getTime());
+      .filter((payment) => {
+        const effectiveDate = getEffectivePaymentDate(payment);
+        if (!treasuryRangeFrom && !treasuryRangeTo) return true;
+        if (!effectiveDate) return false;
+        if (treasuryRangeFrom && effectiveDate < treasuryRangeFrom) return false;
+        if (treasuryRangeTo && effectiveDate > treasuryRangeTo) return false;
+        return true;
+      })
+      .sort((a, b) => new Date(getEffectivePaymentDate(a) || a.createdAt || 0).getTime() - new Date(getEffectivePaymentDate(b) || b.createdAt || 0).getTime());
+
+    const todayQueue = paymentRequests.filter((payment) => ["approved", "scheduled"].includes(payment.status) && payment.status !== "paused" && getEffectivePaymentDate(payment) === today);
 
     const exportTreasuryCsv = () => {
       if (!treasuryQueue.length) {
@@ -2017,7 +2084,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           return [
             payment.paymentNumber || "",
             payment.id,
-            payment.dueDate || "",
+            getEffectivePaymentDate(payment) || "",
             payment.counterparty || "",
             payment.iban || "",
             Number(payment.amount || 0).toFixed(2),
@@ -2059,7 +2126,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         const amountKop = Math.round((Number(payment.amount) || 0) * 100);
         const fields = [
           "1",
-          formatBankDate(payment.dueDate),
+          formatBankDate(getEffectivePaymentDate(payment)),
           "",
           payer?.mfo || "",
           payer?.iban || "",
@@ -2088,6 +2155,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     };
 
     const totalAmount = treasuryQueue.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+    const todayAmount = todayQueue.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
 
     return (
       <div className="space-y-5">
@@ -2106,10 +2174,15 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               </button>
             </div>
           </div>
-          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
             <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
               <div className="text-xs text-blue-700">Платежів у черзі</div>
               <div className="mt-1 text-xl font-bold text-blue-900">{treasuryQueue.length}</div>
+            </div>
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+              <div className="text-xs text-indigo-700">На сьогодні</div>
+              <div className="mt-1 text-xl font-bold text-indigo-900">{todayQueue.length}</div>
+              <div className="text-sm text-indigo-700">{formatMoney(todayAmount)} грн</div>
             </div>
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
               <div className="text-xs text-emerald-700">Сума до оплати</div>
@@ -2123,17 +2196,43 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         </div>
 
         <div className={cardClass}>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+            <div>
+              <label className="text-xs font-semibold text-slate-600">Період</label>
+              <select className={`${inputClass} !mt-0.5`} value={treasuryDatePreset} onChange={(e) => setTreasuryDatePreset(e.target.value)}>
+                <option value="all">Усі дати</option>
+                <option value="today">Сьогодні</option>
+                <option value="tomorrow">Завтра</option>
+                <option value="week">7 днів</option>
+                <option value="custom">Проміжок дат</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-600">Від</label>
+              <input type="date" className={`${inputClass} !mt-0.5`} value={treasuryDatePreset === "custom" ? treasuryDateFrom : treasuryRangeFrom} onChange={(e) => { setTreasuryDatePreset("custom"); setTreasuryDateFrom(e.target.value); }} disabled={treasuryDatePreset !== "custom"} />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-600">До</label>
+              <input type="date" className={`${inputClass} !mt-0.5`} value={treasuryDatePreset === "custom" ? treasuryDateTo : treasuryRangeTo} onChange={(e) => { setTreasuryDatePreset("custom"); setTreasuryDateTo(e.target.value); }} disabled={treasuryDatePreset !== "custom"} />
+            </div>
+            <div className="flex items-end">
+              <button type="button" className={btnSecondary} onClick={() => { setTreasuryDatePreset("all"); setTreasuryDateFrom(""); setTreasuryDateTo(""); }}>
+                Скинути фільтр
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className={cardClass}>
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-slate-700">
                 <tr>
-                  <th className="px-3 py-2 text-left">№</th>
-                  <th className="px-3 py-2 text-left">Назва</th>
-                  <th className="px-3 py-2 text-left">Контрагент</th>
-                  <th className="px-3 py-2 text-left">Платник</th>
+                  <th className="px-3 py-2 text-left">Платіж</th>
                   <th className="px-3 py-2 text-right">Сума</th>
-                  <th className="px-3 py-2 text-left">Дата оплати</th>
                   <th className="px-3 py-2 text-left">Статус</th>
+                  <th className="px-3 py-2 text-left">План</th>
+                  <th className="px-3 py-2 text-left">Ініціатор</th>
                   <th className="px-3 py-2 text-left">Дії</th>
                 </tr>
               </thead>
@@ -2149,33 +2248,54 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                       console.error("[PaymentRegistry] Failed to assign payer:", err)
                     );
                   };
+
                   return (
                     <tr key={payment.id} className="border-t border-slate-200 hover:bg-slate-50">
-                      <td className="px-3 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">{payment.paymentNumber || "—"}</td>
-                      <td className="px-3 py-2 font-medium">{payment.title}</td>
-                      <td className="px-3 py-2">{payment.counterparty || "-"}</td>
                       <td className="px-3 py-2">
-                        {payer ? (
-                          <span>{payer.name}</span>
-                        ) : (
-                          <select className="rounded border border-orange-300 bg-orange-50 px-2 py-1 text-xs" value="" onChange={(e) => assignPayer(e.target.value)}>
-                            <option value="">— Обрати платника —</option>
-                            {payers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                          </select>
-                        )}
+                        <div className="font-medium">{payment.title}</div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500">
+                          {payment.paymentNumber && <span className="font-mono">{payment.paymentNumber}</span>}
+                          {payment.counterparty && <span>→ {payment.counterparty}</span>}
+                          {payment.category && <span className="text-slate-400">{payment.category}</span>}
+                        </div>
+                        <div className="mt-1">
+                          {payer ? (
+                            <span className="text-xs text-slate-600">Платник: {payer.name}</span>
+                          ) : (
+                            <select className="rounded border border-orange-300 bg-orange-50 px-2 py-1 text-xs" value="" onChange={(e) => assignPayer(e.target.value)}>
+                              <option value="">— Обрати платника —</option>
+                              {payers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                          )}
+                        </div>
                       </td>
                       <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{formatMoney(payment.amount)} {payment.currency}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">{formatDate(payment.dueDate)}</td>
                       <td className="px-3 py-2">
                         <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_COLORS[payment.status] || ""}`}>
                           {PAYMENT_STATUSES[payment.status] || payment.status}
                         </span>
+                        {payment.scheduledAt && (
+                          <div className="mt-1 text-xs text-slate-500">Оновлено: {formatDateTime(payment.scheduledAt)}</div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap text-xs">
+                        <div className="font-medium text-slate-900">{formatDate(getEffectivePaymentDate(payment))}</div>
+                        {payment.scheduledForDate && payment.scheduledForDate !== payment.dueDate && (
+                          <div className="text-blue-700">Заявка була на {formatDate(payment.dueDate)}</div>
+                        )}
+                        {payment.scheduledByName && (
+                          <div className="text-slate-400">Планував: {payment.scheduledByName}</div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <div>{payment.requestedByName || "-"}</div>
+                        <div className="text-slate-400">{formatDateTime(payment.createdAt)}</div>
                       </td>
                       <td className="px-3 py-2">
                         <div className="flex flex-wrap gap-1">
-                          {payment.status === "approved" && (
-                            <button type="button" className={btnSecondary} onClick={() => schedulePayment(payment)}>
-                              <Clock3 size={12} /> Запланувати
+                          {(payment.status === "approved" || payment.status === "scheduled") && (
+                            <button type="button" className={btnSecondary} onClick={() => openScheduleModal(payment)}>
+                              <Clock3 size={12} /> {payment.status === "scheduled" ? "Перенести" : "Запланувати"}
                             </button>
                           )}
                           {(payment.status === "approved" || payment.status === "scheduled") && (
@@ -2193,13 +2313,34 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                 })}
                 {treasuryQueue.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-slate-500">Немає погоджених платежів для казначея.</td>
+                    <td colSpan={6} className="px-3 py-8 text-center text-slate-500">Немає платежів для казначея за обраним періодом.</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
         </div>
+
+        {scheduleModal?.payment && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setScheduleModal(null)}>
+            <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-base font-semibold">Планування платежу</h3>
+              <p className="mt-1 text-sm text-slate-500">{scheduleModal.payment.title}</p>
+              <div className="mt-4">
+                <label className="text-sm font-semibold">Дата оплати</label>
+                <input type="date" className={inputClass} value={scheduleModal.date} onChange={(e) => setScheduleModal((prev) => ({ ...prev, date: e.target.value }))} />
+              </div>
+              <div className="mt-4 flex gap-2">
+                <button type="button" className={btnPrimary} onClick={confirmSchedulePayment} disabled={Boolean(processingId)}>
+                  <Clock3 size={14} /> Зберегти дату
+                </button>
+                <button type="button" className={btnSecondary} onClick={() => setScheduleModal(null)}>
+                  Скасувати
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
