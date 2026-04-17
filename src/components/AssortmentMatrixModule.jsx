@@ -763,6 +763,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
   const [sortField, setSortField] = useState("name");
   const [sortDir, setSortDir] = useState("asc");
   const [busyProductId, setBusyProductId] = useState("");
+  const [busyTypeProductId, setBusyTypeProductId] = useState("");
   const [collapsedCategories, setCollapsedCategories] = useState({});
   const fileInputRef = useRef(null);
 
@@ -1051,7 +1052,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
       || mergedAssignments.get(product.code1C)
       || mergedAssignments.get(product.name);
 
-    setBusyProductId(String(product.id));
+    setBusyTypeProductId(String(product.id));
     try {
       const result = await updateItem(targetId, {
         specificationId: product.id,
@@ -1091,7 +1092,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
     } catch (err) {
       alert("Не вдалося оновити тип: " + (err?.message || err));
     } finally {
-      setBusyProductId("");
+      setBusyTypeProductId("");
     }
   };
 
@@ -1230,7 +1231,8 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
                 <tbody>
                   {rows.map((row) => {
                     const otherRestaurants = row.assignedRestaurantNames.filter((name) => name !== selectedRestaurantName);
-                    const busy = busyProductId === String(row.id);
+                    const busyAction = busyProductId === String(row.id);
+                    const busyType = busyTypeProductId === String(row.id);
                     const otherRestaurantsSummary = formatOtherRestaurantsSummary(otherRestaurants);
                     return (
                       <tr key={row.id} className="border-b border-slate-100 hover:bg-slate-50 transition">
@@ -1257,7 +1259,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
                                   type="checkbox"
                                   checked={row.selectedAssignmentType === "house"}
                                   onChange={(e) => updateAssignmentTypeForRestaurant(row, e.target.checked ? "house" : "standard")}
-                                  disabled={busy}
+                                  disabled={busyType || busyAction}
                                   className="rounded border-slate-300"
                                 />
                                 Хаус
@@ -1273,13 +1275,13 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
                           <td className="px-3 py-1.5 text-center">
                             <button
                               type="button"
-                              disabled={busy}
+                              disabled={busyAction || busyType}
                               className={row.isAssignedToSelected
                                 ? "inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition"
                                 : "inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-2.5 py-1.5 text-xs font-medium text-white shadow hover:bg-indigo-700 transition"}
                               onClick={() => upsertAssignmentForRestaurant(row, !row.isAssignedToSelected)}
                             >
-                              {busy ? "Зберігаю…" : row.isAssignedToSelected ? "Зняти" : "Прив'язати"}
+                              {busyAction ? "Зберігаю…" : row.isAssignedToSelected ? "Зняти" : "Прив'язати"}
                             </button>
                           </td>
                         )}
