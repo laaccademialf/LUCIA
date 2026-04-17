@@ -34,8 +34,11 @@ export const addAssortmentMatrixItem = async (item) => {
 
 export const updateAssortmentMatrixItem = async (id, data) => {
   const { id: _ignore, ...rest } = data || {};
-  await updateCollectionItemApi(COL_ITEMS, id, {
+  // DELETE + CREATE замість PUT щоб уникнути server-side merge зі старими зламаними колонками
+  await deleteCollectionItemApi(COL_ITEMS, id);
+  await createCollectionItemApi(COL_ITEMS, {
     ...rest,
+    id,
     updatedAt: stamp(),
   });
 };

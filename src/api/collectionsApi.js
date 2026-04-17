@@ -1,6 +1,23 @@
 const ENV_API_BASE = String(import.meta.env.VITE_DATA_API_BASE_URL || "").trim().replace(/\/+$/, "");
 const ENV_API_TOKEN = String(import.meta.env.VITE_DATA_API_TOKEN || "").trim();
 
+// Префікси полів з динамічними ключами — їхні sub-keys не мають потрапляти в payload
+const DYNAMIC_KEY_PREFIXES = [
+  "pricingByRestaurantId_", "pricing_by_restaurant_id_",
+  "assignmentTypes_", "assignment_types_",
+  "pricingByRestaurantGroup_", "pricing_by_restaurant_group_",
+];
+
+const sanitizePayload = (data) => {
+  if (!data || typeof data !== "object") return data;
+  const out = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (DYNAMIC_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
+    out[key] = value;
+  }
+  return out;
+};
+
 const readRuntimeCustomConfig = () => {
   if (typeof window === "undefined" || typeof localStorage === "undefined") return null;
   const raw = localStorage.getItem("lucia_runtime_custom_config");
@@ -83,7 +100,7 @@ export const createCollectionItemApi = async (collectionName, data) => {
   const response = await fetch(endpoint(`/api/collections/${encodeURIComponent(collectionName)}`), {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify(data || {}),
+    body: JSON.stringify(sanitizePayload(data || {})),
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
@@ -100,7 +117,7 @@ export const updateCollectionItemApi = async (collectionName, id, data) => {
     {
       method: "PUT",
       headers: headers(),
-      body: JSON.stringify(data || {}),
+      body: JSON.stringify(sanitizePayload(data || {})),
     }
   );
   if (!response.ok) {
