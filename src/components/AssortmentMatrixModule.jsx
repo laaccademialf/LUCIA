@@ -1025,35 +1025,55 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
 
   const updateAssignmentTypeForRestaurant = async (product, nextType) => {
     if (!selectedRestaurantId) return;
+
+    const targetId = product.assignmentId
+      || (mergedAssignments.get(String(product.id))
+        || mergedAssignments.get(product.code1C)
+        || mergedAssignments.get(product.name))?.id;
+
+    if (!targetId) {
+      alert("Не знайдено прив'язку для цього продукту. Спочатку прив'яжіть продукт до закладу.");
+      return;
+    }
+
     const mergedAssignment = mergedAssignments.get(String(product.id))
       || mergedAssignments.get(product.code1C)
       || mergedAssignments.get(product.name);
-    if (!mergedAssignment?.id || !mergedAssignment.restaurantIds?.includes(selectedRestaurantId)) return;
 
     setBusyProductId(String(product.id));
     try {
-      await updateItem(mergedAssignment.id, {
+      const result = await updateItem(targetId, {
         specificationId: product.id,
         productName: product.name,
         category: product.category,
-        subCategory: product.subCategory,
+        subCategory: product.subCategory || "",
         unit: product.unit,
         supplier: product.supplier,
         code1C: product.code1C,
         purchasePrice: product.purchasePrice,
+        bottleMarkup: product.bottleMarkup,
+        bottleSalePrice: product.bottleSalePrice,
+        portionCostPrice: product.portionCostPrice,
+        portionMarkup: product.portionMarkup,
+        portionSalePrice: product.portionSalePrice,
         markup: product.markup,
         salePrice: product.salePrice,
         costPrice: product.costPrice,
-        restaurantIds: mergedAssignment.restaurantIds,
-        restaurantNames: mergedAssignment.restaurantNames,
+        restaurantIds: product.assignedRestaurantIds || mergedAssignment?.restaurantIds || [selectedRestaurantId],
+        restaurantNames: product.assignedRestaurantNames || mergedAssignment?.restaurantNames || [],
         assignmentTypes: {
-          ...(mergedAssignment.assignmentTypes || {}),
+          ...(product.assignmentTypes || mergedAssignment?.assignmentTypes || {}),
           [selectedRestaurantId]: nextType,
         },
-        pricingByRestaurantId: mergedAssignment.pricingByRestaurantId || {},
+        pricingByRestaurantId: mergedAssignment?.pricingByRestaurantId || {},
         isActive: product.isActive,
-        notes: mergedAssignment.notes || "",
+        notes: product.assignmentNotes || mergedAssignment?.notes || "",
       });
+      if (!result?.success) {
+        alert("Не вдалося оновити тип прив'язки: " + (result?.error?.message || "невідома помилка"));
+      }
+    } catch (err) {
+      alert("Не вдалося оновити тип: " + (err?.message || err));
     } finally {
       setBusyProductId("");
     }
@@ -1183,8 +1203,8 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
                     <th className="px-3 py-2 cursor-pointer" onClick={() => handleSort("name")}>
                       <span className="inline-flex items-center gap-1">Продукція <SortIcon field="name" /></span>
                     </th>
-                    <th className="px-3 py-2">Од.</th>
                     <th className="px-3 py-2">Постачальник</th>
+                    <th className="px-3 py-2 text-right">Пляшка</th>
                     <th className="px-3 py-2 text-right">Порція</th>
                     <th className="px-3 py-2">Інші заклади</th>
                     <th className="px-3 py-2 text-center">Тип</th>
@@ -1199,8 +1219,11 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
                     return (
                       <tr key={row.id} className="border-b border-slate-100 hover:bg-slate-50 transition">
                         <td className="px-3 py-1.5 font-medium">{row.name || "—"}</td>
-                        <td className="px-3 py-1.5">{row.unit || "—"}</td>
                         <td className="px-3 py-1.5">{row.supplier || "—"}</td>
+                        <td className="px-3 py-1.5 text-right">
+                          <div>{formatPrice(row.bottleSalePrice)}</div>
+                          <div className="text-[11px] text-slate-400">{formatPrice(row.purchasePrice) ? `зак. ${formatPrice(row.purchasePrice)}` : ""}</div>
+                        </td>
                         <td className="px-3 py-1.5 text-right">
                           <div>{formatPrice(row.effectivePortionSalePrice)}</div>
                           <div className="text-[11px] text-slate-400">{row.portionVolumeMl ? `${row.portionVolumeMl} мл` : row.portionSaleUnit || DEFAULT_PORTION_UNIT}</div>
