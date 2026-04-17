@@ -778,6 +778,12 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
       })();
 
       const flat = flattenScalarFields(flatSource);
+      // Видаляємо ключі, що перевищують ліміт MySQL на довжину ідентифікатора
+      for (const col of Object.keys(flat)) {
+        if (col.length > MAX_MYSQL_IDENTIFIER_LENGTH) {
+          delete flat[col];
+        }
+      }
       const typeMap = Object.entries(flat).reduce((acc, [col, value]) => {
         acc[col] = mergeTypes(acc[col], detectValueType(value));
         return acc;
@@ -1720,6 +1726,8 @@ const sanitizeColumnName = (raw) => {
   return normalized;
 };
 
+const MAX_MYSQL_IDENTIFIER_LENGTH = 64;
+
 const flattenScalarFields = (input, prefix = "", out = {}) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) return out;
 
@@ -1742,8 +1750,14 @@ const flattenScalarFields = (input, prefix = "", out = {}) => {
       continue;
     }
     if (typeof value === "object") {
-      // Підтримуємо вкладені об'єкти (рекурсія)
-      flattenScalarFields(value, nextKey, out);
+      const colName = sanitizeColumnName(nextKey);
+      // Якщо ім'я колонки вже довге або вкладений об'єкт має динамічні ключі —
+      // зберегти як JSON замість рекурсивного розгортання
+      if (colName.length >= MAX_MYSQL_IDENTIFIER_LENGTH - 20) {
+        out[colName] = JSON.stringify(value);
+      } else {
+        flattenScalarFields(value, nextKey, out);
+      }
     }
   }
   return out;
@@ -1950,6 +1964,10 @@ const ensureFlatColumnsMySql = async (conn, flatTable, typeMap) => {
   const existing = await getMySqlColumns(conn, flatTable);
   for (const [columnName, mergedType] of Object.entries(typeMap)) {
     if (!columnName || existing.has(columnName)) continue;
+    if (columnName.length > MAX_MYSQL_IDENTIFIER_LENGTH) {
+      console.warn(`[ensureFlatColumns] Skipping column '${columnName}' — name exceeds ${MAX_MYSQL_IDENTIFIER_LENGTH} chars`);
+      continue;
+    }
     await conn.execute(
       `ALTER TABLE ${quoteIdentMySql(flatTable)} ADD COLUMN ${quoteIdentMySql(columnName)} ${sqlTypeFor(mergedType)}`
     );
@@ -2036,9 +2054,10 @@ const normalizeOneCollectionToFlatMySql = async (conn, collectionName) => {
   const typeMap = {};
   const flattenedRows = parsedRows.map((row) => {
     const flat = flattenScalarFields(row.payload);
-    Object.entries(flat).forEach(([col, value]) => {
-      typeMap[col] = mergeTypes(typeMap[col], detectValueType(value));
-    });
+    for (const col of Object.keys(flat)) {
+      if (col.length > MAX_MYSQL_IDENTIFIER_LENGTH) { delete flat[col]; continue; }
+      typeMap[col] = mergeTypes(typeMap[col], detectValueType(flat[col]));
+    }
     return { id: row.id, payload: row.payload, flat };
   });
 
@@ -2657,6 +2676,9 @@ const handleAssetsBatchImport = async (req, res) => {
 
           const nextId = existingId || String(rawPayload?.id || "").trim() || randomId();
           const flat = flattenScalarFields(normalized);
+          for (const col of Object.keys(flat)) {
+            if (col.length > MAX_MYSQL_IDENTIFIER_LENGTH) { delete flat[col]; continue; }
+          }
 
           for (const [col, value] of Object.entries(flat)) {
             aggregatedTypeMap[col] = mergeTypes(aggregatedTypeMap[col], detectValueType(value));
