@@ -622,6 +622,11 @@ const mapMySqlRowToDocument = (row) => {
     const scalar = Object.entries(safeRow).reduce((acc, [key, value]) => {
       if (key === "id" || key === "payload") return acc;
       if (value === undefined) return acc;
+      // Ігноруємо скалярні колонки, що є фрагментами раніше розгорнутих динамічних об'єктів
+      if (key.length > MAX_MYSQL_IDENTIFIER_LENGTH - 10) return acc;
+      for (const blockedPrefix of ALWAYS_JSON_FIELDS) {
+        if (key !== blockedPrefix && key.startsWith(blockedPrefix + "_")) return acc;
+      }
 
       const normalizedValue = normalizeScalarValue(value);
       const parsedValue = parsed[key];
@@ -860,8 +865,20 @@ const updateCollectionItemData = async (collectionName, id, payload, dbConfig) =
   const existing = await getCollectionItemData(collection, itemId, dbConfig);
   if (!existing) throw new Error("Item not found");
 
+  // Видаляємо зі старого документа фрагменти раніше розгорнутих динамічних полів
+  const cleanExisting = { ...existing };
+  for (const existingKey of Object.keys(cleanExisting)) {
+    if (existingKey === "id") continue;
+    for (const blockedPrefix of ALWAYS_JSON_FIELDS) {
+      if (existingKey !== blockedPrefix && existingKey.startsWith(blockedPrefix + "_")) {
+        delete cleanExisting[existingKey];
+        break;
+      }
+    }
+  }
+
   const merged = {
-    ...existing,
+    ...cleanExisting,
     ...(payload && typeof payload === "object" ? payload : {}),
     updatedAt: new Date().toISOString(),
   };
