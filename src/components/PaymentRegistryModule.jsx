@@ -1449,7 +1449,6 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                 );
                 const canApprove = (isFinance || isAssignedApprover) && (payment.status === "pending");
                 const canSchedule = isFinance && payment.status === "approved";
-                const canMarkPaid = isFinance && (payment.status === "scheduled" || payment.status === "approved");
                 const canPause = isFinance && ["approved", "scheduled", "paused"].includes(payment.status);
                 const canEdit = payment.status === "draft" || (payment.status === "pending" && payment.requestedById === myUserId);
                 const canCancel = (payment.status === "draft" || payment.status === "pending") && (payment.requestedById === myUserId || isFinance);
@@ -1495,11 +1494,6 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                         {canSchedule && (
                           <button type="button" disabled={Boolean(processingId)} onClick={() => schedulePayment(payment)} className={btnSecondary}>
                             <Clock3 size={12} /> Запланувати
-                          </button>
-                        )}
-                        {canMarkPaid && (
-                          <button type="button" disabled={Boolean(processingId)} onClick={() => markPaid(payment)} className={btnApprove}>
-                            <Check size={12} /> Оплачено
                           </button>
                         )}
                         {canPause && (
