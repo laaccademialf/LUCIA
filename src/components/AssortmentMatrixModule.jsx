@@ -489,8 +489,12 @@ const normalizeList = (value) => {
 };
 
 const normalizeAssignmentTypes = (value) => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return Object.entries(value).reduce((acc, [key, raw]) => {
+  let parsed = value;
+  if (typeof parsed === "string") {
+    try { parsed = JSON.parse(parsed); } catch { return {}; }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return Object.entries(parsed).reduce((acc, [key, raw]) => {
     const normalizedKey = normalizeString(key);
     const normalizedValue = normalizeString(raw).toLowerCase();
     if (!normalizedKey) return acc;
@@ -565,8 +569,13 @@ const buildAssignmentRecord = (item, specificationsById, restaurantsById) => {
   const restaurantIds = getAssignmentRestaurantIds(item);
   const restaurantNames = getAssignmentRestaurantNames(item, restaurantsById);
   const assignmentTypes = normalizeAssignmentTypes(item?.assignmentTypes || item?.assignment_types);
-  const pricingByRestaurantId = item?.pricingByRestaurantId && typeof item.pricingByRestaurantId === "object"
-    ? Object.entries(item.pricingByRestaurantId).reduce((acc, [restaurantId, pricing]) => {
+  const rawPricing = (() => {
+    const v = item?.pricingByRestaurantId ?? item?.pricing_by_restaurant_id;
+    if (typeof v === "string") { try { return JSON.parse(v); } catch { return null; } }
+    return v;
+  })();
+  const pricingByRestaurantId = rawPricing && typeof rawPricing === "object" && !Array.isArray(rawPricing)
+    ? Object.entries(rawPricing).reduce((acc, [restaurantId, pricing]) => {
         acc[restaurantId] = {
           restaurantGroupId: normalizeString(pricing?.restaurantGroupId || pricing?.groupId),
           restaurantGroupName: normalizeString(pricing?.restaurantGroupName || pricing?.groupName),
@@ -950,8 +959,8 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
           costPrice: product.costPrice,
           restaurantIds: nextRestaurantIds,
           restaurantNames: nextRestaurantIds.map((restaurantId) => restaurantsById.get(restaurantId)?.name || restaurantId),
-          assignmentTypes: nextAssignmentTypes,
-          pricingByRestaurantId: nextPricingByRestaurantId,
+          assignmentTypes: JSON.stringify(nextAssignmentTypes),
+          pricingByRestaurantId: JSON.stringify(nextPricingByRestaurantId),
           isActive: product.isActive,
           notes: mergedAssignment.notes || "",
         });
@@ -974,8 +983,8 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
         costPrice: product.costPrice,
         restaurantIds: [restaurant.id],
         restaurantNames: [restaurant.name],
-        assignmentTypes: { [restaurant.id]: "standard" },
-        pricingByRestaurantId: product.selectedRestaurantPricing ? { [restaurant.id]: product.selectedRestaurantPricing } : {},
+        assignmentTypes: JSON.stringify({ [restaurant.id]: "standard" }),
+        pricingByRestaurantId: JSON.stringify(product.selectedRestaurantPricing ? { [restaurant.id]: product.selectedRestaurantPricing } : {}),
         isActive: product.isActive,
         notes: "",
       });
@@ -1061,11 +1070,16 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
         costPrice: product.costPrice,
         restaurantIds: product.assignedRestaurantIds || mergedAssignment?.restaurantIds || [selectedRestaurantId],
         restaurantNames: product.assignedRestaurantNames || mergedAssignment?.restaurantNames || [],
-        assignmentTypes: {
-          ...(product.assignmentTypes || mergedAssignment?.assignmentTypes || {}),
+        assignmentTypes: JSON.stringify({
+          ...(typeof product.assignmentTypes === "string" ? JSON.parse(product.assignmentTypes || "{}") : (product.assignmentTypes || {})),
+          ...(typeof mergedAssignment?.assignmentTypes === "string" ? JSON.parse(mergedAssignment.assignmentTypes || "{}") : (mergedAssignment?.assignmentTypes || {})),
           [selectedRestaurantId]: nextType,
-        },
-        pricingByRestaurantId: mergedAssignment?.pricingByRestaurantId || {},
+        }),
+        pricingByRestaurantId: JSON.stringify(
+          typeof mergedAssignment?.pricingByRestaurantId === "string"
+            ? JSON.parse(mergedAssignment.pricingByRestaurantId || "{}")
+            : (mergedAssignment?.pricingByRestaurantId || {})
+        ),
         isActive: product.isActive,
         notes: product.assignmentNotes || mergedAssignment?.notes || "",
       });
