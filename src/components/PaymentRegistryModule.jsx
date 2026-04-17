@@ -122,6 +122,7 @@ const parseAmountValue = (value) => {
 };
 
 const generateId = (prefix = "pay") => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const generateRecurringSeriesKey = () => generateId("rser");
 
 const generatePaymentNumber = (restaurantName, restaurants, existingPayments) => {
   const restaurant = (restaurants || []).find((r) => (r.name || r.id) === restaurantName);
@@ -283,6 +284,10 @@ const normalizePaymentRecord = (item) => ({
   ...item,
   recordType: RECORD_TYPE_PAYMENT_REQUEST,
   type: RECORD_TYPE_PAYMENT_REQUEST,
+  ownerUserId: String(item?.ownerUserId || item?.requestedById || "").trim(),
+  ownerEmail: String(item?.ownerEmail || item?.requestedByEmail || "").trim(),
+  ownerName: String(item?.ownerName || item?.requestedByName || "").trim(),
+  recurringSeriesKey: String(item?.recurringSeriesKey || item?.recurringTemplateId || "").trim(),
   approvals: Array.isArray(item?.approvals) ? item.approvals : [],
   comments: Array.isArray(item?.comments) ? item.comments : [],
   dueDate: toDateOnly(item?.dueDate) || "",
@@ -295,6 +300,13 @@ const normalizeRecurringTemplateRecord = (item) => {
     ...item,
     recordType: RECORD_TYPE_RECURRING_TEMPLATE,
     type: RECORD_TYPE_RECURRING_TEMPLATE,
+    ownerUserId: String(item?.ownerUserId || item?.requestedById || "").trim(),
+    ownerEmail: String(item?.ownerEmail || item?.requestedByEmail || "").trim(),
+    ownerName: String(item?.ownerName || item?.requestedByName || "").trim(),
+    recurringSeriesKey: String(item?.recurringSeriesKey || item?.id || "").trim(),
+    requestedById: String(item?.requestedById || item?.ownerUserId || "").trim(),
+    requestedByEmail: String(item?.requestedByEmail || item?.ownerEmail || "").trim(),
+    requestedByName: String(item?.requestedByName || item?.ownerName || "").trim(),
     isActive: item?.isActive !== false,
     frequency: RECURRING_FREQUENCIES[item?.frequency] ? item.frequency : "monthly",
     dayOfMonth: String(getPreferredDay(item?.dayOfMonth)),
@@ -338,12 +350,16 @@ const createPaymentFromRecurringTemplate = (template, occurrenceDate, paymentNum
     status: "approved",
     createdAt: nowIso,
     updatedAt: nowIso,
-    requestedById: template.requestedById || "",
-    requestedByEmail: template.requestedByEmail || "",
-    requestedByName: template.requestedByName || "Система",
+    requestedById: template.requestedById || template.ownerUserId || "",
+    requestedByEmail: template.requestedByEmail || template.ownerEmail || "",
+    requestedByName: template.requestedByName || template.ownerName || "Система",
+    ownerUserId: template.ownerUserId || template.requestedById || "",
+    ownerEmail: template.ownerEmail || template.requestedByEmail || "",
+    ownerName: template.ownerName || template.requestedByName || "",
     approvals: [],
     comments: [],
     recurringTemplateId: template.id,
+    recurringSeriesKey: template.recurringSeriesKey || template.id,
     recurringOccurrenceDate: occurrenceDate,
     recurringFrequency: template.frequency,
     recurringDayOfMonth: String(template.dayOfMonth || ""),
@@ -353,7 +369,10 @@ const createPaymentFromRecurringTemplate = (template, occurrenceDate, paymentNum
 const paymentBelongsToUser = (payment, userId, email, name) => (
   (userId && payment.requestedById === userId) ||
   (email && payment.requestedByEmail === email) ||
-  (name && payment.requestedByName === name)
+  (name && payment.requestedByName === name) ||
+  (userId && payment.ownerUserId === userId) ||
+  (email && payment.ownerEmail === email) ||
+  (name && payment.ownerName === name)
 );
 
 const escapeCsvCell = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
@@ -643,7 +662,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   // ─── Filtering ───
   const filteredPayments = useMemo(() => {
     const visibleTemplates = recurringTemplates.filter((template) => {
-      if ((Number(template.totalGenerated) || 0) > 0) {
+      const templateSeriesKey = String(template.recurringSeriesKey || template.id || "").trim();
+      const hasGeneratedPayment = paymentRequests.some((payment) => {
+        const paymentSeriesKey = String(payment.recurringSeriesKey || payment.recurringTemplateId || "").trim();
+        return Boolean(templateSeriesKey) && paymentSeriesKey === templateSeriesKey;
+      });
+      if (hasGeneratedPayment || (Number(template.totalGenerated) || 0) > 0) {
         return false;
       }
       if (topTab === "mypayments" && !isFinance) {
@@ -829,11 +853,15 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         title: titleWithVat,
         amount,
         id: generateId("rec"),
+        recurringSeriesKey: generateRecurringSeriesKey(),
         recordType: RECORD_TYPE_RECURRING_TEMPLATE,
         type: RECORD_TYPE_RECURRING_TEMPLATE,
         requestedById: myUserId,
         requestedByEmail: myEmail,
         requestedByName: myName,
+        ownerUserId: myUserId,
+        ownerEmail: myEmail,
+        ownerName: myName,
         createdAt: nowIso,
         updatedAt: nowIso,
         isActive: true,
@@ -864,6 +892,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         title: titleWithVat,
         recordType: RECORD_TYPE_PAYMENT_REQUEST,
         type: RECORD_TYPE_PAYMENT_REQUEST,
+        ownerUserId: editingPayment.ownerUserId || editingPayment.requestedById || myUserId,
+        ownerEmail: editingPayment.ownerEmail || editingPayment.requestedByEmail || myEmail,
+        ownerName: editingPayment.ownerName || editingPayment.requestedByName || myName,
         amount,
         status: editingPayment.status === "draft" ? status : editingPayment.status,
         updatedAt: nowIso,
@@ -896,6 +927,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         requestedById: myUserId,
         requestedByEmail: myEmail,
         requestedByName: myName,
+        ownerUserId: myUserId,
+        ownerEmail: myEmail,
+        ownerName: myName,
         approvals: [],
         comments: [],
       };
@@ -940,6 +974,10 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       requestedById: editingRecurringTemplate?.requestedById || myUserId,
       requestedByEmail: editingRecurringTemplate?.requestedByEmail || myEmail,
       requestedByName: editingRecurringTemplate?.requestedByName || myName,
+      ownerUserId: editingRecurringTemplate?.ownerUserId || myUserId,
+      ownerEmail: editingRecurringTemplate?.ownerEmail || myEmail,
+      ownerName: editingRecurringTemplate?.ownerName || myName,
+      recurringSeriesKey: editingRecurringTemplate?.recurringSeriesKey || generateRecurringSeriesKey(),
       createdAt: editingRecurringTemplate?.createdAt || nowIso,
       updatedAt: nowIso,
       isActive: editingRecurringTemplate?.isActive ?? true,
@@ -992,8 +1030,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const runRecurringTemplateNow = (template) => {
     const occurrenceDate = toDateOnly(template.nextOccurrenceDate) || resolveInitialRecurringOccurrence(template);
     if (!occurrenceDate) return;
+    const recurringSeriesKey = String(template.recurringSeriesKey || template.id || "").trim();
     const existingPayment = paymentRequests.find(
-      (payment) => payment.recurringTemplateId === template.id && payment.recurringOccurrenceDate === occurrenceDate
+      (payment) => {
+        const paymentSeriesKey = String(payment.recurringSeriesKey || payment.recurringTemplateId || "").trim();
+        return paymentSeriesKey === recurringSeriesKey && payment.recurringOccurrenceDate === occurrenceDate;
+      }
     );
     if (existingPayment) {
       alert("Платіж на найближчу дату вже створений.");
