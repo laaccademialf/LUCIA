@@ -2479,6 +2479,8 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
   const canManage = isAdmin || isBarManager;
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
+  const [filterSupplier, setFilterSupplier] = useState("");
+  const [filterActive, setFilterActive] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editSpec, setEditSpec] = useState(null);
   const fileInputRef = useRef(null);
@@ -2548,8 +2550,16 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
     if (filterCategory) {
       result = result.filter((product) => product.category === filterCategory);
     }
+    if (filterSupplier) {
+      result = result.filter((product) => product.supplier === filterSupplier);
+    }
+    if (filterActive === "active") {
+      result = result.filter((product) => product.isActive !== false);
+    } else if (filterActive === "inactive") {
+      result = result.filter((product) => product.isActive === false);
+    }
     return result.sort((a, b) => (a.name || "").localeCompare(b.name || "", "uk"));
-  }, [products, search, filterCategory]);
+  }, [products, search, filterCategory, filterSupplier, filterActive]);
 
   const handleDelete = async (id) => {
     if (!confirm("Видалити цю позицію продукції?")) return;
@@ -2603,14 +2613,37 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
             <select
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
-              className={inputClass + " !mt-0 !w-auto min-w-[180px]"}
+              className={inputClass + " !mt-0 !w-auto min-w-[160px]"}
             >
               <option value="">Усі категорії</option>
-              {[...new Set([...categories, ...defaultCategories])].map((category) => (
+              {[...new Set([...categories, ...defaultCategories])].sort((a, b) => a.localeCompare(b, "uk")).map((category) => (
                 <option key={category} value={category}>{category}</option>
               ))}
             </select>
           )}
+
+          {suppliers.length > 0 && (
+            <select
+              value={filterSupplier}
+              onChange={(e) => setFilterSupplier(e.target.value)}
+              className={inputClass + " !mt-0 !w-auto min-w-[160px]"}
+            >
+              <option value="">Усі постачальники</option>
+              {suppliers.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          )}
+
+          <select
+            value={filterActive}
+            onChange={(e) => setFilterActive(e.target.value)}
+            className={inputClass + " !mt-0 !w-auto min-w-[120px]"}
+          >
+            <option value="">Усі статуси</option>
+            <option value="active">Активні</option>
+            <option value="inactive">Неактивні</option>
+          </select>
 
           {canManage && (
             <button type="button" className={btnPrimary} onClick={() => { setEditSpec(null); setShowForm(true); }}>
