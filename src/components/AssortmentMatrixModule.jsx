@@ -1077,6 +1077,8 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
   const [collapsedCategories, setCollapsedCategories] = useState({});
   const [editingPriceProductId, setEditingPriceProductId] = useState("");
   const [editingPriceValue, setEditingPriceValue] = useState("");
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const fileInputRef = useRef(null);
 
   const specificationOptions = useMemo(
@@ -1240,6 +1242,37 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
 
   const SortIcon = ({ field }) =>
     sortField === field ? (sortDir === "asc" ? <ChevronUp size={14} /> : <ChevronDown size={14} />) : null;
+
+  const toggleMatrixSelect = (id) => setSelectedIds((prev) => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  const toggleSelectAllCategory = (rows) => {
+    const ids = rows.map((r) => r.id);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      const allIn = ids.every((id) => next.has(id));
+      if (allIn) { ids.forEach((id) => next.delete(id)); } else { ids.forEach((id) => next.add(id)); }
+      return next;
+    });
+  };
+
+  const bulkAssign = async (shouldAssign) => {
+    if (!selectedRestaurantId || selectedIds.size === 0 || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      const rows = catalogRows.filter((r) => selectedIds.has(r.id));
+      for (const row of rows) {
+        if (shouldAssign && row.isAssignedToSelected) continue;
+        if (!shouldAssign && !row.isAssignedToSelected) continue;
+        await upsertAssignmentForRestaurant(row, shouldAssign);
+      }
+      setSelectedIds(new Set());
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const upsertAssignmentForRestaurant = async (product, shouldAssign) => {
     if (!selectedRestaurantId) return;
@@ -1578,6 +1611,21 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
               : `Ти бачиш лише продукцію, дозволену для закладу ${selectedRestaurantName || ""}.`}
           </span>
         </div>
+
+        {canEdit && selectedIds.size > 0 && selectedRestaurantId && (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
+            <span className="text-sm font-medium text-blue-700">Обрано: {selectedIds.size}</span>
+            <button type="button" disabled={bulkBusy} className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50" onClick={() => bulkAssign(true)}>
+              {bulkBusy ? "Обробка…" : "Прив'язати до закладу"}
+            </button>
+            <button type="button" disabled={bulkBusy} className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50" onClick={() => bulkAssign(false)}>
+              {bulkBusy ? "Обробка…" : "Зняти з закладу"}
+            </button>
+            <button type="button" className="ml-auto text-xs text-slate-500 hover:text-slate-700" onClick={() => setSelectedIds(new Set())}>
+              Скинути вибір
+            </button>
+          </div>
+        )}
       </div>
 
       {canEdit && specificationOptions.length === 0 && (
@@ -1623,6 +1671,11 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    {canEdit && (
+                      <th className="px-2 py-2 w-8">
+                        <input type="checkbox" checked={rows.length > 0 && rows.every((r) => selectedIds.has(r.id))} onChange={() => toggleSelectAllCategory(rows)} className="rounded" />
+                      </th>
+                    )}
                     <th className="px-3 py-2 cursor-pointer" onClick={() => handleSort("name")}>
                       <span className="inline-flex items-center gap-1">Продукція <SortIcon field="name" /></span>
                     </th>
@@ -1641,7 +1694,12 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
                     const busyType = busyTypeProductId === String(row.id);
                     const otherRestaurantsSummary = formatOtherRestaurantsSummary(otherRestaurants);
                     return (
-                      <tr key={row.id} className="border-b border-slate-100 hover:bg-slate-50 transition">
+                      <tr key={row.id} className={`border-b border-slate-100 hover:bg-slate-50 transition ${selectedIds.has(row.id) ? "bg-blue-50" : ""}`}>
+                        {canEdit && (
+                          <td className="px-2 py-1.5 w-8">
+                            <input type="checkbox" checked={selectedIds.has(row.id)} onChange={() => toggleMatrixSelect(row.id)} className="rounded" />
+                          </td>
+                        )}
                         <td className="px-3 py-1.5 font-medium">{stripVolume(row.name) || "—"}</td>
                         <td className="px-3 py-1.5">{row.supplier || "—"}</td>
                         <td className="px-3 py-1.5 text-right">
