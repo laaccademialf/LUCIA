@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   Plus,
   Trash2,
@@ -11,8 +11,19 @@ import {
   ChevronDown,
   ChevronUp,
   Edit3,
+  Shield,
+  UserCheck,
+  Users,
 } from "lucide-react";
 import { useAssortmentMatrix } from "../hooks/useAssortmentMatrix";
+import { getUsers } from "../firebase/users";
+import {
+  isCollectionsApiEnabled,
+  listCollectionItemsApi,
+  createCollectionItemApi,
+  updateCollectionItemApi,
+  deleteCollectionItemApi,
+} from "../api/collectionsApi";
 
 const loadExcelHelpers = () => import("../utils/assortmentMatrixExcel");
 
@@ -24,10 +35,12 @@ const normalizeTabKind = (tabId = "", tabLabel = "") => {
   if (label.includes("специф")) return "specifications";
   if (label.includes("типов")) return "typicalFields";
   if (label.includes("надцін") || label.includes("націн") || label.includes("цінк")) return "markups";
+  if (label.includes("доступ") || label.includes("керуван")) return "access";
   if (v === "barvinotipicalform") return "typicalFields";
   if (v === "barvinositifications" || v === "barvinospecifications" || v === "barvinospecification") return "specifications";
   if (v === "assortmentmatrix") return "matrix";
   if (v.includes("markup") || v.includes("markups") || v.includes("nacink") || v.includes("nacinka") || v.includes("nadc") || v.includes("цінк")) return "markups";
+  if (v.includes("dostupy") || v.includes("access") || v.includes("керуван")) return "access";
   if (v === "test3") return "typicalFields";
   if (v === "test2") return "specifications";
   if (v === "test1") return "matrix";
@@ -683,6 +696,16 @@ const AssortmentMatrixModule = ({ topTab = "matrix", topTabLabel = "", restauran
     deleteSpec,
   } = useAssortmentMatrix();
 
+  // Load bar access records
+  const [barAccessRecords, setBarAccessRecords] = useState([]);
+  useEffect(() => {
+    if (!isCollectionsApiEnabled()) return;
+    listCollectionItemsApi(ACCESS_COLLECTION).then(setBarAccessRecords).catch(() => {});
+  }, []);
+
+  const myEmail = String(user?.email || "").toLowerCase().trim();
+  const myBarAccess = useMemo(() => barAccessRecords.find((r) => r.userEmail?.toLowerCase() === myEmail), [barAccessRecords, myEmail]);
+
   if (loading) {
     return (
       <div className={cardClass}>
@@ -696,6 +719,15 @@ const AssortmentMatrixModule = ({ topTab = "matrix", topTabLabel = "", restauran
       <div className={cardClass}>
         <p className="text-sm text-red-600">Помилка: {String(error?.message || error)}</p>
       </div>
+    );
+  }
+
+  if (kind === "access") {
+    return (
+      <AccessManagementView
+        restaurants={restaurants}
+        user={user}
+      />
     );
   }
 
@@ -727,6 +759,7 @@ const AssortmentMatrixModule = ({ topTab = "matrix", topTabLabel = "", restauran
         specifications={specifications}
         typicalFields={typicalFields}
         user={user}
+        barAccess={myBarAccess}
         addField={addField}
         addSpec={addSpec}
         updateSpec={updateSpec}
@@ -742,10 +775,404 @@ const AssortmentMatrixModule = ({ topTab = "matrix", topTabLabel = "", restauran
       typicalFields={typicalFields}
       restaurants={restaurants}
       user={user}
+      barAccess={myBarAccess}
       addItem={addItem}
       updateItem={updateItem}
       deleteItem={deleteItem}
     />
+  );
+};
+
+/* ═══════════════════════════════════════════════════
+   ACCESS MANAGEMENT VIEW
+   ═══════════════════════════════════════════════════ */
+
+const ACCESS_COLLECTION = "barvinoAccess";
+
+const BAR_ROLES = {
+  manager: "Керівник бару",
+  bartender: "Бармен",
+};
+
+const PERMISSION_LABELS = {
+  viewMatrix: "Перегляд матриці",
+  editPrices: "Редагування цін",
+  editAssignments: "Прив'язка продукції",
+  editSpecifications: "Редагування специфікацій",
+  editMarkups: "Редагування націнок",
+  manageAccess: "Керування доступами",
+};
+
+const DEFAULT_BARTENDER_PERMISSIONS = ["viewMatrix"];
+const DEFAULT_MANAGER_PERMISSIONS = Object.keys(PERMISSION_LABELS);
+
+const AccessManagementView = ({ restaurants, user }) => {
+  const isAdmin = isAdminUser(user);
+  const myEmail = String(user?.email || "").toLowerCase().trim();
+
+  const [accessRecords, setAccessRecords] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState("");
+  const [formData, setFormData] = useState({ userId: "", userName: "", userEmail: "", role: "bartender", restaurantIds: [], permissions: [...DEFAULT_BARTENDER_PERMISSIONS] });
+
+  // Check if current user is a bar manager
+  const myAccess = useMemo(() => accessRecords.find((r) => r.userEmail?.toLowerCase() === myEmail), [accessRecords, myEmail]);
+  const isBarManager = isAdmin || (myAccess?.role === "manager");
+  const canManageAccess = isAdmin || (myAccess?.permissions || []).includes("manageAccess");
+
+  // Load data
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [records, users] = await Promise.all([
+          isCollectionsApiEnabled() ? listCollectionItemsApi(ACCESS_COLLECTION) : [],
+          getUsers(),
+        ]);
+        if (cancelled) return;
+        setAccessRecords(records);
+        setAllUsers(users);
+      } catch (err) {
+        console.error("[BarAccess] Load error:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const usersNotAssigned = useMemo(() => {
+    const assignedEmails = new Set(accessRecords.map((r) => r.userEmail?.toLowerCase()));
+    return allUsers.filter((u) => u.email && !assignedEmails.has(u.email.toLowerCase()));
+  }, [allUsers, accessRecords]);
+
+  const handleSave = useCallback(async () => {
+    if (!formData.userEmail && !formData.userId) { alert("Оберіть користувача"); return; }
+    if (formData.role === "bartender" && formData.restaurantIds.length === 0) { alert("Оберіть хоча б один заклад для бармена"); return; }
+
+    const nowIso = new Date().toISOString();
+    const record = {
+      userId: formData.userId,
+      userName: formData.userName,
+      userEmail: formData.userEmail,
+      role: formData.role,
+      restaurantIds: formData.role === "manager" ? (restaurants || []).map((r) => getRestaurantId(r)) : formData.restaurantIds,
+      permissions: formData.permissions,
+      updatedAt: nowIso,
+      updatedBy: myEmail,
+    };
+
+    try {
+      if (editingId) {
+        await updateCollectionItemApi(ACCESS_COLLECTION, editingId, record);
+        setAccessRecords((prev) => prev.map((r) => r.id === editingId ? { ...r, ...record } : r));
+      } else {
+        record.createdAt = nowIso;
+        record.createdBy = myEmail;
+        const created = await createCollectionItemApi(ACCESS_COLLECTION, record);
+        setAccessRecords((prev) => [...prev, { ...record, id: created?.id || `ba_${Date.now()}` }]);
+      }
+      setShowForm(false);
+      setEditingId("");
+    } catch (err) {
+      alert("Помилка збереження: " + (err?.message || err));
+    }
+  }, [formData, editingId, restaurants, myEmail]);
+
+  const handleDelete = useCallback(async (record) => {
+    if (!confirm(`Видалити доступ для ${record.userName || record.userEmail}?`)) return;
+    try {
+      await deleteCollectionItemApi(ACCESS_COLLECTION, record.id);
+      setAccessRecords((prev) => prev.filter((r) => r.id !== record.id));
+    } catch (err) {
+      alert("Помилка видалення: " + (err?.message || err));
+    }
+  }, []);
+
+  const openEditForm = (record) => {
+    setFormData({
+      userId: record.userId || "",
+      userName: record.userName || "",
+      userEmail: record.userEmail || "",
+      role: record.role || "bartender",
+      restaurantIds: record.restaurantIds || [],
+      permissions: record.permissions || [...DEFAULT_BARTENDER_PERMISSIONS],
+    });
+    setEditingId(record.id);
+    setShowForm(true);
+  };
+
+  const openAddForm = () => {
+    setFormData({ userId: "", userName: "", userEmail: "", role: "bartender", restaurantIds: [], permissions: [...DEFAULT_BARTENDER_PERMISSIONS] });
+    setEditingId("");
+    setShowForm(true);
+  };
+
+  const toggleRestaurant = (restaurantId) => {
+    setFormData((prev) => {
+      const next = prev.restaurantIds.includes(restaurantId)
+        ? prev.restaurantIds.filter((id) => id !== restaurantId)
+        : [...prev.restaurantIds, restaurantId];
+      return { ...prev, restaurantIds: next };
+    });
+  };
+
+  const togglePermission = (perm) => {
+    setFormData((prev) => {
+      const next = prev.permissions.includes(perm)
+        ? prev.permissions.filter((p) => p !== perm)
+        : [...prev, perm];
+      return { ...prev, permissions: next.includes(perm) ? prev.permissions : [...prev.permissions, perm] };
+    });
+  };
+
+  const setRole = (role) => {
+    setFormData((prev) => ({
+      ...prev,
+      role,
+      permissions: role === "manager" ? [...DEFAULT_MANAGER_PERMISSIONS] : [...DEFAULT_BARTENDER_PERMISSIONS],
+      restaurantIds: role === "manager" ? (restaurants || []).map((r) => getRestaurantId(r)) : prev.restaurantIds,
+    }));
+  };
+
+  if (loading) return <div className={cardClass}><p className="text-sm text-slate-500 animate-pulse">Завантаження…</p></div>;
+
+  if (!canManageAccess) {
+    return (
+      <div className={cardClass}>
+        <p className="text-sm text-slate-500">У вас немає прав для керування доступами модуля «Бар та Вино».</p>
+        {myAccess && (
+          <div className="mt-3 text-sm">
+            <p>Ваша роль: <strong>{BAR_ROLES[myAccess.role] || myAccess.role}</strong></p>
+            <p>Заклади: {(myAccess.restaurantIds || []).map((id) => {
+              const r = (restaurants || []).find((rest) => getRestaurantId(rest) === id);
+              return r ? getRestaurantName(r) : id;
+            }).join(", ") || "—"}</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const managers = accessRecords.filter((r) => r.role === "manager");
+  const bartenders = accessRecords.filter((r) => r.role === "bartender");
+
+  return (
+    <div className="grid grid-cols-1 gap-4">
+      {/* Header */}
+      <div className={cardClass}>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-base font-semibold flex items-center gap-2"><Shield size={18} /> Керування доступами</h3>
+          <button type="button" className={btnPrimary} onClick={openAddForm}>
+            <Plus size={16} /> Додати доступ
+          </button>
+        </div>
+        <p className="text-xs text-slate-500">
+          Призначте керівників бару (повний доступ до всіх закладів) та барменів (перегляд обраних закладів). Можна делегувати права редагування окремим акаунтам.
+        </p>
+      </div>
+
+      {/* Form */}
+      {showForm && (
+        <div className={cardClass}>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-base font-semibold">{editingId ? "Редагування доступу" : "Новий доступ"}</h3>
+            <button type="button" onClick={() => { setShowForm(false); setEditingId(""); }} className="p-1 hover:bg-slate-100 rounded"><X size={18} /></button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {/* User */}
+            <div>
+              <label className="text-xs font-semibold text-slate-600">Користувач *</label>
+              {editingId ? (
+                <input className={inputClass} value={`${formData.userName} (${formData.userEmail})`} disabled />
+              ) : (
+                <select
+                  className={inputClass}
+                  value={formData.userId}
+                  onChange={(e) => {
+                    const u = allUsers.find((u) => u.id === e.target.value);
+                    if (u) setFormData((prev) => ({ ...prev, userId: u.id, userName: u.displayName || u.name || u.email, userEmail: u.email }));
+                  }}
+                >
+                  <option value="">Оберіть користувача</option>
+                  {usersNotAssigned.map((u) => (
+                    <option key={u.id} value={u.id}>{u.displayName || u.name || u.email}{u.role ? ` (${u.role})` : ""}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {/* Role */}
+            <div>
+              <label className="text-xs font-semibold text-slate-600">Роль *</label>
+              <div className="mt-1 flex gap-2">
+                <button
+                  type="button"
+                  className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition ${formData.role === "manager" ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}
+                  onClick={() => setRole("manager")}
+                >
+                  <UserCheck size={14} className="inline mr-1" /> Керівник
+                </button>
+                <button
+                  type="button"
+                  className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition ${formData.role === "bartender" ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}
+                  onClick={() => setRole("bartender")}
+                >
+                  <Users size={14} className="inline mr-1" /> Бармен
+                </button>
+              </div>
+            </div>
+
+            {/* Restaurants (for bartenders) */}
+            {formData.role === "bartender" && (
+              <div className="sm:col-span-2">
+                <label className="text-xs font-semibold text-slate-600">Заклади *</label>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {(restaurants || []).map((r) => {
+                    const id = getRestaurantId(r);
+                    const name = getRestaurantName(r);
+                    const selected = formData.restaurantIds.includes(id);
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${selected ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}
+                        onClick={() => toggleRestaurant(id)}
+                      >
+                        {name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {formData.role === "manager" && (
+              <div className="sm:col-span-2">
+                <p className="text-xs text-slate-500 mt-1">Керівник має доступ до всіх закладів автоматично.</p>
+              </div>
+            )}
+
+            {/* Permissions */}
+            <div className="sm:col-span-2">
+              <label className="text-xs font-semibold text-slate-600">Дозволи</label>
+              <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {Object.entries(PERMISSION_LABELS).map(([key, label]) => {
+                  const checked = formData.permissions.includes(key);
+                  const isManagerPerm = formData.role === "manager";
+                  return (
+                    <label key={key} className="inline-flex items-center gap-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={isManagerPerm}
+                        onChange={() => {
+                          setFormData((prev) => ({
+                            ...prev,
+                            permissions: checked ? prev.permissions.filter((p) => p !== key) : [...prev.permissions, key],
+                          }));
+                        }}
+                        className="rounded border-slate-300"
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
+              </div>
+              {formData.role === "manager" && <p className="text-xs text-slate-400 mt-1">Керівник має всі дозволи.</p>}
+            </div>
+
+            {/* Save */}
+            <div className="sm:col-span-2 flex gap-2">
+              <button type="button" className={btnPrimary} onClick={handleSave}>
+                <Save size={16} /> {editingId ? "Оновити" : "Зберегти"}
+              </button>
+              <button type="button" className={btnSecondary} onClick={() => { setShowForm(false); setEditingId(""); }}>Скасувати</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Managers */}
+      <div className={cardClass}>
+        <h4 className="text-sm font-semibold mb-3 flex items-center gap-2"><UserCheck size={16} className="text-indigo-600" /> Керівники бару ({managers.length})</h4>
+        {managers.length === 0 ? (
+          <p className="text-sm text-slate-400">Керівників ще не призначено.</p>
+        ) : (
+          <div className="space-y-2">
+            {managers.map((record) => (
+              <div key={record.id} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <div>
+                  <div className="text-sm font-medium">{record.userName || record.userEmail}</div>
+                  <div className="text-xs text-slate-500">{record.userEmail} · Повний доступ до всіх закладів</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button type="button" className="p-1 hover:bg-slate-100 rounded" title="Редагувати" onClick={() => openEditForm(record)}>
+                    <Edit3 size={15} className="text-slate-500" />
+                  </button>
+                  {canManageAccess && (
+                    <button type="button" className="p-1 hover:bg-red-50 rounded" title="Видалити" onClick={() => handleDelete(record)}>
+                      <Trash2 size={15} className="text-red-400" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Bartenders */}
+      <div className={cardClass}>
+        <h4 className="text-sm font-semibold mb-3 flex items-center gap-2"><Users size={16} className="text-emerald-600" /> Бармени ({bartenders.length})</h4>
+        {bartenders.length === 0 ? (
+          <p className="text-sm text-slate-400">Барменів ще не додано.</p>
+        ) : (
+          <div className="space-y-2">
+            {bartenders.map((record) => {
+              const restNames = (record.restaurantIds || []).map((id) => {
+                const r = (restaurants || []).find((rest) => getRestaurantId(rest) === id);
+                return r ? getRestaurantName(r) : id;
+              });
+              const extraPerms = (record.permissions || []).filter((p) => p !== "viewMatrix");
+              return (
+                <div key={record.id} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div>
+                    <div className="text-sm font-medium">{record.userName || record.userEmail}</div>
+                    <div className="text-xs text-slate-500">{record.userEmail}</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {restNames.map((name) => (
+                        <span key={name} className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">{name}</span>
+                      ))}
+                    </div>
+                    {extraPerms.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {extraPerms.map((p) => (
+                          <span key={p} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">{PERMISSION_LABELS[p] || p}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button type="button" className="p-1 hover:bg-slate-100 rounded" title="Редагувати" onClick={() => openEditForm(record)}>
+                      <Edit3 size={15} className="text-slate-500" />
+                    </button>
+                    {canManageAccess && (
+                      <button type="button" className="p-1 hover:bg-red-50 rounded" title="Видалити" onClick={() => handleDelete(record)}>
+                        <Trash2 size={15} className="text-red-400" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
   );
 };
 
@@ -755,8 +1182,11 @@ export default AssortmentMatrixModule;
    MATRIX VIEW
    ═══════════════════════════════════════════════════ */
 
-const MatrixView = ({ items, specifications, typicalFields, restaurants, user, addItem, updateItem, deleteItem }) => {
+const MatrixView = ({ items, specifications, typicalFields, restaurants, user, barAccess, addItem, updateItem, deleteItem }) => {
   const isAdmin = isAdminUser(user);
+  const isBarManager = barAccess?.role === "manager";
+  const canEdit = isAdmin || isBarManager || (barAccess?.permissions || []).includes("editAssignments");
+  const canEditPrices = isAdmin || isBarManager || (barAccess?.permissions || []).includes("editPrices");
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
   const [selectedRestaurantId, setSelectedRestaurantId] = useState("");
@@ -792,10 +1222,15 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
     return map;
   }, [restaurants]);
 
-  const visibleRestaurants = useMemo(
-    () => Array.from(restaurantsById.values()).sort((a, b) => a.name.localeCompare(b.name, "uk")),
-    [restaurantsById]
-  );
+  const visibleRestaurants = useMemo(() => {
+    const all = Array.from(restaurantsById.values()).sort((a, b) => a.name.localeCompare(b.name, "uk"));
+    // Bartenders only see their assigned restaurants
+    if (!canEdit && barAccess?.restaurantIds?.length > 0) {
+      const allowed = new Set(barAccess.restaurantIds);
+      return all.filter((r) => allowed.has(r.id));
+    }
+    return all;
+  }, [restaurantsById, canEdit, barAccess]);
 
   useEffect(() => {
     if (visibleRestaurants.length === 0) {
@@ -852,7 +1287,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
       };
     });
 
-    if (!isAdmin && selectedRestaurantId) {
+    if (!canEdit && selectedRestaurantId) {
       result = result.filter((row) => row.isAssignedToSelected);
     }
 
@@ -1231,7 +1666,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
             <Download size={16} /> Експорт
           </button>
 
-          {isAdmin && (
+          {canEdit && (
             <>
               <button type="button" className={btnSecondary} onClick={() => fileInputRef.current?.click()}>
                 <Upload size={16} /> Імпорт
@@ -1247,14 +1682,14 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
         <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500">
           <span>Обраний заклад: {selectedRestaurantName || "не обрано"}</span>
           <span>
-            {isAdmin
+            {canEdit
               ? `У каталозі: ${catalogRows.length} позицій. Кнопкою керуєш, що має продаватись у вибраному закладі.`
               : `Ти бачиш лише продукцію, дозволену для закладу ${selectedRestaurantName || ""}.`}
           </span>
         </div>
       </div>
 
-      {isAdmin && specificationOptions.length === 0 && (
+      {canEdit && specificationOptions.length === 0 && (
         <div className={cardClass}>
           <p className="text-sm text-amber-700">
             Спочатку додайте алкогольну продукцію у вкладці "Специфікації", після цього її можна буде вмикати для закладів у матриці.
@@ -1305,7 +1740,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
                     <th className="px-3 py-2 text-right">Порція</th>
                     <th className="px-3 py-2">Інші заклади</th>
                     <th className="px-3 py-2 text-center">Тип</th>
-                    {isAdmin && <th className="px-3 py-2 text-center">Дія</th>}
+                    {canEdit && <th className="px-3 py-2 text-center">Дія</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1323,7 +1758,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
                           <div className="text-[11px] text-slate-400">{formatPrice(row.purchasePrice) ? `зак. ${formatPrice(row.purchasePrice)}` : ""}</div>
                         </td>
                         <td className="px-3 py-1.5 text-right">
-                          {isAdmin && row.isAssignedToSelected && editingPriceProductId === String(row.id) ? (
+                          {canEditPrices && row.isAssignedToSelected && editingPriceProductId === String(row.id) ? (
                             <input
                               type="number"
                               step="10"
@@ -1339,14 +1774,14 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
                             />
                           ) : (
                             <div
-                              className={isAdmin && row.isAssignedToSelected ? "cursor-pointer hover:text-indigo-600" : ""}
+                              className={canEditPrices && row.isAssignedToSelected ? "cursor-pointer hover:text-indigo-600" : ""}
                               onClick={() => {
-                                if (isAdmin && row.isAssignedToSelected) {
+                                if (canEditPrices && row.isAssignedToSelected) {
                                   setEditingPriceProductId(String(row.id));
                                   setEditingPriceValue(String(row.effectivePortionSalePrice || ""));
                                 }
                               }}
-                              title={isAdmin && row.isAssignedToSelected ? "Натисніть щоб змінити ціну" : ""}
+                              title={canEditPrices && row.isAssignedToSelected ? "Натисніть щоб змінити ціну" : ""}
                             >
                               {formatPrice(row.effectivePortionSalePrice)}
                             </div>
@@ -1360,7 +1795,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
                         </td>
                         <td className="px-3 py-1.5 text-center">
                           {row.isAssignedToSelected ? (
-                            isAdmin ? (
+                            canEdit ? (
                               <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
                                 <input
                                   type="checkbox"
@@ -1378,7 +1813,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
                             <span className="text-slate-400">—</span>
                           )}
                         </td>
-                        {isAdmin && (
+                        {canEdit && (
                           <td className="px-3 py-1.5 text-center">
                             <button
                               type="button"
