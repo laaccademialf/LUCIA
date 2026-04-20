@@ -808,7 +808,17 @@ const DEFAULT_MANAGER_PERMISSIONS = Object.keys(PERMISSION_LABELS);
 
 const normalizeAccessRecord = (record) => {
   if (!record || typeof record !== "object") return record;
-  let restaurantIds = record.restaurantIds;
+  // MariaDB snake_case → camelCase normalization
+  const userId = record.userId || record.user_id || "";
+  const userName = record.userName || record.user_name || "";
+  const userEmail = record.userEmail || record.user_email || "";
+  const role = record.role || "";
+  const updatedAt = record.updatedAt || record.updated_at || "";
+  const createdAt = record.createdAt || record.created_at || "";
+  const updatedBy = record.updatedBy || record.updated_by || "";
+  const createdBy = record.createdBy || record.created_by || "";
+
+  let restaurantIds = record.restaurantIds || record.restaurant_ids;
   if (typeof restaurantIds === "string") {
     try { restaurantIds = JSON.parse(restaurantIds); } catch { restaurantIds = []; }
   }
@@ -816,7 +826,13 @@ const normalizeAccessRecord = (record) => {
   if (typeof permissions === "string") {
     try { permissions = JSON.parse(permissions); } catch { permissions = []; }
   }
-  return { ...record, restaurantIds: Array.isArray(restaurantIds) ? restaurantIds : [], permissions: Array.isArray(permissions) ? permissions : [] };
+  return {
+    ...record,
+    userId, userName, userEmail, role,
+    restaurantIds: Array.isArray(restaurantIds) ? restaurantIds : [],
+    permissions: Array.isArray(permissions) ? permissions : [],
+    updatedAt, createdAt, updatedBy, createdBy,
+  };
 };
 
 const findMyAccessRecord = (records, user) => {
