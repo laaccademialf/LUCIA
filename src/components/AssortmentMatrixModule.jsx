@@ -313,173 +313,6 @@ const formatPrice = (value) => {
   return num === 0 ? "" : num.toFixed(2);
 };
 
-const SAMPLE_BAR_TYPICAL_FIELDS = [
-  {
-    name: CATEGORY_FIELD_NAME,
-    type: "category",
-    required: false,
-    defaultValue: "Віскі",
-    options: [
-      { name: "Віскі", useTypicalMarkup: true },
-      { name: "Вино", useTypicalMarkup: false },
-      { name: "Ігристе", useTypicalMarkup: false },
-      { name: "Джин", useTypicalMarkup: true },
-      { name: "Ром", useTypicalMarkup: true },
-      { name: "Лікер", useTypicalMarkup: false },
-      { name: "Текіла", useTypicalMarkup: true },
-      { name: "Аперитив", useTypicalMarkup: false },
-    ],
-  },
-  {
-    name: MARKUP_SETTINGS_FIELD_NAME,
-    type: "text",
-    metadataKind: "markupSettings",
-    restaurantGroups: [],
-    rules: [],
-  },
-];
-
-const SAMPLE_BAR_PRODUCTS = [
-  {
-    name: "GLENMORANGIE The Original 0.7L",
-    category: "Віскі",
-    measurementUnit: "мл",
-    saleUnit: "пляшка",
-    portionSaleUnit: DEFAULT_PORTION_UNIT,
-    bottleVolumeMl: 700,
-    portionVolumeMl: 50,
-    unit: "пляшка",
-    supplier: "GoodWine Trade",
-    code1C: "BW-0001",
-    purchasePrice: 1180,
-    bottleMarkup: 95,
-    bottleSalePrice: 2301,
-    portionCostPrice: 84.29,
-    portionMarkup: 170,
-    portionSalePrice: 227.58,
-    markup: 95,
-    salePrice: 2301,
-    costPrice: 1180,
-    notes: "Шотландський односолодовий, базова позиція бару.",
-    isActive: true,
-  },
-  {
-    name: "Woodford Reserve Rye 0.7L",
-    category: "Віскі",
-    measurementUnit: "мл",
-    saleUnit: "пляшка",
-    portionSaleUnit: DEFAULT_PORTION_UNIT,
-    bottleVolumeMl: 700,
-    portionVolumeMl: 50,
-    unit: "пляшка",
-    supplier: "Metro Cash & Carry",
-    code1C: "BW-0002",
-    purchasePrice: 1320,
-    bottleMarkup: 90,
-    bottleSalePrice: 2508,
-    portionCostPrice: 94.29,
-    portionMarkup: 165,
-    portionSalePrice: 249.86,
-    markup: 90,
-    salePrice: 2508,
-    costPrice: 1320,
-    notes: "Для коктейльної карти та продажу по шотах.",
-    isActive: true,
-  },
-  {
-    name: "Prosecco Extra Dry DOC 0.75L",
-    category: "Ігристе",
-    measurementUnit: "мл",
-    saleUnit: "пляшка",
-    portionSaleUnit: DEFAULT_PORTION_UNIT,
-    bottleVolumeMl: 750,
-    portionVolumeMl: 150,
-    unit: "пляшка",
-    supplier: "Wine Bureau",
-    code1C: "BW-0003",
-    purchasePrice: 420,
-    bottleMarkup: 140,
-    bottleSalePrice: 1008,
-    portionCostPrice: 84,
-    portionMarkup: 120,
-    portionSalePrice: 184.8,
-    markup: 140,
-    salePrice: 1008,
-    costPrice: 420,
-    notes: "Італійське ігристе для аперитивів і продажу по келихах.",
-    isActive: true,
-  },
-  {
-    name: "Sauvignon Blanc Marlborough 0.75L",
-    category: "Вино",
-    measurementUnit: "мл",
-    saleUnit: "пляшка",
-    portionSaleUnit: DEFAULT_PORTION_UNIT,
-    bottleVolumeMl: 750,
-    portionVolumeMl: 150,
-    unit: "пляшка",
-    supplier: "Wine Bureau",
-    code1C: "BW-0004",
-    purchasePrice: 365,
-    bottleMarkup: 135,
-    bottleSalePrice: 857.75,
-    portionCostPrice: 73,
-    portionMarkup: 125,
-    portionSalePrice: 164.25,
-    markup: 135,
-    salePrice: 857.75,
-    costPrice: 365,
-    notes: "Позиція для винної карти, під морепродукти.",
-    isActive: true,
-  },
-  {
-    name: "Aperol 1L",
-    category: "Аперитив",
-    measurementUnit: "мл",
-    saleUnit: "пляшка",
-    portionSaleUnit: DEFAULT_PORTION_UNIT,
-    bottleVolumeMl: 1000,
-    portionVolumeMl: 50,
-    unit: "пляшка",
-    supplier: "Bacardi-Martini Ukraine",
-    code1C: "BW-0005",
-    purchasePrice: 610,
-    bottleMarkup: 120,
-    bottleSalePrice: 1342,
-    portionCostPrice: 30.5,
-    portionMarkup: 220,
-    portionSalePrice: 97.6,
-    markup: 120,
-    salePrice: 1342,
-    costPrice: 610,
-    notes: "Для Aperol Spritz і літньої коктейльної карти.",
-    isActive: true,
-  },
-  {
-    name: "Bombay Sapphire 1L",
-    category: "Джин",
-    measurementUnit: "мл",
-    saleUnit: "пляшка",
-    portionSaleUnit: DEFAULT_PORTION_UNIT,
-    bottleVolumeMl: 1000,
-    portionVolumeMl: 50,
-    unit: "пляшка",
-    supplier: "Bacardi-Martini Ukraine",
-    code1C: "BW-0006",
-    purchasePrice: 780,
-    bottleMarkup: 110,
-    bottleSalePrice: 1638,
-    portionCostPrice: 39,
-    portionMarkup: 210,
-    portionSalePrice: 120.9,
-    markup: 110,
-    salePrice: 1638,
-    costPrice: 780,
-    notes: "Базовий джин для gin-tonic та авторських коктейлів.",
-    isActive: true,
-  },
-];
-
 const isAdminUser = (user) => String(user?.role || "").toLowerCase() === "admin";
 
 const normalizeString = (value) => String(value ?? "").trim();
@@ -760,7 +593,6 @@ const AssortmentMatrixModule = ({ topTab = "matrix", topTabLabel = "", restauran
         typicalFields={typicalFields}
         user={user}
         barAccess={myBarAccess}
-        addField={addField}
         addSpec={addSpec}
         updateSpec={updateSpec}
         deleteSpec={deleteSpec}
@@ -2641,7 +2473,7 @@ const TypicalFieldForm = ({ field, onSave, onClose }) => {
    SPECIFICATIONS VIEW
    ═══════════════════════════════════════════════════ */
 
-const SpecificationsView = ({ specifications, typicalFields, user, barAccess, addField, addSpec, updateSpec, deleteSpec }) => {
+const SpecificationsView = ({ specifications, typicalFields, user, barAccess, addSpec, updateSpec, deleteSpec }) => {
   const isAdmin = isAdminUser(user);
   const isBarManager = barAccess?.role === "manager";
   const canManage = isAdmin || isBarManager;
@@ -2649,7 +2481,6 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
   const [filterCategory, setFilterCategory] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editSpec, setEditSpec] = useState(null);
-  const [seedingSamples, setSeedingSamples] = useState(false);
   const fileInputRef = useRef(null);
 
   const products = useMemo(
@@ -2753,31 +2584,6 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
     downloadAssortmentMatrixTemplate();
   };
 
-  const handleSeedSamples = async () => {
-    if (seedingSamples) return;
-    setSeedingSamples(true);
-    try {
-      const existingCategoryField = (typicalFields || []).some((field) => normalizeString(field?.name) === CATEGORY_FIELD_NAME);
-      if (!existingCategoryField) {
-        await addField(SAMPLE_BAR_TYPICAL_FIELDS[0]);
-      }
-
-      const existingNames = new Set((specifications || []).map((spec) => normalizeString(spec?.name || spec?.productName || spec?.dishName)));
-      let added = 0;
-      for (const sample of SAMPLE_BAR_PRODUCTS) {
-        if (existingNames.has(sample.name)) continue;
-        await addSpec(sample);
-        added += 1;
-      }
-
-      alert(added > 0 ? `Додано ${added} тестових позицій бару.` : "Тестові позиції вже були додані раніше.");
-    } catch (err) {
-      alert("Не вдалося додати приклади: " + (err?.message || err));
-    } finally {
-      setSeedingSamples(false);
-    }
-  };
-
   return (
     <div className="grid grid-cols-1 gap-4">
       <div className={cardClass}>
@@ -2812,12 +2618,6 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
             </button>
           )}
 
-          {canManage && (
-            <button type="button" className={btnSecondary} onClick={handleSeedSamples} disabled={seedingSamples}>
-              {seedingSamples ? "Додаю приклади…" : "Додати приклади"}
-            </button>
-          )}
-
           <button type="button" className={btnSecondary} onClick={handleExport}>
             <Download size={16} /> Експорт
           </button>
@@ -2839,7 +2639,6 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
         <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500">
           <span>Позицій у довіднику: {filtered.length} з {products.length}</span>
           <span>Тут зберігається база алкогольної продукції, яку потім обирають у матриці.</span>
-          {canManage && <span>Кнопка "Додати приклади" створює тестові категорії та барні позиції з цінами пляшки й порції.</span>}
         </div>
       </div>
 
