@@ -315,6 +315,12 @@ const formatPrice = (value) => {
 
 const isAdminUser = (user) => String(user?.role || "").toLowerCase() === "admin";
 
+/** Прибирає об'єм з кінця назви: "Aperol 1L" → "Aperol", "Фінляндія 0,7" → "Фінляндія" */
+const stripVolume = (name) =>
+  String(name || "")
+    .replace(/[\s,]*\d+[.,]?\d*\s*(л|l|мл|ml|L|Л|літр|liter|litre)?\s*$/i, "")
+    .trim() || name;
+
 const normalizeString = (value) => String(value ?? "").trim();
 
 const getRestaurantId = (restaurant) =>
@@ -1636,7 +1642,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
                     const otherRestaurantsSummary = formatOtherRestaurantsSummary(otherRestaurants);
                     return (
                       <tr key={row.id} className="border-b border-slate-100 hover:bg-slate-50 transition">
-                        <td className="px-3 py-1.5 font-medium">{row.name || "—"}</td>
+                        <td className="px-3 py-1.5 font-medium">{stripVolume(row.name) || "—"}</td>
                         <td className="px-3 py-1.5">{row.supplier || "—"}</td>
                         <td className="px-3 py-1.5 text-right">
                           <div>{formatPrice(row.bottleSalePrice)}</div>
@@ -2483,6 +2489,7 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
   const [filterActive, setFilterActive] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editSpec, setEditSpec] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const fileInputRef = useRef(null);
 
   const products = useMemo(
@@ -2560,6 +2567,37 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
     }
     return result.sort((a, b) => (a.name || "").localeCompare(b.name || "", "uk"));
   }, [products, search, filterCategory, filterSupplier, filterActive]);
+
+  const toggleSelect = (id) => setSelectedIds((prev) => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((p) => p.id)));
+    }
+  };
+  const allSelected = filtered.length > 0 && selectedIds.size === filtered.length;
+
+  const bulkDeleteSelected = async () => {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Видалити ${selectedIds.size} обраних позицій?`)) return;
+    for (const id of selectedIds) {
+      await deleteSpec(id);
+    }
+    setSelectedIds(new Set());
+  };
+
+  const bulkSetActive = async (active) => {
+    if (selectedIds.size === 0) return;
+    for (const id of selectedIds) {
+      await updateSpec(id, { isActive: active });
+    }
+    setSelectedIds(new Set());
+  };
 
   const handleDelete = async (id) => {
     if (!confirm("Видалити цю позицію продукції?")) return;
@@ -2673,6 +2711,24 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
           <span>Позицій у довіднику: {filtered.length} з {products.length}</span>
           <span>Тут зберігається база алкогольної продукції, яку потім обирають у матриці.</span>
         </div>
+
+        {canManage && selectedIds.size > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
+            <span className="text-sm font-medium text-blue-700">Обрано: {selectedIds.size}</span>
+            <button type="button" className="rounded bg-emerald-500 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-600" onClick={() => bulkSetActive(true)}>
+              Активувати
+            </button>
+            <button type="button" className="rounded bg-amber-500 px-3 py-1 text-xs font-medium text-white hover:bg-amber-600" onClick={() => bulkSetActive(false)}>
+              Деактивувати
+            </button>
+            <button type="button" className="rounded bg-red-500 px-3 py-1 text-xs font-medium text-white hover:bg-red-600" onClick={bulkDeleteSelected}>
+              <Trash2 size={12} className="mr-1 inline" />Видалити
+            </button>
+            <button type="button" className="ml-auto text-xs text-slate-500 hover:text-slate-700" onClick={() => setSelectedIds(new Set())}>
+              Скинути вибір
+            </button>
+          </div>
+        )}
       </div>
 
       {showForm && canManage && (
@@ -2700,6 +2756,11 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
+              {canManage && (
+                <th className="px-2 py-2 w-8">
+                  <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} className="rounded" />
+                </th>
+              )}
               <th className="px-3 py-2">Назва</th>
               <th className="px-3 py-2">Категорія</th>
               <th className="px-3 py-2">Од. виміру</th>
@@ -2715,13 +2776,18 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={canManage ? 10 : 9} className="px-3 py-8 text-center text-slate-400">
+                <td colSpan={canManage ? 12 : 9} className="px-3 py-8 text-center text-slate-400">
                   Позицій продукції ще немає
                 </td>
               </tr>
             ) : (
               filtered.map((product) => (
-                <tr key={product.id} className="border-b border-slate-100 hover:bg-slate-50 transition">
+                <tr key={product.id} className={`border-b border-slate-100 hover:bg-slate-50 transition ${selectedIds.has(product.id) ? "bg-blue-50" : ""}`}>
+                  {canManage && (
+                    <td className="px-2 py-2 w-8">
+                      <input type="checkbox" checked={selectedIds.has(product.id)} onChange={() => toggleSelect(product.id)} className="rounded" />
+                    </td>
+                  )}
                   <td className="px-3 py-2 font-medium">{product.name || "—"}</td>
                   <td className="px-3 py-2">{product.category || "—"}</td>
                   <td className="px-3 py-2">{product.measurementUnit || "—"}</td>
