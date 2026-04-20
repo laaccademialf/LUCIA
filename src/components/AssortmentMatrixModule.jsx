@@ -704,7 +704,7 @@ const AssortmentMatrixModule = ({ topTab = "matrix", topTabLabel = "", restauran
   }, []);
 
   const myEmail = String(user?.email || "").toLowerCase().trim();
-  const myBarAccess = useMemo(() => barAccessRecords.find((r) => r.userEmail?.toLowerCase() === myEmail), [barAccessRecords, myEmail]);
+  const myBarAccess = useMemo(() => findMyAccessRecord(barAccessRecords, user), [barAccessRecords, user]);
 
   if (loading) {
     return (
@@ -819,6 +819,19 @@ const normalizeAccessRecord = (record) => {
   return { ...record, restaurantIds: Array.isArray(restaurantIds) ? restaurantIds : [], permissions: Array.isArray(permissions) ? permissions : [] };
 };
 
+const findMyAccessRecord = (records, user) => {
+  if (!user || !records.length) return null;
+  const uid = String(user.uid || user.id || "").trim();
+  const email = String(user.email || "").toLowerCase().trim();
+  const name = String(user.displayName || user.name || "").toLowerCase().trim();
+  return records.find((r) => {
+    if (uid && (r.userId === uid)) return true;
+    if (email && r.userEmail?.toLowerCase().trim() === email) return true;
+    if (name && r.userName?.toLowerCase().trim() === name) return true;
+    return false;
+  }) || null;
+};
+
 const AccessManagementView = ({ restaurants, user }) => {
   const isAdmin = isAdminUser(user);
   const myEmail = String(user?.email || "").toLowerCase().trim();
@@ -831,7 +844,7 @@ const AccessManagementView = ({ restaurants, user }) => {
   const [formData, setFormData] = useState({ userId: "", userName: "", userEmail: "", role: "bartender", restaurantIds: [], permissions: [...DEFAULT_BARTENDER_PERMISSIONS] });
 
   // Check if current user is a bar manager
-  const myAccess = useMemo(() => accessRecords.find((r) => r.userEmail?.toLowerCase() === myEmail), [accessRecords, myEmail]);
+  const myAccess = useMemo(() => findMyAccessRecord(accessRecords, user), [accessRecords, user]);
   const isBarManager = isAdmin || (myAccess?.role === "manager");
   const canManageAccess = isAdmin || (myAccess?.permissions || []).includes("manageAccess");
 
