@@ -2641,8 +2641,10 @@ const TypicalFieldForm = ({ field, onSave, onClose }) => {
    SPECIFICATIONS VIEW
    ═══════════════════════════════════════════════════ */
 
-const SpecificationsView = ({ specifications, typicalFields, user, addField, addSpec, updateSpec, deleteSpec }) => {
+const SpecificationsView = ({ specifications, typicalFields, user, barAccess, addField, addSpec, updateSpec, deleteSpec }) => {
   const isAdmin = isAdminUser(user);
+  const isBarManager = barAccess?.role === "manager";
+  const canManage = isAdmin || isBarManager;
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -2804,13 +2806,13 @@ const SpecificationsView = ({ specifications, typicalFields, user, addField, add
             </select>
           )}
 
-          {isAdmin && (
+          {canManage && (
             <button type="button" className={btnPrimary} onClick={() => { setEditSpec(null); setShowForm(true); }}>
               <Plus size={16} /> Додати продукцію
             </button>
           )}
 
-          {isAdmin && (
+          {canManage && (
             <button type="button" className={btnSecondary} onClick={handleSeedSamples} disabled={seedingSamples}>
               {seedingSamples ? "Додаю приклади…" : "Додати приклади"}
             </button>
@@ -2820,7 +2822,7 @@ const SpecificationsView = ({ specifications, typicalFields, user, addField, add
             <Download size={16} /> Експорт
           </button>
 
-          {isAdmin && (
+          {canManage && (
             <>
               <button type="button" className={btnSecondary} onClick={() => fileInputRef.current?.click()}>
                 <Upload size={16} /> Імпорт
@@ -2837,11 +2839,11 @@ const SpecificationsView = ({ specifications, typicalFields, user, addField, add
         <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500">
           <span>Позицій у довіднику: {filtered.length} з {products.length}</span>
           <span>Тут зберігається база алкогольної продукції, яку потім обирають у матриці.</span>
-          {isAdmin && <span>Кнопка "Додати приклади" створює тестові категорії та барні позиції з цінами пляшки й порції.</span>}
+          {canManage && <span>Кнопка "Додати приклади" створює тестові категорії та барні позиції з цінами пляшки й порції.</span>}
         </div>
       </div>
 
-      {showForm && isAdmin && (
+      {showForm && canManage && (
         <ProductCatalogForm
           product={editSpec}
           categories={[...new Set([...categories, ...defaultCategories])]}
@@ -2875,13 +2877,13 @@ const SpecificationsView = ({ specifications, typicalFields, user, addField, add
               <th className="px-3 py-2 text-right">Пляшка</th>
               <th className="px-3 py-2 text-right">Порція</th>
               <th className="px-3 py-2 text-center">Активн.</th>
-              {isAdmin && <th className="px-3 py-2 text-center">Дії</th>}
+              {canManage && <th className="px-3 py-2 text-center">Дії</th>}
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={isAdmin ? 10 : 9} className="px-3 py-8 text-center text-slate-400">
+                <td colSpan={canManage ? 10 : 9} className="px-3 py-8 text-center text-slate-400">
                   Позицій продукції ще немає
                 </td>
               </tr>
@@ -2909,7 +2911,7 @@ const SpecificationsView = ({ specifications, typicalFields, user, addField, add
                   <td className="px-3 py-2 text-center">
                     <span className={`inline-block h-2.5 w-2.5 rounded-full ${product.isActive === false ? "bg-red-400" : "bg-emerald-400"}`} />
                   </td>
-                  {isAdmin && (
+                  {canManage && (
                     <td className="px-3 py-2 text-center">
                       <div className="inline-flex items-center gap-1">
                         <button
