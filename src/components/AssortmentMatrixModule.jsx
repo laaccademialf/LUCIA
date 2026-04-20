@@ -765,6 +765,8 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
   const [busyProductId, setBusyProductId] = useState("");
   const [busyTypeProductId, setBusyTypeProductId] = useState("");
   const [collapsedCategories, setCollapsedCategories] = useState({});
+  const [editingPriceProductId, setEditingPriceProductId] = useState("");
+  const [editingPriceValue, setEditingPriceValue] = useState("");
   const fileInputRef = useRef(null);
 
   const specificationOptions = useMemo(
@@ -844,7 +846,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
         assignmentTypes: assignment?.assignmentTypes || {},
         selectedAssignmentType: assignment?.assignmentTypes?.[selectedRestaurantId] || "standard",
         selectedRestaurantPricing,
-        effectivePortionSalePrice: toNumber(selectedRestaurantPricing?.portionSalePrice ?? product.portionSalePrice),
+        effectivePortionSalePrice: roundToTen(toNumber(selectedRestaurantPricing?.portionSalePrice ?? product.portionSalePrice)),
         effectivePortionMarkup: toNumber(selectedRestaurantPricing?.portionMarkup ?? product.portionMarkup),
         isAssignedToSelected,
       };
@@ -1034,6 +1036,84 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
   };
 
   const selectedRestaurantName = selectedRestaurantId ? restaurantsById.get(selectedRestaurantId)?.name || "" : "";
+
+  const updatePriceForRestaurant = async (product, newPrice) => {
+    if (!selectedRestaurantId) return;
+    const roundedPrice = roundToTen(toNumber(newPrice));
+    if (roundedPrice <= 0) { setEditingPriceProductId(""); return; }
+
+    const targetId = product.assignmentId
+      || (mergedAssignments.get(String(product.id))
+        || mergedAssignments.get(product.code1C)
+        || mergedAssignments.get(product.name))?.id;
+
+    if (!targetId) {
+      alert("Не знайдено прив'язку для цього продукту. Спочатку прив'яжіть продукт до закладу.");
+      setEditingPriceProductId("");
+      return;
+    }
+
+    const mergedAssignment = mergedAssignments.get(String(product.id))
+      || mergedAssignments.get(product.code1C)
+      || mergedAssignments.get(product.name);
+
+    const existingPricing = typeof mergedAssignment?.pricingByRestaurantId === "string"
+      ? JSON.parse(mergedAssignment.pricingByRestaurantId || "{}")
+      : (mergedAssignment?.pricingByRestaurantId || {});
+
+    const portionCostPrice = toNumber(product.portionCostPrice);
+    const portionMarkup = portionCostPrice > 0 ? roundMoney(((roundedPrice - portionCostPrice) / portionCostPrice) * 100) : 0;
+
+    const nextPricing = {
+      ...existingPricing,
+      [selectedRestaurantId]: {
+        ...(existingPricing[selectedRestaurantId] || {}),
+        portionSalePrice: roundedPrice,
+        portionCostPrice,
+        portionMarkup,
+      },
+    };
+
+    setBusyTypeProductId(String(product.id));
+    try {
+      const result = await updateItem(targetId, {
+        specificationId: product.id,
+        productName: product.name,
+        category: product.category,
+        subCategory: product.subCategory || "",
+        unit: product.unit,
+        supplier: product.supplier,
+        code1C: product.code1C,
+        purchasePrice: product.purchasePrice,
+        bottleMarkup: product.bottleMarkup,
+        bottleSalePrice: product.bottleSalePrice,
+        portionCostPrice: product.portionCostPrice,
+        portionMarkup: product.portionMarkup,
+        portionSalePrice: product.portionSalePrice,
+        markup: product.markup,
+        salePrice: product.salePrice,
+        costPrice: product.costPrice,
+        restaurantIds: product.assignedRestaurantIds || mergedAssignment?.restaurantIds || [selectedRestaurantId],
+        restaurantNames: product.assignedRestaurantNames || mergedAssignment?.restaurantNames || [],
+        assignmentTypes: JSON.stringify(
+          typeof mergedAssignment?.assignmentTypes === "string"
+            ? JSON.parse(mergedAssignment.assignmentTypes || "{}")
+            : (mergedAssignment?.assignmentTypes || {})
+        ),
+        pricingByRestaurantId: JSON.stringify(nextPricing),
+        isActive: product.isActive,
+        notes: product.assignmentNotes || mergedAssignment?.notes || "",
+      });
+      if (!result?.success) {
+        alert("Не вдалося оновити ціну: " + (result?.error?.message || "невідома помилка"));
+      }
+    } catch (err) {
+      alert("Не вдалося оновити ціну: " + (err?.message || err));
+    } finally {
+      setBusyTypeProductId("");
+      setEditingPriceProductId("");
+    }
+  };
 
   const updateAssignmentTypeForRestaurant = async (product, nextType) => {
     if (!selectedRestaurantId) return;
@@ -1243,7 +1323,34 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, a
                           <div className="text-[11px] text-slate-400">{formatPrice(row.purchasePrice) ? `зак. ${formatPrice(row.purchasePrice)}` : ""}</div>
                         </td>
                         <td className="px-3 py-1.5 text-right">
-                          <div>{formatPrice(row.effectivePortionSalePrice)}</div>
+                          {isAdmin && row.isAssignedToSelected && editingPriceProductId === String(row.id) ? (
+                            <input
+                              type="number"
+                              step="10"
+                              autoFocus
+                              className="w-20 rounded border border-indigo-400 bg-white px-1.5 py-0.5 text-right text-sm text-slate-900 outline-none focus:ring-2 focus:ring-indigo-200"
+                              value={editingPriceValue}
+                              onChange={(e) => setEditingPriceValue(e.target.value)}
+                              onBlur={() => updatePriceForRestaurant(row, editingPriceValue)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") { e.preventDefault(); updatePriceForRestaurant(row, editingPriceValue); }
+                                if (e.key === "Escape") setEditingPriceProductId("");
+                              }}
+                            />
+                          ) : (
+                            <div
+                              className={isAdmin && row.isAssignedToSelected ? "cursor-pointer hover:text-indigo-600" : ""}
+                              onClick={() => {
+                                if (isAdmin && row.isAssignedToSelected) {
+                                  setEditingPriceProductId(String(row.id));
+                                  setEditingPriceValue(String(row.effectivePortionSalePrice || ""));
+                                }
+                              }}
+                              title={isAdmin && row.isAssignedToSelected ? "Натисніть щоб змінити ціну" : ""}
+                            >
+                              {formatPrice(row.effectivePortionSalePrice)}
+                            </div>
+                          )}
                           <div className="text-[11px] text-slate-400">{row.portionVolumeMl ? `${row.portionVolumeMl} мл` : row.portionSaleUnit || DEFAULT_PORTION_UNIT}</div>
                         </td>
                         <td className="px-3 py-1.5">
