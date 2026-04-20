@@ -1079,6 +1079,8 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
   const [editingPriceValue, setEditingPriceValue] = useState("");
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [showMultiAssignModal, setShowMultiAssignModal] = useState(false);
+  const [multiAssignRestaurantIds, setMultiAssignRestaurantIds] = useState([]);
   const fileInputRef = useRef(null);
 
   const specificationOptions = useMemo(
@@ -1269,6 +1271,76 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
         await upsertAssignmentForRestaurant(row, shouldAssign);
       }
       setSelectedIds(new Set());
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const bulkAssignToMultipleRestaurants = async (targetRestaurantIds) => {
+    if (targetRestaurantIds.length === 0 || selectedIds.size === 0 || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      const selectedProducts = specificationOptions.filter((p) => selectedIds.has(p.id));
+      for (const product of selectedProducts) {
+        const mergedAssignment = mergedAssignments.get(String(product.id))
+          || mergedAssignments.get(product.code1C)
+          || mergedAssignments.get(product.name);
+
+        const currentRestaurantIds = mergedAssignment?.restaurantIds || [];
+        const currentAssignmentTypes = mergedAssignment?.assignmentTypes || {};
+        const currentPricingByRestaurantId = mergedAssignment?.pricingByRestaurantId || {};
+        const nextRestaurantIds = Array.from(new Set([...currentRestaurantIds, ...targetRestaurantIds]));
+        const nextAssignmentTypes = { ...currentAssignmentTypes };
+        const nextPricingByRestaurantId = { ...currentPricingByRestaurantId };
+        targetRestaurantIds.forEach((rid) => {
+          if (!nextAssignmentTypes[rid]) nextAssignmentTypes[rid] = "standard";
+        });
+
+        if (mergedAssignment?.id) {
+          await updateItem(mergedAssignment.id, {
+            specificationId: product.id,
+            productName: product.name,
+            category: product.category,
+            subCategory: product.subCategory,
+            unit: product.unit,
+            supplier: product.supplier,
+            code1C: product.code1C,
+            purchasePrice: product.purchasePrice,
+            markup: product.markup,
+            salePrice: product.salePrice,
+            costPrice: product.costPrice,
+            restaurantIds: nextRestaurantIds,
+            restaurantNames: nextRestaurantIds.map((rid) => restaurantsById.get(rid)?.name || rid),
+            assignmentTypes: JSON.stringify(nextAssignmentTypes),
+            pricingByRestaurantId: JSON.stringify(nextPricingByRestaurantId),
+            isActive: product.isActive,
+            notes: mergedAssignment.notes || "",
+          });
+        } else {
+          await addItem({
+            specificationId: product.id,
+            productName: product.name,
+            category: product.category,
+            subCategory: product.subCategory,
+            unit: product.unit,
+            supplier: product.supplier,
+            code1C: product.code1C,
+            purchasePrice: product.purchasePrice,
+            markup: product.markup,
+            salePrice: product.salePrice,
+            costPrice: product.costPrice,
+            restaurantIds: targetRestaurantIds,
+            restaurantNames: targetRestaurantIds.map((rid) => restaurantsById.get(rid)?.name || rid),
+            assignmentTypes: JSON.stringify(nextAssignmentTypes),
+            pricingByRestaurantId: JSON.stringify(nextPricingByRestaurantId),
+            isActive: product.isActive,
+            notes: "",
+          });
+        }
+      }
+      setSelectedIds(new Set());
+      setShowMultiAssignModal(false);
+      setMultiAssignRestaurantIds([]);
     } finally {
       setBulkBusy(false);
     }
@@ -1612,14 +1684,21 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
           </span>
         </div>
 
-        {canEdit && selectedIds.size > 0 && selectedRestaurantId && (
-          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2">
+        {canEdit && selectedIds.size > 0 && (
+          <div className="sticky top-0 z-20 mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 shadow-sm">
             <span className="text-sm font-medium text-blue-700">Обрано: {selectedIds.size}</span>
-            <button type="button" disabled={bulkBusy} className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50" onClick={() => bulkAssign(true)}>
-              {bulkBusy ? "Обробка…" : "Прив'язати до закладу"}
-            </button>
-            <button type="button" disabled={bulkBusy} className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50" onClick={() => bulkAssign(false)}>
-              {bulkBusy ? "Обробка…" : "Зняти з закладу"}
+            {selectedRestaurantId && (
+              <>
+                <button type="button" disabled={bulkBusy} className="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50" onClick={() => bulkAssign(true)}>
+                  {bulkBusy ? "Обробка…" : `Прив'язати до ${selectedRestaurantName}`}
+                </button>
+                <button type="button" disabled={bulkBusy} className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50" onClick={() => bulkAssign(false)}>
+                  {bulkBusy ? "Обробка…" : `Зняти з ${selectedRestaurantName}`}
+                </button>
+              </>
+            )}
+            <button type="button" disabled={bulkBusy} className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50" onClick={() => setShowMultiAssignModal(true)}>
+              Прив'язати до кількох закладів…
             </button>
             <button type="button" className="ml-auto text-xs text-slate-500 hover:text-slate-700" onClick={() => setSelectedIds(new Set())}>
               Скинути вибір
@@ -1785,6 +1864,42 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
             )}
           </div>
         ))
+      )}
+
+      {showMultiAssignModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => { setShowMultiAssignModal(false); setMultiAssignRestaurantIds([]); }}>
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-4 text-lg font-semibold text-slate-800">Прив'язати {selectedIds.size} позицій до закладів</h3>
+            <div className="mb-4 max-h-60 space-y-2 overflow-y-auto">
+              {visibleRestaurants.map((r) => (
+                <label key={r.id} className="flex items-center gap-3 rounded-lg border border-slate-200 px-3 py-2 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={multiAssignRestaurantIds.includes(r.id)}
+                    onChange={() => setMultiAssignRestaurantIds((prev) =>
+                      prev.includes(r.id) ? prev.filter((id) => id !== r.id) : [...prev, r.id]
+                    )}
+                    className="rounded"
+                  />
+                  <span className="text-sm font-medium text-slate-700">{r.name}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                disabled={multiAssignRestaurantIds.length === 0 || bulkBusy}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                onClick={() => bulkAssignToMultipleRestaurants(multiAssignRestaurantIds)}
+              >
+                {bulkBusy ? "Обробка…" : `Прив'язати до ${multiAssignRestaurantIds.length} закладів`}
+              </button>
+              <button type="button" className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" onClick={() => { setShowMultiAssignModal(false); setMultiAssignRestaurantIds([]); }}>
+                Скасувати
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
