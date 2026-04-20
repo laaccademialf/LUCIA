@@ -700,7 +700,7 @@ const AssortmentMatrixModule = ({ topTab = "matrix", topTabLabel = "", restauran
   const [barAccessRecords, setBarAccessRecords] = useState([]);
   useEffect(() => {
     if (!isCollectionsApiEnabled()) return;
-    listCollectionItemsApi(ACCESS_COLLECTION).then(setBarAccessRecords).catch(() => {});
+    listCollectionItemsApi(ACCESS_COLLECTION).then((records) => setBarAccessRecords(records.map(normalizeAccessRecord))).catch(() => {});
   }, []);
 
   const myEmail = String(user?.email || "").toLowerCase().trim();
@@ -806,6 +806,19 @@ const PERMISSION_LABELS = {
 const DEFAULT_BARTENDER_PERMISSIONS = ["viewMatrix"];
 const DEFAULT_MANAGER_PERMISSIONS = Object.keys(PERMISSION_LABELS);
 
+const normalizeAccessRecord = (record) => {
+  if (!record || typeof record !== "object") return record;
+  let restaurantIds = record.restaurantIds;
+  if (typeof restaurantIds === "string") {
+    try { restaurantIds = JSON.parse(restaurantIds); } catch { restaurantIds = []; }
+  }
+  let permissions = record.permissions;
+  if (typeof permissions === "string") {
+    try { permissions = JSON.parse(permissions); } catch { permissions = []; }
+  }
+  return { ...record, restaurantIds: Array.isArray(restaurantIds) ? restaurantIds : [], permissions: Array.isArray(permissions) ? permissions : [] };
+};
+
 const AccessManagementView = ({ restaurants, user }) => {
   const isAdmin = isAdminUser(user);
   const myEmail = String(user?.email || "").toLowerCase().trim();
@@ -832,7 +845,7 @@ const AccessManagementView = ({ restaurants, user }) => {
           getUsers(),
         ]);
         if (cancelled) return;
-        setAccessRecords(records);
+        setAccessRecords(records.map(normalizeAccessRecord));
         setAllUsers(users);
       } catch (err) {
         console.error("[BarAccess] Load error:", err);
@@ -859,8 +872,8 @@ const AccessManagementView = ({ restaurants, user }) => {
       userName: formData.userName,
       userEmail: formData.userEmail,
       role: formData.role,
-      restaurantIds: formData.role === "manager" ? (restaurants || []).map((r) => getRestaurantId(r)) : formData.restaurantIds,
-      permissions: formData.permissions,
+      restaurantIds: JSON.stringify(formData.role === "manager" ? (restaurants || []).map((r) => getRestaurantId(r)) : formData.restaurantIds),
+      permissions: JSON.stringify(formData.permissions),
       updatedAt: nowIso,
       updatedBy: myEmail,
     };
@@ -868,12 +881,12 @@ const AccessManagementView = ({ restaurants, user }) => {
     try {
       if (editingId) {
         await updateCollectionItemApi(ACCESS_COLLECTION, editingId, record);
-        setAccessRecords((prev) => prev.map((r) => r.id === editingId ? { ...r, ...record } : r));
+        setAccessRecords((prev) => prev.map((r) => r.id === editingId ? normalizeAccessRecord({ ...r, ...record }) : r));
       } else {
         record.createdAt = nowIso;
         record.createdBy = myEmail;
-        const created = await createCollectionItemApi(ACCESS_COLLECTION, record);
-        setAccessRecords((prev) => [...prev, { ...record, id: created?.id || `ba_${Date.now()}` }]);
+        const createdId = await createCollectionItemApi(ACCESS_COLLECTION, record);
+        setAccessRecords((prev) => [...prev, normalizeAccessRecord({ ...record, id: createdId || `ba_${Date.now()}` })]);
       }
       setShowForm(false);
       setEditingId("");
