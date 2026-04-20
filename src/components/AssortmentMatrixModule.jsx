@@ -1291,11 +1291,16 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
 
   const categories = useMemo(() => {
     const set = new Set();
+    // Категорії з продукції (специфікацій)
     specificationOptions.forEach((product) => {
       if (product.category) set.add(product.category);
     });
+    // Категорії з типових полів (щоб порожні категорії теж були в матриці)
+    getCategoryEntriesFromFields(typicalFields).forEach((entry) => {
+      if (entry.name) set.add(entry.name);
+    });
     return Array.from(set).sort((a, b) => a.localeCompare(b, "uk"));
-  }, [specificationOptions]);
+  }, [specificationOptions, typicalFields]);
 
   const catalogRows = useMemo(() => {
     let result = specificationOptions.map((product) => {
@@ -1360,13 +1365,19 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
 
   const groupedCatalogRows = useMemo(() => {
     const groups = new Map();
+    // Додаємо порожні категорії з типових полів (тільки якщо не обрано конкретну)
+    if (!filterCategory) {
+      categories.forEach((cat) => {
+        if (!groups.has(cat)) groups.set(cat, []);
+      });
+    }
     catalogRows.forEach((row) => {
       const key = row.category || "Без категорії";
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(row);
     });
     return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b, "uk"));
-  }, [catalogRows]);
+  }, [catalogRows, categories, filterCategory]);
 
   useEffect(() => {
     setCollapsedCategories((prev) => {
