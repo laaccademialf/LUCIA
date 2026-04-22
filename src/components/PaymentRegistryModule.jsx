@@ -2935,6 +2935,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
     const { from: treasuryRangeFrom, to: treasuryRangeTo } = resolveTreasuryRange();
 
+    const selectedChiefPayment = paymentRequests.find((p) => p.id === accountantDetailsPaymentId) || null;
+
     const treasuryQueue = paymentRequests
       .filter((payment) => ["approved", "scheduled"].includes(payment.status) && payment.status !== "paused")
       .filter((payment) => {
