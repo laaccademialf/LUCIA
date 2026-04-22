@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { Check, X, Plus, Download, Upload, Clock3, FileText, Edit3, Trash2, Search, Save, Building2, RefreshCcw, Landmark, Pause, Play, Send } from "lucide-react";
+import { Check, X, Plus, Download, Upload, Clock3, FileText, Edit3, Trash2, Search, Save, Building2, RefreshCcw, Landmark, Pause, Play, Send, Paperclip, Camera } from "lucide-react";
 import * as XLSX from "xlsx";
+import { ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { storage } from "../firebase/config";
 import { getUsers } from "../firebase/users";
 import {
   isPaymentRequestsApiEnabled,
@@ -27,6 +29,7 @@ const btnReject = "inline-flex items-center gap-1 rounded-lg border border-rose-
 const PAYMENT_STATUSES = {
   draft: "Чернетка",
   pending: "На погодженні",
+  accounting: "На бухгалтера",
   approved: "Погоджено",
   paused: "Призупинено",
   scheduled: "Заплановано до оплати",
@@ -70,6 +73,7 @@ const URGENCY_LEVELS = {
 const STATUS_COLORS = {
   draft: "bg-slate-100 text-slate-700",
   pending: "bg-amber-100 text-amber-800",
+  accounting: "bg-violet-100 text-violet-800",
   approved: "bg-emerald-100 text-emerald-800",
   paused: "bg-orange-100 text-orange-800",
   scheduled: "bg-blue-100 text-blue-800",
@@ -119,6 +123,37 @@ const formatMoney = (value) => {
 const parseAmountValue = (value) => {
   const parsed = Number.parseFloat(String(value || "0").replace(/\s+/g, "").replace(",", "."));
   return Number.isFinite(parsed) ? parsed : NaN;
+};
+
+const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024;
+
+const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result || ""));
+  reader.onerror = () => reject(new Error("Не вдалося прочитати файл"));
+  reader.readAsDataURL(file);
+});
+
+const formatFileSize = (bytes) => {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return "0 Б";
+  if (value < 1024) return `${value} Б`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} КБ`;
+  return `${(value / (1024 * 1024)).toFixed(1)} МБ`;
+};
+
+const normalizeAttachments = (value) => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => ({
+      id: String(item?.id || generateId("att")).trim(),
+      name: String(item?.name || "Файл").trim() || "Файл",
+      type: String(item?.type || "").trim(),
+      size: Number(item?.size || 0) || 0,
+      dataUrl: String(item?.dataUrl || item?.url || "").trim(),
+      createdAt: String(item?.createdAt || "").trim(),
+    }))
+    .filter((item) => Boolean(item.dataUrl));
 };
 
 const generateId = (prefix = "pay") => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -249,6 +284,7 @@ const createPaymentFormState = (defaultCurrency = "UAH") => ({
   dueDate: "",
   restaurant: "",
   attachmentNote: "",
+  attachments: [],
   payerId: "",
   paidBy: "",
   expenseRestaurant: "",
@@ -278,6 +314,7 @@ const createRecurringTemplateFormState = (defaultCurrency = "UAH") => ({
   expenseRestaurant: "",
   expenseRestaurants: [],
   attachmentNote: "",
+  attachments: [],
   payerId: "",
   paidBy: "",
   startDate: getTodayDateOnly(),
@@ -343,6 +380,7 @@ const normalizePaymentRecord = (item) => ({
   recurringSeriesKey: String(item?.recurringSeriesKey || item?.recurring_series_key || item?.recurringTemplateId || item?.recurring_template_id || "").trim(),
   approvals: Array.isArray(item?.approvals) ? item.approvals : [],
   comments: Array.isArray(item?.comments) ? item.comments : [],
+  attachments: normalizeAttachments(item?.attachments),
   dueDate: toDateOnly(item?.dueDate) || "",
   scheduledForDate: toDateOnly(item?.scheduledForDate || item?.scheduled_for_date) || "",
   recurringOccurrenceDate: toDateOnly(item?.recurringOccurrenceDate || item?.recurring_occurrence_date) || "",
@@ -367,6 +405,7 @@ const normalizeRecurringTemplateRecord = (item) => {
     endDate: toDateOnly(item?.endDate || item?.end_date) || "",
     nextOccurrenceDate: toDateOnly(item?.nextOccurrenceDate || item?.next_occurrence_date) || "",
     totalGenerated: Number.parseInt(String(item?.totalGenerated || item?.total_generated || "0"), 10) || 0,
+    attachments: normalizeAttachments(item?.attachments),
   };
 
   if (!normalized.nextOccurrenceDate) {
@@ -398,6 +437,7 @@ const createPaymentFromRecurringTemplate = (template, occurrenceDate, paymentNum
     restaurant: template.restaurant || "",
     expenseRestaurant: template.expenseRestaurant || template.restaurant || "",
     attachmentNote: template.attachmentNote || "",
+    attachments: normalizeAttachments(template.attachments),
     payerId: template.payerId || "",
     paidBy: template.paidBy || "",
     status: "approved",
@@ -453,23 +493,138 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const [payments, setPayments] = useState([]);
   const [paymentsLoading, setPaymentsLoading] = useState(false);
   const paymentsLoadedRef = useRef(false);
+  const DELETED_TOMBSTONES_STORAGE_KEY = "lucia_payment_deleted_tombstones";
+  const deletedPaymentIdsRef = useRef(new Map());
+
+  const LOCAL_DELETE_TOMBSTONE_MS = 24 * 60 * 60 * 1000;
+  const LOCAL_KEEP_MISSING_RECORD_MS = 15000;
+
+  const persistDeletedTombstones = useCallback(() => {
+    try {
+      const payload = Array.from(deletedPaymentIdsRef.current.entries());
+      localStorage.setItem(DELETED_TOMBSTONES_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore storage issues
+    }
+  }, []);
+
+  const hydrateDeletedTombstones = useCallback(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(DELETED_TOMBSTONES_STORAGE_KEY) || "[]");
+      if (!Array.isArray(raw)) return;
+      const next = new Map();
+      raw.forEach((entry) => {
+        if (!Array.isArray(entry) || entry.length < 2) return;
+        const id = String(entry[0] || "").trim();
+        const ts = Number(entry[1] || 0);
+        if (!id || !Number.isFinite(ts)) return;
+        next.set(id, ts);
+      });
+      deletedPaymentIdsRef.current = next;
+    } catch {
+      deletedPaymentIdsRef.current = new Map();
+    }
+  }, []);
+
+  const markLocallyDeletedPayments = useCallback((ids) => {
+    const now = Date.now();
+    const map = deletedPaymentIdsRef.current;
+    (Array.isArray(ids) ? ids : [ids]).forEach((id) => {
+      const key = String(id || "").trim();
+      if (key) map.set(key, now);
+    });
+    persistDeletedTombstones();
+  }, [persistDeletedTombstones]);
+
+  const unmarkLocallyDeletedPayments = useCallback((ids) => {
+    const map = deletedPaymentIdsRef.current;
+    (Array.isArray(ids) ? ids : [ids]).forEach((id) => {
+      const key = String(id || "").trim();
+      if (key) map.delete(key);
+    });
+    persistDeletedTombstones();
+  }, []);
+
+  const refreshPaymentsFromApi = useCallback(async ({ withLoader = false } = {}) => {
+    if (!isPaymentRequestsApiEnabled()) return;
+    if (withLoader) setPaymentsLoading(true);
+    try {
+      const data = await getPaymentRequestsApi();
+      const normalized = Array.isArray(data)
+        ? data.map((item) => (isRecurringTemplateRecord(item) ? normalizeRecurringTemplateRecord(item) : normalizePaymentRecord(item)))
+        : [];
+
+      const nowTs = Date.now();
+      const tombstones = deletedPaymentIdsRef.current;
+      for (const [id, deletedAtTs] of tombstones.entries()) {
+        if (nowTs - deletedAtTs > LOCAL_DELETE_TOMBSTONE_MS) {
+          tombstones.delete(id);
+        }
+      }
+      persistDeletedTombstones();
+
+      const filteredNormalized = normalized.filter((item) => !tombstones.has(String(item?.id || "")));
+
+      setPayments((prev) => {
+        const prevById = new Map(prev.map((item) => [String(item.id || ""), item]));
+        const nextById = new Map();
+
+        filteredNormalized.forEach((remoteItem) => {
+          const id = String(remoteItem.id || "");
+          const localItem = prevById.get(id);
+          if (!localItem) {
+            nextById.set(id, remoteItem);
+            return;
+          }
+
+          const remoteTs = new Date(remoteItem.updatedAt || remoteItem.createdAt || 0).getTime();
+          const localTs = new Date(localItem.updatedAt || localItem.createdAt || 0).getTime();
+          nextById.set(id, remoteTs >= localTs ? remoteItem : localItem);
+        });
+
+        prev.forEach((localItem) => {
+          const id = String(localItem.id || "");
+          if (nextById.has(id) || tombstones.has(id)) {
+            return;
+          }
+
+          const localTs = new Date(localItem.updatedAt || localItem.createdAt || 0).getTime();
+          if (Number.isFinite(localTs) && nowTs - localTs <= LOCAL_KEEP_MISSING_RECORD_MS) {
+            nextById.set(id, localItem);
+          }
+        });
+
+        return Array.from(nextById.values()).sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+      });
+    } catch (err) {
+      console.error("[PaymentRegistry] Failed to load payments:", err);
+    } finally {
+      if (withLoader) setPaymentsLoading(false);
+    }
+  }, []);
 
   // Load payments from DB on mount
   useEffect(() => {
     if (paymentsLoadedRef.current) return;
     if (!isPaymentRequestsApiEnabled()) return;
     paymentsLoadedRef.current = true;
-    setPaymentsLoading(true);
-    getPaymentRequestsApi()
-      .then((data) => {
-        const normalized = Array.isArray(data)
-          ? data.map((item) => (isRecurringTemplateRecord(item) ? normalizeRecurringTemplateRecord(item) : normalizePaymentRecord(item)))
-          : [];
-        setPayments(normalized);
-      })
-      .catch((err) => console.error("[PaymentRegistry] Failed to load payments:", err))
-      .finally(() => setPaymentsLoading(false));
-  }, []);
+    hydrateDeletedTombstones();
+    refreshPaymentsFromApi({ withLoader: true });
+  }, [hydrateDeletedTombstones, refreshPaymentsFromApi]);
+
+  // Keep list fresh for other users without page reload
+  useEffect(() => {
+    if (!isPaymentRequestsApiEnabled()) return;
+    const id = setInterval(() => {
+      refreshPaymentsFromApi();
+    }, 10000);
+    const onFocus = () => refreshPaymentsFromApi();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refreshPaymentsFromApi]);
 
   const defaultTypicalFields = normalizeTypicalFieldsState({});
   const [typicalFields, setTypicalFields] = useState(defaultTypicalFields);
@@ -528,7 +683,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   // Approval modal state
   const [approvalModal, setApprovalModal] = useState(null);
-  const [approvalData, setApprovalData] = useState({ counterparty: "", iban: "", paidBy: "", payerId: "", comment: "" });
+  const [approvalData, setApprovalData] = useState({ comment: "" });
+  const [accountantSelections, setAccountantSelections] = useState({});
+  const [accountantDetailsPaymentId, setAccountantDetailsPaymentId] = useState("");
+  const [chiefPayerChoice, setChiefPayerChoice] = useState("");
+  const [chiefArticleChoice, setChiefArticleChoice] = useState("");
+  const [chiefSubArticleChoice, setChiefSubArticleChoice] = useState("");
   const debtAgingInputRef = useRef(null);
 
   // Form state
@@ -545,6 +705,26 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (typeof onAuditEvent !== "function") return;
     onAuditEvent(payload);
   }, [onAuditEvent]);
+
+  const pushCenterNotification = useCallback((title, body) => {
+    try {
+      const key = `pnotify_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const payload = {
+        key,
+        title,
+        body,
+        createdAt: new Date().toISOString(),
+        source: "payments",
+      };
+      const storageKey = "lucia_center_notifications";
+      const current = JSON.parse(localStorage.getItem(storageKey) || "[]");
+      const next = [payload, ...current].slice(0, 100);
+      localStorage.setItem(storageKey, JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent("lucia:notifications-updated"));
+    } catch {
+      // ignore notification write issues
+    }
+  }, []);
 
   const getEffectivePaymentDate = useCallback((payment) => {
     return toDateOnly(payment?.scheduledForDate) || toDateOnly(payment?.dueDate) || "";
@@ -781,7 +961,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
     result.sort((a, b) => {
       const urgencyOrder = { critical: 0, high: 1, normal: 2, low: 3 };
-      const statusOrder = { pending: 0, approved: 1, scheduled: 2, paused: 3, draft: 4, paid: 5, rejected: 6, cancelled: 7 };
+      const statusOrder = { pending: 0, accounting: 1, approved: 2, scheduled: 3, paused: 4, draft: 5, paid: 6, rejected: 7, cancelled: 8 };
       const ua = urgencyOrder[a.urgency] ?? 4;
       const ub = urgencyOrder[b.urgency] ?? 4;
       if (ua !== ub) return ua - ub;
@@ -843,6 +1023,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       restaurant: payment.restaurant || "",
       expenseRestaurant: payment.expenseRestaurant || payment.restaurant || "",
       attachmentNote: payment.attachmentNote || "",
+      attachments: Array.isArray(payment.attachments) ? payment.attachments : [],
       payerId: payment.payerId || "",
       paidBy: payment.paidBy || "",
       isRecurring: false,
@@ -876,6 +1057,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       restaurant: template.restaurant || "",
       expenseRestaurant: template.expenseRestaurant || template.restaurant || "",
       attachmentNote: template.attachmentNote || "",
+      attachments: normalizeAttachments(template.attachments),
       payerId: template.payerId || "",
       paidBy: template.paidBy || "",
       startDate: template.startDate || getTodayDateOnly(),
@@ -890,6 +1072,45 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   const handleFormChange = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const addPaymentAttachments = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+
+    const oversized = files.filter((file) => file.size > MAX_ATTACHMENT_SIZE_BYTES);
+    if (oversized.length > 0) {
+      alert(`Деякі файли перевищують 10 МБ і не будуть додані: ${oversized.map((f) => f.name).join(", ")}`);
+    }
+
+    const accepted = files.filter((file) => file.size <= MAX_ATTACHMENT_SIZE_BYTES);
+    if (accepted.length === 0) return;
+
+    try {
+      const prepared = await Promise.all(accepted.map(async (file) => ({
+        id: generateId("att"),
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        dataUrl: await readFileAsDataUrl(file),
+        createdAt: new Date().toISOString(),
+      })));
+
+      setFormData((prev) => ({
+        ...prev,
+        attachments: [...normalizeAttachments(prev.attachments), ...prepared].slice(0, 12),
+      }));
+    } catch (err) {
+      console.error("[PaymentRegistry] Failed to process attachments:", err);
+      alert("Не вдалося додати вкладення.");
+    }
+  };
+
+  const removePaymentAttachment = (attachmentId) => {
+    setFormData((prev) => ({
+      ...prev,
+      attachments: normalizeAttachments(prev.attachments).filter((item) => item.id !== attachmentId),
+    }));
   };
 
   const handleRecurringFormChange = (field, value) => {
@@ -1016,6 +1237,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       addPaymentRequestApi({ ...newPayment }).catch((err) =>
         console.error("[PaymentRegistry] Failed to save payment:", err)
       );
+      if (status === "pending") {
+        pushCenterNotification(
+          "Нова заявка на погодження",
+          `${newPayment.title} · ${formatMoney(amount)} ${newPayment.currency}`
+        );
+      }
       writeAudit({
         action: "payment_request_create",
         entityType: "payment_request",
@@ -1150,7 +1377,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     });
   };
 
-  const removeRecurringTemplate = (template) => {
+  const removeRecurringTemplate = async (template) => {
     const recurringSeriesKey = String(template?.recurringSeriesKey || template?.id || "").trim();
     const linkedOpenPayments = payments.filter((item) => {
       if (isRecurringTemplateRecord(item)) return false;
@@ -1164,16 +1391,35 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     if (!window.confirm(confirmText)) return;
 
     const removableIds = new Set([template.id, ...linkedOpenPayments.map((item) => item.id)]);
+    markLocallyDeletedPayments(Array.from(removableIds));
     setPayments((prev) => prev.filter((item) => !removableIds.has(item.id)));
-    deletePaymentRequestApi(template.id).catch((err) =>
-      console.error("[PaymentRegistry] Failed to delete recurring template:", err)
-    );
+    const deleteResults = await Promise.allSettled([
+      deletePaymentRequestApi(template.id),
+      ...linkedOpenPayments.map((payment) => deletePaymentRequestApi(payment.id)),
+    ]);
 
-    linkedOpenPayments.forEach((payment) => {
-      deletePaymentRequestApi(payment.id).catch((err) =>
-        console.error("[PaymentRegistry] Failed to delete linked recurring payment:", err)
-      );
-    });
+    const failedIds = [template.id, ...linkedOpenPayments.map((item) => item.id)].filter((_, idx) => deleteResults[idx]?.status === "rejected");
+
+    if (failedIds.length > 0) {
+      console.error("[PaymentRegistry] Failed to delete some recurring records", deleteResults);
+      unmarkLocallyDeletedPayments(failedIds);
+      setPayments((prev) => {
+        const restoreById = new Map([
+          [template.id, template],
+          ...linkedOpenPayments.map((item) => [item.id, item]),
+        ]);
+        const next = [...prev];
+        failedIds.forEach((id) => {
+          const item = restoreById.get(id);
+          if (!item) return;
+          if (!next.some((entry) => entry.id === id)) next.unshift(item);
+        });
+        return next.sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+      });
+      alert("Не вдалося видалити всі пов'язані записи. Перевірте підключення до БД.");
+    }
+
+    refreshPaymentsFromApi();
 
     writeAudit({
       action: "payment_recurring_template_delete",
@@ -1185,12 +1431,24 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     });
   };
 
-  const deletePayment = (payment) => {
+  const deletePayment = async (payment) => {
     if (!window.confirm(`Видалити заявку "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency})? Цю дію неможливо скасувати.`)) return;
+    markLocallyDeletedPayments([payment.id]);
     setPayments((prev) => prev.filter((item) => item.id !== payment.id));
-    deletePaymentRequestApi(payment.id).catch((err) =>
-      console.error("[PaymentRegistry] Failed to delete payment:", err)
-    );
+    try {
+      await deletePaymentRequestApi(payment.id);
+    } catch (err) {
+      console.error("[PaymentRegistry] Failed to delete payment:", err);
+      unmarkLocallyDeletedPayments([payment.id]);
+      setPayments((prev) => {
+        if (prev.some((item) => item.id === payment.id)) return prev;
+        return [payment, ...prev].sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+      });
+      alert("Не вдалося видалити платіж у БД. Заявку відновлено.");
+      return;
+    }
+
+    refreshPaymentsFromApi();
     writeAudit({
       action: "payment_request_delete",
       entityType: "payment_request",
@@ -1256,17 +1514,33 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     setSelectedIds(new Set());
   };
 
-  const bulkDeleteSelected = () => {
+  const bulkDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
     const toDelete = paymentRequests.filter((p) => selectedIds.has(p.id));
     if (toDelete.length === 0) return;
     if (!confirm(`Видалити ${toDelete.length} заявок? Цю дію неможливо скасувати.`)) return;
+    markLocallyDeletedPayments(toDelete.map((payment) => payment.id));
     setPayments((prev) => prev.filter((item) => !selectedIds.has(item.id)));
-    toDelete.forEach((payment) => {
-      deletePaymentRequestApi(payment.id).catch((err) =>
-        console.error("[PaymentRegistry] Failed to delete payment:", err)
-      );
-    });
+    const results = await Promise.allSettled(toDelete.map((payment) => deletePaymentRequestApi(payment.id)));
+    const failedIds = toDelete.filter((_, idx) => results[idx]?.status === "rejected").map((item) => item.id);
+
+    if (failedIds.length > 0) {
+      console.error("[PaymentRegistry] Failed to delete some payments:", results);
+      unmarkLocallyDeletedPayments(failedIds);
+      setPayments((prev) => {
+        const restoreById = new Map(toDelete.map((item) => [item.id, item]));
+        const next = [...prev];
+        failedIds.forEach((id) => {
+          const item = restoreById.get(id);
+          if (!item) return;
+          if (!next.some((entry) => entry.id === id)) next.unshift(item);
+        });
+        return next.sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+      });
+      alert(`Не вдалося видалити ${failedIds.length} заявок у БД. Вони відновлені.`);
+    }
+
+    refreshPaymentsFromApi();
     writeAudit({
       action: "payment_request_bulk_delete",
       entityType: "payment_request",
@@ -1294,37 +1568,36 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   // ─── Actions ───
   const openApprovalModal = (payment) => {
-    setApprovalData({
-      counterparty: payment.counterparty || "",
-      iban: payment.iban || "",
-      paidBy: payment.paidBy || "",
-      payerId: payment.payerId || "",
-      comment: "",
-    });
+    setApprovalData({ comment: "" });
     setApprovalModal(payment);
   };
 
   const confirmApproval = () => {
     const payment = approvalModal;
     if (!payment) return;
-    if (!approvalData.counterparty.trim()) {
-      alert("Вкажіть контрагента (отримувача) для погодження.");
-      return;
-    }
     setProcessingId(payment.id);
+    const hasPayerDetails = Boolean(
+      String(payment.payerId || "").trim() ||
+      String(payment.paidBy || "").trim()
+    );
     const nowIso = new Date().toISOString();
     const updatedData = {
       ...payment,
-      status: "approved",
-      counterparty: approvalData.counterparty.trim(),
-      iban: approvalData.iban.trim() || payment.iban,
-      paidBy: approvalData.paidBy.trim() || myName,
-      payerId: approvalData.payerId || payment.payerId || "",
+      status: "accounting",
+      accountingStage: hasPayerDetails ? "article" : "chief",
       approvalComment: approvalData.comment.trim(),
       updatedAt: nowIso,
       approvals: [
         ...(payment.approvals || []),
-        { action: "approved", at: nowIso, byId: myUserId, byName: myName, comment: approvalData.comment.trim() },
+        {
+          action: "approved",
+          at: nowIso,
+          byId: myUserId,
+          byName: myName,
+          comment: hasPayerDetails
+            ? `${approvalData.comment.trim()} ${approvalData.comment.trim() ? "| " : ""}Пропущено етап головбуха: платника вже обрано.`
+            : approvalData.comment.trim(),
+        },
       ],
     };
     updateStoredRecord(payment.id, () => updatedData);
@@ -1335,8 +1608,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       action: "payment_request_approve",
       entityType: "payment_request",
       entityId: payment.id,
-      description: `Погоджено платіж "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency}) — контрагент: ${approvalData.counterparty.trim()}`,
+      description: `Погоджено платіж "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency}) і передано бухгалтеру`,
     });
+    pushCenterNotification(
+      "Платіж передано бухгалтеру",
+      `${payment.title} · ${formatMoney(payment.amount)} ${payment.currency}`
+    );
     setProcessingId("");
     setApprovalModal(null);
   };
@@ -1852,13 +2129,69 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                 </div>
               </div>
             )}
-            <div className="md:col-span-2">
-              <label className="text-sm font-semibold">Опис / коментар</label>
-              <textarea className={`${inputClass} min-h-[60px]`} value={formData.description} onChange={(e) => handleFormChange("description", e.target.value)} placeholder="Додаткова інформація до заявки" />
-            </div>
-            <div>
-              <label className="text-sm font-semibold">Примітка до вкладення</label>
-              <input className={inputClass} value={formData.attachmentNote} onChange={(e) => handleFormChange("attachmentNote", e.target.value)} placeholder="Рахунок-фактура в 1С" />
+            <div className="md:col-span-3 grid grid-cols-1 items-stretch gap-3 md:grid-cols-2">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <div>
+                  <div className="text-sm font-semibold">Опис / коментар</div>
+                </div>
+                <textarea className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100 min-h-[84px]" value={formData.description} onChange={(e) => handleFormChange("description", e.target.value)} placeholder="Додаткова інформація до заявки" />
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                <div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold">Вкладення</div>
+                      <div className="text-xs text-slate-500">Фото/файли, до 12 шт, до 10 МБ кожен</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-600 border border-slate-200">
+                        {normalizeAttachments(formData.attachments).length} файл(ів)
+                      </span>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                        <Upload size={13} /> Додати
+                        <input
+                          type="file"
+                          multiple
+                          className="hidden"
+                          accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+                          onChange={(e) => {
+                            addPaymentAttachments(e.target.files);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  {normalizeAttachments(formData.attachments).length > 0 && (
+                    <div className="mt-2 space-y-1.5">
+                      {normalizeAttachments(formData.attachments).map((attachment) => {
+                        const isImage = attachment.type.startsWith("image/");
+                        return (
+                          <div key={attachment.id} className="flex items-center justify-between gap-2 rounded border border-slate-200 bg-white px-2 py-1">
+                            <button
+                              type="button"
+                              className="flex min-w-0 items-center gap-2 text-left text-xs text-indigo-700 hover:underline"
+                              onClick={() => window.open(attachment.dataUrl, "_blank", "noopener,noreferrer")}
+                            >
+                              {isImage ? (
+                                <img src={attachment.dataUrl} alt={attachment.name} className="h-6 w-6 rounded object-cover" />
+                              ) : (
+                                <FileText size={12} className="shrink-0" />
+                              )}
+                              <span className="truncate">{attachment.name}</span>
+                              <span className="shrink-0 text-[11px] text-slate-400">{formatFileSize(attachment.size)}</span>
+                            </button>
+                            <button type="button" className="rounded border border-rose-200 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-50" onClick={() => removePaymentAttachment(attachment.id)}>
+                              Видалити
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
@@ -2104,41 +2437,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-lg mx-4" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-base font-semibold mb-1">Погодження платежу</h3>
             <p className="text-sm text-slate-500 mb-4">"{approvalModal.title}" — {formatMoney(approvalModal.amount)} {approvalModal.currency}</p>
+            <p className="text-xs text-slate-500 mb-3">Реквізити контрагента, IBAN та платника заповнює головний бухгалтер на наступному етапі.</p>
             <div className="grid grid-cols-1 gap-3">
-              <div>
-                <label className="text-sm font-semibold">Контрагент (отримувач) *</label>
-                <input
-                  list="approval-counterparties"
-                  className={inputClass}
-                  value={approvalData.counterparty}
-                  onChange={(e) => {
-                    setApprovalData((prev) => ({ ...prev, counterparty: e.target.value }));
-                    const match = counterparties.find((c) => c.name === e.target.value);
-                    if (match?.iban) setApprovalData((prev) => ({ ...prev, iban: match.iban }));
-                  }}
-                  placeholder="Оберіть або введіть контрагента"
-                />
-                <datalist id="approval-counterparties">
-                  {counterparties.map((c) => <option key={c.id} value={c.name}>{c.name}{c.edrpou ? ` (${c.edrpou})` : ""}</option>)}
-                </datalist>
-              </div>
-              <div>
-                <label className="text-sm font-semibold">IBAN / рахунок</label>
-                <input className={inputClass} value={approvalData.iban} onChange={(e) => setApprovalData((prev) => ({ ...prev, iban: e.target.value }))} placeholder="UA..." />
-              </div>
-              <div>
-                <label className="text-sm font-semibold">Платник</label>
-                <select className={inputClass} value={approvalData.payerId} onChange={(e) => {
-                  const payerId = e.target.value;
-                  const payer = payersById.get(payerId);
-                  setApprovalData((prev) => ({ ...prev, payerId, paidBy: payer?.name || prev.paidBy || "" }));
-                }}>
-                  <option value="">Оберіть платника</option>
-                  {getPayersForRestaurant(approvalModal?.restaurant).map((payer) => (
-                    <option key={payer.id} value={payer.id}>{payer.name}</option>
-                  ))}
-                </select>
-              </div>
               <div>
                 <label className="text-sm font-semibold">Коментар до погодження</label>
                 <textarea className={`${inputClass} min-h-[60px]`} value={approvalData.comment} onChange={(e) => setApprovalData((prev) => ({ ...prev, comment: e.target.value }))} placeholder="Додаткові примітки" />
@@ -2160,13 +2460,60 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const renderMyPayments = () => {
     const myPayments = paymentRequests.filter((payment) => paymentBelongsToUser(payment, myUserId, myEmail, myName));
     const grouped = {
-      active: myPayments.filter((p) => ["draft", "pending", "approved", "scheduled"].includes(p.status)),
+      active: myPayments.filter((p) => ["draft", "pending", "accounting", "approved", "scheduled"].includes(p.status)),
       paused: myPayments.filter((p) => p.status === "paused"),
       completed: myPayments.filter((p) => p.status === "paid"),
       other: myPayments.filter((p) => ["rejected", "cancelled"].includes(p.status)),
     };
 
     const canPauseResume = (p) => ["approved", "scheduled", "paused"].includes(p.status);
+
+    const getStatusLabel = (payment) => {
+      if (payment.status !== "accounting") {
+        return PAYMENT_STATUSES[payment.status] || payment.status;
+      }
+      if (payment.accountingStage === "article") return "У бухгалтера";
+      if (payment.accountingStage === "done") return "Передано казначею";
+      return "У головного бухгалтера";
+    };
+
+    const getStatusPair = (payment) => {
+      const route = findApproverForPayment(payment);
+      const routePerson = route?.approverName || route?.approverEmail || "не визначено";
+      const approvals = Array.isArray(payment.approvals) ? payment.approvals : [];
+      const approvedEvent = approvals.find((item) => item.action === "approved");
+      const payerSetEvent = approvals.find((item) => item.action === "accounting_payer_set");
+      const toTreasuryEvent = approvals.find((item) => item.action === "accounting_to_treasury");
+
+      const current = (() => {
+        if (payment.status === "pending") return `На погодженні (${routePerson})`;
+        if (payment.status === "accounting" && payment.accountingStage === "chief") return "У головного бухгалтера";
+        if (payment.status === "accounting" && payment.accountingStage === "article") return "У бухгалтера";
+        if (payment.status === "approved") return toTreasuryEvent ? `Передано казначею (${toTreasuryEvent.byName || "—"})` : "Погоджено";
+        if (payment.status === "scheduled") return payment.scheduledByName ? `Заплановано (${payment.scheduledByName})` : "Заплановано";
+        if (payment.status === "paid") return payment.paidByName ? `Оплачено (${payment.paidByName})` : "Оплачено";
+        return PAYMENT_STATUSES[payment.status] || payment.status;
+      })();
+
+      const previous = (() => {
+        if (payment.status === "pending") return "Чернетка";
+        if (payment.status === "accounting" && payment.accountingStage === "chief") {
+          return approvedEvent?.byName ? `Погоджено (${approvedEvent.byName})` : "На погодженні";
+        }
+        if (payment.status === "accounting" && payment.accountingStage === "article") {
+          return payerSetEvent?.byName ? `Головний бухгалтер (${payerSetEvent.byName})` : "У головного бухгалтера";
+        }
+        if (payment.status === "approved") {
+          return toTreasuryEvent?.byName ? `У бухгалтера (${toTreasuryEvent.byName})` : "На бухгалтерії";
+        }
+        if (payment.status === "scheduled") return "Погоджено";
+        if (payment.status === "paid") return payment.scheduledByName ? `Заплановано (${payment.scheduledByName})` : "Заплановано";
+        if (payment.status === "paused") return PAYMENT_STATUSES[payment.statusBeforePause] || "Погоджено";
+        return approvedEvent?.byName ? `Погоджено (${approvedEvent.byName})` : "—";
+      })();
+
+      return { current, previous };
+    };
 
     const renderSection = (title, items, emptyText, { showPauseBtn = false } = {}) => (
       <div className={cardClass}>
@@ -2180,13 +2527,16 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                 <th className="px-3 py-2 text-left">Контрагент</th>
                 <th className="px-3 py-2 text-right">Сума</th>
                 <th className="px-3 py-2 text-left">Статус</th>
+                <th className="px-3 py-2 text-left">Попередній</th>
                 <th className="px-3 py-2 text-left">Дата оплати</th>
                 <th className="px-3 py-2 text-left">Оновлено</th>
                 {showPauseBtn && <th className="px-3 py-2 text-left">Дії</th>}
               </tr>
             </thead>
             <tbody>
-              {items.map((p) => (
+              {items.map((p) => {
+                const statusPair = getStatusPair(p);
+                return (
                 <tr key={p.id} className="border-t border-slate-200">
                   <td className="px-3 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">{p.paymentNumber || "—"}</td>
                   <td className="px-3 py-2 font-medium">{p.title}</td>
@@ -2194,12 +2544,13 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                   <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{formatMoney(p.amount)} {p.currency}</td>
                   <td className="px-3 py-2">
                     <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_COLORS[p.status] || ""}`}>
-                      {PAYMENT_STATUSES[p.status] || p.status}
+                      {statusPair.current || getStatusLabel(p)}
                     </span>
                     {p.status === "scheduled" && p.scheduledForDate && (
                       <div className="mt-1 text-xs text-blue-700">На {formatDate(p.scheduledForDate)}</div>
                     )}
                   </td>
+                  <td className="px-3 py-2 text-xs text-slate-600">{statusPair.previous || "—"}</td>
                   <td className="px-3 py-2 whitespace-nowrap">
                     <div>{formatDate(p.dueDate)}</div>
                     {p.scheduledForDate && p.scheduledForDate !== p.dueDate && (
@@ -2217,10 +2568,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                     </td>
                   )}
                 </tr>
-              ))}
+                );
+              })}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={showPauseBtn ? 8 : 7} className="px-3 py-6 text-center text-slate-500">{emptyText}</td>
+                  <td colSpan={showPauseBtn ? 9 : 8} className="px-3 py-6 text-center text-slate-500">{emptyText}</td>
                 </tr>
               )}
             </tbody>
@@ -2748,6 +3100,84 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           </div>
         </div>
 
+        {selectedChiefPayment && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setAccountantDetailsPaymentId("")}>
+            <div className="mx-4 w-full max-w-3xl rounded-xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-base font-semibold">Картка платежу для головного бухгалтера</h3>
+              <div className="mt-1 text-sm text-slate-500">{selectedChiefPayment.title} · {formatMoney(selectedChiefPayment.amount)} {selectedChiefPayment.currency}</div>
+
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">Контрагент</div>
+                  <div className="text-sm text-slate-800">{selectedChiefPayment.counterparty || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">IBAN</div>
+                  <div className="text-sm text-slate-800">{selectedChiefPayment.iban || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">Опис / коментар</div>
+                  <div className="text-sm text-slate-800">{selectedChiefPayment.description || "—"}</div>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <label className="text-sm font-semibold">Платник</label>
+                <select className={inputClass} value={chiefPayerChoice} onChange={(e) => setChiefPayerChoice(e.target.value)}>
+                  <option value="">Оберіть платника</option>
+                  {getPayersForRestaurant(selectedChiefPayment.restaurant).map((payer) => (
+                    <option key={payer.id} value={payer.id}>{payer.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="mt-4">
+                <div className="text-sm font-semibold">Вкладення ({normalizeAttachments(selectedChiefPayment.attachments).length})</div>
+                <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                  {normalizeAttachments(selectedChiefPayment.attachments).map((attachment) => {
+                    const isImage = attachment.type.startsWith("image/");
+                    return (
+                      <button
+                        key={attachment.id}
+                        type="button"
+                        className="flex items-center gap-2 rounded border border-slate-200 p-2 text-left hover:bg-slate-50"
+                        onClick={() => window.open(attachment.dataUrl, "_blank", "noopener,noreferrer")}
+                      >
+                        {isImage ? (
+                          <img src={attachment.dataUrl} alt={attachment.name} className="h-10 w-10 rounded object-cover" />
+                        ) : (
+                          <FileText size={16} className="text-slate-500" />
+                        )}
+                        <div className="min-w-0">
+                          <div className="truncate text-sm text-indigo-700">{attachment.name}</div>
+                          <div className="text-xs text-slate-500">{formatFileSize(attachment.size)}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                  {normalizeAttachments(selectedChiefPayment.attachments).length === 0 && (
+                    <div className="text-xs text-slate-500">Вкладень немає.</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={btnApprove}
+                  onClick={() => {
+                    saveChiefDetails(selectedChiefPayment, chiefPayerChoice);
+                    setAccountantDetailsPaymentId("");
+                  }}
+                >
+                  <Check size={12} /> Зберегти платника і передати бухгалтеру
+                </button>
+                <button type="button" className={btnSecondary} onClick={() => setAccountantDetailsPaymentId("")}>Закрити</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className={cardClass}>
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="min-w-full text-sm">
@@ -3040,6 +3470,371 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   // ─── Render: Погоджувачі ───
   const renderApproversTab = () => <ApproversTab approvalRoutes={approvalRoutes} addApprovalRoute={addApprovalRoute} updateApprovalRoute={updateApprovalRoute} removeApprovalRoute={removeApprovalRoute} categories={typicalFields.articles ? typicalFields.articles.map((a) => `${a.code} ${a.name}`) : typicalFields.categories} />;
 
+  const renderAccountantTab = () => {
+    const queue = paymentRequests
+      .filter((p) => p.status === "accounting")
+      .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+
+    const chiefStage = queue.filter((p) => (p.accountingStage || "chief") === "chief");
+    const articleStage = queue.filter((p) => p.accountingStage === "article");
+
+    const getSelection = (payment) => {
+      const current = accountantSelections[payment.id] || {};
+      return {
+        payerId: current.payerId ?? payment.payerId ?? "",
+        articleCode: current.articleCode ?? payment.articleCode ?? "",
+        subArticleCode: current.subArticleCode ?? payment.subArticleCode ?? "",
+      };
+    };
+
+    const setSelection = (paymentId, patch) => {
+      setAccountantSelections((prev) => ({
+        ...prev,
+        [paymentId]: {
+          ...(prev[paymentId] || {}),
+          ...patch,
+        },
+      }));
+    };
+
+    const saveChiefDetails = (payment, payerId, articleCode, subArticleCode) => {
+      const payer = payersById.get(String(payerId || ""));
+      if (!payer) {
+        alert("Оберіть платника.");
+        return;
+      }
+      const art = (typicalFields.articles || []).find((a) => a.code === articleCode);
+      const nowIso = new Date().toISOString();
+      const updatedData = {
+        ...payment,
+        payerId: payer.id,
+        paidBy: payer.name,
+        articleCode: articleCode || payment.articleCode || "",
+        subArticleCode: subArticleCode || "",
+        category: art ? `${art.code} ${art.name}` : (payment.category || ""),
+        accountingStage: "article",
+        updatedAt: nowIso,
+        approvals: [
+          ...(payment.approvals || []),
+          {
+            action: "accounting_payer_set",
+            at: nowIso,
+            byId: myUserId,
+            byName: myName,
+            comment: `Платник: ${payer.name}${articleCode ? `, стаття: ${articleCode}` : ""}${subArticleCode ? `/${subArticleCode}` : ""}`,
+          },
+        ],
+      };
+      updateStoredRecord(payment.id, () => updatedData);
+      updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
+        console.error("[PaymentRegistry] Failed to set payer details:", err)
+      );
+      writeAudit({
+        action: "payment_accountant_set_payer",
+        entityType: "payment_request",
+        entityId: payment.id,
+        description: `Для платежу "${payment.title}" обрано платника ${payer.name}`,
+      });
+    };
+
+    const sendToTreasury = (payment, articleCode, subArticleCode) => {
+      if (!payment.payerId) {
+        alert("Спочатку оберіть платника у верхньому модулі.");
+        return;
+      }
+      if (!articleCode) {
+        alert("Оберіть статтю витрат.");
+        return;
+      }
+      const art = (typicalFields.articles || []).find((a) => a.code === articleCode);
+      const nowIso = new Date().toISOString();
+      const updatedData = {
+        ...payment,
+        status: "approved",
+        accountingStage: "done",
+        articleCode,
+        subArticleCode: subArticleCode || "",
+        category: art ? `${art.code} ${art.name}` : payment.category,
+        updatedAt: nowIso,
+        approvals: [
+          ...(payment.approvals || []),
+          { action: "accounting_to_treasury", at: nowIso, byId: myUserId, byName: myName },
+        ],
+      };
+      updateStoredRecord(payment.id, () => updatedData);
+      updatePaymentRequestApi(payment.id, updatedData).catch((err) =>
+        console.error("[PaymentRegistry] Failed to send payment to treasury:", err)
+      );
+      writeAudit({
+        action: "payment_sent_to_treasury",
+        entityType: "payment_request",
+        entityId: payment.id,
+        description: `Платіж "${payment.title}" передано до казначея`,
+      });
+      pushCenterNotification(
+        "Новий платіж до казначея",
+        `${payment.title} · ${formatMoney(payment.amount)} ${payment.currency}`
+      );
+    };
+
+    const openChiefDetails = (payment) => {
+      setAccountantDetailsPaymentId(payment.id);
+      setChiefPayerChoice(payment.payerId || "");
+      setChiefArticleChoice(payment.articleCode || "");
+      setChiefSubArticleChoice(payment.subArticleCode || "");
+    };
+
+    const selectedChiefPayment = chiefStage.find((payment) => payment.id === accountantDetailsPaymentId) || null;
+
+    return (
+      <div className="space-y-5">
+        <div className={cardClass}>
+          <h3 className="text-base font-semibold">Головний бухгалтер: реквізити платника</h3>
+          <p className="mt-1 text-sm text-slate-500">Після погодження платежі потрапляють сюди для вибору платника.</p>
+          <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-700">
+                <tr>
+                  <th className="px-3 py-2 text-left">Платіж</th>
+                  <th className="px-3 py-2 text-right">Сума</th>
+                  <th className="px-3 py-2 text-left">Контрагент / IBAN</th>
+                  <th className="px-3 py-2 text-left">Дія</th>
+                </tr>
+              </thead>
+              <tbody>
+                {chiefStage.map((payment) => (
+                  <tr key={payment.id} className="border-t border-slate-200 hover:bg-slate-50">
+                    <td className="px-3 py-2">
+                      <button type="button" className="text-left font-medium text-indigo-700 hover:underline" onClick={() => openChiefDetails(payment)}>
+                        {payment.title}
+                      </button>
+                      <div className="text-xs text-slate-500">Платник: {payment.paidBy || "не обрано"}</div>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">{formatMoney(payment.amount)} {payment.currency}</td>
+                    <td className="px-3 py-2">
+                      <div className="text-xs text-slate-600">{payment.counterparty || "—"}</div>
+                      <div className="text-xs text-slate-400">{payment.iban || "IBAN не заповнено"}</div>
+                      <div className="text-xs text-slate-400">Вкладень: {normalizeAttachments(payment.attachments).length}</div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <button type="button" className={btnSecondary} onClick={() => openChiefDetails(payment)}>
+                        Відкрити картку
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {chiefStage.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-3 py-6 text-center text-slate-500">Немає заявок для вибору платника.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className={cardClass}>
+          <h3 className="text-base font-semibold">Бухгалтер: стаття і передача казначею</h3>
+          <p className="mt-1 text-sm text-slate-500">Після вибору платника оберіть статтю витрат і передайте заявку у казначейство.</p>
+          <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-700">
+                <tr>
+                  <th className="px-3 py-2 text-left">Платіж</th>
+                  <th className="px-3 py-2 text-right">Сума</th>
+                  <th className="px-3 py-2 text-left">Стаття</th>
+                  <th className="px-3 py-2 text-left">Підстаття</th>
+                  <th className="px-3 py-2 text-left">Дія</th>
+                </tr>
+              </thead>
+              <tbody>
+                {articleStage.map((payment) => (
+                  (() => {
+                    const selection = getSelection(payment);
+                    const selectedArticleCode = selection.articleCode;
+                    const availableSubArticles = (typicalFields.subArticles || []).filter((sa) => sa.articleCode === selectedArticleCode);
+                    return (
+                  <tr key={payment.id} className="border-t border-slate-200 hover:bg-slate-50">
+                    <td className="px-3 py-2">
+                      <div className="font-medium">{payment.title}</div>
+                      <div className="text-xs text-slate-500">Платник: {payment.paidBy || "—"}</div>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">{formatMoney(payment.amount)} {payment.currency}</td>
+                    <td className="px-3 py-2">
+                      <select
+                        className="rounded border border-slate-300 px-2 py-1 text-sm"
+                        value={selectedArticleCode}
+                        onChange={(e) => setSelection(payment.id, { articleCode: e.target.value, subArticleCode: "" })}
+                      >
+                        <option value="">Оберіть статтю</option>
+                        {(typicalFields.articles || []).map((article) => (
+                          <option key={article.code} value={article.code}>{article.code} {article.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-3 py-2">
+                      <select
+                        className="rounded border border-slate-300 px-2 py-1 text-sm"
+                        value={selection.subArticleCode}
+                        onChange={(e) => setSelection(payment.id, { subArticleCode: e.target.value })}
+                      >
+                        <option value="">Без підстатті</option>
+                        {availableSubArticles.map((sa) => (
+                          <option key={sa.code} value={sa.code}>{sa.code} {sa.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-3 py-2">
+                      <button
+                        type="button"
+                        className={btnApprove}
+                        onClick={() => sendToTreasury(payment, selectedArticleCode, selection.subArticleCode)}
+                      >
+                        <Send size={12} /> Передати казначею
+                      </button>
+                    </td>
+                  </tr>
+                    );
+                  })()
+                ))}
+                {articleStage.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-slate-500">Немає заявок для передачі в казначейство.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {selectedChiefPayment && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setAccountantDetailsPaymentId("")}>
+            <div className="mx-4 w-full max-w-3xl rounded-xl bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-base font-semibold">Картка платежу для головного бухгалтера</h3>
+              <div className="mt-1 text-sm text-slate-500">{selectedChiefPayment.title} · {formatMoney(selectedChiefPayment.amount)} {selectedChiefPayment.currency}</div>
+
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">Контрагент</div>
+                  <div className="text-sm text-slate-800">{selectedChiefPayment.counterparty || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">IBAN</div>
+                  <div className="text-sm text-slate-800">{selectedChiefPayment.iban || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">Опис / коментар</div>
+                  <div className="text-sm text-slate-800">{selectedChiefPayment.description || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">Номер платежу</div>
+                  <div className="text-sm text-slate-800">{selectedChiefPayment.paymentNumber || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">Заклад / витрати закладу</div>
+                  <div className="text-sm text-slate-800">{selectedChiefPayment.restaurant || "—"} / {selectedChiefPayment.expenseRestaurant || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">Терміновість</div>
+                  <div className="text-sm text-slate-800">{URGENCY_LEVELS[selectedChiefPayment.urgency] || selectedChiefPayment.urgency || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">Бажана дата оплати</div>
+                  <div className="text-sm text-slate-800">{formatDate(selectedChiefPayment.dueDate)}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">Ініціатор</div>
+                  <div className="text-sm text-slate-800">{selectedChiefPayment.requestedByName || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-500">Створено</div>
+                  <div className="text-sm text-slate-800">{formatDateTime(selectedChiefPayment.createdAt)}</div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div>
+                <label className="text-sm font-semibold">Платник</label>
+                <select className={inputClass} value={chiefPayerChoice} onChange={(e) => setChiefPayerChoice(e.target.value)}>
+                  <option value="">Оберіть платника</option>
+                  {getPayersForRestaurant(selectedChiefPayment.restaurant).map((payer) => (
+                    <option key={payer.id} value={payer.id}>{payer.name}</option>
+                  ))}
+                </select>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold">Стаття</label>
+                  <select className={inputClass} value={chiefArticleChoice} onChange={(e) => {
+                    setChiefArticleChoice(e.target.value);
+                    setChiefSubArticleChoice("");
+                  }}>
+                    <option value="">Оберіть статтю</option>
+                    {(typicalFields.articles || []).map((article) => (
+                      <option key={article.code} value={article.code}>{article.code} {article.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold">Підстаття</label>
+                  <select className={inputClass} value={chiefSubArticleChoice} onChange={(e) => setChiefSubArticleChoice(e.target.value)}>
+                    <option value="">Без підстатті</option>
+                    {(typicalFields.subArticles || []).filter((sa) => sa.articleCode === chiefArticleChoice).map((sa) => (
+                      <option key={sa.code} value={sa.code}>{sa.code} {sa.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div className="text-sm font-semibold">Вкладення ({normalizeAttachments(selectedChiefPayment.attachments).length})</div>
+                <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                  {normalizeAttachments(selectedChiefPayment.attachments).map((attachment) => {
+                    const isImage = attachment.type.startsWith("image/");
+                    return (
+                      <button
+                        key={attachment.id}
+                        type="button"
+                        className="flex items-center gap-2 rounded border border-slate-200 p-2 text-left hover:bg-slate-50"
+                        onClick={() => window.open(attachment.dataUrl, "_blank", "noopener,noreferrer")}
+                      >
+                        {isImage ? (
+                          <img src={attachment.dataUrl} alt={attachment.name} className="h-10 w-10 rounded object-cover" />
+                        ) : (
+                          <FileText size={16} className="text-slate-500" />
+                        )}
+                        <div className="min-w-0">
+                          <div className="truncate text-sm text-indigo-700">{attachment.name}</div>
+                          <div className="text-xs text-slate-500">{formatFileSize(attachment.size)}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                  {normalizeAttachments(selectedChiefPayment.attachments).length === 0 && (
+                    <div className="text-xs text-slate-500">Вкладень немає.</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={btnApprove}
+                  onClick={() => {
+                    saveChiefDetails(selectedChiefPayment, chiefPayerChoice, chiefArticleChoice, chiefSubArticleChoice);
+                    setAccountantDetailsPaymentId("");
+                  }}
+                >
+                  <Check size={12} /> Зберегти платника і передати бухгалтеру
+                </button>
+                <button type="button" className={btnSecondary} onClick={() => setAccountantDetailsPaymentId("")}>Закрити</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // ─── Tab Router ───
   const tabKey = String(topTab || "").toLowerCase();
 
@@ -3061,6 +3856,10 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   if (tabKey.includes("approvalpeople") || tabKey.includes("погоджувач")) {
     return renderApproversTab();
+  }
+
+  if (tabKey.includes("bukhalter") || tabKey.includes("бухгалтер")) {
+    return renderAccountantTab();
   }
 
   if (isTreasuryTabKey(tabKey)) {

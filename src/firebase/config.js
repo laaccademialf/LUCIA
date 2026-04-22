@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
+import { getStorage } from "firebase/storage";
 
 // Конфігурація Firebase
 // Для використання: створіть файл .env в корені проєкту на основі .env.example
@@ -43,6 +44,9 @@ export const db = getFirestore(app);
 
 // Ініціалізація Authentication
 export const auth = getAuth(app);
+
+// Ініціалізація Storage
+export const storage = getStorage(app);
 
 export const activeFirebaseConfig = firebaseConfig;
 export const isRuntimeFirebaseConfig = Boolean(readRuntimeConfig());

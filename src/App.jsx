@@ -329,6 +329,49 @@ const playChecklistAlertTone = () => {
   }
 };
 
+const getNotificationReadAndDismissedSets = () => {
+  try {
+    const readRaw = JSON.parse(localStorage.getItem("lucia_notification_read_ids") || "[]");
+    const dismissedRaw = JSON.parse(localStorage.getItem("lucia_notification_dismissed_ids") || "[]");
+    const readSet = new Set(Array.isArray(readRaw) ? readRaw.map((id) => String(id)) : []);
+    const dismissedSet = new Set(Array.isArray(dismissedRaw) ? dismissedRaw.map((id) => String(id)) : []);
+    return { readSet, dismissedSet };
+  } catch {
+    return { readSet: new Set(), dismissedSet: new Set() };
+  }
+};
+
+const getUnreadNotificationsCount = (items) => {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) return 0;
+  const { readSet, dismissedSet } = getNotificationReadAndDismissedSets();
+  return list.reduce((count, item) => {
+    const id = String(item?.key || item?.id || "");
+    if (!id) return count;
+    if (dismissedSet.has(id)) return count;
+    if (readSet.has(id)) return count;
+    return count + 1;
+  }, 0);
+};
+
+const playCenterAlertTone = () => {
+  try {
+    const audioEnabledRaw = localStorage.getItem("lucia_notification_audio_enabled");
+    const audioEnabled = audioEnabledRaw === null ? true : Boolean(JSON.parse(audioEnabledRaw));
+    if (!audioEnabled) return;
+
+    const volumeRaw = parseFloat(localStorage.getItem("lucia_notification_volume") || "0.5");
+    const volume = Number.isFinite(volumeRaw) ? Math.max(0, Math.min(1, volumeRaw)) : 0.5;
+    if (volume <= 0) return;
+
+    const audio = new Audio("/oh-oh-icq-sound.mp3");
+    audio.volume = volume;
+    audio.play().catch(() => {});
+  } catch {
+    // ignore audio errors
+  }
+};
+
 function App() {
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const runtimeCustomConfig = useMemo(() => getCurrentRuntimeCustomConfig(), []);
@@ -484,9 +527,13 @@ function App() {
     });
   // --- Notification Center state ---
   const [notifications, setNotifications] = useState([]);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
   const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
+  const [externalNotificationTick, setExternalNotificationTick] = useState(0);
   const [checklistReminderTick, setChecklistReminderTick] = useState(0);
   const seenMissedChecklistKeysRef = useRef(new Set());
+  const seenNotificationKeysRef = useRef(new Set());
+  const notificationSoundInitializedRef = useRef(false);
   const userInteractedRef = useRef(false);
   const authAuditRef = useRef("");
 
@@ -577,6 +624,27 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const onExternalNotifications = () => setExternalNotificationTick((v) => v + 1);
+    window.addEventListener("lucia:notifications-updated", onExternalNotifications);
+    return () => window.removeEventListener("lucia:notifications-updated", onExternalNotifications);
+  }, []);
+
+  useEffect(() => {
+    const syncUnread = () => {
+      setNotificationUnreadCount(getUnreadNotificationsCount(notifications));
+    };
+
+    syncUnread();
+    window.addEventListener("lucia:notification-state-updated", syncUnread);
+    window.addEventListener("storage", syncUnread);
+
+    return () => {
+      window.removeEventListener("lucia:notification-state-updated", syncUnread);
+      window.removeEventListener("storage", syncUnread);
+    };
+  }, [notifications]);
+
+  useEffect(() => {
     const id = setInterval(() => {
       setChecklistReminderTick((v) => v + 1);
     }, 30000);
@@ -587,7 +655,10 @@ function App() {
   useEffect(() => {
     if (!user || !Array.isArray(restaurants) || restaurants.length === 0) {
       setNotifications([]);
+      setNotificationUnreadCount(0);
       seenMissedChecklistKeysRef.current = new Set();
+      seenNotificationKeysRef.current = new Set();
+      notificationSoundInitializedRef.current = false;
       return;
     }
 
@@ -636,25 +707,66 @@ function App() {
       }
     }
 
+    const paymentNotifications = (() => {
+      try {
+        const raw = JSON.parse(localStorage.getItem("lucia_center_notifications") || "[]");
+        if (!Array.isArray(raw)) return [];
+        return raw.slice(0, 50).map((item) => ({
+          key: String(item.key || `p_${Math.random().toString(36).slice(2)}`),
+          id: String(item.id || item.key || `p_${Math.random().toString(36).slice(2)}`),
+          type: "payment",
+          title: String(item.title || "Платіжне сповіщення"),
+          time: item.createdAt ? new Date(item.createdAt).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" }) : "щойно",
+          body: String(item.body || ""),
+          createdAt: String(item.createdAt || ""),
+          read: false,
+          actionUrl: "payments-registry",
+          priority: item.priority || "normal",
+        }));
+      } catch {
+        return [];
+      }
+    })();
+
     missedItems.sort((a, b) => a.time.localeCompare(b.time));
-    const nextNotifications = missedItems.slice(0, 50);
+    const checklistNotifications = missedItems.slice(0, 50).map((item) => ({
+      ...item,
+      key: item.key || `c_${Math.random().toString(36).slice(2)}`,
+      id: item.key || `c_${Math.random().toString(36).slice(2)}`,
+      type: "checklist",
+      read: false,
+      actionUrl: "checklists",
+      priority: "high",
+    }));
+    const nextNotifications = [...paymentNotifications, ...checklistNotifications]
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+      .slice(0, 50);
     setNotifications(nextNotifications);
+    setNotificationUnreadCount(getUnreadNotificationsCount(nextNotifications));
 
-    const seen = seenMissedChecklistKeysRef.current;
-    const currentKeys = new Set(nextNotifications.map((item) => item.key));
-    const newKeys = nextNotifications.filter((item) => !seen.has(item.key));
+    const currentNotificationKeys = new Set(
+      nextNotifications
+        .map((item) => String(item?.key || item?.id || ""))
+        .filter(Boolean)
+    );
+    const hasNewNotifications = Array.from(currentNotificationKeys).some((key) => !seenNotificationKeysRef.current.has(key));
 
-    if (newKeys.length > 0 && userInteractedRef.current) {
-      playChecklistAlertTone();
+    if (!notificationSoundInitializedRef.current) {
+      notificationSoundInitializedRef.current = true;
+    } else if (hasNewNotifications && userInteractedRef.current) {
+      playCenterAlertTone();
     }
 
-    seenMissedChecklistKeysRef.current = currentKeys;
+    seenNotificationKeysRef.current = currentNotificationKeys;
+
+    seenMissedChecklistKeysRef.current = new Set(checklistNotifications.map((item) => item.key));
   }, [
     user,
     restaurants,
     checklistTemplates,
     checklistExecutions,
     checklistReminderTick,
+    externalNotificationTick,
   ]);
 
   // ...існуючий код App...
@@ -3983,7 +4095,7 @@ function App() {
   );
 
   const topTabsElement = topTabs.length > 0 ? (
-    <div className="sticky top-0 z-30 bg-slate-900/95 border-b border-slate-800 shadow-lg" style={{boxShadow: "0 4px 6px -1px rgba(15, 23, 42, 0.4)"}}>
+    <div className={clsx("sticky top-0 z-30 bg-slate-900/95 border-b border-slate-800 shadow-lg", notificationPanelOpen && "pointer-events-none")} style={{boxShadow: "0 4px 6px -1px rgba(15, 23, 42, 0.4)"}}>
       <div className={clsx("w-full px-0 lg:px-0 min-h-10", isMobile ? "flex flex-col" : "flex items-stretch justify-between") }>
         <div className="flex gap-0 items-stretch overflow-x-auto">
         {topTabs.map(tab => (
@@ -4222,16 +4334,11 @@ function App() {
                 >
                   <Bell size={20} className="text-slate-300" />
                   {/* Badge для непрочитаних */}
-                  {notifications && notifications.length > 0 && (
+                  {notificationUnreadCount > 0 && (
                     <span className="absolute top-1 right-1 block h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-white animate-pulse"></span>
                   )}
                 </button>
-                {/* NotificationPanel popover */}
-                <NotificationPanel
-                  open={notificationPanelOpen}
-                  onClose={() => setNotificationPanelOpen(false)}
-                  notifications={notifications}
-                />
+                {/* NotificationPanel - now rendered at top level */}
                 <button
                   type="button"
                   onClick={() => setShowProfileModal(true)}
@@ -4332,6 +4439,21 @@ function App() {
           user={user}
         />
       </Suspense>
+
+      {/* Notification Center - Top Level */}
+      <NotificationPanel
+        open={notificationPanelOpen}
+        onClose={() => setNotificationPanelOpen(false)}
+        notifications={notifications}
+        onNotificationAction={(notification) => {
+          // Обробка дій сповіщень
+          if (notification.actionUrl) {
+            setActiveNav(notification.actionUrl);
+          }
+          // Закрити панель при кліцінні
+          setNotificationPanelOpen(false);
+        }}
+      />
     </div>
   );
 }
