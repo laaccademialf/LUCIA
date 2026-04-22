@@ -150,6 +150,40 @@ const toDateOnly = (value) => {
   return `${parsed.getFullYear()}-${padNumber(parsed.getMonth() + 1)}-${padNumber(parsed.getDate())}`;
 };
 
+const normalizeCompanyCode = (value) => String(value || "").replace(/\D/g, "");
+
+const parseExcelDateOnly = (value) => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (!parsed) return "";
+    return `${parsed.y}-${padNumber(parsed.m)}-${padNumber(parsed.d)}`;
+  }
+  return toDateOnly(value);
+};
+
+const getDayDiff = (fromDate, toDate) => {
+  const from = toDateOnly(fromDate);
+  const to = toDateOnly(toDate);
+  if (!from || !to) return null;
+  const fromUtc = Date.UTC(Number(from.slice(0, 4)), Number(from.slice(5, 7)) - 1, Number(from.slice(8, 10)));
+  const toUtc = Date.UTC(Number(to.slice(0, 4)), Number(to.slice(5, 7)) - 1, Number(to.slice(8, 10)));
+  return Math.round((toUtc - fromUtc) / 86400000);
+};
+
+const buildVatTitleTail = (amount, vatMode, vatRate) => {
+  if (vatMode === "without") {
+    return " // без ПДВ";
+  }
+  if (vatMode === "with" && vatRate) {
+    const rate = Number.parseFloat(String(vatRate).replace(",", "."));
+    if (Number.isFinite(rate)) {
+      const vatAmount = amount * rate / 100;
+      return ` // в т.ч. ПДВ ${vatRate}% - ${formatMoney(vatAmount)} грн`;
+    }
+  }
+  return "";
+};
+
 const getTodayDateOnly = () => toDateOnly(new Date().toISOString());
 
 const getLastDayOfMonth = (year, month) => new Date(year, month, 0).getDate();
@@ -443,6 +477,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const [statusFilter, setStatusFilter] = useState("all");
   const [urgencyFilter, setUrgencyFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [debtAgingThresholdDays, setDebtAgingThresholdDays] = useState("3");
   const [showForm, setShowForm] = useState(false);
   const [editingPayment, setEditingPayment] = useState(null);
   const [showRecurringForm, setShowRecurringForm] = useState(false);
@@ -1457,6 +1492,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const importDebtAgingFile = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const thresholdDays = Math.max(0, Number.parseInt(String(debtAgingThresholdDays || "3"), 10) || 3);
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
@@ -1465,86 +1501,68 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         const ws = workbook.Sheets[workbook.SheetNames[0]];
         const allRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
 
-        // Знаходимо рядок заголовків (містить "Документ" і "Контрагент")
-        let headerRowIndex = -1;
-        for (let i = 0; i < Math.min(allRows.length, 15); i++) {
-          const row = allRows[i];
-          if (row.some((cell) => String(cell).trim() === "Документ") && row.some((cell) => String(cell).includes("Контрагент"))) {
-            headerRowIndex = i;
-            break;
-          }
-        }
-        if (headerRowIndex < 0) {
-          alert("Не вдалося розпізнати структуру файлу. Потрібен файл 'Старіння заборгованості' з 1С.");
-          return;
-        }
-
-        const headers = allRows[headerRowIndex].map((h) => String(h).trim());
-        const colDoc = headers.findIndex((h) => h === "Документ");
-        const colEdrpou = headers.findIndex((h) => h.includes("ЕГРПОУ") || h.includes("ЄДРПОУ"));
-        const colContract = headers.findIndex((h) => h === "Договор" || h === "Договір");
-        const colCounterparty = headers.findIndex((h) => h === "Контрагент");
-        const colOrg = headers.findIndex((h) => h === "Организация" || h === "Організація");
-        const colDebtDays = headers.findIndex((h) => h.includes("Срок долга") && !h.includes("договор") && !h.includes("договір"));
-        const colContractDays = headers.findIndex((h) => h.includes("Срок долга") && (h.includes("договор") || h.includes("договір")));
-        const colDebt = headers.findIndex((h) => h.includes("Задолженность") || h.includes("Заборгованість"));
-
-        // Пропускаємо рядок підзаголовків (якщо є — "До 7 дней" тощо)
-        let dataStartRow = headerRowIndex + 1;
-        if (dataStartRow < allRows.length) {
-          const nextRow = allRows[dataStartRow];
-          const firstCell = String(nextRow?.[0] || "").trim();
-          if (!firstCell || firstCell.startsWith("До") || firstCell.startsWith("От") || firstCell.startsWith("Від")) {
-            dataStartRow++;
-          }
-        }
-
         const nowIso = new Date().toISOString();
         const today = nowIso.slice(0, 10);
         let imported = 0;
         let skippedByTerm = 0;
+        let skippedInvalid = 0;
         const newPayments = [];
 
-        for (let i = dataStartRow; i < allRows.length; i++) {
+        for (let i = 0; i < allRows.length; i++) {
           const row = allRows[i];
-          // Пропускаємо повністю порожні рядки
           if (!row || row.every((cell) => cell === "" || cell === null || cell === undefined)) continue;
 
-          const counterparty = String(row[colCounterparty >= 0 ? colCounterparty : 3] || "").trim();
-          const debtAmount = Number.parseFloat(String(row[colDebt >= 0 ? colDebt : 9] || "0").replace(/\s/g, "").replace(",", "."));
+          const restaurantAccountNumber = String(row[0] || "").trim();
+          const counterparty = String(row[1] || "").trim();
+          const counterpartyEdrpou = normalizeCompanyCode(row[2]);
+          const contractInfo = String(row[5] || "").trim();
+          const payerName = String(row[7] || "").trim();
+          const payerEdrpou = normalizeCompanyCode(row[8]);
+          const debtDueDate = parseExcelDateOnly(row[12]);
+          const contractDueDate = parseExcelDateOnly(row[13]);
+          const debtAmount = parseAmountValue(row[14]);
           if (!counterparty || !Number.isFinite(debtAmount) || debtAmount <= 0) continue;
 
-          const debtDays = Number.parseInt(String(row[colDebtDays >= 0 ? colDebtDays : 7] || "0"), 10) || 0;
-          const contractDays = Number.parseInt(String(row[colContractDays >= 0 ? colContractDays : 8] || "0"), 10) || 0;
-
-          // Фільтр: створюємо заявку тільки якщо залишок до кінцевого терміну < 3 днів
-          const daysRemaining = contractDays - debtDays;
-          if (daysRemaining >= 3) {
+          const daysRemaining = getDayDiff(debtDueDate, contractDueDate);
+          if (daysRemaining === null) {
+            skippedInvalid++;
+            continue;
+          }
+          if (daysRemaining >= thresholdDays) {
             skippedByTerm++;
             continue;
           }
 
-          const document = String(row[colDoc >= 0 ? colDoc : 0] || "").trim();
-          const edrpou = String(row[colEdrpou >= 0 ? colEdrpou : 1] || "").trim();
-          const contract = String(row[colContract >= 0 ? colContract : 2] || "").trim();
-          const organization = String(row[colOrg >= 0 ? colOrg : 5] || "").trim();
+          const matchedCounterparty = counterparties.find((c) => {
+            const dbCode = normalizeCompanyCode(c.edrpou || c.code);
+            return (counterpartyEdrpou && dbCode === counterpartyEdrpou)
+              || c.name?.toLowerCase() === counterparty.toLowerCase();
+          });
+          const matchedPayer = payers.find((payer) => {
+            const dbCode = normalizeCompanyCode(payer?.edrpou);
+            return (payerEdrpou && dbCode === payerEdrpou)
+              || payer?.name?.toLowerCase() === payerName.toLowerCase();
+          });
+          const payerRestaurant = Array.isArray(matchedPayer?.restaurantIds) && matchedPayer.restaurantIds.length > 0
+            ? matchedPayer.restaurantIds[0]
+            : "";
 
           const urgency = daysRemaining < 0 ? "critical" : daysRemaining === 0 ? "high" : "normal";
 
-          const title = `Оплата заборгованості: ${counterparty}` + (contract ? ` (${contract})` : "");
+          const titleBase = `Оплата за товар згідно договору ${contractInfo || ""}`.trim();
+          const title = titleBase + buildVatTitleTail(debtAmount, matchedCounterparty?.vatMode, matchedCounterparty?.vatRate);
           const description = [
-            document ? `Документ: ${document}` : "",
-            edrpou ? `ЄДРПОУ: ${edrpou}` : "",
-            contract ? `Договір: ${contract}` : "",
-            organization ? `Організація: ${organization}` : "",
-            `Строк боргу: ${debtDays} дн. / Строк договору: ${contractDays} дн. (залишок: ${daysRemaining} дн.)`,
+            restaurantAccountNumber ? `Обліковий номер ресторану: ${restaurantAccountNumber}` : "",
+            counterpartyEdrpou ? `ЄДРПОУ контрагента: ${counterpartyEdrpou}` : "",
+            payerName ? `Платник: ${payerName}` : "",
+            payerEdrpou ? `ЄДРПОУ платника: ${payerEdrpou}` : "",
+            contractInfo ? `Дані договору: ${contractInfo}` : "",
+            debtDueDate ? `Дата строку боргу: ${formatDate(debtDueDate)}` : "",
+            contractDueDate ? `Дата строку договору: ${formatDate(contractDueDate)}` : "",
+            `Різниця між строком договору та боргу: ${daysRemaining} дн.`,
           ].filter(Boolean).join("\n");
 
-          const paymentNumber = generatePaymentNumber("", restaurants, [...paymentRequests, ...newPayments]);
-          const matchedCounterparty = counterparties.find((c) =>
-            c.name?.toLowerCase() === counterparty.toLowerCase()
-            || (edrpou && String(c.edrpou || "") === edrpou)
-          );
+          const paymentNumber = generatePaymentNumber(payerRestaurant, restaurants, [...paymentRequests, ...newPayments]);
 
           const payment = {
             id: generateId("debt"),
@@ -1555,16 +1573,18 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
             description,
             amount: Math.round(debtAmount * 100) / 100,
             currency: "UAH",
-            counterparty,
+            counterparty: matchedCounterparty?.name || counterparty,
             iban: matchedCounterparty?.iban || "",
-            edrpou,
+            edrpou: counterpartyEdrpou,
             category: "203 Постачальники продуктів",
             articleCode: "203",
             urgency,
-            vatMode: "none",
-            vatRate: "",
-            restaurant: organization || "",
-            expenseRestaurant: organization || "",
+            vatMode: matchedCounterparty?.vatMode || "none",
+            vatRate: matchedCounterparty?.vatRate || "",
+            restaurant: payerRestaurant || payerName || "",
+            expenseRestaurant: payerRestaurant || payerName || "",
+            payerId: matchedPayer?.id || "",
+            paidBy: matchedPayer?.name || payerName || "",
             dueDate: today,
             status: "draft",
             createdAt: nowIso,
@@ -1586,12 +1606,12 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         }
 
         if (imported === 0) {
-          alert(`У файлі не знайдено заборгованостей, що потребують оплати (залишок до терміну < 3 днів).${skippedByTerm > 0 ? `\nПропущено ${skippedByTerm} позицій (ще є час до кінцевого терміну).` : ""}`);
+          alert(`У файлі не знайдено заборгованостей, що потребують оплати (різниця < ${thresholdDays} днів).${skippedByTerm > 0 ? `\nПропущено ${skippedByTerm} позицій (ще є час до кінцевого терміну).` : ""}${skippedInvalid > 0 ? `\nПропущено ${skippedInvalid} позицій з некоректними датами.` : ""}`);
           return;
         }
 
         const totalAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
-        if (!confirm(`Буде створено ${imported} заявок на оплату заборгованості на загальну суму ${formatMoney(totalAmount)} грн.${skippedByTerm > 0 ? `\nПропущено ${skippedByTerm} позицій (залишок до терміну ≥ 3 днів).` : ""}\n\nПродовжити?`)) {
+        if (!confirm(`Буде створено ${imported} заявок на оплату заборгованості на загальну суму ${formatMoney(totalAmount)} грн.${skippedByTerm > 0 ? `\nПропущено ${skippedByTerm} позицій (різниця до терміну ≥ ${thresholdDays} днів).` : ""}${skippedInvalid > 0 ? `\nПропущено ${skippedInvalid} позицій з некоректними датами.` : ""}\n\nПродовжити?`)) {
           return;
         }
 
@@ -1852,6 +1872,16 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           <button type="button" className={btnPrimary} onClick={openNewForm}>
             <Plus size={14} /> Нова заявка на платіж
           </button>
+          <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-600">
+            <span className="font-semibold whitespace-nowrap">Поріг, днів</span>
+            <input
+              type="number"
+              min="0"
+              className="w-16 rounded border border-slate-300 px-2 py-1 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+              value={debtAgingThresholdDays}
+              onChange={(e) => setDebtAgingThresholdDays(e.target.value)}
+            />
+          </div>
           <label className={`${btnSecondary} cursor-pointer`}>
             <Upload size={14} /> Імпорт боргів з 1С
             <input type="file" accept=".xlsx,.xls" className="hidden" onChange={importDebtAgingFile} />
