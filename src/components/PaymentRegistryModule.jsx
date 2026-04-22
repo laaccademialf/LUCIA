@@ -1121,7 +1121,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   const submitPayment = (asDraft = false) => {
     if (!formData.title.trim()) {
-      alert("Вкажіть назву / призначення платежу.");
+      alert("Вкажіть мету платежу.");
       return;
     }
     const amount = Number.parseFloat(String(formData.amount || "0").replace(/\s+/g, "").replace(",", "."));
@@ -1130,18 +1130,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       return;
     }
 
-    // Build VAT suffix for title
-    let vatSuffix = "";
-    if (formData.vatMode === "without") {
-      vatSuffix = ", без ПДВ";
-    } else if (formData.vatMode === "with" && formData.vatRate) {
-      const rate = Number.parseFloat(formData.vatRate);
-      const vatAmount = amount * rate / 100;
-      vatSuffix = `, в т.ч. ПДВ ${formData.vatRate}% - ${formatMoney(vatAmount)} грн`;
-    }
-    const titleBase = (formData.title || "").replace(/,\s*(без ПДВ|в т\.ч\. ПДВ\s*\d+(\.\d+)?%(\s*-\s*[\d\s]+[,.]?\d*\s*грн)?)(\s*\/\/.*)?$/g, "").replace(/\s*\/\/.*$/, "").trim() + vatSuffix;
+    const vatSuffix = buildVatTitleTail(amount, formData.vatMode, formData.vatRate);
+    const paymentPurposeBase = (formData.paymentPurpose || "").replace(/,\s*(без ПДВ|в т\.ч\. ПДВ\s*\d+(\.\d+)?%(\s*-\s*[\d\s]+[,.]?\d*\s*грн)?)(\s*\/\/.*)?$/g, "").replace(/\s*\/\/.*$/, "").trim();
     const codeSuffix = [formData.articleCode, formData.subArticleCode].filter(Boolean).join("//");
-    const titleWithVat = codeSuffix ? `${titleBase} //${codeSuffix}` : titleBase;
+    const paymentPurposeWithVat = (paymentPurposeBase ? `${paymentPurposeBase}${vatSuffix}` : "") + (codeSuffix ? ` //${codeSuffix}` : "");
+    const normalizedTitle = (formData.title || "").trim();
 
     // If recurring toggle is on — create a recurring template instead
     if (formData.isRecurring && !editingPayment) {
@@ -1152,7 +1145,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       const nowIso = new Date().toISOString();
       const normalizedTemplate = normalizeRecurringTemplateRecord({
         ...formData,
-        title: titleWithVat,
+        title: normalizedTitle,
+        paymentPurpose: paymentPurposeWithVat,
         amount,
         id: generateId("rec"),
         recurringSeriesKey: generateRecurringSeriesKey(),
@@ -1191,7 +1185,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       const updatedData = {
         ...editingPayment,
         ...formData,
-        title: titleWithVat,
+        title: normalizedTitle,
+        paymentPurpose: paymentPurposeWithVat,
         recordType: RECORD_TYPE_PAYMENT_REQUEST,
         type: RECORD_TYPE_PAYMENT_REQUEST,
         ownerUserId: editingPayment.ownerUserId || editingPayment.requestedById || myUserId,
@@ -1221,7 +1216,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         recordType: RECORD_TYPE_PAYMENT_REQUEST,
         type: RECORD_TYPE_PAYMENT_REQUEST,
         ...formData,
-        title: titleWithVat,
+        title: normalizedTitle,
+        paymentPurpose: paymentPurposeWithVat,
         amount,
         status,
         createdAt: nowIso,
@@ -1960,8 +1956,14 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="md:col-span-3">
               <label className="text-sm font-semibold">Мета платежу * <span className="text-xs font-normal text-slate-400">— опишіть своїми словами, навіщо цей платіж</span></label>
-              <div className="flex gap-2 items-center">
+              <div className="mt-1 flex gap-2 items-center">
                 <input className={`${inputClass} flex-1`} value={formData.title} onChange={(e) => handleFormChange("title", e.target.value)} placeholder="Наприклад: Оплата за продукти — ТОВ Ланч" />
+              </div>
+            </div>
+            <div className="md:col-span-3">
+              <label className="text-sm font-semibold text-indigo-700">Призначення платежу <span className="text-xs font-normal text-slate-400">— заповнює бухгалтер (з правилами ПДВ та статтями)</span></label>
+              <div className="mt-1 flex gap-2 items-center">
+                <input className={`${inputClass} flex-1`} value={formData.paymentPurpose || ""} onChange={(e) => handleFormChange("paymentPurpose", e.target.value)} placeholder="Наприклад: Оплата за товари за договором №… від …" />
                 <div className="flex gap-1 items-center shrink-0">
                   <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors whitespace-nowrap ${formData.vatMode === "none" ? "border-slate-500 bg-slate-100 text-slate-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => handleFormChange("vatMode", "none")}>—</button>
                   <button type="button" className={`rounded-lg px-2 py-1.5 text-xs font-semibold border transition-colors whitespace-nowrap ${formData.vatMode === "without" ? "border-emerald-500 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"}`} onClick={() => handleFormChange("vatMode", "without")}>Без ПДВ</button>
@@ -2137,10 +2139,6 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                   <div className="text-sm font-semibold">Опис / коментар <span className="text-xs font-normal text-slate-400">— для ініціатора</span></div>
                 </div>
                 <textarea className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100 min-h-[84px]" value={formData.description} onChange={(e) => handleFormChange("description", e.target.value)} placeholder="Додаткова інформація до заявки" />
-                <div className="mt-3">
-                  <div className="text-sm font-semibold text-indigo-700">Призначення платежу <span className="text-xs font-normal text-slate-400">— заповнює бухгалтер (з правилами ПДВ та статтями)</span></div>
-                  <textarea className="mt-1 w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 min-h-[60px]" value={formData.paymentPurpose || ""} onChange={(e) => handleFormChange("paymentPurpose", e.target.value)} placeholder="Наприклад: Оплата за товари за договором №… від …, в т.ч. ПДВ 20%" />
-                </div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
                 <div>
@@ -2987,7 +2985,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
             payment.iban || "",
             Number(payment.amount || 0).toFixed(2),
             payment.currency || "UAH",
-            payment.description || payment.title || "",
+            payment.paymentPurpose || payment.description || payment.title || "",
             payment.category || "",
             payment.restaurant || "",
             payment.paidBy || payer?.name || "",
@@ -3030,7 +3028,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           payer?.iban || "",
           payer?.edrpou || "",
           String(amountKop),
-          (payment.title || payment.description || "").replace(/;/g, ","),
+          (payment.paymentPurpose || payment.title || payment.description || "").replace(/;/g, ","),
           cp?.edrpou || "",
           payment.counterparty || "",
           cp?.mfo || "",
@@ -3499,12 +3497,26 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     const chiefStage = queue.filter((p) => (p.accountingStage || "chief") === "chief");
     const articleStage = queue.filter((p) => p.accountingStage === "article");
 
+    const applyPurposeRules = (payment, rawPurpose, articleCode, subArticleCode) => {
+      const amount = Number(payment.amount) || 0;
+      const vatSuffix = buildVatTitleTail(amount, payment.vatMode, payment.vatRate);
+      const basePurpose = String(rawPurpose || payment.paymentPurpose || payment.title || "")
+        .replace(/,\s*(без ПДВ|в т\.ч\. ПДВ\s*\d+(\.\d+)?%(\s*-\s*[\d\s]+[,.]?\d*\s*грн)?)(\s*\/\/.*)?$/g, "")
+        .replace(/\s*\/\/.*$/, "")
+        .trim();
+      const codeSuffix = [articleCode, subArticleCode].filter(Boolean).join("//");
+      return `${basePurpose}${vatSuffix}${codeSuffix ? ` //${codeSuffix}` : ""}`.trim();
+    };
+
     const getSelection = (payment) => {
       const current = accountantSelections[payment.id] || {};
+      const articleCode = current.articleCode ?? payment.articleCode ?? "";
+      const subArticleCode = current.subArticleCode ?? payment.subArticleCode ?? "";
       return {
         payerId: current.payerId ?? payment.payerId ?? "",
-        articleCode: current.articleCode ?? payment.articleCode ?? "",
-        subArticleCode: current.subArticleCode ?? payment.subArticleCode ?? "",
+        articleCode,
+        subArticleCode,
+        paymentPurpose: current.paymentPurpose ?? applyPurposeRules(payment, payment.paymentPurpose || payment.title || "", articleCode, subArticleCode),
       };
     };
 
@@ -3558,13 +3570,18 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       });
     };
 
-    const sendToTreasury = (payment, articleCode, subArticleCode) => {
+    const sendToTreasury = (payment, articleCode, subArticleCode, paymentPurpose) => {
       if (!payment.payerId) {
         alert("Спочатку оберіть платника у верхньому модулі.");
         return;
       }
       if (!articleCode) {
         alert("Оберіть статтю витрат.");
+        return;
+      }
+      const normalizedPurpose = applyPurposeRules(payment, paymentPurpose, articleCode, subArticleCode);
+      if (!normalizedPurpose) {
+        alert("Заповніть призначення платежу.");
         return;
       }
       const art = (typicalFields.articles || []).find((a) => a.code === articleCode);
@@ -3575,6 +3592,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
         accountingStage: "done",
         articleCode,
         subArticleCode: subArticleCode || "",
+        paymentPurpose: normalizedPurpose,
         category: art ? `${art.code} ${art.name}` : payment.category,
         updatedAt: nowIso,
         approvals: [
@@ -3665,6 +3683,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                   <th className="px-3 py-2 text-right">Сума</th>
                   <th className="px-3 py-2 text-left">Стаття</th>
                   <th className="px-3 py-2 text-left">Підстаття</th>
+                  <th className="px-3 py-2 text-left">Призначення платежу</th>
                   <th className="px-3 py-2 text-left">Дія</th>
                 </tr>
               </thead>
@@ -3685,7 +3704,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                       <select
                         className="rounded border border-slate-300 px-2 py-1 text-sm"
                         value={selectedArticleCode}
-                        onChange={(e) => setSelection(payment.id, { articleCode: e.target.value, subArticleCode: "" })}
+                        onChange={(e) => {
+                          const nextArticleCode = e.target.value;
+                          const nextPurpose = applyPurposeRules(payment, selection.paymentPurpose, nextArticleCode, "");
+                          setSelection(payment.id, { articleCode: nextArticleCode, subArticleCode: "", paymentPurpose: nextPurpose });
+                        }}
                       >
                         <option value="">Оберіть статтю</option>
                         {(typicalFields.articles || []).map((article) => (
@@ -3697,7 +3720,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                       <select
                         className="rounded border border-slate-300 px-2 py-1 text-sm"
                         value={selection.subArticleCode}
-                        onChange={(e) => setSelection(payment.id, { subArticleCode: e.target.value })}
+                        onChange={(e) => {
+                          const nextSubArticleCode = e.target.value;
+                          const nextPurpose = applyPurposeRules(payment, selection.paymentPurpose, selectedArticleCode, nextSubArticleCode);
+                          setSelection(payment.id, { subArticleCode: nextSubArticleCode, paymentPurpose: nextPurpose });
+                        }}
                       >
                         <option value="">Без підстатті</option>
                         {availableSubArticles.map((sa) => (
@@ -3706,10 +3733,29 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                       </select>
                     </td>
                     <td className="px-3 py-2">
+                      <div className="flex min-w-[320px] items-center gap-2">
+                        <input
+                          className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+                          value={selection.paymentPurpose || ""}
+                          onChange={(e) => setSelection(payment.id, { paymentPurpose: e.target.value })}
+                          placeholder="Вкажіть призначення платежу"
+                        />
+                        <button
+                          type="button"
+                          className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                          onClick={() => setSelection(payment.id, { paymentPurpose: applyPurposeRules(payment, selection.paymentPurpose, selectedArticleCode, selection.subArticleCode) })}
+                          title="Підтягнути правила ПДВ і статей"
+                        >
+                          Правила
+                        </button>
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-400">ПДВ і коди статей додаються в кінець автоматично.</div>
+                    </td>
+                    <td className="px-3 py-2">
                       <button
                         type="button"
                         className={btnApprove}
-                        onClick={() => sendToTreasury(payment, selectedArticleCode, selection.subArticleCode)}
+                        onClick={() => sendToTreasury(payment, selectedArticleCode, selection.subArticleCode, selection.paymentPurpose)}
                       >
                         <Send size={12} /> Передати казначею
                       </button>
@@ -3720,7 +3766,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                 ))}
                 {articleStage.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-slate-500">Немає заявок для передачі в казначейство.</td>
+                    <td colSpan={6} className="px-3 py-6 text-center text-slate-500">Немає заявок для передачі в казначейство.</td>
                   </tr>
                 )}
               </tbody>
