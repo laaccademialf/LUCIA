@@ -273,6 +273,7 @@ const buildRecurringOccurrenceKey = (templateId, occurrenceDate) => `${String(te
 const createPaymentFormState = (defaultCurrency = "UAH") => ({
   title: "",
   description: "",
+  paymentPurpose: "",
   amount: "",
   currency: defaultCurrency,
   category: "",
@@ -1011,6 +1012,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
     setFormData({
       title: payment.title || "",
       description: payment.description || "",
+      paymentPurpose: payment.paymentPurpose || "",
       amount: String(payment.amount || ""),
       currency: payment.currency || "UAH",
       category: payment.category || "",
@@ -1957,7 +1959,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           <h3 className="text-base font-semibold">{editingPayment ? "Редагувати заявку" : "Нова заявка на платіж"}</h3>
           <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
             <div className="md:col-span-3">
-              <label className="text-sm font-semibold">Назва / призначення платежу *</label>
+              <label className="text-sm font-semibold">Мета платежу * <span className="text-xs font-normal text-slate-400">— опишіть своїми словами, навіщо цей платіж</span></label>
               <div className="flex gap-2 items-center">
                 <input className={`${inputClass} flex-1`} value={formData.title} onChange={(e) => handleFormChange("title", e.target.value)} placeholder="Наприклад: Оплата за продукти — ТОВ Ланч" />
                 <div className="flex gap-1 items-center shrink-0">
@@ -2132,9 +2134,13 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
             <div className="md:col-span-3 grid grid-cols-1 items-stretch gap-3 md:grid-cols-2">
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
                 <div>
-                  <div className="text-sm font-semibold">Опис / коментар</div>
+                  <div className="text-sm font-semibold">Опис / коментар <span className="text-xs font-normal text-slate-400">— для ініціатора</span></div>
                 </div>
                 <textarea className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100 min-h-[84px]" value={formData.description} onChange={(e) => handleFormChange("description", e.target.value)} placeholder="Додаткова інформація до заявки" />
+                <div className="mt-3">
+                  <div className="text-sm font-semibold text-indigo-700">Призначення платежу <span className="text-xs font-normal text-slate-400">— заповнює бухгалтер (з правилами ПДВ та статтями)</span></div>
+                  <textarea className="mt-1 w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 min-h-[60px]" value={formData.paymentPurpose || ""} onChange={(e) => handleFormChange("paymentPurpose", e.target.value)} placeholder="Наприклад: Оплата за товари за договором №… від …, в т.ч. ПДВ 20%" />
+                </div>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
                 <div>
@@ -2284,7 +2290,17 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       {/* Table */}
       <div className={cardClass}>
         <div className="flex items-center justify-between gap-2 mb-3">
-          <h3 className="text-base font-semibold">Реєстр платежів ({filteredPayments.length})</h3>
+          <div>
+            <h3 className="text-base font-semibold">Реєстр платежів ({filteredPayments.length})</h3>
+            {filteredPayments.filter((p) => !isRecurringTemplateRecord(p)).length > 0 && (
+              <div className="mt-0.5 text-xs text-slate-500">
+                Загальна сума: <span className="font-semibold text-slate-700">{formatMoney(filteredPayments.filter((p) => !isRecurringTemplateRecord(p)).reduce((sum, p) => sum + (Number(p.amount) || 0), 0))} {filteredPayments.find((p) => !isRecurringTemplateRecord(p))?.currency || "UAH"}</span>
+                {[...new Set(filteredPayments.filter((p) => !isRecurringTemplateRecord(p)).map((p) => p.currency))].length > 1 && (
+                  <span className="ml-2 text-slate-400">(різні валюти — суми не агреговано)</span>
+                )}
+              </div>
+            )}
+          </div>
           {selectedIds.size > 0 && (
             <div className="flex items-center gap-2">
               <span className="text-sm text-slate-600">Виділено: {selectedIds.size}</span>
@@ -2347,6 +2363,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                         {(linkedPayment?.paymentNumber || payment.paymentNumber) && <span className="font-mono">{linkedPayment?.paymentNumber || payment.paymentNumber}</span>}
                         {isRecurringTemplate && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">Регулярний</span>}
                         {payment.counterparty && <span>→ {payment.counterparty}</span>}
+                        {(payersById.get(String(payment.payerId || ""))?.name || payment.paidBy) && (
+                          <span className="text-indigo-600 font-medium">Платник: {payersById.get(String(payment.payerId || ""))?.name || payment.paidBy}</span>
+                        )}
                         {payment.category && <span className="text-slate-400">{payment.category}</span>}
                       </div>
                       {isRecurringTemplate && linkedPayment && (
