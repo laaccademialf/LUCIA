@@ -478,6 +478,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   const [urgencyFilter, setUrgencyFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [debtAgingThresholdDays, setDebtAgingThresholdDays] = useState("3");
+  const [isDebtDropActive, setIsDebtDropActive] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingPayment, setEditingPayment] = useState(null);
   const [showRecurringForm, setShowRecurringForm] = useState(false);
@@ -528,6 +529,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   // Approval modal state
   const [approvalModal, setApprovalModal] = useState(null);
   const [approvalData, setApprovalData] = useState({ counterparty: "", iban: "", paidBy: "", payerId: "", comment: "" });
+  const debtAgingInputRef = useRef(null);
 
   // Form state
   const [formData, setFormData] = useState(() => createPaymentFormState("UAH"));
@@ -1489,8 +1491,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   };
 
   // ─── Імпорт файлу старіння заборгованості з 1С ───
-  const importDebtAgingFile = (e) => {
-    const file = e.target.files?.[0];
+  const importDebtAgingFromFile = (file) => {
     if (!file) return;
     const thresholdDays = Math.max(0, Number.parseInt(String(debtAgingThresholdDays || "3"), 10) || 3);
     const reader = new FileReader();
@@ -1638,6 +1639,11 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       }
     };
     reader.readAsArrayBuffer(file);
+  };
+
+  const importDebtAgingFile = (e) => {
+    const file = e.target.files?.[0];
+    importDebtAgingFromFile(file);
     e.target.value = "";
   };
 
@@ -1869,23 +1875,46 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
       {!showForm && (
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className={btnPrimary} onClick={openNewForm}>
+          <button type="button" className={`${btnPrimary} !h-10 !px-4`} onClick={openNewForm}>
             <Plus size={14} /> Нова заявка на платіж
           </button>
-          <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-600">
-            <span className="font-semibold whitespace-nowrap">Поріг, днів</span>
-            <input
-              type="number"
-              min="0"
-              className="w-16 rounded border border-slate-300 px-2 py-1 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
-              value={debtAgingThresholdDays}
-              onChange={(e) => setDebtAgingThresholdDays(e.target.value)}
-            />
+          <div
+            className={`flex h-10 flex-wrap items-center gap-2 rounded-lg border border-dashed px-2 py-1 transition ${isDebtDropActive ? "border-indigo-400 bg-indigo-50" : "border-slate-300 bg-white"}`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!isDebtDropActive) setIsDebtDropActive(true);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              setIsDebtDropActive(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDebtDropActive(false);
+              const droppedFile = e.dataTransfer?.files?.[0];
+              if (droppedFile) importDebtAgingFromFile(droppedFile);
+            }}
+          >
+            <button
+              type="button"
+              className={`${btnSecondary} !h-8 !px-3 !text-sm`}
+              onClick={() => debtAgingInputRef.current?.click()}
+            >
+              <Upload size={14} /> Імпорт боргів з 1С
+            </button>
+            <span className="text-sm text-slate-500 whitespace-nowrap">або перетягніть файл сюди</span>
+            <div className="ml-1 flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-2 text-sm text-slate-600">
+              <span className="font-semibold whitespace-nowrap">Поріг, днів</span>
+              <input
+                type="number"
+                min="0"
+                className="h-6 w-14 rounded border border-slate-300 px-1.5 py-0.5 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+                value={debtAgingThresholdDays}
+                onChange={(e) => setDebtAgingThresholdDays(e.target.value)}
+              />
+            </div>
+            <input ref={debtAgingInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={importDebtAgingFile} />
           </div>
-          <label className={`${btnSecondary} cursor-pointer`}>
-            <Upload size={14} /> Імпорт боргів з 1С
-            <input type="file" accept=".xlsx,.xls" className="hidden" onChange={importDebtAgingFile} />
-          </label>
         </div>
       )}
 
