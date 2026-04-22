@@ -172,13 +172,13 @@ const getDayDiff = (fromDate, toDate) => {
 
 const buildVatTitleTail = (amount, vatMode, vatRate) => {
   if (vatMode === "without") {
-    return " // без ПДВ";
+    return ", без ПДВ";
   }
   if (vatMode === "with" && vatRate) {
     const rate = Number.parseFloat(String(vatRate).replace(",", "."));
     if (Number.isFinite(rate)) {
       const vatAmount = amount * rate / 100;
-      return ` // в т.ч. ПДВ ${vatRate}% - ${formatMoney(vatAmount)} грн`;
+      return `, в т.ч. ПДВ ${vatRate}% - ${formatMoney(vatAmount)} грн`;
     }
   }
   return "";
@@ -1551,7 +1551,9 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
           const urgency = daysRemaining < 0 ? "critical" : daysRemaining === 0 ? "high" : "normal";
 
           const titleBase = `Оплата за товар згідно договору ${contractInfo || ""}`.trim();
-          const title = titleBase + buildVatTitleTail(debtAmount, matchedCounterparty?.vatMode, matchedCounterparty?.vatRate);
+          const vatTail = buildVatTitleTail(debtAmount, matchedCounterparty?.vatMode, matchedCounterparty?.vatRate);
+          const codeSuffix = ["203", ""].filter(Boolean).join("//");
+          const title = codeSuffix ? `${titleBase}${vatTail} //${codeSuffix}` : `${titleBase}${vatTail}`;
           const description = [
             restaurantAccountNumber ? `Обліковий номер ресторану: ${restaurantAccountNumber}` : "",
             counterpartyEdrpou ? `ЄДРПОУ контрагента: ${counterpartyEdrpou}` : "",
