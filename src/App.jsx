@@ -1069,6 +1069,9 @@ function App() {
   const topTabs = useMemo(() => {
     const tabsFromMenu = getTabsForSection(activeNav);
     const allTabs = tabsFromMenu.map((tab) => {
+      if (String(tab?.label || "").trim().toLowerCase() === "управління надцінками") {
+        return { ...tab, label: "Управління націнками" };
+      }
       if (activeNav === "ops-checklists" && tab.id === "openingchecklist") {
         return { ...tab, label: "Чеклисти" };
       }

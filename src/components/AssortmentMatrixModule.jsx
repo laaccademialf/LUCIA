@@ -1065,8 +1065,11 @@ export default AssortmentMatrixModule;
 const MatrixView = ({ items, specifications, typicalFields, restaurants, user, barAccess, addItem, updateItem, deleteItem }) => {
   const isAdmin = isAdminUser(user);
   const isBarManager = barAccess?.role === "manager";
-  const canEdit = isAdmin || isBarManager || (barAccess?.permissions || []).includes("editAssignments");
-  const canEditPrices = isAdmin || isBarManager || (barAccess?.permissions || []).includes("editPrices");
+  const [viewAsBartender, setViewAsBartender] = useState(false);
+  const canEditBase = isAdmin || isBarManager || (barAccess?.permissions || []).includes("editAssignments");
+  const canEditPricesBase = isAdmin || isBarManager || (barAccess?.permissions || []).includes("editPrices");
+  const canEdit = viewAsBartender ? false : canEditBase;
+  const canEditPrices = viewAsBartender ? false : canEditPricesBase;
   const [search, setSearch] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
   const [selectedRestaurantId, setSelectedRestaurantId] = useState("");
@@ -1623,6 +1626,18 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
     <div className="grid grid-cols-1 gap-4">
       <div className={cardClass}>
         <div className="flex flex-wrap items-center gap-3">
+          {(isBarManager || isAdmin) && (
+            <label className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700">
+              <input
+                type="checkbox"
+                checked={viewAsBartender}
+                onChange={(e) => setViewAsBartender(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-slate-300"
+              />
+              Режим бармена
+            </label>
+          )}
+
           <div className="relative flex-1 min-w-[220px]">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
@@ -2087,6 +2102,7 @@ const TypicalFieldsView = ({ typicalFields, addField, updateField, deleteField }
 
 const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField }) => {
   const [feedback, setFeedback] = useState("");
+  const [lastGroupId, setLastGroupId] = useState("");
   const [groupForm, setGroupForm] = useState({
     id: "",
     name: "",
@@ -2164,6 +2180,7 @@ const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField 
 
     try {
       await persistMarkupSettings(nextGroups, rules);
+      setLastGroupId(nextGroup.id);
       setGroupForm({ id: "", name: "", minimumPortionPrice: "", restaurantIds: [] });
       setFeedback(`Групу закладів "${name}" збережено.`);
     } catch (err) {
@@ -2232,7 +2249,7 @@ const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField 
 
     try {
       await persistMarkupSettings(restaurantGroups, nextRules);
-      setRuleForm({ id: "", alcoholCategories: [], restaurantGroupId: restaurantGroups[0]?.id || "", costFrom: "", costTo: "", markupPercent: "" });
+      setRuleForm({ id: "", alcoholCategories: [], restaurantGroupId: lastGroupId || restaurantGroups[0]?.id || "", costFrom: "", costTo: "", markupPercent: "" });
       setFeedback(`Правило націнки збережено для ${selectedCategories.length} категорій.`);
     } catch (err) {
       alert(String(err?.message || err || "Не вдалося зберегти правило націнки"));
@@ -2247,6 +2264,18 @@ const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField 
       setFeedback("Правило націнки видалено.");
     } catch (err) {
       alert(String(err?.message || err || "Не вдалося видалити правило націнки"));
+    }
+  };
+
+  const handleDeleteRange = async (rangeKey) => {
+    if (!confirm("Видалити всі правила в цьому діапазоні собівартості?")) return;
+    setFeedback("");
+    const nextRules = rules.filter((rule) => getMarkupRuleRangeKey(rule) !== rangeKey);
+    try {
+      await persistMarkupSettings(restaurantGroups, nextRules);
+      setFeedback("Діапазон видалено.");
+    } catch (err) {
+      alert(String(err?.message || err || "Не вдалося видалити діапазон"));
     }
   };
 
@@ -2288,6 +2317,44 @@ const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField 
         label: formatMarkupRuleRangeLabel(row.costFrom, row.costTo),
       }));
   }, [rules]);
+
+  const compactColumnsByGroup = useMemo(() => {
+    return restaurantGroups.map((group) => {
+      const clusters = [];
+      const signatureMap = new Map();
+
+      markupCategories.forEach((category) => {
+        const signature = unifiedMatrixRows
+          .map((row) => {
+            const rule = row.byKey[`${category}::${group.id}`];
+            // Treat empty and explicit 0% as equivalent to reduce visual column fragmentation.
+            return String(toNumber(rule?.markupPercent ?? 0));
+          })
+          .join("|");
+
+        if (signatureMap.has(signature)) {
+          signatureMap.get(signature).categories.push(category);
+          return;
+        }
+
+        const cluster = {
+          key: `${group.id}:${category}:${signature}`,
+          groupId: group.id,
+          representativeCategory: category,
+          categories: [category],
+        };
+        signatureMap.set(signature, cluster);
+        clusters.push(cluster);
+      });
+
+      return { group, columns: clusters };
+    });
+  }, [restaurantGroups, markupCategories, unifiedMatrixRows]);
+
+  const compactColumnCount = useMemo(
+    () => compactColumnsByGroup.reduce((sum, entry) => sum + entry.columns.length, 0),
+    [compactColumnsByGroup]
+  );
 
   return (
     <div className="grid grid-cols-1 gap-4">
@@ -2351,6 +2418,7 @@ const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField 
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
                   <th className="px-3 py-2">Група</th>
+                  <th className="px-3 py-2 text-xs">Заклади</th>
                   <th className="px-3 py-2 text-center">Закладів</th>
                   <th className="px-3 py-2 text-right">Мін. ціна</th>
                   <th className="px-3 py-2 text-center">Дії</th>
@@ -2358,12 +2426,14 @@ const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField 
               </thead>
               <tbody>
                 {restaurantGroups.length === 0 ? (
-                  <tr><td colSpan={4} className="px-3 py-6 text-center text-slate-400">Груп закладів ще немає</td></tr>
+                  <tr><td colSpan={5} className="px-3 py-6 text-center text-slate-400">Груп закладів ще немає</td></tr>
                 ) : restaurantGroups.map((group) => (
                   <tr key={group.id} className="border-b border-slate-100 last:border-b-0">
                     <td className="px-3 py-2">
                       <div className="font-medium">{group.name}</div>
-                      <div className="text-xs text-slate-500">{group.restaurantIds.map((restaurantId) => restaurantOptions.find((item) => item.id === restaurantId)?.name || restaurantId).join(", ") || "—"}</div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="text-xs text-slate-600">{group.restaurantIds.map((restaurantId) => restaurantOptions.find((item) => item.id === restaurantId)?.name || restaurantId).join(", ") || "—"}</div>
                     </td>
                     <td className="px-3 py-2 text-center">{group.restaurantIds.length}</td>
                     <td className="px-3 py-2 text-right">{formatPrice(group.minimumPortionPrice)}</td>
@@ -2392,7 +2462,21 @@ const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField 
               {ruleForm.id ? (
                 <div className="mt-0.5 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-700">{ruleForm.alcoholCategories[0] || "—"}</div>
               ) : (
-                <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 rounded border border-slate-200 p-2">
+                <div className="mt-0.5 grid gap-2">
+                  <button
+                    type="button"
+                    className="self-start text-xs font-medium px-2 py-1 rounded border border-slate-300 hover:bg-slate-100"
+                    onClick={() => {
+                      const allSelected = ruleForm.alcoholCategories.length === markupCategories.length;
+                      setRuleForm((prev) => ({
+                        ...prev,
+                        alcoholCategories: allSelected ? [] : [...markupCategories],
+                      }));
+                    }}
+                  >
+                    {ruleForm.alcoholCategories.length === markupCategories.length ? "Зняти все" : "Вибрати все"}
+                  </button>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 rounded border border-slate-200 p-2">
                   {markupCategories.map((category) => (
                     <label key={category} className="inline-flex items-center gap-1.5 text-xs text-slate-700">
                       <input
@@ -2409,6 +2493,7 @@ const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField 
                       {category}
                     </label>
                   ))}
+                </div>
                 </div>
               )}
             </div>
@@ -2457,21 +2542,24 @@ const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField 
         ) : (
           <div>
             <div className="rounded-xl border border-slate-200">
-              <table className="w-full text-sm" style={{ minWidth: Math.max(700, 180 + markupCategories.length * restaurantGroups.length * 90) }}>
+              <table className="w-full text-sm" style={{ minWidth: Math.max(620, 180 + compactColumnCount * 72) }}>
                 <thead>
                   <tr className="border-b border-slate-200 text-center text-xs font-semibold uppercase tracking-wider text-slate-500">
                     <th rowSpan={2} className="w-[180px] border-r border-slate-200 px-3 py-3 text-left align-bottom">Собівартість порції</th>
-                    {restaurantGroups.map((group) => (
-                      <th key={group.id} colSpan={markupCategories.length} className="border-r border-slate-200 px-2 py-2 last:border-r-0">
+                    {compactColumnsByGroup.map(({ group, columns }) => (
+                      <th key={group.id} colSpan={columns.length} className="border-r border-slate-200 px-2 py-2 last:border-r-0">
                         <div className="font-semibold text-slate-700">{group.name}</div>
+                        <div className="mt-0.5 text-[10px] font-normal text-slate-600">{group.restaurantIds.map((restaurantId) => restaurantOptions.find((item) => item.id === restaurantId)?.name || restaurantId).join(", ")}</div>
                       </th>
                     ))}
                   </tr>
                   <tr className="border-b border-slate-200 text-center text-[11px] font-medium text-slate-500">
-                    {restaurantGroups.map((group) =>
-                      markupCategories.map((cat) => (
-                        <th key={`${group.id}_${cat}`} className="border-r border-slate-100 px-1 py-1.5 last:border-r-0">
-                          <div className="truncate" title={cat}>{cat}</div>
+                    {compactColumnsByGroup.map(({ group, columns }) =>
+                      columns.map((column) => (
+                        <th key={`${group.id}_${column.key}`} className="border-r border-slate-100 px-1 py-1.5 last:border-r-0">
+                          <div className="mx-auto max-w-[150px] whitespace-normal break-words text-[10px] leading-tight" title={column.categories.join(", ")}>
+                            {column.categories.join(", ")}
+                          </div>
                         </th>
                       ))
                     )}
@@ -2480,33 +2568,48 @@ const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField 
                 <tbody>
                   {unifiedMatrixRows.length === 0 ? (
                     <tr>
-                      <td colSpan={1 + restaurantGroups.length * markupCategories.length} className="px-3 py-6 text-center text-slate-400">
+                      <td colSpan={1 + compactColumnCount} className="px-3 py-6 text-center text-slate-400">
                         Ще немає жодного правила.
                       </td>
                     </tr>
                   ) : unifiedMatrixRows.map((row) => (
-                    <tr key={row.rangeKey} className="border-b border-slate-100 last:border-b-0">
-                      <td className="border-r border-slate-200 px-3 py-2 font-medium text-slate-700">{row.label}</td>
-                      {restaurantGroups.map((group) =>
-                        markupCategories.map((cat) => {
-                          const rule = row.byKey[`${cat}::${group.id}`] || null;
+                    <tr key={row.rangeKey} className="border-b border-slate-100 last:border-b-0 group">
+                      <td className="border-r border-slate-200 px-2 py-2 font-medium text-slate-700">
+                        <div className="flex items-center gap-2">
+                          <span>{row.label}</span>
+                          <button
+                            type="button"
+                            className="rounded p-0.5 opacity-0 group-hover:opacity-100 hover:bg-red-50 text-red-400 transition-opacity"
+                            onClick={() => handleDeleteRange(row.rangeKey)}
+                            title="Видалити цей діапазон"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </td>
+                      {compactColumnsByGroup.map(({ group, columns }) =>
+                        columns.map((column) => {
+                          const category = column.representativeCategory;
+                          const rule = row.byKey[`${category}::${group.id}`] || null;
+                          const effectiveMarkup = toNumber(rule?.markupPercent ?? 0);
+                          const hasAnyRuleInCluster = column.categories.some((clusterCategory) => Boolean(row.byKey[`${clusterCategory}::${group.id}`]));
                           return (
-                            <td key={`${row.rangeKey}_${group.id}_${cat}`} className="border-r border-slate-100 px-1 py-2 text-center last:border-r-0">
+                            <td key={`${row.rangeKey}_${group.id}_${column.key}`} className="border-r border-slate-100 px-1 py-2 text-center last:border-r-0">
                               <button
                                 type="button"
-                                className={rule
+                                className={hasAnyRuleInCluster
                                   ? "inline-flex min-w-[60px] items-center justify-center rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50"
                                   : "inline-flex min-w-[60px] items-center justify-center rounded border border-dashed border-slate-300 bg-slate-50 px-2 py-1 text-xs text-slate-400 hover:bg-slate-100"}
                                 onClick={() => setRuleForm({
-                                  id: rule?.id || "",
-                                  alcoholCategories: [cat],
+                                  id: "",
+                                  alcoholCategories: [...column.categories],
                                   restaurantGroupId: group.id,
                                   costFrom: String(row.costFrom || ""),
                                   costTo: String(row.costTo || ""),
-                                  markupPercent: String(rule?.markupPercent || ""),
+                                  markupPercent: String(effectiveMarkup || ""),
                                 })}
                               >
-                                {rule ? `${toNumber(rule.markupPercent)}%` : "+"}
+                                {hasAnyRuleInCluster ? `${effectiveMarkup}%` : "+"}
                               </button>
                             </td>
                           );
@@ -2517,10 +2620,10 @@ const MarkupSettingsView = ({ typicalFields, restaurants, addField, updateField 
 
                   <tr className="bg-slate-50/70">
                     <td className="border-r border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">Мін. ціна</td>
-                    {restaurantGroups.map((group) =>
-                      markupCategories.map((cat, catIdx) => (
-                        <td key={`min_${group.id}_${cat}`} className="border-r border-slate-100 px-1 py-2 text-center text-xs font-semibold text-slate-700 last:border-r-0">
-                          {catIdx === 0 ? formatPrice(group.minimumPortionPrice) : ""}
+                    {compactColumnsByGroup.map(({ group, columns }) =>
+                      columns.map((column, idx) => (
+                        <td key={`min_${group.id}_${column.key}`} className="border-r border-slate-100 px-1 py-2 text-center text-xs font-semibold text-slate-700 last:border-r-0">
+                          {idx === 0 ? formatPrice(group.minimumPortionPrice) : ""}
                         </td>
                       ))
                     )}

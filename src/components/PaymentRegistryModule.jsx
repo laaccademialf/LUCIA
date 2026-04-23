@@ -1430,6 +1430,10 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
   };
 
   const deletePayment = async (payment) => {
+    if (!paymentBelongsToUser(payment, myUserId, myEmail, myName)) {
+      alert("Видаляти заявку може лише її ініціатор.");
+      return;
+    }
     if (!window.confirm(`Видалити заявку "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency})? Цю дію неможливо скасувати.`)) return;
     markLocallyDeletedPayments([payment.id]);
     setPayments((prev) => prev.filter((item) => item.id !== payment.id));
@@ -1451,7 +1455,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
       action: "payment_request_delete",
       entityType: "payment_request",
       entityId: payment.id,
-      description: `Адмін видалив заявку "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency})`,
+      description: `Ініціатор видалив заявку "${payment.title}" (${formatMoney(payment.amount)} ${payment.currency})`,
     });
   };
 
@@ -1514,11 +1518,14 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
 
   const bulkDeleteSelected = async () => {
     if (selectedIds.size === 0) return;
-    const toDelete = paymentRequests.filter((p) => selectedIds.has(p.id));
+    const selectedPayments = paymentRequests.filter((p) => selectedIds.has(p.id));
+    const toDelete = selectedPayments.filter((p) => !isRecurringTemplateRecord(p) && paymentBelongsToUser(p, myUserId, myEmail, myName));
+    const skipped = selectedPayments.length - toDelete.length;
     if (toDelete.length === 0) return;
-    if (!confirm(`Видалити ${toDelete.length} заявок? Цю дію неможливо скасувати.`)) return;
+    if (!confirm(`Видалити ${toDelete.length} заявок? Цю дію неможливо скасувати.${skipped > 0 ? `\n${skipped} заявок пропущено: видаляти може лише ініціатор.` : ""}`)) return;
     markLocallyDeletedPayments(toDelete.map((payment) => payment.id));
-    setPayments((prev) => prev.filter((item) => !selectedIds.has(item.id)));
+    const toDeleteIds = new Set(toDelete.map((payment) => payment.id));
+    setPayments((prev) => prev.filter((item) => !toDeleteIds.has(item.id)));
     const results = await Promise.allSettled(toDelete.map((payment) => deletePaymentRequestApi(payment.id)));
     const failedIds = toDelete.filter((_, idx) => results[idx]?.status === "rejected").map((item) => item.id);
 
@@ -2305,8 +2312,8 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
               <button type="button" onClick={bulkLaunchSelected} className={btnApprove} title="Запустити виділені чернетки на оплату">
                 <Send size={12} /> Запустити
               </button>
-              {isAdmin && (
-                <button type="button" onClick={bulkDeleteSelected} className={btnReject} title="Видалити виділені">
+              {paymentRequests.some((p) => selectedIds.has(p.id) && !isRecurringTemplateRecord(p) && paymentBelongsToUser(p, myUserId, myEmail, myName)) && (
+                <button type="button" onClick={bulkDeleteSelected} className={btnReject} title="Видалити мої виділені заявки">
                   <Trash2 size={12} /> Видалити
                 </button>
               )}
@@ -2347,6 +2354,7 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                   ? (isFinance || paymentBelongsToUser(payment, myUserId, myEmail, myName))
                   : (payment.status === "draft" || (payment.status === "pending" && payment.requestedById === myUserId));
                 const canCancel = !isRecurringTemplate && (payment.status === "draft" || payment.status === "pending") && (payment.requestedById === myUserId || isFinance);
+                const canDelete = !isRecurringTemplate && paymentBelongsToUser(payment, myUserId, myEmail, myName);
 
                 return (
                   <tr key={payment.id} className={`border-t border-slate-200 hover:bg-slate-50${selectedIds.has(payment.id) ? " bg-indigo-50" : ""}`}>
@@ -2426,8 +2434,13 @@ export default function PaymentRegistryModule({ topTab, restaurants, user, onAud
                             Скасувати
                           </button>
                         )}
-                        {isAdmin && (
-                          <button type="button" onClick={() => (isRecurringTemplate ? removeRecurringTemplate(payment) : deletePayment(payment))} className={btnReject} title="Видалити назавжди">
+                        {canDelete && (
+                          <button type="button" onClick={() => deletePayment(payment)} className={btnReject} title="Видалити заявку назавжди">
+                            <Trash2 size={12} /> Видалити
+                          </button>
+                        )}
+                        {isAdmin && isRecurringTemplate && (
+                          <button type="button" onClick={() => removeRecurringTemplate(payment)} className={btnReject} title="Видалити шаблон регулярного платежу">
                             <Trash2 size={12} /> Видалити
                           </button>
                         )}
