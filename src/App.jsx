@@ -280,6 +280,43 @@ const ASSET_FIELD_LABELS = {
 
 const getAssetFieldLabel = (field) => ASSET_FIELD_LABELS[String(field || "")] || String(field || "-");
 const normalizeLowerText = (value) => String(value || "").trim().toLowerCase();
+const NAVIGATION_QUERY_NAV_KEY = "nav";
+const NAVIGATION_QUERY_TAB_KEY = "tab";
+
+const getNavigationStateFromLocation = () => {
+  if (typeof window === "undefined") {
+    return { activeNav: "", topTab: "" };
+  }
+
+  const url = new URL(window.location.href);
+
+  return {
+    activeNav: String(url.searchParams.get(NAVIGATION_QUERY_NAV_KEY) || "").trim(),
+    topTab: String(url.searchParams.get(NAVIGATION_QUERY_TAB_KEY) || "").trim(),
+  };
+};
+
+const buildNavigationUrl = (activeNav, topTab) => {
+  if (typeof window === "undefined") return "";
+
+  const url = new URL(window.location.href);
+  const normalizedActiveNav = String(activeNav || "").trim();
+  const normalizedTopTab = String(topTab || "").trim();
+
+  if (normalizedActiveNav) {
+    url.searchParams.set(NAVIGATION_QUERY_NAV_KEY, normalizedActiveNav);
+  } else {
+    url.searchParams.delete(NAVIGATION_QUERY_NAV_KEY);
+  }
+
+  if (normalizedTopTab) {
+    url.searchParams.set(NAVIGATION_QUERY_TAB_KEY, normalizedTopTab);
+  } else {
+    url.searchParams.delete(NAVIGATION_QUERY_TAB_KEY);
+  }
+
+  return `${url.pathname}${url.search}${url.hash}`;
+};
 
 
 
@@ -511,9 +548,14 @@ function App() {
           const { user, loading: authLoading, isAuthenticated } = useAuth();
         // Список ресторанів
         const [restaurants, setRestaurants] = useState([]);
+      const initialNavigationRef = useRef(null);
+      if (initialNavigationRef.current === null) {
+        initialNavigationRef.current = getNavigationStateFromLocation();
+      }
       // Головна вкладка
       const [topTab, setTopTab] = useState(() => {
-        // Відновлення збереженої вкладки з localStorage
+        const urlTopTab = String(initialNavigationRef.current?.topTab || "").trim();
+        if (urlTopTab) return urlTopTab;
         return localStorage.getItem('lucia_topTab') || "test1";
       });
 
@@ -522,7 +564,8 @@ function App() {
       const [assetInventorySessionsHistory, setAssetInventorySessionsHistory] = useState([]);
     // Головна навігація
     const [activeNav, setActiveNav] = useState(() => {
-      // Відновлення збереженої сторінки з localStorage
+      const urlActiveNav = String(initialNavigationRef.current?.activeNav || "").trim();
+      if (urlActiveNav) return urlActiveNav;
       return localStorage.getItem('lucia_activeNav') || "reports-assets";
     });
   // --- Notification Center state ---
@@ -536,6 +579,9 @@ function App() {
   const notificationSoundInitializedRef = useRef(false);
   const userInteractedRef = useRef(false);
   const authAuditRef = useRef("");
+  const hasSyncedBrowserHistoryRef = useRef(false);
+  const isApplyingBrowserHistoryRef = useRef(false);
+  const lastNavigationSnapshotRef = useRef("");
 
   const getLoginAuditMarker = useCallback(() => {
     if (typeof window === "undefined" || typeof localStorage === "undefined") return "";
@@ -569,6 +615,48 @@ function App() {
       console.warn("Audit log write failed:", error);
     });
   };
+
+  const persistNavigationState = useCallback((nextActiveNav, nextTopTab, historyMode = "push") => {
+    if (typeof window === "undefined") return;
+
+    const normalizedActiveNav = String(nextActiveNav || "").trim();
+    const normalizedTopTab = String(nextTopTab || "").trim();
+
+    if (normalizedActiveNav) {
+      localStorage.setItem("lucia_activeNav", normalizedActiveNav);
+    } else {
+      localStorage.removeItem("lucia_activeNav");
+    }
+
+    if (normalizedTopTab) {
+      localStorage.setItem("lucia_topTab", normalizedTopTab);
+    } else {
+      localStorage.removeItem("lucia_topTab");
+    }
+
+    const nextUrl = buildNavigationUrl(normalizedActiveNav, normalizedTopTab);
+    const nextState = {
+      activeNav: normalizedActiveNav,
+      topTab: normalizedTopTab,
+    };
+
+    if (historyMode === "replace") {
+      window.history.replaceState(nextState, "", nextUrl);
+      return;
+    }
+
+    window.history.pushState(nextState, "", nextUrl);
+  }, []);
+
+  const handleActiveNavChange = useCallback((nextActiveNav) => {
+    setActiveNav(nextActiveNav);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
+  const handleTopTabChange = useCallback((nextTopTab) => {
+    setTopTab(nextTopTab);
+    setSelected(null);
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -1199,6 +1287,50 @@ function App() {
     setTopTab(nextTopTab);
     localStorage.setItem('lucia_topTab', nextTopTab);
   }, [activeNav, topTabs, topTab]);
+
+  const isNavigationStateStable = useMemo(() => {
+    if (!activeNav) return false;
+    if (topTabs.length === 0) return topTab === "";
+    return topTabs.some((tab) => tab.id === topTab);
+  }, [activeNav, topTabs, topTab]);
+
+  useEffect(() => {
+    if (!isNavigationStateStable) return;
+
+    const normalizedTopTab = topTabs.length === 0 ? "" : topTab;
+    const snapshot = JSON.stringify({ activeNav, topTab: normalizedTopTab });
+    if (lastNavigationSnapshotRef.current === snapshot) {
+      return;
+    }
+
+    lastNavigationSnapshotRef.current = snapshot;
+    const historyMode = !hasSyncedBrowserHistoryRef.current || isApplyingBrowserHistoryRef.current ? "replace" : "push";
+    hasSyncedBrowserHistoryRef.current = true;
+    persistNavigationState(activeNav, normalizedTopTab, historyMode);
+    if (isApplyingBrowserHistoryRef.current) {
+      isApplyingBrowserHistoryRef.current = false;
+    }
+  }, [activeNav, topTab, topTabs.length, isNavigationStateStable, persistNavigationState]);
+
+  useEffect(() => {
+    const handlePopState = (event) => {
+      const historyState = event.state && typeof event.state === "object" ? event.state : null;
+      const locationState = getNavigationStateFromLocation();
+      const nextActiveNav = String(historyState?.activeNav || locationState.activeNav || "").trim();
+      const nextTopTab = String(historyState?.topTab || locationState.topTab || "").trim();
+
+      if (!nextActiveNav) return;
+
+      isApplyingBrowserHistoryRef.current = true;
+      setActiveNav(nextActiveNav);
+      setTopTab(nextTopTab);
+      setSelected(null);
+      if (isMobile) setSidebarOpen(false);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [isMobile]);
 
   const normalizedRoleRestaurantIds = useMemo(() => (
     Array.isArray(roleRestaurantIds)
@@ -3439,7 +3571,7 @@ function App() {
       if (topTab === "add") {
         return (
           <div className="grid grid-cols-1">
-            <AddUserForm currentUser={user} onSuccess={() => setTopTab("edit")} />
+            <AddUserForm currentUser={user} onSuccess={() => handleTopTabChange("edit")} />
           </div>
         );
       }
@@ -3598,7 +3730,7 @@ function App() {
                 return;
               }
               setSelected(asset);
-              setTopTab('test2');
+              handleTopTabChange('test2');
             }} />
           </div>
         );
@@ -4053,7 +4185,7 @@ function App() {
           {expandedGroups[group.id] && (
             <div style={{display: "flex", flexDirection: "column", gap: "0.25rem", paddingBottom: "0.5rem"}}>
               {group.children.map(item => (
-                <button key={item.id} type="button" onClick={() => {setActiveNav(item.id); localStorage.setItem('lucia_activeNav', item.id); if (isMobile) setSidebarOpen(false);}} style={{margin: "0 0.5rem", display: "flex", alignItems: "flex-start", gap: "0.5rem", borderRadius: "0.5rem", padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: "500", transition: "all 150ms", whiteSpace: "nowrap", backgroundColor: activeNav === item.id ? "#4f46e5" : "transparent", color: activeNav === item.id ? "white" : "#e2e8f0", border: "none", cursor: "pointer"}}>
+                <button key={item.id} type="button" onClick={() => handleActiveNavChange(item.id)} style={{margin: "0 0.5rem", display: "flex", alignItems: "flex-start", gap: "0.5rem", borderRadius: "0.5rem", padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: "500", transition: "all 150ms", whiteSpace: "nowrap", backgroundColor: activeNav === item.id ? "#4f46e5" : "transparent", color: activeNav === item.id ? "white" : "#e2e8f0", border: "none", cursor: "pointer"}}>
                   <span style={{display: "inline-block", height: "0.5rem", width: "0.5rem", borderRadius: "9999px", backgroundColor: "#818cf8", marginTop: "0.25rem", flexShrink: 0}} />
                   {item.label}
                 </button>
@@ -4106,9 +4238,7 @@ function App() {
             key={tab.id}
             type="button"
             onClick={() => {
-              setTopTab(tab.id);
-              localStorage.setItem('lucia_topTab', tab.id);
-              setSelected(null);
+              handleTopTabChange(tab.id);
             }}
             style={{
               padding: "0.5rem 0.75rem",
@@ -4451,7 +4581,7 @@ function App() {
         onNotificationAction={(notification) => {
           // Обробка дій сповіщень
           if (notification.actionUrl) {
-            setActiveNav(notification.actionUrl);
+            handleActiveNavChange(notification.actionUrl);
           }
           // Закрити панель при кліцінні
           setNotificationPanelOpen(false);
