@@ -30,6 +30,15 @@ export default function NotificationCenter({ open, onClose, notifications = [], 
   const [pushEnabled, setPushEnabledState] = useState(() => getPushEnabled());
   const [pushPermission, setPushPermission] = useState(() => getPushPermissionStatus());
   const [isFullscreen, setIsFullscreen] = useState(() => Boolean(document.fullscreenElement));
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [lightTheme, setLightTheme] = useState(() => {
+    const savedPlatform = localStorage.getItem("lucia_platform_light_theme");
+    if (savedPlatform !== null) return JSON.parse(savedPlatform);
+    const savedLegacy = localStorage.getItem("lucia_notification_light_theme");
+    return savedLegacy !== null ? JSON.parse(savedLegacy) : false;
+  });
+
+  const isLight = lightTheme;
 
   // Зберігай наслідки
   useEffect(() => {
@@ -39,6 +48,14 @@ export default function NotificationCenter({ open, onClose, notifications = [], 
   useEffect(() => {
     localStorage.setItem("lucia_notification_audio_enabled", JSON.stringify(audioEnabled));
   }, [audioEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("lucia_notification_light_theme", JSON.stringify(lightTheme));
+    localStorage.setItem("lucia_platform_light_theme", JSON.stringify(lightTheme));
+    document.body.classList.toggle("lucia-platform-light", lightTheme);
+    document.documentElement.style.colorScheme = lightTheme ? "light" : "dark";
+    window.dispatchEvent(new CustomEvent("lucia:platform-theme-changed", { detail: { light: lightTheme } }));
+  }, [lightTheme]);
 
   useEffect(() => {
     localStorage.setItem("lucia_notification_read_ids", JSON.stringify(Array.from(readIds)));
@@ -134,23 +151,34 @@ export default function NotificationCenter({ open, onClose, notifications = [], 
       <div
         className={clsx(
           "absolute right-0 top-0 bottom-0 w-96 max-w-full",
-          "bg-slate-900 shadow-2xl flex flex-col",
+          isLight ? "bg-slate-50" : "bg-slate-900",
+          "shadow-2xl flex flex-col",
           "transition-transform duration-300",
           open ? "translate-x-0" : "translate-x-full"
         )}
       >
         {/* Заголовок */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700 bg-gradient-to-r from-slate-800 to-slate-900">
+        <div
+          className={clsx(
+            "flex items-center justify-between px-6 py-4 border-b",
+            isLight
+              ? "border-slate-200 bg-gradient-to-r from-slate-100 to-slate-50"
+              : "border-slate-700 bg-gradient-to-r from-slate-800 to-slate-900"
+          )}
+        >
           <div>
-            <h2 className="text-lg font-bold text-white">Сповіщення</h2>
+            <h2 className={clsx("text-lg font-bold", isLight ? "text-slate-800" : "text-white")}>Сповіщення</h2>
             {unreadCount > 0 && (
-              <p className="text-xs text-slate-400 mt-0.5">{unreadCount} непрочитаних</p>
+              <p className={clsx("text-xs mt-0.5", isLight ? "text-slate-500" : "text-slate-400")}>{unreadCount} непрочитаних</p>
             )}
           </div>
           <div className="flex items-center gap-1">
             <button
               onClick={toggleFullscreen}
-              className="p-2 rounded-lg hover:bg-slate-700 transition-colors text-slate-300"
+              className={clsx(
+                "p-2 rounded-lg transition-colors",
+                isLight ? "hover:bg-slate-200 text-slate-600" : "hover:bg-slate-700 text-slate-300"
+              )}
               title={isFullscreen ? "Вийти з повного екрана" : "Відкрити на повний екран"}
             >
               {isFullscreen ? (
@@ -165,7 +193,10 @@ export default function NotificationCenter({ open, onClose, notifications = [], 
             </button>
             <button
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-slate-700 transition-colors text-slate-300"
+              className={clsx(
+                "p-2 rounded-lg transition-colors",
+                isLight ? "hover:bg-slate-200 text-slate-600" : "hover:bg-slate-700 text-slate-300"
+              )}
               title="Закрити"
             >
               <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
@@ -176,17 +207,21 @@ export default function NotificationCenter({ open, onClose, notifications = [], 
         </div>
 
         {/* Список сповіщень */}
-        <div className="flex-1 overflow-y-auto divide-y divide-slate-700">
+        <div className={clsx("flex-1 overflow-y-auto divide-y", isLight ? "divide-slate-200" : "divide-slate-700")}>
           {visibleNotifications.length === 0 ? (
             <div className="p-6 text-center">
               <div className="text-5xl mb-3">🔔</div>
-              <p className="text-slate-400 text-sm">Немає сповіщень</p>
+              <p className={clsx("text-sm", isLight ? "text-slate-500" : "text-slate-400")}>Немає сповіщень</p>
             </div>
           ) : (
             visibleNotifications.map((notification) => {
               const isRead = readIds.has(notification.key || notification.id);
               const priority = notification.priority || "normal";
-              const priorityColors = {
+              const priorityColors = isLight ? {
+                high: "bg-red-50 border-l-4 border-red-500",
+                normal: "bg-white border-l-4 border-blue-500",
+                low: "bg-white border-l-4 border-slate-300",
+              } : {
                 high: "bg-red-900/30 border-l-4 border-red-500",
                 normal: "bg-slate-800 border-l-4 border-blue-400",
                 low: "bg-slate-800 border-l-4 border-slate-600",
@@ -196,7 +231,8 @@ export default function NotificationCenter({ open, onClose, notifications = [], 
                 <div
                   key={notification.key || notification.id}
                   className={clsx(
-                    "p-4 cursor-pointer transition-all hover:bg-slate-700/50",
+                    "p-4 cursor-pointer transition-all",
+                    isLight ? "hover:bg-slate-100" : "hover:bg-slate-700/50",
                     priorityColors[priority],
                     !isRead && "font-semibold"
                   )}
@@ -207,15 +243,15 @@ export default function NotificationCenter({ open, onClose, notifications = [], 
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 min-w-0">
-                        <p className={clsx("text-sm break-words", isRead ? "text-slate-400" : "text-white")}>
+                        <p className={clsx("text-sm break-words", isRead ? (isLight ? "text-slate-500" : "text-slate-400") : (isLight ? "text-slate-900" : "text-white"))}>
                           {notification.title}
                         </p>
                         {notification.body && (
-                          <p className="text-xs text-slate-500 mt-1 line-clamp-2">
+                          <p className={clsx("text-xs mt-1 line-clamp-2", isLight ? "text-slate-600" : "text-slate-500")}>
                             {notification.body}
                           </p>
                         )}
-                        <p className="text-xs text-slate-500 mt-2">
+                        <p className={clsx("text-xs mt-2", isLight ? "text-slate-500" : "text-slate-500")}>
                           {notification.time || notification.createdAt}
                         </p>
                       </div>
@@ -226,14 +262,17 @@ export default function NotificationCenter({ open, onClose, notifications = [], 
                   </div>
 
                   {/* Дії */}
-                  <div className="flex gap-2 mt-3 pt-3 border-t border-slate-700/50">
+                  <div className={clsx("flex gap-2 mt-3 pt-3 border-t", isLight ? "border-slate-200" : "border-slate-700/50")}>
                     {!isRead && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleMarkAsRead(notification);
                         }}
-                        className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 transition-colors"
+                        className={clsx(
+                          "text-xs px-2 py-1 rounded transition-colors",
+                          isLight ? "bg-slate-200 hover:bg-slate-300 text-slate-700" : "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                        )}
                         title="Позначити як прочитане"
                       >
                         ✓ Прочитано
@@ -244,7 +283,10 @@ export default function NotificationCenter({ open, onClose, notifications = [], 
                         e.stopPropagation();
                         handleDismiss(notification);
                       }}
-                      className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors ml-auto"
+                      className={clsx(
+                        "text-xs px-2 py-1 rounded transition-colors ml-auto",
+                        isLight ? "bg-slate-200 hover:bg-slate-300 text-slate-700" : "bg-slate-700 hover:bg-slate-600 text-slate-300"
+                      )}
                       title="Приховати"
                     >
                       × Приховати
@@ -256,82 +298,138 @@ export default function NotificationCenter({ open, onClose, notifications = [], 
           )}
         </div>
 
-        {/* Контролі в низу */}
-        <div className="border-t border-slate-700 bg-slate-900 p-4 space-y-3">
-          {/* Регулятор гучності */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-300">
-              <span>Звук</span>
-              <span>{Math.round(audioVolume * 100)}%</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={audioVolume * 100}
-                onChange={(e) => setAudioVolume(parseFloat(e.target.value) / 100)}
-                className="flex-1 h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-              />
-              <button
-                onClick={() => setAudioEnabled(!audioEnabled)}
-                className={clsx(
-                  "p-1.5 rounded-lg transition-colors",
-                  audioEnabled ? "bg-blue-900/50 text-blue-300 hover:bg-blue-900/70" : "bg-slate-700 text-slate-400 hover:bg-slate-600"
+        {/* Нижня зона: плитка швидкої дії + налаштування по кліку */}
+        <div className={clsx("border-t p-4 space-y-3", isLight ? "border-slate-200 bg-slate-50" : "border-slate-700 bg-slate-900")}>
+          {settingsOpen && (
+            <div className={clsx("rounded-xl border p-3 space-y-3", isLight ? "border-slate-200 bg-white" : "border-slate-700 bg-slate-800/70")}>
+              <div className="flex items-center justify-between">
+                <h4 className={clsx("text-xs font-semibold", isLight ? "text-slate-700" : "text-slate-200")}>Налаштування сповіщень</h4>
+                <button
+                  onClick={() => setSettingsOpen(false)}
+                  className={clsx("text-xs", isLight ? "text-slate-500 hover:text-slate-700" : "text-slate-400 hover:text-slate-200")}
+                >
+                  Згорнути
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <div className={clsx("flex items-center justify-between text-xs font-semibold", isLight ? "text-slate-600" : "text-slate-300")}>
+                  <span>Звук</span>
+                  <span>{Math.round(audioVolume * 100)}%</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    value={audioVolume * 100}
+                    onChange={(e) => setAudioVolume(parseFloat(e.target.value) / 100)}
+                    className={clsx("flex-1 h-2 rounded-lg appearance-none cursor-pointer accent-blue-500", isLight ? "bg-slate-200" : "bg-slate-700")}
+                  />
+                  <button
+                    onClick={() => setAudioEnabled(!audioEnabled)}
+                    className={clsx(
+                      "p-1.5 rounded-lg transition-colors",
+                      audioEnabled
+                        ? (isLight ? "bg-blue-100 text-blue-700 hover:bg-blue-200" : "bg-blue-900/50 text-blue-300 hover:bg-blue-900/70")
+                        : (isLight ? "bg-slate-200 text-slate-500 hover:bg-slate-300" : "bg-slate-700 text-slate-400 hover:bg-slate-600")
+                    )}
+                    title={audioEnabled ? "Вимкнути звук" : "Увімкнути звук"}
+                  >
+                    {audioEnabled ? "🔊" : "🔇"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className={clsx("text-xs font-semibold", isLight ? "text-slate-600" : "text-slate-300")}>Push-сповіщення</span>
+                  <button
+                    onClick={handleTogglePush}
+                    disabled={pushPermission === "denied"}
+                    className={clsx(
+                      "px-2 py-1 rounded text-xs font-medium transition-colors",
+                      pushEnabled && pushPermission === "granted"
+                        ? (isLight ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-green-900/50 text-green-300 hover:bg-green-900/70")
+                        : pushPermission === "denied"
+                        ? (isLight ? "bg-slate-200 text-slate-400 cursor-not-allowed" : "bg-slate-700 text-slate-500 cursor-not-allowed")
+                        : (isLight ? "bg-slate-200 text-slate-700 hover:bg-slate-300" : "bg-slate-700 text-slate-300 hover:bg-slate-600")
+                    )}
+                    title={
+                      pushPermission === "denied"
+                        ? "Push-сповіщення заблоковані в браузері"
+                        : pushEnabled
+                        ? "Вимкнути push-сповіщення"
+                        : "Включити push-сповіщення"
+                    }
+                  >
+                    {pushEnabled && pushPermission === "granted" ? "✓ Увімкнені" : "Увімкнути"}
+                  </button>
+                </div>
+                {pushPermission === "denied" && (
+                  <p className={clsx("text-xs italic", isLight ? "text-slate-500" : "text-slate-500")}>
+                    Push-сповіщення заблоковані. Змініть налаштування браузера.
+                  </p>
                 )}
-                title={audioEnabled ? "Вимкнути звук" : "Увімкнути звук"}
+              </div>
+
+              <button
+                onClick={handleClearAll}
+                disabled={visibleNotifications.length === 0}
+                className={clsx(
+                  "w-full py-2 px-3 rounded-lg text-sm font-medium transition-colors",
+                  visibleNotifications.length === 0
+                    ? (isLight ? "bg-slate-200 text-slate-400 cursor-not-allowed" : "bg-slate-700 text-slate-500 cursor-not-allowed")
+                    : (isLight ? "bg-slate-200 hover:bg-slate-300 text-slate-700" : "bg-slate-700 hover:bg-slate-600 text-slate-200")
+                )}
               >
-                {audioEnabled ? "🔊" : "🔇"}
+                Очистити всі
               </button>
             </div>
-          </div>
+          )}
 
-          {/* Push-сповіщення */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-300">Push-сповіщення</span>
-              <button
-                onClick={handleTogglePush}
-                disabled={pushPermission === "denied"}
-                className={clsx(
-                  "px-2 py-1 rounded text-xs font-medium transition-colors",
-                  pushEnabled && pushPermission === "granted"
-                    ? "bg-green-900/50 text-green-300 hover:bg-green-900/70"
-                    : pushPermission === "denied"
-                    ? "bg-slate-700 text-slate-500 cursor-not-allowed"
-                    : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                )}
-                title={
-                  pushPermission === "denied"
-                    ? "Push-сповіщення заблоковані в браузері"
-                    : pushEnabled
-                    ? "Вимкнути push-сповіщення"
-                    : "Включити push-сповіщення"
-                }
-              >
-                {pushEnabled && pushPermission === "granted" ? "✓ Увімкнені" : "Увімкнути"}
-              </button>
-            </div>
-            {pushPermission === "denied" && (
-              <p className="text-xs text-slate-500 italic">
-                Push-сповіщення заблоковані. Змініть налаштування браузера.
-              </p>
-            )}
-          </div>
+          <div className="grid grid-cols-4 gap-2">
+            <button
+              onClick={() => setSettingsOpen((prev) => !prev)}
+              className={clsx(
+                "col-span-1 aspect-square rounded-xl border transition-all",
+                "flex flex-col items-center justify-center gap-1",
+                settingsOpen
+                  ? (isLight ? "border-blue-500 bg-blue-100 text-blue-700" : "border-blue-500 bg-blue-900/40 text-blue-200")
+                  : (isLight ? "border-slate-300 bg-white text-slate-600 hover:bg-slate-100" : "border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700")
+              )}
+              title="Налаштування сповіщень"
+            >
+              <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5m6 0a3 3 0 11-6 0m6 0H9" />
+              </svg>
+              <span className="text-[11px] font-semibold">Сповіщення</span>
+            </button>
 
-          {/* Дії */}
-          <button
-            onClick={handleClearAll}
-            disabled={visibleNotifications.length === 0}
-            className={clsx(
-              "w-full py-2 px-3 rounded-lg text-sm font-medium transition-colors",
-              visibleNotifications.length === 0
-                ? "bg-slate-700 text-slate-500 cursor-not-allowed"
-                : "bg-slate-700 hover:bg-slate-600 text-slate-200"
-            )}
-          >
-            Очистити всі
-          </button>
+            <button
+              onClick={() => setLightTheme((prev) => !prev)}
+              className={clsx(
+                "col-span-1 aspect-square rounded-xl border transition-all",
+                "flex flex-col items-center justify-center gap-1",
+                isLight
+                  ? "border-amber-400 bg-amber-50 text-amber-700"
+                  : "border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
+              )}
+              title="Перемкнути тему"
+            >
+              {isLight ? (
+                <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="4" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 2v2m0 16v2m10-10h-2M4 12H2m17.66 7.66-1.41-1.41M5.75 5.75 4.34 4.34m15.32 0-1.41 1.41M5.75 18.25l-1.41 1.41" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79z" />
+                </svg>
+              )}
+              <span className="text-[11px] font-semibold">Тема</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import clsx from "clsx";
 import {
   Plus,
   Trash2,
@@ -1206,7 +1207,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
     });
 
     return result;
-  }, [specificationOptions, mergedAssignments, selectedRestaurantId, restaurantPricingGroups, isAdmin, search, filterCategory, sortField, sortDir]);
+  }, [specificationOptions, mergedAssignments, selectedRestaurantId, restaurantPricingGroups, canEdit, search, filterCategory, sortField, sortDir]);
 
   const groupedCatalogRows = useMemo(() => {
     const groups = new Map();
@@ -1221,20 +1222,22 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(row);
     });
-    return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b, "uk"));
-  }, [catalogRows, categories, filterCategory]);
+    const sorted = Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b, "uk"));
+    // In bartender/read-only view hide empty category cards to reduce visual noise.
+    return canEdit ? sorted : sorted.filter(([, rows]) => rows.length > 0);
+  }, [catalogRows, categories, filterCategory, canEdit]);
 
   useEffect(() => {
     setCollapsedCategories((prev) => {
       const next = { ...prev };
       groupedCatalogRows.forEach(([categoryName]) => {
         if (typeof next[categoryName] === "undefined") {
-          next[categoryName] = true;
+          next[categoryName] = false;
         }
       });
       return next;
     });
-  }, [groupedCatalogRows]);
+  }, [groupedCatalogRows, canEdit]);
 
   const handleSort = (field) => {
     if (sortField === field) {
@@ -1739,29 +1742,46 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
           <p className="px-3 py-8 text-center text-slate-400">Позицій не знайдено</p>
         </div>
       ) : (
-        groupedCatalogRows.map(([categoryName, rows]) => (
-          <div key={categoryName} className={cardClass + " overflow-x-auto !p-3"}>
-            <button
-              type="button"
-              onClick={() => toggleCategory(categoryName)}
-              className="flex w-full items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition hover:bg-slate-50"
+        <div
+          className={canEdit ? "space-y-3" : "columns-3 gap-3"}
+          style={canEdit ? undefined : { columnGap: "0.75rem" }}
+        >
+          {groupedCatalogRows.map(([categoryName, rows]) => (
+            <div
+              key={categoryName}
+              className={clsx(
+                cardClass,
+                "overflow-x-auto !p-3",
+                canEdit ? "" : "mb-3 break-inside-avoid"
+              )}
             >
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="text-sm font-semibold text-slate-800">{categoryName}</span>
-                <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">
-                  {rows.length} поз.
-                </span>
-                <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">
-                  Активних: {rows.filter((row) => row.isAssignedToSelected).length}
-                </span>
-              </div>
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500">
-                {collapsedCategories[categoryName] ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-              </span>
-            </button>
+              <button
+                type="button"
+                onClick={() => (canEdit ? toggleCategory(categoryName) : undefined)}
+                className={clsx(
+                  "flex w-full items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition",
+                  canEdit ? "hover:bg-slate-50" : "cursor-default"
+                )}
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="text-base font-bold text-slate-800">{categoryName}</span>
+                  <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                    {rows.length} поз.
+                  </span>
+                  <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                    Активних: {rows.filter((row) => row.isAssignedToSelected).length}
+                  </span>
+                </div>
+                {canEdit && (
+                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500">
+                    {collapsedCategories[categoryName] ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                  </span>
+                )}
+              </button>
 
-            {collapsedCategories[categoryName] ? null : (
-              <div className="mt-2">
+              {canEdit && collapsedCategories[categoryName] ? null : (
+                <div className="mt-2">
+              {canEdit ? (
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">
@@ -1826,7 +1846,13 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
                               }}
                               title={canEditPrices && row.isAssignedToSelected ? "Натисніть щоб змінити ціну" : ""}
                             >
-                              {formatPrice(row.effectivePortionSalePrice)}
+                              {(() => {
+                                const directPrice = toNumber(row.effectivePortionSalePrice);
+                                if (directPrice > 0) return formatPrice(directPrice);
+                                const fallbackPrice = computeSalePriceFromMarkup(row.portionCostPrice, row.effectivePortionMarkup);
+                                if (fallbackPrice > 0) return formatPrice(fallbackPrice);
+                                return "—";
+                              })()}
                             </div>
                           )}
                           <div className="text-[11px] text-slate-400">{row.portionVolumeMl ? `${row.portionVolumeMl} мл` : row.portionSaleUnit || DEFAULT_PORTION_UNIT}</div>
@@ -1875,10 +1901,42 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
                   })}
                 </tbody>
               </table>
-              </div>
-            )}
-          </div>
-        ))
+              ) : (
+                <div className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
+                  {rows.map((row) => {
+                    const directPrice = toNumber(row.effectivePortionSalePrice);
+                    const fallbackPrice = computeSalePriceFromMarkup(row.portionCostPrice, row.effectivePortionMarkup);
+                    const portionPrice = directPrice > 0 ? formatPrice(directPrice) : fallbackPrice > 0 ? formatPrice(fallbackPrice) : "—";
+                    const bottlePrice = formatPrice(row.bottleSalePrice) || "—";
+                    return (
+                      <div key={row.id} className="px-2.5 py-1 first:rounded-t-lg last:rounded-b-lg">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-semibold text-slate-800">{stripVolume(row.name) || "—"}</div>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500">
+                              <span>{row.portionVolumeMl ? `${row.portionVolumeMl} мл` : row.portionSaleUnit || DEFAULT_PORTION_UNIT}</span>
+                              {row.supplier && <span className="text-slate-400">• {row.supplier}</span>}
+                              {row.selectedAssignmentType === "house" && (
+                                <span className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700">Хаус</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right pr-0.5">
+                            <div className="text-[10px] uppercase tracking-wide text-slate-400">Порція</div>
+                            <div className="text-base font-bold leading-none text-slate-900">{portionPrice}</div>
+                            <div className="mt-0.5 text-[11px] text-slate-500">Пляшка: {bottlePrice}</div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
       {showMultiAssignModal && (

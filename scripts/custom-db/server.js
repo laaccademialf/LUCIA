@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import net from "node:net";
+import { DEFAULT_MENU_STRUCTURE } from "../../src/data/defaultMenuStructure.js";
 
 const PORT = Number(process.env.MIGRATION_PORT || 8787);
 const HOST = process.env.MIGRATION_HOST || "0.0.0.0";
@@ -420,6 +421,105 @@ const mapUserProfile = (profile) => ({
   position: readFirstString(profile?.position, profile?.position_name),
   workRole: readFirstString(profile?.work_role_name, profile?.work_role, profile?.workRole),
 });
+
+const BOOTSTRAP_ADMIN_ENABLED =
+  String(process.env.LUCIA_BOOTSTRAP_ADMIN_ENABLED || "true").trim().toLowerCase() !== "false";
+const BOOTSTRAP_ADMIN_ID =
+  String(process.env.LUCIA_BOOTSTRAP_ADMIN_ID || "bootstrap_admin").trim() || "bootstrap_admin";
+const BOOTSTRAP_ADMIN_EMAIL =
+  normalizeEmail(process.env.LUCIA_BOOTSTRAP_ADMIN_EMAIL || "admin@lucia.local");
+const BOOTSTRAP_ADMIN_PASSWORD =
+  String(process.env.LUCIA_BOOTSTRAP_ADMIN_PASSWORD || "Admin123!").trim();
+const BOOTSTRAP_ADMIN_DISPLAY_NAME =
+  String(process.env.LUCIA_BOOTSTRAP_ADMIN_DISPLAY_NAME || "Platform Admin").trim() || "Platform Admin";
+const BOOTSTRAP_MENU_ENABLED =
+  String(process.env.LUCIA_BOOTSTRAP_MENU_ENABLED || "true").trim().toLowerCase() !== "false";
+
+let bootstrapAdminPromise = null;
+
+const cloneDefaultMenuStructure = () =>
+  JSON.parse(JSON.stringify(Array.isArray(DEFAULT_MENU_STRUCTURE) ? DEFAULT_MENU_STRUCTURE : []));
+
+const ensureBootstrapAdminUser = async (dbConfig) => {
+  if (!BOOTSTRAP_ADMIN_ENABLED) {
+    return { created: false, reason: "disabled" };
+  }
+
+  if (!BOOTSTRAP_ADMIN_EMAIL || BOOTSTRAP_ADMIN_PASSWORD.length < 6) {
+    return { created: false, reason: "invalid-bootstrap-config" };
+  }
+
+  if (bootstrapAdminPromise) {
+    return bootstrapAdminPromise;
+  }
+
+  bootstrapAdminPromise = (async () => {
+    const [users, authUsers] = await Promise.all([
+      getCollectionItemsData("users", dbConfig),
+      getCollectionItemsData("authUsers", dbConfig),
+    ]);
+
+    if (users.length > 0 || authUsers.length > 0) {
+      return { created: false, reason: "already-initialized" };
+    }
+
+    const createdAt = nowIso();
+    const password = hashPassword(BOOTSTRAP_ADMIN_PASSWORD);
+
+    await createCollectionItemData(
+      "authUsers",
+      {
+        id: BOOTSTRAP_ADMIN_ID,
+        email: BOOTSTRAP_ADMIN_EMAIL,
+        ...buildPasswordStoragePayload(password),
+        createdAt,
+        updatedAt: createdAt,
+      },
+      dbConfig
+    );
+
+    await createCollectionItemData(
+      "users",
+      {
+        id: BOOTSTRAP_ADMIN_ID,
+        email: BOOTSTRAP_ADMIN_EMAIL,
+        displayName: BOOTSTRAP_ADMIN_DISPLAY_NAME,
+        role: "admin",
+        restaurant: "",
+        position: "",
+        workRole: "",
+        createdAt,
+        updatedAt: createdAt,
+      },
+      dbConfig
+    );
+
+    if (BOOTSTRAP_MENU_ENABLED) {
+      const existingMenuDoc = await getCollectionItemData("menuStructure", "main", dbConfig);
+      const existingStructure = Array.isArray(existingMenuDoc?.structure) ? existingMenuDoc.structure : null;
+
+      if (!existingMenuDoc || !existingStructure || existingStructure.length === 0) {
+        await createCollectionItemData(
+          "menuStructure",
+          {
+            id: "main",
+            structure: cloneDefaultMenuStructure(),
+            bootstrappedAt: nowIso(),
+            source: "default-template",
+          },
+          dbConfig
+        );
+      }
+    }
+
+    console.log(`[auth] Bootstrap admin created: ${BOOTSTRAP_ADMIN_EMAIL}`);
+    return { created: true, reason: "created" };
+  })().finally(() => {
+    bootstrapAdminPromise = null;
+  });
+
+  return bootstrapAdminPromise;
+};
 
 const hasAdminRole = (profile) => String(mapUserProfile(profile).role || "").toLowerCase() === "admin";
 
@@ -2247,6 +2347,7 @@ const handleAuthLogin = async (req, res) => {
   }
 
   const dbConfig = getAssetsRuntimeConfig();
+  await ensureBootstrapAdminUser(dbConfig);
   const authUsers = await getAuthUsersByEmail(email, dbConfig);
   if (!Array.isArray(authUsers) || authUsers.length === 0) {
     return sendJson(res, 401, { ok: false, error: "Invalid credentials" });
