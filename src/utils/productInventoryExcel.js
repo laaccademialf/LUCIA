@@ -8,6 +8,12 @@ const toNumber = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const getInventoryEndedBy = (inventory) =>
+  inventory?.inventorySessionEndedBy ||
+  inventory?.inventory_session_ended_by ||
+  inventory?.sessionEndedBy ||
+  "";
+
 export const importProductsFromExcel = (file, defaultRestaurant = null) => {
   const restaurants = Array.isArray(defaultRestaurant?.restaurants) ? defaultRestaurant.restaurants : [];
   const forceSingleRestaurant = Boolean(defaultRestaurant?.forceSingleRestaurant);
@@ -203,6 +209,7 @@ export const exportProductsAndInventoriesToExcel = (
       "Створено": inventory.createdAt ? new Date(inventory.createdAt).toLocaleString("uk-UA") : "",
       "Ресторан": inventory.restaurantName || "",
       "Відповідальний": inventory.createdBy || "",
+      "Хто завершив": getInventoryEndedBy(inventory),
       "Коментар": inventory.comment || "",
     };
 
@@ -230,7 +237,7 @@ export const exportProductsAndInventoriesToExcel = (
   const inventoriesSheet = XLSX.utils.json_to_sheet(
     inventoriesData.length > 0
       ? inventoriesData
-      : [{ "Дата інвентаризації": "", "Створено": "", "Ресторан": "", "Код закладу": "", "Відповідальний": "", "Коментар": "", "Продукт": "", "Код 1С": "", "Категорія": "", "Одиниця": "", "Кількість": "", "Ціна за одиницю": "", "Сума": "" }]
+      : [{ "Дата інвентаризації": "", "Створено": "", "Ресторан": "", "Код закладу": "", "Відповідальний": "", "Хто завершив": "", "Коментар": "", "Продукт": "", "Код 1С": "", "Категорія": "", "Одиниця": "", "Кількість": "", "Ціна за одиницю": "", "Сума": "" }]
   );
 
   XLSX.utils.book_append_sheet(wb, productsSheet, "Продукти");
@@ -250,6 +257,7 @@ export const exportInventoriesToExcel = (
       "Ресторан": inventory.restaurantName || "",
       "Код закладу": inventory.restaurantRegNumber || "",
       "Відповідальний": inventory.createdBy || "",
+      "Хто завершив": getInventoryEndedBy(inventory),
     };
 
     const lines = Array.isArray(inventory.items) ? inventory.items : [];
@@ -275,6 +283,7 @@ export const exportInventoriesToExcel = (
           "Ресторан": "",
           "Код закладу": "",
           "Відповідальний": "",
+          "Хто завершив": "",
           "Продукт": "",
           "Код 1С": "",
           "Категорія": "",

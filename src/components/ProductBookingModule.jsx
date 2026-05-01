@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2, Download, Upload, FileDown, X, Printer } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
-import { endProductInventorySession, startProductInventorySession } from "../firebase/firestore";
+import {
+  endProductInventorySession,
+  getActiveProductInventorySession,
+  startProductInventorySession,
+  subscribeToActiveProductInventorySession,
+} from "../firebase/firestore";
 
 const loadProductInventoryExcel = () => import("../utils/productInventoryExcel");
 const loadInventoryListExcel = () => import("../utils/inventoryListExcel");
@@ -76,6 +81,16 @@ const formatDateUk = (value) => {
     return date.toLocaleDateString("uk-UA");
   }
   return raw;
+};
+
+const getInventoryEndedByLabel = (inventory) => {
+  const endedBy = String(
+    inventory?.inventorySessionEndedBy ||
+    inventory?.inventory_session_ended_by ||
+    inventory?.sessionEndedBy ||
+    ""
+  ).trim();
+  return endedBy || "-";
 };
 
 const normalizeComparableToken = (value) => String(value || "").trim().toLowerCase();
@@ -947,9 +962,18 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   }, [user, isGlobalAdmin]);
 
   useEffect(() => {
-    // Do not auto-attach remote active sessions on restaurant change.
-    // Session must start explicitly via "Почати інвентаризацію".
-    setActiveSession(null);
+    if (!restaurantId) {
+      setActiveSession(null);
+      return () => {};
+    }
+
+    const unsubscribe = subscribeToActiveProductInventorySession(restaurantId, (session) => {
+      setActiveSession(session || null);
+    });
+
+    return () => {
+      if (typeof unsubscribe === "function") unsubscribe();
+    };
   }, [restaurantId]);
 
   const scopedProducts = useMemo(() => {
@@ -1101,6 +1125,12 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       && String(activeSession?.restaurantId || activeSession?.scopeId || "") === normalizedRestaurantId;
     if (hasMatchingActiveSession) return activeSession;
 
+    const currentSharedSession = await getActiveProductInventorySession(normalizedRestaurantId);
+    if (currentSharedSession?.id) {
+      setActiveSession(currentSharedSession);
+      return currentSharedSession;
+    }
+
     const nowIso = new Date().toISOString();
     const selectedRestaurantName =
       restaurants.find((item) => String(item.id) === normalizedRestaurantId)?.name || "Невідомий ресторан";
@@ -1190,18 +1220,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     if (!result.success) {
       alert("Не вдалося зберегти інвентаризацію.");
       return;
-    }
-
-    if (effectiveSession?.id) {
-      try {
-        await endProductInventorySession(effectiveSession.id, {
-          endedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
-          endedById: user?.uid || "",
-        });
-        setActiveSession(null);
-      } catch (error) {
-        alert(getErrorMessage(error, "Інвентаризацію збережено, але не вдалося завершити активну сесію."));
-      }
     }
 
     setQuantities({});
@@ -1297,13 +1315,39 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }
 
     try {
+      const endedByName = user?.displayName || user?.fullName || user?.email || "Користувач";
+      const endedById = user?.uid || "";
+      const endedAt = new Date().toISOString();
+
       await endProductInventorySession(activeSession.id, {
-        endedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
-        endedById: user?.uid || "",
+        endedBy: endedByName,
+        endedById,
+        endedAt,
       });
+
+      const relatedInventories = visibleInventories.filter(
+        (inventory) => String(inventory?.inventorySessionId || "") === String(activeSession.id || "")
+      );
+
+      let syncError = null;
+      for (const inventory of relatedInventories) {
+        const result = await updateInventory(String(inventory?.id || ""), {
+          inventorySessionEndedBy: endedByName,
+          inventorySessionEndedById: endedById,
+          inventorySessionEndedAt: endedAt,
+        });
+        if (!result.success) {
+          syncError = result.error;
+          break;
+        }
+      }
+
       setActiveSession(null);
       setEditingInventoryId("");
       setQuantities({});
+      if (syncError) {
+        alert(getErrorMessage(syncError, "Сесію завершено, але не вдалося оновити автора завершення в журналі."));
+      }
     } catch (error) {
       console.error("Помилка завершення інвентаризації продуктів:", error);
       alert(getErrorMessage(error, "Не вдалося завершити інвентаризацію."));
@@ -1450,6 +1494,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         <div><strong>Дата:</strong> ${escapeHtml(formatDateUk(inventory?.inventoryDate))}</div>
         <div><strong>Ресторан:</strong> ${escapeHtml(inventory?.restaurantName || "-")}</div>
         <div><strong>Хто створив:</strong> ${escapeHtml(inventory?.createdBy || "-")}</div>
+        <div><strong>Хто завершив:</strong> ${escapeHtml(getInventoryEndedByLabel(inventory))}</div>
         <div><strong>К-сть позицій:</strong> ${Array.isArray(inventory?.items) ? inventory.items.length : 0}</div>
       </div>
 
@@ -1741,6 +1786,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                 <th className="px-3 py-2 text-left">Позицій</th>
                 <th className="px-3 py-2 text-left">Сума</th>
                 <th className="px-3 py-2 text-left">Хто створив</th>
+                <th className="px-3 py-2 text-left">Хто завершив</th>
                 <th className="px-3 py-2 text-left">Дії</th>
               </tr>
             </thead>
@@ -1752,6 +1798,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                   <td className="px-3 py-2">{Array.isArray(inventory.items) ? inventory.items.length : 0}</td>
                   <td className="px-3 py-2 font-medium">{formatMoney(inventory.totalAmount)}</td>
                   <td className="px-3 py-2">{inventory.createdBy || "-"}</td>
+                  <td className="px-3 py-2">{getInventoryEndedByLabel(inventory)}</td>
                   <td className="px-3 py-2">
                     <div className="flex flex-wrap gap-2">
                       <button
@@ -1799,7 +1846,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               ))}
               {visibleInventories.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-slate-500">Інвентаризацій поки немає.</td>
+                  <td colSpan={7} className="px-3 py-6 text-center text-slate-500">Інвентаризацій поки немає.</td>
                 </tr>
               )}
             </tbody>
@@ -2139,6 +2186,7 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
         <div><strong>Дата:</strong> ${escapeHtml(formatDateUk(inventory?.inventoryDate))}</div>
         <div><strong>Ресторан:</strong> ${escapeHtml(inventory?.restaurantName || "-")}</div>
         <div><strong>Хто створив:</strong> ${escapeHtml(inventory?.createdBy || "-")}</div>
+        <div><strong>Хто завершив:</strong> ${escapeHtml(getInventoryEndedByLabel(inventory))}</div>
         <div><strong>К-сть позицій:</strong> ${Array.isArray(inventory?.items) ? inventory.items.length : 0}</div>
       </div>
       <table>
@@ -2206,6 +2254,7 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
               <th className="px-3 py-2 text-left">Позицій</th>
               <th className="px-3 py-2 text-left">Сума</th>
               <th className="px-3 py-2 text-left">Хто створив</th>
+              <th className="px-3 py-2 text-left">Хто завершив</th>
               <th className="px-3 py-2 text-left">Дії</th>
             </tr>
           </thead>
@@ -2217,6 +2266,7 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
                 <td className="px-3 py-2">{Array.isArray(inventory.items) ? inventory.items.length : 0}</td>
                 <td className="px-3 py-2 font-medium">{formatMoney(inventory.totalAmount)}</td>
                 <td className="px-3 py-2">{inventory.createdBy || "-"}</td>
+                <td className="px-3 py-2">{getInventoryEndedByLabel(inventory)}</td>
                 <td className="px-3 py-2">
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -2257,7 +2307,7 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
             ))}
             {visibleInventories.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-slate-500">Інвентаризацій поки немає.</td>
+                <td colSpan={7} className="px-3 py-6 text-center text-slate-500">Інвентаризацій поки немає.</td>
               </tr>
             )}
           </tbody>

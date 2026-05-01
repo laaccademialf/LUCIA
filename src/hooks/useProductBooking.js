@@ -189,6 +189,24 @@ const normalizeInventoryRecord = (item) => {
     restaurantRegNumber: firstNonEmptyString(item.restaurantRegNumber, item.restaurant_reg_number, item.regNumber, item.reg_number),
     inventoryDate: firstNonEmptyString(item.inventoryDate, item.inventory_date),
     inventorySessionId: firstNonEmptyString(item.inventorySessionId, item.inventory_session_id),
+    inventorySessionEndedBy: firstNonEmptyString(
+      item.inventorySessionEndedBy,
+      item.inventory_session_ended_by,
+      item.sessionEndedBy,
+      item.session_ended_by
+    ),
+    inventorySessionEndedById: firstNonEmptyString(
+      item.inventorySessionEndedById,
+      item.inventory_session_ended_by_id,
+      item.sessionEndedById,
+      item.session_ended_by_id
+    ),
+    inventorySessionEndedAt: firstNonEmptyString(
+      item.inventorySessionEndedAt,
+      item.inventory_session_ended_at,
+      item.sessionEndedAt,
+      item.session_ended_at
+    ),
     isSubmitted: toBooleanWithFallback(item.isSubmitted ?? item.is_submitted, false),
   };
 };
@@ -196,6 +214,26 @@ const normalizeInventoryRecord = (item) => {
 const normalizeCollectionRecords = (items, normalizeOne) => {
   if (!Array.isArray(items)) return [];
   return items.map((item) => normalizeOne(item));
+};
+
+const mergeInventoryItems = (existingItems = [], incomingItems = []) => {
+  const mergedByProductId = new Map();
+
+  (Array.isArray(existingItems) ? existingItems : []).forEach((item) => {
+    const productId = toTrimmedString(item?.productId);
+    if (!productId) return;
+    mergedByProductId.set(productId, item);
+  });
+
+  (Array.isArray(incomingItems) ? incomingItems : []).forEach((item) => {
+    const productId = toTrimmedString(item?.productId);
+    if (!productId) return;
+    mergedByProductId.set(productId, item);
+  });
+
+  return Array.from(mergedByProductId.values()).sort((a, b) =>
+    String(a?.productName || "").localeCompare(String(b?.productName || ""), "uk")
+  );
 };
 
 const runInBatches = async (items, batchSize, worker) => {
@@ -618,13 +656,51 @@ export const useProductBooking = (enableRealtime = true) => {
         const docId = sessionId || `${restaurantId}__${datePart}`;
         const existing = await getCollectionItemApi("productInventories", docId);
         if (existing) {
+          const mergedItems = mergeInventoryItems(existing?.items, inventory?.items);
+          const totalItems = mergedItems.reduce((sum, item) => sum + toNumberWithFallback(item?.qty, 0), 0);
+          const totalAmount = mergedItems.reduce((sum, item) => sum + toNumberWithFallback(item?.amount, 0), 0);
+          const nowIso = new Date().toISOString();
+          const contributor = {
+            userId: toTrimmedString(inventory?.createdById || inventory?.updatedById),
+            name: firstNonEmptyString(inventory?.createdBy, inventory?.updatedBy, "Користувач"),
+            at: nowIso,
+          };
+          const contributorsMap = new Map();
+
+          (Array.isArray(existing?.contributors) ? existing.contributors : []).forEach((entry) => {
+            const key = toTrimmedString(entry?.userId || entry?.name);
+            if (!key) return;
+            contributorsMap.set(key, entry);
+          });
+
+          const contributorKey = toTrimmedString(contributor.userId || contributor.name);
+          if (contributorKey) contributorsMap.set(contributorKey, contributor);
+
           await updateCollectionItemApi("productInventories", docId, {
             ...existing,
             ...inventory,
+            createdBy: firstNonEmptyString(existing?.createdBy, inventory?.createdBy, "Користувач"),
+            createdById: firstNonEmptyString(existing?.createdById, inventory?.createdById),
+            items: mergedItems,
+            totalItems,
+            totalAmount,
+            contributors: Array.from(contributorsMap.values()),
+            lastContributorName: contributor.name,
+            lastContributorId: contributor.userId,
+            updatedBy: contributor.name,
+            updatedById: contributor.userId,
+            updatedAt: nowIso,
           });
         } else {
           await createCollectionItemApi("productInventories", {
             id: docId,
+            contributors: [{
+              userId: toTrimmedString(inventory?.createdById || inventory?.updatedById),
+              name: firstNonEmptyString(inventory?.createdBy, inventory?.updatedBy, "Користувач"),
+              at: new Date().toISOString(),
+            }],
+            lastContributorName: firstNonEmptyString(inventory?.createdBy, inventory?.updatedBy, "Користувач"),
+            lastContributorId: toTrimmedString(inventory?.createdById || inventory?.updatedById),
             ...inventory,
           });
         }

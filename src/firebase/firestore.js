@@ -992,6 +992,29 @@ export const subscribeToActiveProductInventorySession = (scopeId, callback) => {
   });
 };
 
+export const getActiveProductInventorySession = async (scopeId) => {
+  const scope = String(scopeId || "");
+  if (!scope) return null;
+
+  if (isApiDataModeEnabled()) {
+    const sessions = (await listCollectionItemsApi("productInventorySessions")).map(normalizeProductInventorySession);
+    const filtered = sessions
+      .filter((item) => String(item?.scopeId || "") === scope && normalizeSessionActive(item?.isActive))
+      .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
+    return filtered[0] || null;
+  }
+
+  const sessionsRef = collection(db, "productInventorySessions");
+  const q = query(sessionsRef, orderBy("startedAt", "desc"));
+  const snapshot = await getDocs(q);
+  const sessions = snapshot.docs
+    .map((item) => normalizeProductInventorySession({ id: item.id, ...item.data() }))
+    .filter((item) => String(item?.scopeId || "") === scope && normalizeSessionActive(item?.isActive))
+    .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
+
+  return sessions[0] || null;
+};
+
 export const subscribeToProductInventorySessions = (scopeId, callback) => {
   if (isApiDataModeEnabled()) {
     return subscribeByPolling(async () => {
