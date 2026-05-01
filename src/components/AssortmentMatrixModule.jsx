@@ -6,6 +6,7 @@ import {
   Download,
   Upload,
   FileDown,
+  RefreshCcw,
   X,
   Save,
   Search,
@@ -211,7 +212,17 @@ const findMarkupRuleForCost = ({ alcoholCategory, restaurantGroupId, portionCost
   }) || null;
 };
 
-const normalizePricingByRestaurantGroup = (value) => (Array.isArray(value) ? value : [])
+const normalizePricingByRestaurantGroup = (value) => {
+  let parsed = value;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      parsed = [];
+    }
+  }
+
+  return (Array.isArray(parsed) ? parsed : [])
   .map((entry) => ({
     restaurantGroupId: normalizeString(entry?.restaurantGroupId || entry?.groupId),
     restaurantGroupName: normalizeString(entry?.restaurantGroupName || entry?.groupName),
@@ -224,6 +235,7 @@ const normalizePricingByRestaurantGroup = (value) => (Array.isArray(value) ? val
     minimumPortionPrice: toNumber(entry?.minimumPortionPrice),
   }))
   .filter((entry) => entry.restaurantGroupId);
+};
 
 const buildAutoPricingByRestaurantGroup = ({
   product,
@@ -323,6 +335,35 @@ const stripVolume = (name) =>
     .trim() || name;
 
 const normalizeString = (value) => String(value ?? "").trim();
+
+const normalizeRestaurantGroupName = (value) => normalizeString(value).toLowerCase();
+
+const buildRestaurantGroupId = (rawId, rawName) => {
+  const explicitId = normalizeString(rawId);
+  if (explicitId) return explicitId;
+
+  const normalizedName = normalizeRestaurantGroupName(rawName);
+  return normalizedName ? `group:${normalizedName}` : "";
+};
+
+const isSameRestaurantGroup = (left, right) => {
+  const leftId = buildRestaurantGroupId(
+    left?.id || left?.restaurantGroupId || left?.groupId,
+    left?.name || left?.restaurantGroupName || left?.groupName
+  );
+  const rightId = buildRestaurantGroupId(
+    right?.id || right?.restaurantGroupId || right?.groupId,
+    right?.name || right?.restaurantGroupName || right?.groupName
+  );
+
+  if (leftId && rightId && leftId === rightId) {
+    return true;
+  }
+
+  const leftName = normalizeRestaurantGroupName(left?.name || left?.restaurantGroupName || left?.groupName || left);
+  const rightName = normalizeRestaurantGroupName(right?.name || right?.restaurantGroupName || right?.groupName || right);
+  return Boolean(leftName && rightName && leftName === rightName);
+};
 
 const getRestaurantId = (restaurant) =>
   normalizeString(restaurant?.id ?? restaurant?.restaurantId ?? restaurant?.name);
@@ -1156,6 +1197,21 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
       const restaurantIds = assignment?.restaurantIds || [];
       const restaurantNames = assignment?.restaurantNames || [];
       const isAssignedToSelected = selectedRestaurantId ? restaurantIds.includes(selectedRestaurantId) : false;
+      const resolvedRestaurantGroup = (() => {
+        if (!selectedRestaurantId) return null;
+        const direct = resolveRestaurantGroupForRestaurant(selectedRestaurantId, restaurantPricingGroups);
+        if (direct) return direct;
+
+        const selectedRestaurantName = normalizeString(restaurantsById.get(selectedRestaurantId)?.name || selectedRestaurantId).toLowerCase();
+        if (!selectedRestaurantName) return null;
+
+        return restaurantPricingGroups.find((group) =>
+          (group.restaurantIds || []).some((rid) => {
+            const restaurantName = normalizeString(restaurantsById.get(rid)?.name || rid).toLowerCase();
+            return restaurantName === selectedRestaurantName;
+          })
+        ) || null;
+      })();
       const selectedRestaurantPricing = selectedRestaurantId
         ? (assignment?.pricingByRestaurantId?.[selectedRestaurantId] || getPricingForRestaurant({
             pricingByRestaurantGroup: product.pricingByRestaurantGroup,
@@ -1163,12 +1219,9 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
             restaurantGroups: restaurantPricingGroups,
           }))
         : null;
-      const specRestaurantPricing = selectedRestaurantId
-        ? getPricingForRestaurant({
-            pricingByRestaurantGroup: product.pricingByRestaurantGroup,
-            restaurantId: selectedRestaurantId,
-            restaurantGroups: restaurantPricingGroups,
-          })
+      const specRestaurantPricing = resolvedRestaurantGroup
+        ? normalizePricingByRestaurantGroup(product.pricingByRestaurantGroup)
+            .find((entry) => isSameRestaurantGroup(entry, resolvedRestaurantGroup)) || null
         : null;
 
       const specPortionSalePrice = toNumber(product.portionSalePrice);
@@ -1177,7 +1230,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
       const derivedRuleBasedPrice = (() => {
         if (!selectedRestaurantId) return 0;
         if (!usesTypicalMarkupForCategory(typicalFields, product.category)) return 0;
-        const group = resolveRestaurantGroupForRestaurant(selectedRestaurantId, restaurantPricingGroups);
+        const group = resolvedRestaurantGroup;
         if (!group) return 0;
         const rule = findMarkupRuleForCost({
           alcoholCategory: product.category,
@@ -1202,9 +1255,11 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
                 : (explicitRestaurantSalePrice > 0 && explicitRestaurantSalePrice > toNumber(product.portionCostPrice)
                     ? explicitRestaurantSalePrice
                     : fallbackCalculatedFromSpec))
-          : (explicitRestaurantSalePrice > 0
+          : (explicitRestaurantSalePrice > 0 && explicitRestaurantSalePrice > toNumber(product.portionCostPrice)
               ? explicitRestaurantSalePrice
-              : specGroupSalePrice > 0
+              : derivedRuleBasedPrice > 0
+                ? derivedRuleBasedPrice
+                : specGroupSalePrice > 0
                 ? specGroupSalePrice
                 : specPortionSalePrice > 0
                   ? specPortionSalePrice
@@ -1253,7 +1308,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
     });
 
     return result;
-  }, [specificationOptions, mergedAssignments, selectedRestaurantId, restaurantPricingGroups, canEdit, typicalFields, markupSettings.rules, search, filterCategory, sortField, sortDir]);
+  }, [specificationOptions, mergedAssignments, selectedRestaurantId, restaurantPricingGroups, restaurantsById, canEdit, typicalFields, markupSettings.rules, search, filterCategory, sortField, sortDir]);
 
   const groupedCatalogRows = useMemo(() => {
     const groups = new Map();
@@ -1520,6 +1575,41 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
 
   const selectedRestaurantName = selectedRestaurantId ? restaurantsById.get(selectedRestaurantId)?.name || "" : "";
 
+  const calculateRecommendedPriceForRestaurant = useCallback((product, restaurantId = selectedRestaurantId) => {
+    if (!restaurantId) return 0;
+
+    const specGroupPricing = getPricingForRestaurant({
+      pricingByRestaurantGroup: product.pricingByRestaurantGroup,
+      restaurantId,
+      restaurantGroups: restaurantPricingGroups,
+    });
+    const specGroupPrice = toNumber(specGroupPricing?.portionSalePrice);
+    if (specGroupPrice > 0) return roundToTen(specGroupPrice);
+
+    const shouldUseTypicalMarkup = usesTypicalMarkupForCategory(typicalFields, product.category);
+    if (shouldUseTypicalMarkup) {
+      const group = resolveRestaurantGroupForRestaurant(restaurantId, restaurantPricingGroups);
+      if (group) {
+        const rule = findMarkupRuleForCost({
+          alcoholCategory: product.category,
+          restaurantGroupId: group.id,
+          portionCostPrice: product.portionCostPrice,
+          rules: markupSettings.rules,
+        });
+        const markupPercent = toNumber(rule?.markupPercent);
+        if (markupPercent > 0) {
+          const calculated = roundToTen(toNumber(product.portionCostPrice) * (1 + markupPercent / 100));
+          return Math.max(calculated, roundToTen(group.minimumPortionPrice));
+        }
+      }
+    }
+
+    const directSpecPrice = toNumber(product.portionSalePrice);
+    if (directSpecPrice > 0) return roundToTen(directSpecPrice);
+
+    return roundToTen(computeSalePriceFromMarkup(product.portionCostPrice, product.portionMarkup));
+  }, [selectedRestaurantId, restaurantPricingGroups, typicalFields, markupSettings.rules]);
+
   const updatePriceForRestaurant = async (product, newPrice) => {
     if (!selectedRestaurantId) return;
     const roundedPrice = roundToTen(toNumber(newPrice));
@@ -1595,6 +1685,32 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
     } finally {
       setBusyTypeProductId("");
       setEditingPriceProductId("");
+    }
+  };
+
+  const recalculatePriceForRestaurant = async (product) => {
+    const recommendedPrice = calculateRecommendedPriceForRestaurant(product, selectedRestaurantId);
+    if (!Number.isFinite(recommendedPrice) || recommendedPrice <= 0) {
+      alert("Неможливо перерахувати ціну: перевірте правила націнок/специфікацію.");
+      return;
+    }
+    await updatePriceForRestaurant(product, recommendedPrice);
+  };
+
+  const recalculateAllVisibleForRestaurant = async () => {
+    if (!selectedRestaurantId) return;
+    const targetRows = catalogRows.filter((row) => row.isAssignedToSelected);
+    if (targetRows.length === 0) {
+      alert("Немає прив'язаних позицій для перерахунку.");
+      return;
+    }
+    if (!confirm(`Перерахувати вартість реалізації для ${targetRows.length} позицій за матрицею націнок?`)) return;
+
+    for (const row of targetRows) {
+      const recommendedPrice = calculateRecommendedPriceForRestaurant(row, selectedRestaurantId);
+      if (!Number.isFinite(recommendedPrice) || recommendedPrice <= 0) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await updatePriceForRestaurant(row, recommendedPrice);
     }
   };
 
@@ -1725,6 +1841,12 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
           <button type="button" className={btnSecondary} onClick={handleExport} disabled={!selectedRestaurantId}>
             <Download size={16} /> Експорт
           </button>
+
+          {canEdit && selectedRestaurantId && (
+            <button type="button" className={btnSecondary} onClick={recalculateAllVisibleForRestaurant}>
+              <RefreshCcw size={16} /> Перерахувати ціни
+            </button>
+          )}
 
           {canEdit && (
             <>
@@ -1930,16 +2052,29 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
                         </td>
                         {canEdit && (
                           <td className="px-3 py-1.5 text-center">
-                            <button
-                              type="button"
-                              disabled={busyAction || busyType}
-                              className={row.isAssignedToSelected
-                                ? "inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition"
-                                : "inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-2.5 py-1.5 text-xs font-medium text-white shadow hover:bg-indigo-700 transition"}
-                              onClick={() => upsertAssignmentForRestaurant(row, !row.isAssignedToSelected)}
-                            >
-                              {busyAction ? "Зберігаю…" : row.isAssignedToSelected ? "Зняти" : "Прив'язати"}
-                            </button>
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                disabled={busyAction || busyType}
+                                className={row.isAssignedToSelected
+                                  ? "inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition"
+                                  : "inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-2.5 py-1.5 text-xs font-medium text-white shadow hover:bg-indigo-700 transition"}
+                                onClick={() => upsertAssignmentForRestaurant(row, !row.isAssignedToSelected)}
+                              >
+                                {busyAction ? "Зберігаю…" : row.isAssignedToSelected ? "Зняти" : "Прив'язати"}
+                              </button>
+                              {row.isAssignedToSelected && (
+                                <button
+                                  type="button"
+                                  disabled={busyType || busyAction}
+                                  className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1.5 text-xs font-medium text-emerald-700 shadow-sm hover:bg-emerald-100 transition"
+                                  onClick={() => recalculatePriceForRestaurant(row)}
+                                  title="Перерахувати ціну за матрицею націнок"
+                                >
+                                  <RefreshCcw size={12} /> Перерах.
+                                </button>
+                              )}
+                            </div>
                           </td>
                         )}
                       </tr>
