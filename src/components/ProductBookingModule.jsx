@@ -1,15 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2, Download, Upload, FileDown, X, Printer } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
-import { endProductInventorySession, startProductInventorySession, subscribeToActiveProductInventorySession } from "../firebase/firestore";
+import { endProductInventorySession, startProductInventorySession } from "../firebase/firestore";
 
 const loadProductInventoryExcel = () => import("../utils/productInventoryExcel");
+const loadInventoryListExcel = () => import("../utils/inventoryListExcel");
 
 const normalizeTabKind = (tabId = "") => {
   const value = String(tabId).toLowerCase();
+  if (
+    value.includes("inventarizationspisok") ||
+    value.includes("inventorylist") ||
+    value.includes("inventory-list") ||
+    value.includes("списокінвентаризаці") ||
+    value.includes("список інвентаризац")
+  ) return "inventoryList";
+  if (
+    value.includes("productsettings") ||
+    value.includes("inventoryproducts") ||
+    value.includes("inventory-products") ||
+    value.includes("productsadmin")
+  ) return "products";
   if (value.includes("journal") || value.includes("журнал")) return "inventoryJournal";
   if (value.includes("vendor") || value.includes("supplier") || value.includes("постач")) return "suppliers";
   if (
+    value.includes("inventarizations") ||
+    value.includes("inventorization") ||
+    value.includes("інвентаризац") ||
     value.includes("inventar") ||
     value.includes("inventory") ||
     value.includes("інвентар") ||
@@ -31,6 +48,11 @@ const normalizeTabKind = (tabId = "") => {
 
 const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
+
+const getErrorMessage = (error, fallbackMessage) => {
+  const message = String(error?.message || error || "").trim();
+  return message ? `${fallbackMessage}\n\n${message}` : fallbackMessage;
+};
 
 const toNumber = (value) => {
   const normalized = String(value ?? "")
@@ -56,7 +78,117 @@ const formatDateUk = (value) => {
   return raw;
 };
 
-const sameRestaurant = (productRestaurantId, restaurantId) => String(productRestaurantId || "") === String(restaurantId || "");
+const normalizeComparableToken = (value) => String(value || "").trim().toLowerCase();
+
+const sameRestaurant = (productRestaurantId, restaurantId) => normalizeComparableToken(productRestaurantId) === normalizeComparableToken(restaurantId);
+
+const findRestaurantByAnyReference = (restaurants = [], references = []) => {
+  if (!Array.isArray(restaurants) || restaurants.length === 0) return null;
+
+  const normalizedRefs = Array.from(new Set(references.map((value) => normalizeComparableToken(value)).filter(Boolean)));
+  if (!normalizedRefs.length) return null;
+
+  return restaurants.find((restaurant) => {
+    const candidates = [
+      restaurant?.id,
+      restaurant?.code,
+      restaurant?.regNumber,
+      restaurant?.restaurantCode,
+      restaurant?.name,
+      restaurant?.restaurantName,
+    ]
+      .map((value) => normalizeComparableToken(value))
+      .filter(Boolean);
+
+    return candidates.some((candidate) => normalizedRefs.includes(candidate));
+  }) || null;
+};
+
+const normalizeRestaurantScopedRecord = (record, restaurants = []) => {
+  if (!record || typeof record !== "object") return record;
+
+  const recordRestaurantId = String(record.restaurantId || "").trim();
+  const recordRestaurantName = String(record.restaurantName || "").trim();
+  const recordRestaurantRegNumber = String(record.restaurantRegNumber || "").trim();
+
+  const matchedRestaurant = findRestaurantByAnyReference(restaurants, [
+    recordRestaurantId,
+    recordRestaurantName,
+    recordRestaurantRegNumber,
+    record.restaurant,
+    record.restaurant_id,
+    record.restaurant_name,
+    record.restaurant_reg_number,
+    record.regNumber,
+    record.reg_number,
+  ]);
+
+  if (!matchedRestaurant) return record;
+
+  return {
+    ...record,
+    restaurantId: String(matchedRestaurant.id || recordRestaurantId || "").trim(),
+    restaurantName: String(matchedRestaurant.name || recordRestaurantName || "").trim(),
+    restaurantRegNumber: String(
+      matchedRestaurant.regNumber ||
+      recordRestaurantRegNumber ||
+      matchedRestaurant.code ||
+      matchedRestaurant.restaurantCode ||
+      ""
+    ).trim(),
+  };
+};
+
+const buildDerivedRestaurants = (records = []) => {
+  const restaurantMap = new Map();
+
+  records.forEach((record) => {
+    if (!record || typeof record !== "object") return;
+
+    const id = String(
+      record.restaurantId ||
+      record.restaurant_id ||
+      record.restaurantRegNumber ||
+      record.restaurant_reg_number ||
+      record.regNumber ||
+      record.reg_number ||
+      record.restaurantName ||
+      record.restaurant_name ||
+      record.restaurant ||
+      ""
+    ).trim();
+    const name = String(record.restaurantName || record.restaurant_name || record.restaurant || "").trim();
+    const regNumber = String(
+      record.restaurantRegNumber || record.restaurant_reg_number || record.regNumber || record.reg_number || ""
+    ).trim();
+
+    if (!id && !name && !regNumber) return;
+
+    const key = String(id || regNumber || name).trim().toLowerCase();
+    if (!key) return;
+
+    const existing = restaurantMap.get(key);
+    if (existing) {
+      restaurantMap.set(key, {
+        ...existing,
+        id: existing.id || id || regNumber || name,
+        name: existing.name || name || regNumber || id,
+        regNumber: existing.regNumber || regNumber,
+      });
+      return;
+    }
+
+    restaurantMap.set(key, {
+      id: id || regNumber || name,
+      name: name || regNumber || id,
+      regNumber,
+    });
+  });
+
+  return Array.from(restaurantMap.values()).sort((a, b) =>
+    String(a?.name || a?.regNumber || a?.id || "").localeCompare(String(b?.name || b?.regNumber || b?.id || ""), "uk")
+  );
+};
 
 const getRestaurantNameById = (restaurants = [], restaurantId) => {
   return restaurants.find((item) => String(item.id) === String(restaurantId || ""))?.name || "";
@@ -79,13 +211,13 @@ const hasProcurementAccess = (user) => {
   return terms.some((term) => roleValue.includes(term) || workRoleValue.includes(term));
 };
 
-const isGlobalAdminUser = (user) => String(user?.role || "").toLowerCase() === "admin" && !user?.restaurant;
+const isGlobalAdminUser = (user) => String(user?.role || "").toLowerCase() === "admin";
 
 function ProductAdminTab({ products, suppliers, categories, subcategoriesByCategory, units, inventories, restaurants, user, canManageProducts, addProduct, updateProduct, deleteProduct }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const defaultRestaurantId = isGlobalAdmin ? "" : String(user?.restaurant || "");
-  const [draft, setDraft] = useState({
-    restaurantId: defaultRestaurantId,
+  const createEmptyDraft = (restaurantId = "") => ({
+    restaurantId,
     name: "",
     code1C: "",
     category: "",
@@ -94,6 +226,9 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
     supplier: "",
     unitPrice: "",
   });
+  const [createDraft, setCreateDraft] = useState(() => createEmptyDraft(defaultRestaurantId));
+  const [editingProductId, setEditingProductId] = useState("");
+  const [editDraft, setEditDraft] = useState(() => createEmptyDraft(defaultRestaurantId));
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [supplierFilter, setSupplierFilter] = useState("");
@@ -102,27 +237,104 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
   const [restaurantFilter, setRestaurantFilter] = useState(defaultRestaurantId);
   const [importMode, setImportMode] = useState("selected");
 
-  const availableSubcategories = useMemo(() => {
-    if (!draft.category) return [];
-    return subcategoriesByCategory?.[draft.category] || [];
-  }, [draft.category, subcategoriesByCategory]);
+  const availableCreateSubcategories = useMemo(() => {
+    if (!createDraft.category) return [];
+    return subcategoriesByCategory?.[createDraft.category] || [];
+  }, [createDraft.category, subcategoriesByCategory]);
+
+  const availableEditSubcategories = useMemo(() => {
+    if (!editDraft.category) return [];
+    return subcategoriesByCategory?.[editDraft.category] || [];
+  }, [editDraft.category, subcategoriesByCategory]);
+
+  const editingProduct = useMemo(
+    () => products.find((item) => String(item.id || "") === String(editingProductId || "")) || null,
+    [products, editingProductId]
+  );
 
   useEffect(() => {
     if (isGlobalAdmin) return;
     const scopedRestaurant = String(user?.restaurant || "");
     setRestaurantFilter(scopedRestaurant);
-    setDraft((prev) => ({ ...prev, restaurantId: scopedRestaurant }));
+    setCreateDraft((prev) => ({ ...prev, restaurantId: scopedRestaurant }));
+    setEditDraft((prev) => ({ ...prev, restaurantId: scopedRestaurant }));
   }, [user, isGlobalAdmin]);
+
+  useEffect(() => {
+    if (!editingProductId || editingProduct) return;
+    setEditingProductId("");
+    setEditDraft(createEmptyDraft(defaultRestaurantId));
+  }, [defaultRestaurantId, editingProduct, editingProductId]);
 
   const availableRestaurants = useMemo(() => {
     if (isGlobalAdmin) return restaurants;
     return restaurants.filter((item) => String(item.id) === String(user?.restaurant || ""));
   }, [restaurants, user, isGlobalAdmin]);
 
+  const resetCreateDraft = () => {
+    setCreateDraft(createEmptyDraft(defaultRestaurantId));
+  };
+
+  const resetEditDraft = () => {
+    setEditingProductId("");
+    setEditDraft(createEmptyDraft(defaultRestaurantId));
+  };
+
+  const buildProductPayload = (draftValue, activeValue = true) => {
+    const selectedRestaurant = restaurants.find((item) => String(item.id) === String(draftValue.restaurantId));
+    return {
+      restaurantId: String(draftValue.restaurantId),
+      restaurantName: selectedRestaurant?.name || "Невідомий ресторан",
+      restaurantRegNumber: String(selectedRestaurant?.regNumber || ""),
+      name: String(draftValue.name || "").trim(),
+      code1C: String(draftValue.code1C || "").trim(),
+      category: String(draftValue.category || "").trim(),
+      subcategory: String(draftValue.subcategory || "").trim(),
+      unit: String(draftValue.unit || "").trim(),
+      supplier: String(draftValue.supplier || "").trim(),
+      unitPrice: toNumber(draftValue.unitPrice),
+      isActive: activeValue,
+    };
+  };
+
+  const validateDraft = (draftValue) => {
+    if (!String(draftValue.restaurantId || "").trim()) {
+      alert("Оберіть заклад для продукту.");
+      return false;
+    }
+    if (!String(draftValue.name || "").trim() || !String(draftValue.category || "").trim() || !String(draftValue.unit || "").trim() || !String(draftValue.supplier || "").trim()) {
+      alert("Заповніть обов'язкові поля: Назва, Категорія, Одиниця, Постачальник.");
+      return false;
+    }
+    return true;
+  };
+
+  const handleDraftCategoryChange = (setDraftState, nextCategory) => {
+    setDraftState((prev) => ({
+      ...prev,
+      category: nextCategory,
+      subcategory: "",
+    }));
+  };
+
+  const handleSelectProductForEdit = (item) => {
+    setEditingProductId(String(item?.id || ""));
+    setEditDraft({
+      restaurantId: String(item?.restaurantId || defaultRestaurantId || ""),
+      name: String(item?.name || ""),
+      code1C: String(item?.code1C || ""),
+      category: String(item?.category || ""),
+      subcategory: String(item?.subcategory || ""),
+      unit: String(item?.unit || ""),
+      supplier: String(item?.supplier || ""),
+      unitPrice: String(item?.unitPrice ?? ""),
+    });
+  };
+
   const filteredProducts = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
     return products.filter((item) => {
-      const byRestaurant = restaurantFilter ? sameRestaurant(item.restaurantId, restaurantFilter) : isGlobalAdmin;
+      const byRestaurant = restaurantFilter ? sameRestaurant(item.restaurantId, restaurantFilter) : true;
       const bySearch = normalizedSearch
         ? [item.name, item.code1C, item.category, item.subcategory, item.unit, item.supplier, item.restaurantName]
             .filter(Boolean)
@@ -142,68 +354,60 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
 
       return byRestaurant && bySearch && byCategory && bySubcategory && bySupplier && byStatus;
     });
-  }, [products, searchTerm, categoryFilter, subcategoryFilter, supplierFilter, statusFilter, restaurantFilter, isGlobalAdmin]);
+  }, [products, searchTerm, categoryFilter, subcategoryFilter, supplierFilter, statusFilter, restaurantFilter]);
 
   const handleAdd = async () => {
-    if (!draft.restaurantId.trim()) {
-      alert("Оберіть заклад для продукту.");
-      return;
-    }
-    if (!draft.name.trim() || !draft.category.trim() || !draft.unit.trim() || !draft.supplier.trim()) {
-      alert("Заповніть обов'язкові поля: Назва, Категорія, Одиниця, Постачальник.");
-      return;
-    }
-    const selectedRestaurant = restaurants.find((item) => String(item.id) === String(draft.restaurantId));
-    const restaurantName = selectedRestaurant?.name || "Невідомий ресторан";
-    const restaurantRegNumber = String(selectedRestaurant?.regNumber || "");
-    const unitPrice = toNumber(draft.unitPrice);
-    const newProduct = {
-      restaurantId: String(draft.restaurantId),
-      restaurantName,
-      restaurantRegNumber,
-      name: draft.name.trim(),
-      code1C: draft.code1C.trim(),
-      category: draft.category.trim(),
-      subcategory: String(draft.subcategory || "").trim(),
-      unit: draft.unit.trim(),
-      supplier: draft.supplier.trim(),
-      unitPrice,
-      isActive: true,
-    };
-    const result = await addProduct(newProduct);
+    if (!validateDraft(createDraft)) return;
+
+    const result = await addProduct(buildProductPayload(createDraft, true));
     if (!result.success) {
-      alert("Не вдалося додати продукт у базу.");
+      alert(getErrorMessage(result.error, "Не вдалося додати продукт у базу."));
       return;
     }
-    setDraft((prev) => ({
-      ...prev,
-      name: "",
-      code1C: "",
-      category: "",
-      subcategory: "",
-      unit: "",
-      supplier: "",
-      unitPrice: "",
-    }));
+
+    resetCreateDraft();
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingProductId || !editingProduct) {
+      alert("Спочатку оберіть продукт для редагування.");
+      return;
+    }
+    if (!validateDraft(editDraft)) return;
+
+    const result = await updateProduct(
+      editingProductId,
+      buildProductPayload(editDraft, editingProduct.isActive !== false)
+    );
+    if (!result.success) {
+      alert(getErrorMessage(result.error, "Не вдалося зберегти зміни продукту."));
+      return;
+    }
+
+    alert("Зміни продукту збережено.");
   };
 
   const toggleActive = async (item) => {
     const { id, ...payload } = item;
     const result = await updateProduct(id, { ...payload, isActive: !item.isActive });
     if (!result.success) {
-      alert("Не вдалося оновити статус продукту.");
+      alert(getErrorMessage(result.error, "Не вдалося оновити статус продукту."));
     }
   };
 
   const handleDeleteProduct = async (item) => {
     const confirmed = window.confirm(
-      `Видалити продукт \"${item?.name || "без назви"}\"?\nЦю дію неможливо скасувати.`
+      `Видалити продукт "${item?.name || "без назви"}"?\nЦю дію неможливо скасувати.`
     );
     if (!confirmed) return;
 
     const result = await deleteProduct(item.id);
     if (!result.success) {
-      alert("Не вдалося видалити продукт.");
+      alert(getErrorMessage(result.error, "Не вдалося видалити продукт."));
+    }
+
+    if (String(editingProductId || "") === String(item?.id || "")) {
+      resetEditDraft();
     }
   };
 
@@ -226,7 +430,7 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
     const file = event.target.files?.[0];
     if (!file) return;
 
-    const selectedRestaurantId = String(draft.restaurantId || restaurantFilter || user?.restaurant || "");
+    const selectedRestaurantId = String(createDraft.restaurantId || restaurantFilter || user?.restaurant || "");
     const selectedRestaurant = restaurants.find((item) => String(item.id) === selectedRestaurantId);
 
     if (importMode === "selected" && !selectedRestaurantId) {
@@ -247,7 +451,7 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
       if (importedProducts.length === 0) {
         alert(
           importMode === "selected"
-            ? "У файлі не знайдено валідних продуктів для імпорту. Перевірте поля: Код(1С), Номенклатура/Назва, Единица измерения/Одиниця, Учетная цена/Ціна."
+            ? "У файлі не знайдено валідних продуктів для імпорту. Перевірте поля: Код(1С), Номенклатура/Назва, Категорія, Підкатегорія, Единица измерения/Одиниця, Учетная цена/Ціна."
             : "У файлі не знайдено валідних продуктів для імпорту. Для мультизакладного імпорту додайте 'Код закладу' (обліковий №, напр. 101КВ) або 'Заклад'."
         );
         return;
@@ -298,7 +502,7 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
 
   return (
     <div className={cardClass}>
-      <div className="flex items-center gap-2 mb-4">
+      <div className="mb-4 flex items-center gap-2">
         <Package size={18} className="text-indigo-600" />
         <h2 className="text-lg font-semibold">Адміністрування продуктів</h2>
       </div>
@@ -368,94 +572,205 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
       {canManageProducts && (
         <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
           {importMode === "selected"
-            ? "Режим імпорту: всі рядки з Excel будуть прив'язані до обраного закладу. Підтримується формат 1С: №, Код, Номенклатура, Единица измерения, Учетная цена."
+            ? "Режим імпорту: всі рядки з Excel будуть прив'язані до обраного закладу. Підтримується формат 1С та внутрішній шаблон з полями категорії і підкатегорії."
             : "Режим імпорту: заклад береться з колонок 'Код закладу' (обліковий №, напр. 101КВ) або 'Заклад'."}
         </div>
       )}
 
       {canManageProducts && (
-        <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-8">
-            <div>
-              <label className="text-sm font-semibold text-slate-800">Заклад</label>
-              <select className={inputClass} value={draft.restaurantId} onChange={(e) => setDraft((p) => ({ ...p, restaurantId: e.target.value }))}>
-                <option value="">Оберіть заклад</option>
-                {availableRestaurants.map((restaurant) => (
-                  <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
-                ))}
-              </select>
+        <div className="mb-5 grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <section className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">Новий продукт</h3>
+                <p className="text-sm text-slate-600">Створення нового продукту окремо від редагування вже наявних позицій.</p>
+              </div>
+              <button
+                type="button"
+                onClick={resetCreateDraft}
+                className="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
+              >
+                Очистити
+              </button>
             </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Назва</label>
-            <input className={inputClass} value={draft.name} onChange={(e) => setDraft((p) => ({ ...p, name: e.target.value }))} />
-          </div>
-            <div>
-              <label className="text-sm font-semibold text-slate-800">Код 1С</label>
-              <input className={inputClass} value={draft.code1C} onChange={(e) => setDraft((p) => ({ ...p, code1C: e.target.value }))} />
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <label className="text-sm font-semibold text-slate-800">Заклад</label>
+                <select className={inputClass} value={createDraft.restaurantId} onChange={(e) => setCreateDraft((prev) => ({ ...prev, restaurantId: e.target.value }))}>
+                  <option value="">Оберіть заклад</option>
+                  {availableRestaurants.map((restaurant) => (
+                    <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-800">Назва</label>
+                <input className={inputClass} value={createDraft.name} onChange={(e) => setCreateDraft((prev) => ({ ...prev, name: e.target.value }))} placeholder="Наприклад, Соус ванільний" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-800">Код 1С</label>
+                <input className={inputClass} value={createDraft.code1C} onChange={(e) => setCreateDraft((prev) => ({ ...prev, code1C: e.target.value }))} placeholder="Якщо є у довіднику" />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-800">Категорія</label>
+                <select className={inputClass} value={createDraft.category} onChange={(e) => handleDraftCategoryChange(setCreateDraft, e.target.value)}>
+                  <option value="">Оберіть категорію</option>
+                  {categories.map((category) => (
+                    <option key={category} value={category}>{category}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-800">Підкатегорія</label>
+                <select className={inputClass} value={createDraft.subcategory} onChange={(e) => setCreateDraft((prev) => ({ ...prev, subcategory: e.target.value }))} disabled={!createDraft.category}>
+                  <option value="">{createDraft.category ? "Оберіть підкатегорію" : "Спочатку оберіть категорію"}</option>
+                  {availableCreateSubcategories.map((subcategory) => (
+                    <option key={subcategory} value={subcategory}>{subcategory}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-800">Одиниця</label>
+                <select className={inputClass} value={createDraft.unit} onChange={(e) => setCreateDraft((prev) => ({ ...prev, unit: e.target.value }))}>
+                  <option value="">Оберіть одиницю</option>
+                  {units.map((unit) => (
+                    <option key={unit} value={unit}>{unit}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-800">Постачальник</label>
+                <select className={inputClass} value={createDraft.supplier} onChange={(e) => setCreateDraft((prev) => ({ ...prev, supplier: e.target.value }))}>
+                  <option value="">Оберіть постачальника</option>
+                  {suppliers.map((supplier) => (
+                    <option key={supplier} value={supplier}>{supplier}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-slate-800">Ціна за одиницю (грн)</label>
+                <input type="number" min="0" step="0.01" className={inputClass} value={createDraft.unitPrice} onChange={(e) => setCreateDraft((prev) => ({ ...prev, unitPrice: e.target.value }))} placeholder="0.00" />
+              </div>
             </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Категорія</label>
-            <select
-              className={inputClass}
-              value={draft.category}
-              onChange={(e) =>
-                setDraft((p) => ({
-                  ...p,
-                  category: e.target.value,
-                  subcategory: "",
-                }))
-              }
-            >
-              <option value="">Оберіть категорію</option>
-              {categories.map((category) => (
-                <option key={category} value={category}>{category}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Підкатегорія</label>
-            <select
-              className={inputClass}
-              value={draft.subcategory}
-              onChange={(e) => setDraft((p) => ({ ...p, subcategory: e.target.value }))}
-              disabled={!draft.category}
-            >
-              <option value="">{draft.category ? "Оберіть підкатегорію" : "Спочатку оберіть категорію"}</option>
-              {availableSubcategories.map((subcategory) => (
-                <option key={subcategory} value={subcategory}>{subcategory}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Одиниця</label>
-            <select className={inputClass} value={draft.unit} onChange={(e) => setDraft((p) => ({ ...p, unit: e.target.value }))}>
-              <option value="">Оберіть одиницю</option>
-              {units.map((unit) => (
-                <option key={unit} value={unit}>{unit}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Постачальник</label>
-            <select className={inputClass} value={draft.supplier} onChange={(e) => setDraft((p) => ({ ...p, supplier: e.target.value }))}>
-              <option value="">Оберіть постачальника</option>
-              {suppliers.map((supplier) => (
-                <option key={supplier} value={supplier}>{supplier}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Ціна за одиницю (грн)</label>
-            <input type="number" min="0" step="0.01" className={inputClass} value={draft.unitPrice} onChange={(e) => setDraft((p) => ({ ...p, unitPrice: e.target.value }))} />
-          </div>
-          <div className="flex items-end">
-            <button
-              type="button"
-              onClick={handleAdd}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-            >
-              <Plus size={16} /> Додати продукт
-            </button>
-          </div>
+
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={handleAdd}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+              >
+                <Plus size={16} /> Додати продукт
+              </button>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">Редагування продукту</h3>
+                <p className="text-sm text-slate-600">Оберіть позицію в таблиці нижче, щоб відкрити її для редагування в окремому блоці.</p>
+              </div>
+              {editingProductId ? (
+                <button
+                  type="button"
+                  onClick={resetEditDraft}
+                  className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                >
+                  <X size={15} /> Скасувати
+                </button>
+              ) : null}
+            </div>
+
+            {!editingProductId ? (
+              <div className="rounded-xl border border-dashed border-blue-300 bg-white/70 px-4 py-6 text-sm text-slate-600">
+                Продукт для редагування ще не вибрано. Натисніть "Редагувати" у таблиці, щоб змінити назву, категорію, постачальника або інші поля.
+              </div>
+            ) : (
+              <>
+                <div className="mb-3 rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm text-slate-700">
+                  Редагується: <span className="font-semibold text-slate-900">{editingProduct?.name || "Без назви"}</span>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Заклад</label>
+                    <select className={inputClass} value={editDraft.restaurantId} onChange={(e) => setEditDraft((prev) => ({ ...prev, restaurantId: e.target.value }))}>
+                      <option value="">Оберіть заклад</option>
+                      {availableRestaurants.map((restaurant) => (
+                        <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Назва</label>
+                    <input className={inputClass} value={editDraft.name} onChange={(e) => setEditDraft((prev) => ({ ...prev, name: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Код 1С</label>
+                    <input className={inputClass} value={editDraft.code1C} onChange={(e) => setEditDraft((prev) => ({ ...prev, code1C: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Категорія</label>
+                    <select className={inputClass} value={editDraft.category} onChange={(e) => handleDraftCategoryChange(setEditDraft, e.target.value)}>
+                      <option value="">Оберіть категорію</option>
+                      {categories.map((category) => (
+                        <option key={category} value={category}>{category}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Підкатегорія</label>
+                    <select className={inputClass} value={editDraft.subcategory} onChange={(e) => setEditDraft((prev) => ({ ...prev, subcategory: e.target.value }))} disabled={!editDraft.category}>
+                      <option value="">{editDraft.category ? "Оберіть підкатегорію" : "Спочатку оберіть категорію"}</option>
+                      {availableEditSubcategories.map((subcategory) => (
+                        <option key={subcategory} value={subcategory}>{subcategory}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Одиниця</label>
+                    <select className={inputClass} value={editDraft.unit} onChange={(e) => setEditDraft((prev) => ({ ...prev, unit: e.target.value }))}>
+                      <option value="">Оберіть одиницю</option>
+                      {units.map((unit) => (
+                        <option key={unit} value={unit}>{unit}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Постачальник</label>
+                    <select className={inputClass} value={editDraft.supplier} onChange={(e) => setEditDraft((prev) => ({ ...prev, supplier: e.target.value }))}>
+                      <option value="">Оберіть постачальника</option>
+                      {suppliers.map((supplier) => (
+                        <option key={supplier} value={supplier}>{supplier}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Ціна за одиницю (грн)</label>
+                    <input type="number" min="0" step="0.01" className={inputClass} value={editDraft.unitPrice} onChange={(e) => setEditDraft((prev) => ({ ...prev, unitPrice: e.target.value }))} />
+                  </div>
+                </div>
+
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={resetEditDraft}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    Скасувати зміни
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveEdit}
+                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500"
+                  >
+                    Зберегти зміни
+                  </button>
+                </div>
+              </>
+            )}
+          </section>
         </div>
       )}
 
@@ -556,39 +871,49 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
             </tr>
           </thead>
           <tbody>
-            {filteredProducts.map((item) => (
-              <tr key={item.id} className="border-t border-slate-200">
-                <td className="px-3 py-2 font-medium text-slate-900">{item.name}</td>
-                <td className="px-3 py-2">{item.code1C || "-"}</td>
-                <td className="px-3 py-2">{item.category}</td>
-                <td className="px-3 py-2">{item.subcategory || "-"}</td>
-                <td className="px-3 py-2">{item.unit}</td>
-                <td className="px-3 py-2">{formatMoney(item.unitPrice)}</td>
-                <td className="px-3 py-2">{item.supplier || "-"}</td>
-                <td className="px-3 py-2">{item.restaurantName || "-"}</td>
-                <td className="px-3 py-2">
-                  <span className={`rounded-full px-2 py-1 text-xs font-semibold ${item.isActive ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"}`}>
-                    {item.isActive ? "Активний" : "Вимкнений"}
-                  </span>
-                </td>
-                {canManageProducts && (
+            {filteredProducts.map((item) => {
+              const isEditingCurrentItem = String(editingProductId || "") === String(item.id || "");
+              return (
+                <tr key={item.id} className="border-t border-slate-200">
+                  <td className="px-3 py-2 font-medium text-slate-900">{item.name}</td>
+                  <td className="px-3 py-2">{item.code1C || "-"}</td>
+                  <td className="px-3 py-2">{item.category}</td>
+                  <td className="px-3 py-2">{item.subcategory || "-"}</td>
+                  <td className="px-3 py-2">{item.unit}</td>
+                  <td className="px-3 py-2">{formatMoney(item.unitPrice)}</td>
+                  <td className="px-3 py-2">{item.supplier || "-"}</td>
+                  <td className="px-3 py-2">{item.restaurantName || "-"}</td>
                   <td className="px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <button type="button" className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold hover:bg-slate-100" onClick={() => toggleActive(item)}>
-                        {item.isActive ? "Вимкнути" : "Увімкнути"}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-100"
-                        onClick={() => handleDeleteProduct(item)}
-                      >
-                        Видалити
-                      </button>
-                    </div>
+                    <span className={`rounded-full px-2 py-1 text-xs font-semibold ${item.isActive ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"}`}>
+                      {item.isActive ? "Активний" : "Вимкнений"}
+                    </span>
                   </td>
-                )}
-              </tr>
-            ))}
+                  {canManageProducts && (
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className={`rounded-lg border px-2 py-1 text-xs font-semibold ${isEditingCurrentItem ? "border-blue-300 bg-blue-100 text-blue-700" : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"}`}
+                          onClick={() => handleSelectProductForEdit(item)}
+                        >
+                          {isEditingCurrentItem ? "Редагується" : "Редагувати"}
+                        </button>
+                        <button type="button" className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold hover:bg-slate-100" onClick={() => toggleActive(item)}>
+                          {item.isActive ? "Вимкнути" : "Увімкнути"}
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-100"
+                          onClick={() => handleDeleteProduct(item)}
+                        >
+                          Видалити
+                        </button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
             {filteredProducts.length === 0 && (
               <tr>
                 <td colSpan={canManageProducts ? 10 : 9} className="px-3 py-6 text-center text-slate-500">
@@ -603,9 +928,10 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
   );
 }
 
-function InventoryTab({ products, inventories, restaurants, user, createInventory, updateInventory }) {
+function InventoryTab({ products, inventories, restaurants, user, createInventory, updateInventory, deleteInventory }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const quantityInputRefs = useRef({});
+  const pendingRestoreRef = useRef(null);
   const [activeRowProductId, setActiveRowProductId] = useState(null);
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
   const [quantities, setQuantities] = useState({});
@@ -621,19 +947,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   }, [user, isGlobalAdmin]);
 
   useEffect(() => {
-    const scopeId = String(restaurantId || "");
-    if (!scopeId) {
-      setActiveSession(null);
-      return undefined;
-    }
-
-    const unsubscribe = subscribeToActiveProductInventorySession(scopeId, (session) => {
-      setActiveSession(session || null);
-    });
-
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
+    // Do not auto-attach remote active sessions on restaurant change.
+    // Session must start explicitly via "Почати інвентаризацію".
+    setActiveSession(null);
   }, [restaurantId]);
 
   const scopedProducts = useMemo(() => {
@@ -647,6 +963,15 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   }, [scopedProducts]);
 
   useEffect(() => {
+    const pendingRestore = pendingRestoreRef.current;
+    if (pendingRestore && String(pendingRestore.restaurantId || "") === String(restaurantId || "")) {
+      setQuantities(pendingRestore.quantities || {});
+      setEditingInventoryId(String(pendingRestore.inventoryId || ""));
+      setInventoryDate(String(pendingRestore.inventoryDate || new Date().toISOString().slice(0, 10)));
+      pendingRestoreRef.current = null;
+      return;
+    }
+
     setQuantities({});
     setEditingInventoryId("");
   }, [restaurantId]);
@@ -731,15 +1056,102 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       .filter(Boolean);
   }, [scopedProducts, quantities]);
 
+  const buildRestoredQuantities = (inventory, targetRestaurantId) => {
+    const normalizedRestaurantId = String(targetRestaurantId || "");
+    const scopedRestoreProducts = products.filter(
+      (item) => item.isActive !== false && sameRestaurant(item.restaurantId, normalizedRestaurantId)
+    );
+
+    const byId = new Map();
+    const byCode = new Map();
+    const byName = new Map();
+
+    scopedRestoreProducts.forEach((product) => {
+      const productId = String(product?.id || "").trim();
+      const code1C = String(product?.code1C || "").trim().toLowerCase();
+      const name = String(product?.name || "").trim().toLowerCase();
+
+      if (productId) byId.set(productId, product);
+      if (code1C) byCode.set(code1C, product);
+      if (name) byName.set(name, product);
+    });
+
+    return (inventory?.items || []).reduce((acc, item) => {
+      const qty = toNumber(item?.qty);
+      if (qty <= 0) return acc;
+
+      const productId = String(item?.productId || "").trim();
+      const code1C = String(item?.code1C || "").trim().toLowerCase();
+      const name = String(item?.productName || item?.name || "").trim().toLowerCase();
+
+      const matchedProduct = byId.get(productId) || byCode.get(code1C) || byName.get(name);
+      if (!matchedProduct?.id) return acc;
+
+      acc[String(matchedProduct.id)] = String(qty);
+      return acc;
+    }, {});
+  };
+
+  const ensureSessionForRestaurant = async (targetRestaurantId) => {
+    const normalizedRestaurantId = String(targetRestaurantId || "").trim();
+    if (!normalizedRestaurantId) return null;
+
+    const hasMatchingActiveSession =
+      activeSession?.id
+      && String(activeSession?.restaurantId || activeSession?.scopeId || "") === normalizedRestaurantId;
+    if (hasMatchingActiveSession) return activeSession;
+
+    const nowIso = new Date().toISOString();
+    const selectedRestaurantName =
+      restaurants.find((item) => String(item.id) === normalizedRestaurantId)?.name || "Невідомий ресторан";
+
+    const sessionId = await startProductInventorySession(normalizedRestaurantId, {
+      restaurantId: normalizedRestaurantId,
+      restaurantName: selectedRestaurantName,
+      startedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+      startedById: user?.uid || "",
+    });
+
+    const nextSession = {
+      id: String(sessionId || ""),
+      scopeId: normalizedRestaurantId,
+      restaurantId: normalizedRestaurantId,
+      restaurantName: selectedRestaurantName,
+      isActive: true,
+      startedAt: nowIso,
+      updatedAt: nowIso,
+      startedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+      startedById: user?.uid || "",
+    };
+
+    setActiveSession(nextSession);
+    return nextSession;
+  };
+
   const handleSaveInventory = async () => {
     if (!restaurantId) {
       alert("Оберіть ресторан для інвентаризації.");
       return;
     }
 
-    if (!activeSession?.id) {
-      alert("Спочатку почніть інвентаризацію кнопкою 'Почати інвентаризацію'.");
-      return;
+    let effectiveSession = activeSession;
+    if (!effectiveSession?.id) {
+      // For restored/edit mode, auto-start a fresh session to keep update flow smooth.
+      if (!editingInventoryId) {
+        alert("Спочатку почніть інвентаризацію кнопкою 'Почати інвентаризацію'.");
+        return;
+      }
+
+      try {
+        effectiveSession = await ensureSessionForRestaurant(restaurantId);
+        if (!effectiveSession?.id) {
+          alert("Не вдалося автоматично почати інвентаризацію для оновлення.");
+          return;
+        }
+      } catch (error) {
+        alert(getErrorMessage(error, "Не вдалося автоматично почати інвентаризацію для оновлення."));
+        return;
+      }
     }
 
     if (filledLines.length === 0) {
@@ -757,9 +1169,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       restaurantId: String(restaurantId),
       restaurantName,
       restaurantRegNumber,
-      inventoryDate: String(activeSession?.startedAt || inventoryDate).slice(0, 10),
-      inventorySessionId: String(activeSession?.id || ""),
-      inventorySessionStartedAt: String(activeSession?.startedAt || ""),
+      inventoryDate: String(effectiveSession?.startedAt || inventoryDate).slice(0, 10),
+      inventorySessionId: String(effectiveSession?.id || ""),
+      inventorySessionStartedAt: String(effectiveSession?.startedAt || ""),
       items: filledLines,
       totalItems,
       totalAmount,
@@ -780,34 +1192,77 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       return;
     }
 
+    if (effectiveSession?.id) {
+      try {
+        await endProductInventorySession(effectiveSession.id, {
+          endedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+          endedById: user?.uid || "",
+        });
+        setActiveSession(null);
+      } catch (error) {
+        alert(getErrorMessage(error, "Інвентаризацію збережено, але не вдалося завершити активну сесію."));
+      }
+    }
+
     setQuantities({});
     setEditingInventoryId("");
     setInventoryDate(new Date().toISOString().slice(0, 10));
     alert(editingInventoryId ? "Інвентаризацію успішно оновлено." : "Інвентаризацію успішно збережено.");
   };
 
-  const handleRestoreInventory = (inventory) => {
-    const restoredQuantities = {};
-    (inventory?.items || []).forEach((item) => {
-      const productId = String(item?.productId || "");
-      if (!productId) return;
-      const qty = toNumber(item?.qty);
-      if (qty > 0) {
-        restoredQuantities[productId] = String(qty);
-      }
-    });
-
-    setQuantities(restoredQuantities);
-    setEditingInventoryId(String(inventory?.id || ""));
-    setInventoryDate(
-      String(
-        inventory?.inventoryDate ||
-          String(inventory?.inventorySessionStartedAt || "").slice(0, 10) ||
-          new Date().toISOString().slice(0, 10)
-      )
+  const handleRestoreInventory = async (inventory) => {
+    const targetRestaurantId = String(inventory?.restaurantId || restaurantId || "");
+    const restoredQuantities = buildRestoredQuantities(inventory, targetRestaurantId);
+    const nextInventoryDate = String(
+      inventory?.inventoryDate ||
+        String(inventory?.inventorySessionStartedAt || "").slice(0, 10) ||
+        new Date().toISOString().slice(0, 10)
     );
-    if (isGlobalAdmin) {
-      setRestaurantId(String(inventory?.restaurantId || ""));
+
+    if (String(targetRestaurantId || "") !== String(restaurantId || "")) {
+      pendingRestoreRef.current = {
+        restaurantId: targetRestaurantId,
+        quantities: restoredQuantities,
+        inventoryId: String(inventory?.id || ""),
+        inventoryDate: nextInventoryDate,
+      };
+      setRestaurantId(targetRestaurantId);
+    } else {
+      setQuantities(restoredQuantities);
+      setEditingInventoryId(String(inventory?.id || ""));
+      setInventoryDate(nextInventoryDate);
+    }
+
+    try {
+      const session = await ensureSessionForRestaurant(targetRestaurantId);
+      if (!session?.id) {
+        alert("Не вдалося активувати сесію інвентаризації після повернення.");
+      }
+    } catch (error) {
+      alert(getErrorMessage(error, "Не вдалося активувати сесію інвентаризації після повернення."));
+    }
+  };
+
+  const handleDeleteInventory = async (inventory) => {
+    if (!isGlobalAdmin) {
+      alert("Видалення інвентаризації доступне лише адміністратору.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Видалити інвентаризацію за ${formatDateUk(inventory?.inventoryDate)} (${inventory?.restaurantName || "без закладу"})?\nЦю дію неможливо скасувати.`
+    );
+    if (!confirmed) return;
+
+    const result = await deleteInventory(String(inventory?.id || ""));
+    if (!result.success) {
+      alert(getErrorMessage(result.error, "Не вдалося видалити інвентаризацію."));
+      return;
+    }
+
+    if (String(editingInventoryId || "") === String(inventory?.id || "")) {
+      setEditingInventoryId("");
+      setQuantities({});
     }
   };
 
@@ -822,17 +1277,16 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }
 
     try {
-      await startProductInventorySession(String(restaurantId), {
-        restaurantId: String(restaurantId),
-        restaurantName: restaurants.find((item) => String(item.id) === String(restaurantId))?.name || "Невідомий ресторан",
-        startedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
-        startedById: user?.uid || "",
-      });
+      const startedSession = await ensureSessionForRestaurant(restaurantId);
+      if (!startedSession?.id) {
+        alert("Не вдалося почати інвентаризацію.");
+        return;
+      }
       setEditingInventoryId("");
       setQuantities({});
     } catch (error) {
       console.error("Помилка старту інвентаризації продуктів:", error);
-      alert("Не вдалося почати інвентаризацію.");
+      alert(getErrorMessage(error, "Не вдалося почати інвентаризацію."));
     }
   };
 
@@ -847,11 +1301,12 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         endedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
         endedById: user?.uid || "",
       });
+      setActiveSession(null);
       setEditingInventoryId("");
       setQuantities({});
     } catch (error) {
       console.error("Помилка завершення інвентаризації продуктів:", error);
-      alert("Не вдалося завершити інвентаризацію.");
+      alert(getErrorMessage(error, "Не вдалося завершити інвентаризацію."));
     }
   };
 
@@ -1327,6 +1782,17 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                       >
                         Повернути
                       </button>
+                      {isGlobalAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handleDeleteInventory(inventory);
+                          }}
+                          className="inline-flex items-center rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                        >
+                          Видалити
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -1344,7 +1810,241 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   );
 }
 
-function InventoryJournalTab({ inventories, user }) {
+function InventoryListTab({ listProducts, restaurants, user, canManage, replaceInventoryListForRestaurant }) {
+  const isGlobalAdmin = isGlobalAdminUser(user);
+  const importInputRef = useRef(null);
+  const importInputId = "inventory-list-import-input";
+  const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
+  const [searchTerm, setSearchTerm] = useState("");
+
+  useEffect(() => {
+    if (isGlobalAdmin) return;
+    setRestaurantId(String(user?.restaurant || ""));
+  }, [user, isGlobalAdmin]);
+
+  const availableRestaurants = useMemo(() => {
+    if (isGlobalAdmin) return restaurants;
+    return restaurants.filter((item) => String(item.id) === String(user?.restaurant));
+  }, [restaurants, user, isGlobalAdmin]);
+
+  const scopedList = useMemo(() => {
+    const selectedRestaurantId = String(restaurantId || "");
+    if (!selectedRestaurantId) return [];
+    return listProducts.filter((item) => item.isActive !== false && sameRestaurant(item.restaurantId, selectedRestaurantId));
+  }, [listProducts, restaurantId]);
+
+  const filteredList = useMemo(() => {
+    const normalizedSearch = String(searchTerm || "").trim().toLowerCase();
+    if (!normalizedSearch) return scopedList;
+
+    return scopedList.filter((item) =>
+      [item.name, item.code1C, item.unit]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedSearch)
+    );
+  }, [scopedList, searchTerm]);
+
+  const handleDownloadTemplate = async () => {
+    const { downloadInventoryListTemplate } = await loadInventoryListExcel();
+    downloadInventoryListTemplate();
+  };
+
+  const handleImportList = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!restaurantId) {
+      alert("Перед імпортом оберіть заклад.");
+      event.target.value = "";
+      return;
+    }
+
+    const selectedRestaurant = restaurants.find((item) => String(item.id) === String(restaurantId));
+    try {
+      const { importInventoryListFromExcel } = await loadInventoryListExcel();
+      const importedRows = await importInventoryListFromExcel(file, {
+        id: restaurantId,
+        name: String(selectedRestaurant?.name || ""),
+        regNumber: String(selectedRestaurant?.regNumber || ""),
+      });
+
+      const uniqueRows = Array.from(
+        new Map(
+          importedRows.map((item) => {
+            const key = `${String(item.code1C || "").trim().toLowerCase()}::${String(item.name || "").trim().toLowerCase()}`;
+            return [key, item];
+          })
+        ).values()
+      ).filter((item) => String(item.name || "").trim() || String(item.code1C || "").trim());
+
+      if (uniqueRows.length === 0) {
+        alert("У файлі не знайдено валідних рядків для списку інвентаризації.");
+        return;
+      }
+
+      const result = await replaceInventoryListForRestaurant(restaurantId, uniqueRows);
+      if (!result.success) {
+        alert(getErrorMessage(result.error, "Не вдалося замінити список інвентаризації."));
+        return;
+      }
+
+      alert(`Список інвентаризації оновлено. Завантажено: ${uniqueRows.length} позицій.`);
+    } catch (error) {
+      console.error("Помилка імпорту списку інвентаризації:", error);
+      alert(getErrorMessage(error, "Не вдалося імпортувати список інвентаризації."));
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const handleClearList = async () => {
+    if (!restaurantId) {
+      alert("Оберіть заклад.");
+      return;
+    }
+
+    const confirmed = window.confirm("Очистити поточний список інвентаризації для вибраного закладу?");
+    if (!confirmed) return;
+
+    const result = await replaceInventoryListForRestaurant(restaurantId, []);
+    if (!result.success) {
+      alert(getErrorMessage(result.error, "Не вдалося очистити список інвентаризації."));
+      return;
+    }
+
+    alert("Список інвентаризації очищено.");
+  };
+
+  return (
+    <div className={cardClass}>
+      <div className="mb-4 flex items-center gap-2">
+        <ClipboardCheck size={18} className="text-indigo-600" />
+        <h2 className="text-lg font-semibold">Список інвентаризації</h2>
+      </div>
+
+      <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Заклад</label>
+          <select
+            className={inputClass}
+            value={restaurantId}
+            onChange={(event) => setRestaurantId(event.target.value)}
+            disabled={!isGlobalAdmin}
+          >
+            <option value="">Оберіть заклад</option>
+            {availableRestaurants.map((restaurant) => (
+              <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="md:col-span-2">
+          <label className="text-sm font-semibold text-slate-800">Пошук у списку</label>
+          <input
+            className={inputClass}
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Назва, код 1С, одиниця"
+          />
+        </div>
+      </div>
+
+      {canManage ? (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <input
+            id={importInputId}
+            ref={importInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{
+              position: "absolute",
+              width: "1px",
+              height: "1px",
+              padding: 0,
+              margin: "-1px",
+              overflow: "hidden",
+              clip: "rect(0, 0, 0, 0)",
+              whiteSpace: "nowrap",
+              border: 0,
+            }}
+            onChange={handleImportList}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              void handleDownloadTemplate();
+            }}
+            className="inline-flex items-center gap-2 rounded-lg bg-slate-600 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-500"
+          >
+            <FileDown size={15} /> Завантажити шаблон
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const input = importInputRef.current || document.getElementById(importInputId);
+              if (input && typeof input.click === "function") {
+                input.click();
+              } else {
+                alert("Не вдалося відкрити вибір файлу. Оновіть сторінку і спробуйте ще раз.");
+              }
+            }}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+          >
+            <Upload size={15} /> Імпортувати та замінити список
+          </button>
+          <button
+            type="button"
+            onClick={handleClearList}
+            className="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
+          >
+            <Trash2 size={15} /> Очистити список
+          </button>
+        </div>
+      ) : (
+        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Лише адміністратор або відділ закупівель може завантажувати/очищати список.
+        </div>
+      )}
+
+      <div className="mb-3 flex items-center justify-between text-xs font-semibold text-slate-600">
+        <span>Позицій у списку: {filteredList.length} з {scopedList.length}</span>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border border-slate-200">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-50 text-slate-700">
+            <tr>
+              <th className="px-3 py-2 text-left">Назва</th>
+              <th className="px-3 py-2 text-left">Код 1С</th>
+              <th className="px-3 py-2 text-left">Одиниця</th>
+              <th className="px-3 py-2 text-left">Заклад</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredList.map((item) => (
+              <tr key={item.id} className="border-t border-slate-200">
+                <td className="px-3 py-2 font-medium text-slate-900">{item.name || "-"}</td>
+                <td className="px-3 py-2">{item.code1C || "-"}</td>
+                <td className="px-3 py-2">{item.unit || "-"}</td>
+                <td className="px-3 py-2">{item.restaurantName || "-"}</td>
+              </tr>
+            ))}
+            {filteredList.length === 0 && (
+              <tr>
+                <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
+                  {restaurantId ? "Список для цього закладу порожній." : "Спочатку оберіть заклад."}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function InventoryJournalTab({ inventories, user, deleteInventory }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const visibleInventories = useMemo(() => {
     if (isGlobalAdmin) return inventories;
@@ -1477,6 +2177,23 @@ function InventoryJournalTab({ inventories, user }) {
     printWindow.document.close();
   };
 
+  const handleDeleteInventory = async (inventory) => {
+    if (!isGlobalAdmin) {
+      alert("Видалення інвентаризації доступне лише адміністратору.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Видалити інвентаризацію за ${formatDateUk(inventory?.inventoryDate)} (${inventory?.restaurantName || "без закладу"})?\nЦю дію неможливо скасувати.`
+    );
+    if (!confirmed) return;
+
+    const result = await deleteInventory(String(inventory?.id || ""));
+    if (!result.success) {
+      alert(getErrorMessage(result.error, "Не вдалося видалити інвентаризацію."));
+    }
+  };
+
   return (
     <div className={`${cardClass} px-2 sm:px-5`}>
       <h3 className="mb-3 text-base font-semibold text-slate-900">Журнал інвентаризацій</h3>
@@ -1523,6 +2240,17 @@ function InventoryJournalTab({ inventories, user }) {
                     >
                       <Printer size={14} /> Друк
                     </button>
+                    {isGlobalAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleDeleteInventory(inventory);
+                        }}
+                        className="inline-flex items-center rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                      >
+                        Видалити
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -3258,6 +3986,7 @@ function OrdersManagementTab({ orders, updateOrder, createSupplierDispatch, canM
 export default function ProductBookingModule({ topTab, restaurants = [], user }) {
   const {
     products,
+    inventoryListProducts,
     orders,
     suppliers,
     typicalFields,
@@ -3276,25 +4005,48 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     createTypicalField,
     updateTypicalField,
     removeTypicalField,
+    replaceInventoryListForRestaurant,
     createInventory,
     updateInventory,
+    deleteInventory,
   } = useProductBooking(true);
 
   const tabKind = normalizeTabKind(topTab);
   const canManageProducts = hasProcurementAccess(user);
   const canManageOrders = hasProcurementAccess(user);
+  const normalizedProducts = useMemo(() => {
+    return products.map((item) => normalizeRestaurantScopedRecord(item, restaurants));
+  }, [products, restaurants]);
+
+  const normalizedInventoryListProducts = useMemo(() => {
+    return inventoryListProducts.map((item) => normalizeRestaurantScopedRecord(item, restaurants));
+  }, [inventoryListProducts, restaurants]);
+
+  const normalizedOrders = useMemo(() => {
+    return orders.map((item) => normalizeRestaurantScopedRecord(item, restaurants));
+  }, [orders, restaurants]);
+
+  const normalizedInventories = useMemo(() => {
+    return inventories.map((item) => normalizeRestaurantScopedRecord(item, restaurants));
+  }, [inventories, restaurants]);
+
+  const effectiveRestaurants = useMemo(() => {
+    if (Array.isArray(restaurants) && restaurants.length > 0) return restaurants;
+    return buildDerivedRestaurants([...normalizedProducts, ...normalizedInventoryListProducts, ...normalizedOrders, ...normalizedInventories]);
+  }, [restaurants, normalizedProducts, normalizedInventoryListProducts, normalizedOrders, normalizedInventories]);
+
   const availableSuppliers = useMemo(() => {
     const fromDirectory = suppliers
       .filter((item) => item.isActive !== false)
       .map((item) => String(item.name || "").trim())
       .filter(Boolean);
 
-    const fromProducts = products
+    const fromProducts = normalizedProducts
       .map((item) => String(item.supplier || "").trim())
       .filter(Boolean);
 
     return Array.from(new Set([...fromDirectory, ...fromProducts])).sort((a, b) => a.localeCompare(b, "uk"));
-  }, [suppliers, products]);
+  }, [suppliers, normalizedProducts]);
 
   const availableCategories = useMemo(() => {
     const fromDirectory = typicalFields
@@ -3302,12 +4054,12 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
       .map((item) => String(item.name || "").trim())
       .filter(Boolean);
 
-    const fromProducts = products
+    const fromProducts = normalizedProducts
       .map((item) => String(item.category || "").trim())
       .filter(Boolean);
 
     return Array.from(new Set([...fromDirectory, ...fromProducts])).sort((a, b) => a.localeCompare(b, "uk"));
-  }, [typicalFields, products]);
+  }, [typicalFields, normalizedProducts]);
 
   const availableSubcategoriesByCategory = useMemo(() => {
     const map = {};
@@ -3322,7 +4074,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
         map[category].push(subcategory);
       });
 
-    products.forEach((item) => {
+    normalizedProducts.forEach((item) => {
       const category = String(item.category || "").trim();
       const subcategory = String(item.subcategory || "").trim();
       if (!category || !subcategory) return;
@@ -3335,7 +4087,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     });
 
     return map;
-  }, [typicalFields, products]);
+  }, [typicalFields, normalizedProducts]);
 
   const availableUnits = useMemo(() => {
     const fromDirectory = typicalFields
@@ -3343,31 +4095,36 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
       .map((item) => String(item.name || "").trim())
       .filter(Boolean);
 
-    const fromProducts = products
+    const fromProducts = normalizedProducts
       .map((item) => String(item.unit || "").trim())
       .filter(Boolean);
 
     return Array.from(new Set([...fromDirectory, ...fromProducts])).sort((a, b) => a.localeCompare(b, "uk"));
-  }, [typicalFields, products]);
+  }, [typicalFields, normalizedProducts]);
 
   if (loading) {
     return <div className={`${cardClass} text-sm text-slate-600`}>Завантаження даних з бази...</div>;
   }
 
   if (error) {
-    return <div className={`${cardClass} text-sm text-red-600`}>Помилка завантаження даних модуля замовлень.</div>;
+    return (
+      <div className={`${cardClass} text-sm text-red-600`}>
+        <div>Помилка завантаження даних модуля замовлень.</div>
+        <div className="mt-2 whitespace-pre-wrap text-xs text-red-500">{String(error?.message || error || "")}</div>
+      </div>
+    );
   }
 
   if (tabKind === "products") {
     return (
       <ProductAdminTab
-        products={products}
+        products={normalizedProducts}
         suppliers={availableSuppliers}
         categories={availableCategories}
         subcategoriesByCategory={availableSubcategoriesByCategory}
         units={availableUnits}
-        inventories={inventories}
-        restaurants={restaurants}
+        inventories={normalizedInventories}
+        restaurants={effectiveRestaurants}
         user={user}
         canManageProducts={canManageProducts}
         addProduct={addProduct}
@@ -3380,12 +4137,25 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
   if (tabKind === "inventory") {
     return (
       <InventoryTab
-        products={products}
-        inventories={inventories}
-        restaurants={restaurants}
+        products={normalizedInventoryListProducts}
+        inventories={normalizedInventories}
+        restaurants={effectiveRestaurants}
         user={user}
         createInventory={createInventory}
         updateInventory={updateInventory}
+        deleteInventory={deleteInventory}
+      />
+    );
+  }
+
+  if (tabKind === "inventoryList") {
+    return (
+      <InventoryListTab
+        listProducts={normalizedInventoryListProducts}
+        restaurants={effectiveRestaurants}
+        user={user}
+        canManage={canManageProducts}
+        replaceInventoryListForRestaurant={replaceInventoryListForRestaurant}
       />
     );
   }
@@ -3393,8 +4163,9 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
   if (tabKind === "inventoryJournal") {
     return (
       <InventoryJournalTab
-        inventories={inventories}
+        inventories={normalizedInventories}
         user={user}
+        deleteInventory={deleteInventory}
       />
     );
   }
@@ -3426,7 +4197,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
   if (tabKind === "orders") {
     return (
       <OrdersManagementTab
-        orders={orders}
+        orders={normalizedOrders}
         updateOrder={updateOrder}
         createSupplierDispatch={createSupplierDispatch}
         canManageOrders={canManageOrders}
@@ -3435,5 +4206,5 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     );
   }
 
-  return <BookingTab products={products} orders={orders} createOrder={createOrder} restaurants={restaurants} user={user} suppliersDirectory={suppliers} />;
+  return <BookingTab products={normalizedProducts} orders={normalizedOrders} createOrder={createOrder} restaurants={effectiveRestaurants} user={user} suppliersDirectory={suppliers} />;
 }

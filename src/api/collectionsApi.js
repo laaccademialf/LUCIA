@@ -140,3 +140,31 @@ export const deleteCollectionItemApi = async (collectionName, id) => {
     throw new Error(`Delete ${collectionName}/${id} failed (${response.status}): ${body || "no body"}`);
   }
 };
+
+export const replaceInventoryListByRestaurantApi = async (restaurantId, items = []) => {
+  assertEnabled();
+
+  const response = await fetch(
+    endpoint("/api/collections/inventoryListProducts/replace-by-restaurant"),
+    {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({
+        restaurantId: String(restaurantId || "").trim(),
+        items: Array.isArray(items) ? items : [],
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Replace inventory list failed (${response.status}): ${body || "no body"}`);
+  }
+
+  const payload = await response.json().catch(() => ({}));
+  return {
+    ok: Boolean(payload?.ok),
+    deleted: Number(payload?.deleted || 0),
+    created: Number(payload?.created || 0),
+  };
+};

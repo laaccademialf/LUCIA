@@ -61,7 +61,6 @@ export const DEFAULT_MENU_STRUCTURE = [
     id: "inventory",
     label: "Облік",
     children: [
-      { id: "inventory-products", label: "Продукти", tabs: [], tabLabels: [] },
       { id: "inventory-utilities", label: "Утиліти", tabs: [], tabLabels: [] },
       {
         id: "inventory-assets",

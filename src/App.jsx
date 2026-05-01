@@ -4550,10 +4550,12 @@ function App() {
           <div
             className={clsx(
               "mx-auto max-w-screen-2xl px-3 sm:px-6 lg:px-8",
-              activeNav === "inventory-products" ? "pt-1 pb-4 sm:pt-2 sm:pb-6" : "py-4 sm:py-8"
+              (activeNav.includes("productbooking") || activeNav.includes("inventory-products"))
+                ? "pt-1 pb-4 sm:pt-2 sm:pb-6"
+                : "py-4 sm:py-8"
             )}
           >
-            <div className={clsx(activeNav === "inventory-products" ? "mt-0" : "mt-4")}>
+            <div className={clsx((activeNav.includes("productbooking") || activeNav.includes("inventory-products")) ? "mt-0" : "mt-4")}>
               <Suspense fallback={<div className="p-4 text-sm text-slate-500">Завантаження модуля...</div>}>
                 {renderContent()}
               </Suspense>

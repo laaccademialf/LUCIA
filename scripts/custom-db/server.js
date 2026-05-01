@@ -2091,9 +2091,21 @@ const ensureFlatColumnsMySql = async (conn, flatTable, typeMap) => {
       console.warn(`[ensureFlatColumns] Skipping column '${columnName}' — name exceeds ${MAX_MYSQL_IDENTIFIER_LENGTH} chars`);
       continue;
     }
-    await conn.execute(
-      `ALTER TABLE ${quoteIdentMySql(flatTable)} ADD COLUMN ${quoteIdentMySql(columnName)} ${sqlTypeFor(mergedType)}`
-    );
+    try {
+      await conn.execute(
+        `ALTER TABLE ${quoteIdentMySql(flatTable)} ADD COLUMN ${quoteIdentMySql(columnName)} ${sqlTypeFor(mergedType)}`
+      );
+      existing.add(columnName);
+    } catch (error) {
+      const code = String(error?.code || "").toUpperCase();
+      const message = String(error?.message || "").toLowerCase();
+      const duplicateColumn = code === "ER_DUP_FIELDNAME" || message.includes("duplicate column") || message.includes("duplicate column name");
+      if (duplicateColumn) {
+        existing.add(columnName);
+        continue;
+      }
+      throw error;
+    }
   }
 };
 
@@ -3154,14 +3166,353 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
     return next;
   };
 
+  const normalizeString = (value) => String(value || "").trim();
+
+  const firstNonEmptyString = (...values) => {
+    for (const value of values) {
+      const normalized = normalizeString(value);
+      if (normalized) return normalized;
+    }
+    return "";
+  };
+
+  const normalizeBoolean = (value, fallback = true) => {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value !== 0;
+    const normalized = normalizeString(value).toLowerCase();
+    if (!normalized) return fallback;
+    if (["false", "0", "no", "inactive", "disabled", "off", "ні", "вимкнено"].includes(normalized)) return false;
+    if (["true", "1", "yes", "active", "enabled", "on", "так", "увімкнено"].includes(normalized)) return true;
+    return fallback;
+  };
+
+  const normalizeNumber = (value, fallback = 0) => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    const normalized = normalizeString(value).replace(/\s+/g, "").replace(",", ".");
+    if (!normalized) return fallback;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  const normalizedToken = (value) => normalizeString(value).toLowerCase();
+
+  const parseMaybeArray = (value) => {
+    if (Array.isArray(value)) return value;
+    if (typeof value !== "string") return [];
+    const text = value.trim();
+    if (!text) return [];
+    try {
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const buildRestaurantLookup = (restaurants) => {
+    const byToken = new Map();
+    for (const rawItem of Array.isArray(restaurants) ? restaurants : []) {
+      const item = {
+        id: firstNonEmptyString(rawItem?.id, rawItem?.restaurant_id),
+        name: firstNonEmptyString(rawItem?.name, rawItem?.restaurant_name),
+        regNumber: firstNonEmptyString(rawItem?.regNumber, rawItem?.reg_number),
+      };
+      const tokens = [
+        item.id,
+        item.name,
+        item.regNumber,
+        rawItem?.code,
+        rawItem?.restaurantCode,
+        rawItem?.restaurant_code,
+      ]
+        .map((value) => normalizedToken(value))
+        .filter(Boolean);
+
+      for (const token of tokens) {
+        if (!byToken.has(token)) byToken.set(token, item);
+      }
+    }
+    return byToken;
+  };
+
+  const normalizeRestaurantScopedRecord = (record, restaurantLookup) => {
+    if (!record || typeof record !== "object") return record;
+    if (!(restaurantLookup instanceof Map) || restaurantLookup.size === 0) return record;
+
+    const references = [
+      record.restaurantId,
+      record.restaurant_id,
+      record.restaurant,
+      record.restaurantName,
+      record.restaurant_name,
+      record.restaurantRegNumber,
+      record.restaurant_reg_number,
+      record.regNumber,
+      record.reg_number,
+      record.restaurantCode,
+      record.restaurant_code,
+    ]
+      .map((value) => normalizedToken(value))
+      .filter(Boolean);
+
+    const matched = references.map((ref) => restaurantLookup.get(ref)).find(Boolean);
+    if (!matched) return record;
+
+    return {
+      ...record,
+      restaurantId: firstNonEmptyString(matched.id, record.restaurantId, record.restaurant_id, record.restaurant),
+      restaurantName: firstNonEmptyString(matched.name, record.restaurantName, record.restaurant_name),
+      restaurantRegNumber: firstNonEmptyString(
+        matched.regNumber,
+        record.restaurantRegNumber,
+        record.restaurant_reg_number,
+        record.regNumber,
+        record.reg_number
+      ),
+    };
+  };
+
+  const normalizeBookingCollectionPayload = (name, payload) => {
+    if (!payload || typeof payload !== "object") return payload;
+    const next = { ...payload };
+
+    if (name === "inventoryListProducts") {
+      const code1C = firstNonEmptyString(next.code1C, next.code_1c, next.code1_c, next.code1c, next.code);
+      if (code1C) {
+        next.code1C = code1C;
+        next.code_1c = code1C;
+        next.code1_c = code1C;
+      }
+      next.restaurantId = firstNonEmptyString(
+        next.restaurantId,
+        next.restaurant_id,
+        next.restaurant,
+        next.restaurantRegNumber,
+        next.restaurant_reg_number,
+        next.regNumber,
+        next.reg_number
+      );
+      next.restaurantName = firstNonEmptyString(next.restaurantName, next.restaurant_name);
+      next.restaurantRegNumber = firstNonEmptyString(next.restaurantRegNumber, next.restaurant_reg_number, next.regNumber, next.reg_number);
+      next.name = firstNonEmptyString(next.name, next.productName, next.product_name);
+      next.unit = firstNonEmptyString(next.unit, next.unitName, next.unit_name, next.measure);
+      next.unitPrice = normalizeNumber(next.unitPrice ?? next.unit_price ?? next.price ?? next.accountingPrice ?? next.accounting_price, 0);
+      next.fileQuantity = normalizeNumber(
+        next.fileQuantity ?? next.file_quantity ?? next.quantity ?? next.qty ?? next.factQuantity ?? next.fact_quantity,
+        0
+      );
+      next.isActive = normalizeBoolean(next.isActive ?? next.is_active ?? next.active, true);
+      return next;
+    }
+
+    if (name === "bookingProducts") {
+      const code1C = firstNonEmptyString(next.code1C, next.code_1c, next.code1_c, next.code1c, next.code);
+      if (code1C) {
+        next.code1C = code1C;
+        next.code_1c = code1C;
+        next.code1_c = code1C;
+      }
+      next.restaurantId = firstNonEmptyString(
+        next.restaurantId,
+        next.restaurant_id,
+        next.restaurant,
+        next.restaurantRegNumber,
+        next.restaurant_reg_number,
+        next.regNumber,
+        next.reg_number
+      );
+      next.restaurantName = firstNonEmptyString(next.restaurantName, next.restaurant_name);
+      next.restaurantRegNumber = firstNonEmptyString(next.restaurantRegNumber, next.restaurant_reg_number, next.regNumber, next.reg_number);
+      next.unitPrice = normalizeNumber(next.unitPrice ?? next.unit_price ?? next.price, 0);
+      next.isActive = normalizeBoolean(next.isActive ?? next.is_active ?? next.active, true);
+      return next;
+    }
+
+    if (name === "productOrders") {
+      next.restaurantId = firstNonEmptyString(
+        next.restaurantId,
+        next.restaurant_id,
+        next.restaurant,
+        next.restaurantRegNumber,
+        next.restaurant_reg_number,
+        next.regNumber,
+        next.reg_number
+      );
+      next.restaurantName = firstNonEmptyString(next.restaurantName, next.restaurant_name);
+      next.restaurantRegNumber = firstNonEmptyString(next.restaurantRegNumber, next.restaurant_reg_number, next.regNumber, next.reg_number);
+      next.status = firstNonEmptyString(next.status, next.order_status) || "new";
+      next.totalAmount = normalizeNumber(next.totalAmount ?? next.total_amount, 0);
+      next.totalItems = normalizeNumber(next.totalItems ?? next.total_items, 0);
+      return next;
+    }
+
+    if (name === "bookingSuppliers") {
+      next.name = firstNonEmptyString(next.name, next.supplierName, next.supplier_name);
+      next.isActive = normalizeBoolean(next.isActive ?? next.is_active ?? next.active, true);
+      const legalEntities = parseMaybeArray(next.legalEntities ?? next.legal_entities)
+        .map((entry) => normalizeString(entry))
+        .filter(Boolean);
+      next.legalEntities = legalEntities;
+      next.legal_entities = legalEntities;
+      next.minimumOrderAmount = normalizeNumber(next.minimumOrderAmount ?? next.minimum_order_amount, 0);
+      return next;
+    }
+
+    if (name === "bookingTypicalFields") {
+      next.type = firstNonEmptyString(next.type, next.fieldType, next.field_type);
+      next.name = firstNonEmptyString(next.name, next.fieldName, next.field_name);
+      next.categoryName = firstNonEmptyString(next.categoryName, next.category_name);
+      next.isActive = normalizeBoolean(next.isActive ?? next.is_active ?? next.active, true);
+      return next;
+    }
+
+    if (name === "productInventories") {
+      next.restaurantId = firstNonEmptyString(
+        next.restaurantId,
+        next.restaurant_id,
+        next.restaurant,
+        next.restaurantRegNumber,
+        next.restaurant_reg_number,
+        next.regNumber,
+        next.reg_number
+      );
+      next.restaurantName = firstNonEmptyString(next.restaurantName, next.restaurant_name);
+      next.restaurantRegNumber = firstNonEmptyString(next.restaurantRegNumber, next.restaurant_reg_number, next.regNumber, next.reg_number);
+      next.inventoryDate = firstNonEmptyString(next.inventoryDate, next.inventory_date);
+      next.inventorySessionId = firstNonEmptyString(next.inventorySessionId, next.inventory_session_id);
+      next.isSubmitted = normalizeBoolean(next.isSubmitted ?? next.is_submitted, false);
+      return next;
+    }
+
+    if (name === "productInventorySessions") {
+      next.scopeId = firstNonEmptyString(next.scopeId, next.scope_id);
+      next.restaurantId = firstNonEmptyString(next.restaurantId, next.restaurant_id, next.scopeId, next.scope_id);
+      next.restaurantName = firstNonEmptyString(next.restaurantName, next.restaurant_name);
+      next.startedAt = firstNonEmptyString(next.startedAt, next.started_at);
+      next.endedAt = firstNonEmptyString(next.endedAt, next.ended_at);
+      next.updatedAt = firstNonEmptyString(next.updatedAt, next.updated_at);
+      next.startedBy = firstNonEmptyString(next.startedBy, next.started_by);
+      next.startedById = firstNonEmptyString(next.startedById, next.started_by_id);
+      next.endedBy = firstNonEmptyString(next.endedBy, next.ended_by);
+      next.endedById = firstNonEmptyString(next.endedById, next.ended_by_id);
+      next.isActive = String(next.endedAt || "").trim()
+        ? false
+        : normalizeBoolean(next.isActive ?? next.is_active, false);
+      return next;
+    }
+
+    return next;
+  };
+
+  const normalizeBookingCollectionResponse = async (name, input) => {
+    const targetCollections = new Set([
+      "inventoryListProducts",
+      "bookingProducts",
+      "productOrders",
+      "bookingSuppliers",
+      "bookingTypicalFields",
+      "productInventories",
+      "productInventorySessions",
+    ]);
+    if (!targetCollections.has(name)) return input;
+
+    const list = Array.isArray(input) ? input : [input].filter(Boolean);
+    if (!list.length) return Array.isArray(input) ? [] : input;
+
+    let restaurantLookup = new Map();
+    if (
+      name === "inventoryListProducts"
+      || name === "bookingProducts"
+      || name === "productOrders"
+      || name === "productInventories"
+    ) {
+      try {
+        const restaurants = await getCollectionItemsData("restaurants", dbConfig);
+        restaurantLookup = buildRestaurantLookup(restaurants);
+      } catch {
+        restaurantLookup = new Map();
+      }
+    }
+
+    const normalizedList = list.map((item) => {
+      const normalized = normalizeBookingCollectionPayload(name, item);
+      return normalizeRestaurantScopedRecord(normalized, restaurantLookup);
+    });
+
+    return Array.isArray(input) ? normalizedList : normalizedList[0] || null;
+  };
+
+  const runSequential = async (items, worker) => {
+    const safeItems = Array.isArray(items) ? items : [];
+    for (const item of safeItems) {
+      await worker(item);
+    }
+  };
+
+  if (collectionName === "inventoryListProducts" && method === "POST" && itemId === "replace-by-restaurant") {
+    let payload;
+    try {
+      payload = await parseJsonBody(req, 20 * 1024 * 1024);
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+    }
+
+    const restaurantId = firstNonEmptyString(payload?.restaurantId, payload?.restaurant_id);
+    if (!restaurantId) {
+      return sendJson(res, 400, { ok: false, error: "restaurantId is required" });
+    }
+
+    const sourceItems = Array.isArray(payload?.items) ? payload.items : [];
+    if (sourceItems.length > 10000) {
+      return sendJson(res, 400, { ok: false, error: "Maximum 10000 items per replace" });
+    }
+
+    const preparedItems = sourceItems
+      .map((item) => normalizeBookingCollectionPayload(collectionName, {
+        ...(item || {}),
+        restaurantId,
+      }))
+      .filter((item) => firstNonEmptyString(item?.name, item?.productName, item?.product_name, item?.code1C, item?.code_1c, item?.code1_c));
+
+    try {
+      const existingItems = await getCollectionItemsData(collectionName, dbConfig);
+      const scopedExisting = existingItems.filter(
+        (entry) => firstNonEmptyString(entry?.restaurantId, entry?.restaurant_id) === restaurantId
+      );
+
+      await runSequential(scopedExisting, async (entry) => {
+        const id = String(entry?.id || "").trim();
+        if (!id) return;
+        await deleteCollectionItemData(collectionName, id, dbConfig);
+      });
+
+      await runSequential(preparedItems, async (item) => {
+        await createCollectionItemData(collectionName, item, dbConfig);
+      });
+
+      return sendJson(res, 200, {
+        ok: true,
+        deleted: scopedExisting.length,
+        created: preparedItems.length,
+      });
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: `Replace failed: ${error.message || "unknown error"}`,
+      });
+    }
+  }
+
   if (method === "GET" && !itemId) {
     const items = await getCollectionItemsData(collectionName, dbConfig);
-    return sendJson(res, 200, { ok: true, data: items });
+    const normalizedItems = await normalizeBookingCollectionResponse(collectionName, items);
+    return sendJson(res, 200, { ok: true, data: normalizedItems });
   }
 
   if (method === "GET" && itemId) {
     const item = await getCollectionItemData(collectionName, itemId, dbConfig);
-    return sendJson(res, 200, { ok: true, data: item });
+    const normalizedItem = await normalizeBookingCollectionResponse(collectionName, item);
+    return sendJson(res, 200, { ok: true, data: normalizedItem });
   }
 
   if (method === "POST" && !itemId) {
@@ -3174,7 +3525,7 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
 
     const normalizedPayload = collectionName === "users"
       ? normalizeUsersPayloadAliases(payload)
-      : payload;
+      : normalizeBookingCollectionPayload(collectionName, payload);
     const id = await createCollectionItemData(collectionName, normalizedPayload, dbConfig);
     return sendJson(res, 200, { ok: true, id });
   }
@@ -3189,7 +3540,7 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
 
     const normalizedPayload = collectionName === "users"
       ? normalizeUsersPayloadAliases(payload)
-      : payload;
+      : normalizeBookingCollectionPayload(collectionName, payload);
     await updateCollectionItemData(collectionName, itemId, normalizedPayload, dbConfig);
     return sendJson(res, 200, { ok: true });
   }

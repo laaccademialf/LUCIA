@@ -272,6 +272,30 @@ const normalizeSessionActive = (value) => {
   return text === "true" || text === "1";
 };
 
+const normalizeProductInventorySession = (item) => {
+  if (!item || typeof item !== "object") return item;
+
+  const scopeId = String(item.scopeId || item.scope_id || "");
+  const startedAt = item.startedAt || item.started_at || "";
+  const endedAt = item.endedAt || item.ended_at || "";
+  const updatedAt = item.updatedAt || item.updated_at || "";
+
+  return {
+    ...item,
+    scopeId,
+    startedAt,
+    endedAt,
+    updatedAt,
+    restaurantId: String(item.restaurantId || item.restaurant_id || ""),
+    restaurantName: String(item.restaurantName || item.restaurant_name || ""),
+    startedBy: String(item.startedBy || item.started_by || ""),
+    startedById: String(item.startedById || item.started_by_id || ""),
+    endedBy: String(item.endedBy || item.ended_by || ""),
+    endedById: String(item.endedById || item.ended_by_id || ""),
+    isActive: endedAt ? false : normalizeSessionActive(item.isActive ?? item.is_active),
+  };
+};
+
 const normalizeInventorySession = (item) => {
   if (!item || typeof item !== "object") return item;
   const scopeId = String(item.scopeId || item.scope_id || "global");
@@ -578,6 +602,70 @@ export const subscribeToBookingProducts = (callback) => {
   });
 };
 
+export const getInventoryListProducts = async () => {
+  try {
+    const productsRef = collection(db, "inventoryListProducts");
+    const q = query(productsRef, orderBy("name"));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((item) => ({
+      id: item.id,
+      ...item.data(),
+    }));
+  } catch (error) {
+    console.error("Помилка отримання списку інвентаризації:", error);
+    throw error;
+  }
+};
+
+export const addInventoryListProduct = async (product) => {
+  try {
+    const docRef = await addDoc(collection(db, "inventoryListProducts"), {
+      ...product,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    return docRef.id;
+  } catch (error) {
+    console.error("Помилка додавання позиції до списку інвентаризації:", error);
+    throw error;
+  }
+};
+
+export const updateInventoryListProduct = async (id, data) => {
+  try {
+    const docRef = doc(db, "inventoryListProducts", id);
+    await updateDoc(docRef, {
+      ...data,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Помилка оновлення позиції списку інвентаризації:", error);
+    throw error;
+  }
+};
+
+export const deleteInventoryListProduct = async (id) => {
+  try {
+    await deleteDoc(doc(db, "inventoryListProducts", id));
+  } catch (error) {
+    console.error("Помилка видалення позиції списку інвентаризації:", error);
+    throw error;
+  }
+};
+
+export const subscribeToInventoryListProducts = (callback) => {
+  const productsRef = collection(db, "inventoryListProducts");
+  const q = query(productsRef, orderBy("name"));
+
+  return onSnapshot(q, (snapshot) => {
+    const products = snapshot.docs.map((item) => ({
+      id: item.id,
+      ...item.data(),
+    }));
+    callback(products);
+  });
+};
+
 export const getProductOrders = async () => {
   try {
     const ordersRef = collection(db, "productOrders");
@@ -794,20 +882,20 @@ export const startProductInventorySession = async (scopeId, sessionData = {}) =>
   if (isApiDataModeEnabled()) {
     const scope = String(scopeId || "");
     const nowIso = new Date().toISOString();
-    const all = await listCollectionItemsApi("productInventorySessions");
+    const all = (await listCollectionItemsApi("productInventorySessions")).map(normalizeProductInventorySession);
 
-    await Promise.all(
-      all
-        .filter((item) => String(item?.scopeId || "") === scope && item?.isActive === true)
-        .map((item) =>
-          updateCollectionItemApi("productInventorySessions", item.id, {
-            isActive: false,
-            endedAt: nowIso,
-            endedReason: "auto_closed_by_new_session",
-            updatedAt: nowIso,
-          })
-        )
+    const activeForScope = all.filter(
+      (item) => String(item?.scopeId || "") === scope && normalizeSessionActive(item?.isActive)
     );
+
+    for (const item of activeForScope) {
+      await updateCollectionItemApi("productInventorySessions", item.id, {
+        isActive: false,
+        endedAt: nowIso,
+        endedReason: "auto_closed_by_new_session",
+        updatedAt: nowIso,
+      });
+    }
 
     return await createCollectionItemApi("productInventorySessions", {
       scopeId: scope,
@@ -826,7 +914,7 @@ export const startProductInventorySession = async (scopeId, sessionData = {}) =>
     await Promise.all(
       activeSnapshot.docs
         .map((item) => ({ id: item.id, ...item.data() }))
-        .filter((item) => String(item.scopeId || "") === String(scopeId || "") && item.isActive === true)
+        .filter((item) => String(item.scopeId || "") === String(scopeId || "") && normalizeSessionActive(item.isActive))
         .map((item) =>
           updateDoc(doc(db, "productInventorySessions", item.id), {
             isActive: false,
@@ -883,9 +971,9 @@ export const subscribeToActiveProductInventorySession = (scopeId, callback) => {
   if (isApiDataModeEnabled()) {
     return subscribeByPolling(async () => {
       const scope = String(scopeId || "");
-      const sessions = await listCollectionItemsApi("productInventorySessions");
+      const sessions = (await listCollectionItemsApi("productInventorySessions")).map(normalizeProductInventorySession);
       const filtered = sessions
-        .filter((item) => String(item?.scopeId || "") === scope && item?.isActive === true)
+        .filter((item) => String(item?.scopeId || "") === scope && normalizeSessionActive(item?.isActive))
         .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
       return filtered.slice(0, 1);
     }, (items) => callback(items[0] || null), 5000);
@@ -897,7 +985,7 @@ export const subscribeToActiveProductInventorySession = (scopeId, callback) => {
   return onSnapshot(q, (snapshot) => {
     const sessions = snapshot.docs
       .map((item) => ({ id: item.id, ...item.data() }))
-      .filter((item) => String(item.scopeId || "") === String(scopeId || "") && item.isActive === true)
+      .filter((item) => String(item.scopeId || "") === String(scopeId || "") && normalizeSessionActive(item.isActive))
       .sort((a, b) => String(b.startedAt || "").localeCompare(String(a.startedAt || "")));
 
     callback(sessions[0] || null);
@@ -908,7 +996,7 @@ export const subscribeToProductInventorySessions = (scopeId, callback) => {
   if (isApiDataModeEnabled()) {
     return subscribeByPolling(async () => {
       const scope = String(scopeId || "");
-      const sessions = await listCollectionItemsApi("productInventorySessions");
+      const sessions = (await listCollectionItemsApi("productInventorySessions")).map(normalizeProductInventorySession);
       return sessions
         .filter((item) => String(item?.scopeId || "") === scope)
         .sort((a, b) => String(b?.startedAt || "").localeCompare(String(a?.startedAt || "")));
@@ -1066,6 +1154,16 @@ export const updateProductInventory = async (id, data) => {
     });
   } catch (error) {
     console.error("Помилка оновлення інвентаризації продуктів:", error);
+    throw error;
+  }
+};
+
+export const deleteProductInventory = async (id) => {
+  try {
+    const docRef = doc(db, "productInventories", id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    console.error("Помилка видалення інвентаризації продуктів:", error);
     throw error;
   }
 };

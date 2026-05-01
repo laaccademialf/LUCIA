@@ -4,38 +4,212 @@ import {
   addBookingSupplier,
   addBookingTypicalField,
   addBookingProduct,
+  addInventoryListProduct,
   upsertProductInventoryByRestaurantDate,
   addProductOrder,
   deleteBookingSupplier,
   deleteBookingTypicalField,
   deleteBookingProduct,
+  deleteInventoryListProduct,
   getBookingSuppliers,
   getBookingTypicalFields,
   getBookingProducts,
+  getInventoryListProducts,
   getProductInventories,
   getProductOrders,
   subscribeToBookingSuppliers,
   subscribeToBookingTypicalFields,
   subscribeToBookingProducts,
+  subscribeToInventoryListProducts,
   subscribeToProductInventories,
   subscribeToProductOrders,
   updateBookingSupplier,
   updateBookingTypicalField,
   updateBookingProduct,
+  updateInventoryListProduct,
   updateProductInventory,
   updateProductOrder,
+  deleteProductInventory,
 } from "../firebase/firestore";
 import {
   createCollectionItemApi,
   getCollectionItemApi,
   isCollectionsApiEnabled,
   listCollectionItemsApi,
+  replaceInventoryListByRestaurantApi,
   updateCollectionItemApi,
   deleteCollectionItemApi,
 } from "../api/collectionsApi";
 
+const toTrimmedString = (value) => String(value ?? "").trim();
+
+const firstNonEmptyString = (...values) => {
+  for (const candidate of values) {
+    const normalized = toTrimmedString(candidate);
+    if (normalized) return normalized;
+  }
+  return "";
+};
+
+const toBooleanWithFallback = (value, fallback = true) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const normalized = toTrimmedString(value).toLowerCase();
+  if (!normalized) return fallback;
+  if (["false", "0", "no", "inactive", "disabled", "off", "ні", "вимкнено"].includes(normalized)) return false;
+  if (["true", "1", "yes", "active", "enabled", "on", "так", "увімкнено"].includes(normalized)) return true;
+  return fallback;
+};
+
+const toNumberWithFallback = (value, fallback = 0) => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const normalized = toTrimmedString(value).replace(/\s+/g, "").replace(",", ".");
+  if (!normalized) return fallback;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const normalizeProductRecord = (item) => {
+  if (!item || typeof item !== "object") return item;
+  const normalizedCode = firstNonEmptyString(item.code1C, item.code_1c, item.code1_c, item.code1c, item.code);
+  return {
+    ...item,
+    restaurantId: firstNonEmptyString(
+      item.restaurantId,
+      item.restaurant_id,
+      item.restaurant,
+      item.restaurantCode,
+      item.restaurant_code,
+      item.restaurantRegNumber,
+      item.restaurant_reg_number
+    ),
+    restaurantName: firstNonEmptyString(item.restaurantName, item.restaurant_name, item.restaurantTitle, item.restaurant_title),
+    restaurantRegNumber: firstNonEmptyString(item.restaurantRegNumber, item.restaurant_reg_number, item.regNumber, item.reg_number),
+    code1C: normalizedCode,
+    code_1c: normalizedCode,
+    code1_c: normalizedCode,
+    unitPrice: toNumberWithFallback(item.unitPrice ?? item.unit_price ?? item.price, 0),
+    isActive: toBooleanWithFallback(item.isActive ?? item.is_active ?? item.active, true),
+  };
+};
+
+const normalizeInventoryListProductRecord = (item) => {
+  if (!item || typeof item !== "object") return item;
+  const normalizedCode = firstNonEmptyString(item.code1C, item.code_1c, item.code1_c, item.code1c, item.code);
+  return {
+    ...item,
+    restaurantId: firstNonEmptyString(
+      item.restaurantId,
+      item.restaurant_id,
+      item.restaurant,
+      item.restaurantCode,
+      item.restaurant_code,
+      item.restaurantRegNumber,
+      item.restaurant_reg_number
+    ),
+    restaurantName: firstNonEmptyString(item.restaurantName, item.restaurant_name, item.restaurantTitle, item.restaurant_title),
+    restaurantRegNumber: firstNonEmptyString(item.restaurantRegNumber, item.restaurant_reg_number, item.regNumber, item.reg_number),
+    name: firstNonEmptyString(item.name, item.productName, item.product_name),
+    code1C: normalizedCode,
+    code_1c: normalizedCode,
+    code1_c: normalizedCode,
+    unit: firstNonEmptyString(item.unit, item.unitName, item.unit_name, item.measure),
+    unitPrice: toNumberWithFallback(item.unitPrice ?? item.unit_price ?? item.price ?? item.accountingPrice ?? item.accounting_price, 0),
+    fileQuantity: toNumberWithFallback(
+      item.fileQuantity ?? item.file_quantity ?? item.quantity ?? item.qty ?? item.factQuantity ?? item.fact_quantity,
+      0
+    ),
+    isActive: toBooleanWithFallback(item.isActive ?? item.is_active ?? item.active, true),
+  };
+};
+
+const normalizeOrderRecord = (item) => {
+  if (!item || typeof item !== "object") return item;
+  return {
+    ...item,
+    restaurantId: firstNonEmptyString(
+      item.restaurantId,
+      item.restaurant_id,
+      item.restaurant,
+      item.restaurantCode,
+      item.restaurant_code,
+      item.restaurantRegNumber,
+      item.restaurant_reg_number
+    ),
+    restaurantName: firstNonEmptyString(item.restaurantName, item.restaurant_name, item.restaurantTitle, item.restaurant_title),
+    restaurantRegNumber: firstNonEmptyString(item.restaurantRegNumber, item.restaurant_reg_number, item.regNumber, item.reg_number),
+    status: firstNonEmptyString(item.status, item.order_status) || "new",
+    totalAmount: toNumberWithFallback(item.totalAmount ?? item.total_amount, 0),
+    totalItems: toNumberWithFallback(item.totalItems ?? item.total_items, 0),
+  };
+};
+
+const normalizeSupplierRecord = (item) => {
+  if (!item || typeof item !== "object") return item;
+  const legalEntitiesRaw = item.legalEntities ?? item.legal_entities;
+  const legalEntities = Array.isArray(legalEntitiesRaw)
+    ? legalEntitiesRaw.map((entry) => toTrimmedString(entry)).filter(Boolean)
+    : [];
+
+  return {
+    ...item,
+    name: firstNonEmptyString(item.name, item.supplierName, item.supplier_name),
+    isActive: toBooleanWithFallback(item.isActive ?? item.is_active ?? item.active, true),
+    legalEntities,
+    legal_entities: legalEntities,
+    minimumOrderAmount: toNumberWithFallback(item.minimumOrderAmount ?? item.minimum_order_amount, 0),
+  };
+};
+
+const normalizeTypicalFieldRecord = (item) => {
+  if (!item || typeof item !== "object") return item;
+  return {
+    ...item,
+    type: firstNonEmptyString(item.type, item.fieldType, item.field_type),
+    name: firstNonEmptyString(item.name, item.fieldName, item.field_name),
+    categoryName: firstNonEmptyString(item.categoryName, item.category_name),
+    isActive: toBooleanWithFallback(item.isActive ?? item.is_active ?? item.active, true),
+  };
+};
+
+const normalizeInventoryRecord = (item) => {
+  if (!item || typeof item !== "object") return item;
+  return {
+    ...item,
+    restaurantId: firstNonEmptyString(
+      item.restaurantId,
+      item.restaurant_id,
+      item.restaurant,
+      item.restaurantCode,
+      item.restaurant_code,
+      item.restaurantRegNumber,
+      item.restaurant_reg_number
+    ),
+    restaurantName: firstNonEmptyString(item.restaurantName, item.restaurant_name, item.restaurantTitle, item.restaurant_title),
+    restaurantRegNumber: firstNonEmptyString(item.restaurantRegNumber, item.restaurant_reg_number, item.regNumber, item.reg_number),
+    inventoryDate: firstNonEmptyString(item.inventoryDate, item.inventory_date),
+    inventorySessionId: firstNonEmptyString(item.inventorySessionId, item.inventory_session_id),
+    isSubmitted: toBooleanWithFallback(item.isSubmitted ?? item.is_submitted, false),
+  };
+};
+
+const normalizeCollectionRecords = (items, normalizeOne) => {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => normalizeOne(item));
+};
+
+const runInBatches = async (items, batchSize, worker) => {
+  const source = Array.isArray(items) ? items : [];
+  const size = Math.max(1, Number(batchSize) || 1);
+  for (let i = 0; i < source.length; i += size) {
+    const batch = source.slice(i, i + size);
+    await Promise.all(batch.map((entry) => worker(entry)));
+  }
+};
+
 export const useProductBooking = (enableRealtime = true) => {
   const [products, setProducts] = useState([]);
+  const [inventoryListProducts, setInventoryListProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [typicalFields, setTypicalFields] = useState([]);
@@ -44,24 +218,27 @@ export const useProductBooking = (enableRealtime = true) => {
   const [error, setError] = useState(null);
 
   const reloadAllApi = async () => {
-    const [productsData, ordersData, suppliersData, typicalFieldsData, inventoriesData] =
+    const [productsData, inventoryListProductsData, ordersData, suppliersData, typicalFieldsData, inventoriesData] =
       await Promise.all([
         listCollectionItemsApi("bookingProducts"),
+        listCollectionItemsApi("inventoryListProducts"),
         listCollectionItemsApi("productOrders"),
         listCollectionItemsApi("bookingSuppliers"),
         listCollectionItemsApi("bookingTypicalFields"),
         listCollectionItemsApi("productInventories"),
       ]);
 
-    setProducts(productsData);
-    setOrders(ordersData);
-    setSuppliers(suppliersData);
-    setTypicalFields(typicalFieldsData);
-    setInventories(inventoriesData);
+    setProducts(normalizeCollectionRecords(productsData, normalizeProductRecord));
+    setInventoryListProducts(normalizeCollectionRecords(inventoryListProductsData, normalizeInventoryListProductRecord));
+    setOrders(normalizeCollectionRecords(ordersData, normalizeOrderRecord));
+    setSuppliers(normalizeCollectionRecords(suppliersData, normalizeSupplierRecord));
+    setTypicalFields(normalizeCollectionRecords(typicalFieldsData, normalizeTypicalFieldRecord));
+    setInventories(normalizeCollectionRecords(inventoriesData, normalizeInventoryRecord));
   };
 
   useEffect(() => {
     let unsubscribeProducts;
+    let unsubscribeInventoryListProducts;
     let unsubscribeOrders;
     let unsubscribeSuppliers;
     let unsubscribeTypicalFields;
@@ -87,27 +264,32 @@ export const useProductBooking = (enableRealtime = true) => {
     if (enableRealtime) {
       try {
         unsubscribeProducts = subscribeToBookingProducts((data) => {
-          setProducts(data);
+          setProducts(normalizeCollectionRecords(data, normalizeProductRecord));
+          setLoading(false);
+        });
+
+        unsubscribeInventoryListProducts = subscribeToInventoryListProducts((data) => {
+          setInventoryListProducts(normalizeCollectionRecords(data, normalizeInventoryListProductRecord));
           setLoading(false);
         });
 
         unsubscribeOrders = subscribeToProductOrders((data) => {
-          setOrders(data);
+          setOrders(normalizeCollectionRecords(data, normalizeOrderRecord));
           setLoading(false);
         });
 
         unsubscribeSuppliers = subscribeToBookingSuppliers((data) => {
-          setSuppliers(data);
+          setSuppliers(normalizeCollectionRecords(data, normalizeSupplierRecord));
           setLoading(false);
         });
 
         unsubscribeTypicalFields = subscribeToBookingTypicalFields((data) => {
-          setTypicalFields(data);
+          setTypicalFields(normalizeCollectionRecords(data, normalizeTypicalFieldRecord));
           setLoading(false);
         });
 
         unsubscribeInventories = subscribeToProductInventories((data) => {
-          setInventories(data);
+          setInventories(normalizeCollectionRecords(data, normalizeInventoryRecord));
           setLoading(false);
         });
       } catch (err) {
@@ -118,18 +300,20 @@ export const useProductBooking = (enableRealtime = true) => {
     } else {
       const fetchData = async () => {
         try {
-          const [productsData, ordersData, suppliersData, typicalFieldsData, inventoriesData] = await Promise.all([
+          const [productsData, inventoryListProductsData, ordersData, suppliersData, typicalFieldsData, inventoriesData] = await Promise.all([
             getBookingProducts(),
+            getInventoryListProducts(),
             getProductOrders(),
             getBookingSuppliers(),
             getBookingTypicalFields(),
             getProductInventories(),
           ]);
-          setProducts(productsData);
-          setOrders(ordersData);
-          setSuppliers(suppliersData);
-          setTypicalFields(typicalFieldsData);
-          setInventories(inventoriesData);
+          setProducts(normalizeCollectionRecords(productsData, normalizeProductRecord));
+          setInventoryListProducts(normalizeCollectionRecords(inventoryListProductsData, normalizeInventoryListProductRecord));
+          setOrders(normalizeCollectionRecords(ordersData, normalizeOrderRecord));
+          setSuppliers(normalizeCollectionRecords(suppliersData, normalizeSupplierRecord));
+          setTypicalFields(normalizeCollectionRecords(typicalFieldsData, normalizeTypicalFieldRecord));
+          setInventories(normalizeCollectionRecords(inventoriesData, normalizeInventoryRecord));
         } catch (err) {
           console.error("Помилка завантаження модуля замовлень:", err);
           setError(err);
@@ -142,6 +326,7 @@ export const useProductBooking = (enableRealtime = true) => {
 
     return () => {
       if (unsubscribeProducts) unsubscribeProducts();
+      if (unsubscribeInventoryListProducts) unsubscribeInventoryListProducts();
       if (unsubscribeOrders) unsubscribeOrders();
       if (unsubscribeSuppliers) unsubscribeSuppliers();
       if (unsubscribeTypicalFields) unsubscribeTypicalFields();
@@ -201,6 +386,110 @@ export const useProductBooking = (enableRealtime = true) => {
       return { success: true, id };
     } catch (err) {
       setError(err);
+      return { success: false, error: err };
+    }
+  };
+
+  const createInventoryListProduct = async (product) => {
+    try {
+      const id = isCollectionsApiEnabled()
+        ? await createCollectionItemApi("inventoryListProducts", product)
+        : await addInventoryListProduct(product);
+      if (isCollectionsApiEnabled()) await reloadAllApi();
+      return { success: true, id };
+    } catch (err) {
+      setError(err);
+      return { success: false, error: err };
+    }
+  };
+
+  const editInventoryListProduct = async (id, data) => {
+    try {
+      if (isCollectionsApiEnabled()) {
+        await updateCollectionItemApi("inventoryListProducts", id, data);
+        await reloadAllApi();
+      } else {
+        await updateInventoryListProduct(id, data);
+      }
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err };
+    }
+  };
+
+  const removeInventoryListProduct = async (id) => {
+    try {
+      if (isCollectionsApiEnabled()) {
+        await deleteCollectionItemApi("inventoryListProducts", id);
+        await reloadAllApi();
+      } else {
+        await deleteInventoryListProduct(id);
+      }
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err };
+    }
+  };
+
+  const replaceInventoryListForRestaurant = async (restaurantId, items = []) => {
+    try {
+      const normalizedRestaurantId = toTrimmedString(restaurantId);
+      if (!normalizedRestaurantId) {
+        throw new Error("Не обрано заклад для заміни списку.");
+      }
+
+      const normalizedItems = (Array.isArray(items) ? items : []).map((item) => ({
+        ...item,
+        restaurantId: normalizedRestaurantId,
+      }));
+
+      if (isCollectionsApiEnabled()) {
+        const fallbackReplaceViaClassicApi = async () => {
+          const existingItems = await listCollectionItemsApi("inventoryListProducts");
+          const scopedExisting = existingItems.filter(
+            (entry) => firstNonEmptyString(entry?.restaurantId, entry?.restaurant_id) === normalizedRestaurantId
+          );
+
+          await runInBatches(scopedExisting, 8, async (existing) => {
+            const existingId = toTrimmedString(existing?.id);
+            if (!existingId) return;
+            await deleteCollectionItemApi("inventoryListProducts", existingId);
+          });
+
+          await runInBatches(normalizedItems, 8, async (item) => {
+            await createCollectionItemApi("inventoryListProducts", item);
+          });
+        };
+
+        try {
+          await replaceInventoryListByRestaurantApi(normalizedRestaurantId, normalizedItems);
+        } catch (bulkErr) {
+          const message = String(bulkErr?.message || bulkErr || "").toLowerCase();
+          const shouldFallback = message.includes("(405)") || message.includes("method not allowed");
+          if (!shouldFallback) throw bulkErr;
+          await fallbackReplaceViaClassicApi();
+        }
+
+        await reloadAllApi();
+      } else {
+        const existingItems = await getInventoryListProducts();
+        const scopedExisting = existingItems.filter(
+          (entry) => firstNonEmptyString(entry?.restaurantId, entry?.restaurant_id) === normalizedRestaurantId
+        );
+
+        for (const existing of scopedExisting) {
+          const existingId = toTrimmedString(existing?.id);
+          if (!existingId) continue;
+          await deleteInventoryListProduct(existingId);
+        }
+
+        for (const item of normalizedItems) {
+          await addInventoryListProduct(item);
+        }
+      }
+
+      return { success: true };
+    } catch (err) {
       return { success: false, error: err };
     }
   };
@@ -366,8 +655,24 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
+  const deleteInventory = async (id) => {
+    try {
+      if (isCollectionsApiEnabled()) {
+        await deleteCollectionItemApi("productInventories", id);
+        await reloadAllApi();
+      } else {
+        await deleteProductInventory(id);
+      }
+      return { success: true };
+    } catch (err) {
+      setError(err);
+      return { success: false, error: err };
+    }
+  };
+
   return {
     products,
+    inventoryListProducts,
     orders,
     suppliers,
     typicalFields,
@@ -386,7 +691,12 @@ export const useProductBooking = (enableRealtime = true) => {
     updateTypicalField,
     removeTypicalField,
     createSupplierDispatch,
+    createInventoryListProduct,
+    editInventoryListProduct,
+    removeInventoryListProduct,
+    replaceInventoryListForRestaurant,
     createInventory,
     updateInventory,
+    deleteInventory,
   };
 };
