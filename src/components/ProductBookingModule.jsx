@@ -1619,9 +1619,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   return (
     <div className="space-y-5">
       <div className={`${cardClass} pt-2 sm:pt-3 px-2 sm:px-5 pb-2 sm:pb-3`}>
-        {/* ── Compact top controls ── */}
-        {isGlobalAdmin && (
-          <div className="mb-2">
+        {/* ── Sticky top controls ── */}
+        <div className="sticky top-0 z-10 bg-white/95 backdrop-blur pb-1 space-y-1.5">
+          {isGlobalAdmin && (
             <select
               className="h-8 w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none"
               value={restaurantId}
@@ -1632,96 +1632,84 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                 <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
               ))}
             </select>
-          </div>
-        )}
+          )}
 
-        {/* Search + session status in one compact row */}
-        <div className="mb-2 flex items-center gap-2">
-          <div className="relative flex-1">
-            <input
-              className="h-8 w-full rounded-lg border border-slate-300 bg-white px-2 pr-7 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Пошук продукту…"
-              list="inventory-product-suggestions"
-              autoComplete="off"
-            />
-            {searchTerm && (
+          {/* Search row */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <input
+                className="h-8 w-full rounded-lg border border-slate-300 bg-white px-2 pr-7 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Пошук продукту…"
+                list="inventory-product-suggestions"
+                autoComplete="off"
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-slate-700"
+                  onClick={() => setSearchTerm("")}
+                  aria-label="Очистити пошук"
+                >
+                  <X size={13} />
+                </button>
+              )}
+              <datalist id="inventory-product-suggestions">
+                {keywordSuggestions.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+            </div>
+            {/* Session start/end — always visible */}
+            {activeSession?.id ? (
               <button
                 type="button"
-                className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-slate-700"
-                onClick={() => setSearchTerm("")}
-                aria-label="Очистити пошук"
+                onClick={handleEndInventorySession}
+                className="shrink-0 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 whitespace-nowrap"
               >
-                <X size={13} />
+                Завершити
               </button>
-            )}
-            <datalist id="inventory-product-suggestions">
-              {keywordSuggestions.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
-          </div>
-          {activeSession?.id ? (
-            <button
-              type="button"
-              onClick={handleEndInventorySession}
-              className="shrink-0 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 whitespace-nowrap"
-            >
-              Завершити
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleStartInventorySession}
-              className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 whitespace-nowrap"
-            >
-              Почати
-            </button>
-          )}
-        </div>
-
-        {/* Session status hint */}
-        <div className="mb-2 flex items-center gap-2 text-[11px]">
-          {activeSession?.id ? (
-            <span className="font-semibold text-emerald-700">
-              ✓ Активна з {formatDateUk(String(activeSession.startedAt || "").slice(0, 10))}
-            </span>
-          ) : (
-            <span className="text-slate-500">Інвентаризація не активна</span>
-          )}
-          {editingInventoryId && (
-            <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">Ред. режим</span>
-          )}
-        </div>
-
-        {/* Sticky save row above the table */}
-        <div className="sticky top-0 z-10 mb-1 flex items-center justify-between gap-2 rounded-lg bg-white/95 py-1 backdrop-blur">
-          <span className="text-xs text-slate-600">
-            Позицій: <span className="font-semibold">{filledLines.length}</span>
-            {filledLines.length > 0 && (
-              <span className="ml-2 text-slate-500">
-                • {formatDateUk(activeSession?.startedAt ? String(activeSession.startedAt).slice(0, 10) : inventoryDate)}
-              </span>
-            )}
-          </span>
-          <div className="flex items-center gap-1.5">
-            {editingInventoryId && (
+            ) : (
               <button
                 type="button"
-                onClick={handleCancelEditing}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                onClick={handleStartInventorySession}
+                className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 whitespace-nowrap"
               >
-                Скасувати
+                Почати
               </button>
             )}
-            <button
-              type="button"
-              onClick={handleSaveInventory}
-              className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500"
-            >
-              {editingInventoryId ? "Оновити" : "Зберегти"}
-            </button>
+          </div>
+
+          {/* Save row + status */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] text-slate-500 leading-tight">
+              {activeSession?.id ? (
+                <span className="font-semibold text-emerald-700">✓ Активна з {formatDateUk(String(activeSession.startedAt || "").slice(0, 10))}</span>
+              ) : (
+                <span>Не активна</span>
+              )}
+              {editingInventoryId && <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">Ред. режим</span>}
+              {filledLines.length > 0 && <span className="ml-2">· {filledLines.length} поз.</span>}
+            </div>
+            <div className="flex items-center gap-1.5">
+              {editingInventoryId && (
+                <button
+                  type="button"
+                  onClick={handleCancelEditing}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Скасувати
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleSaveInventory}
+                className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500"
+              >
+                {editingInventoryId ? "Оновити" : "Зберегти"}
+              </button>
+            </div>
           </div>
         </div>
 
