@@ -1163,6 +1163,52 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
             restaurantGroups: restaurantPricingGroups,
           }))
         : null;
+      const specRestaurantPricing = selectedRestaurantId
+        ? getPricingForRestaurant({
+            pricingByRestaurantGroup: product.pricingByRestaurantGroup,
+            restaurantId: selectedRestaurantId,
+            restaurantGroups: restaurantPricingGroups,
+          })
+        : null;
+
+      const specPortionSalePrice = toNumber(product.portionSalePrice);
+      const explicitRestaurantSalePrice = toNumber(assignment?.pricingByRestaurantId?.[selectedRestaurantId]?.portionSalePrice);
+      const specGroupSalePrice = toNumber(specRestaurantPricing?.portionSalePrice);
+      const derivedRuleBasedPrice = (() => {
+        if (!selectedRestaurantId) return 0;
+        if (!usesTypicalMarkupForCategory(typicalFields, product.category)) return 0;
+        const group = resolveRestaurantGroupForRestaurant(selectedRestaurantId, restaurantPricingGroups);
+        if (!group) return 0;
+        const rule = findMarkupRuleForCost({
+          alcoholCategory: product.category,
+          restaurantGroupId: group.id,
+          portionCostPrice: product.portionCostPrice,
+          rules: markupSettings.rules,
+        });
+        const markupPercent = toNumber(rule?.markupPercent);
+        if (markupPercent <= 0) return 0;
+        const calculated = roundToTen(toNumber(product.portionCostPrice) * (1 + markupPercent / 100));
+        return Math.max(calculated, roundToTen(group.minimumPortionPrice));
+      })();
+      const fallbackCalculatedFromSpec = computeSalePriceFromMarkup(product.portionCostPrice, product.portionMarkup);
+      const effectivePortionSalePrice =
+        !canEdit
+          ? (derivedRuleBasedPrice > 0
+              ? derivedRuleBasedPrice
+              : specGroupSalePrice > 0
+              ? specGroupSalePrice
+              : specPortionSalePrice > 0
+                ? specPortionSalePrice
+                : (explicitRestaurantSalePrice > 0 && explicitRestaurantSalePrice > toNumber(product.portionCostPrice)
+                    ? explicitRestaurantSalePrice
+                    : fallbackCalculatedFromSpec))
+          : (explicitRestaurantSalePrice > 0
+              ? explicitRestaurantSalePrice
+              : specGroupSalePrice > 0
+                ? specGroupSalePrice
+                : specPortionSalePrice > 0
+                  ? specPortionSalePrice
+                  : fallbackCalculatedFromSpec);
 
       return {
         ...product,
@@ -1174,7 +1220,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
         assignmentTypes: assignment?.assignmentTypes || {},
         selectedAssignmentType: assignment?.assignmentTypes?.[selectedRestaurantId] || "standard",
         selectedRestaurantPricing,
-        effectivePortionSalePrice: roundToTen(toNumber(selectedRestaurantPricing?.portionSalePrice ?? product.portionSalePrice)),
+        effectivePortionSalePrice,
         effectivePortionMarkup: toNumber(selectedRestaurantPricing?.portionMarkup ?? product.portionMarkup),
         isAssignedToSelected,
       };
@@ -1207,7 +1253,7 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
     });
 
     return result;
-  }, [specificationOptions, mergedAssignments, selectedRestaurantId, restaurantPricingGroups, canEdit, search, filterCategory, sortField, sortDir]);
+  }, [specificationOptions, mergedAssignments, selectedRestaurantId, restaurantPricingGroups, canEdit, typicalFields, markupSettings.rules, search, filterCategory, sortField, sortDir]);
 
   const groupedCatalogRows = useMemo(() => {
     const groups = new Map();
