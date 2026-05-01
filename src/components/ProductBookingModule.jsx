@@ -1686,6 +1686,15 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                           }}
                           onFocus={() => setActiveRowProductId(product.id)}
                           onBlur={() => {
+                            // Auto-apply typed delta when leaving the field (same as pressing +)
+                            const delta = toNumber(inputValues[product.id]);
+                            if (delta !== 0) {
+                              setQuantities((prev) => {
+                                const next = Math.max(0, toNumber(prev[product.id]) + delta);
+                                return { ...prev, [product.id]: next === 0 ? "" : String(next) };
+                              });
+                              setInputValues((prev) => ({ ...prev, [product.id]: "" }));
+                            }
                             setTimeout(() => {
                               const current = quantityInputRefs.current?.[product.id];
                               if (!current || document.activeElement !== current) {

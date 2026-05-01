@@ -677,7 +677,7 @@ export const useProductBooking = (enableRealtime = true) => {
         const sessionId = String(inventory?.inventorySessionId || "").trim();
         const dateRaw = String(inventory?.inventoryDate || "").trim();
         const datePart = dateRaw ? dateRaw.slice(0, 10) : "";
-        const docId = sessionId || `${restaurantId}__${datePart}`;
+        const docId = sessionId || `${restaurantId}__${datePart}__${userId}`;
         const existing = await getCollectionItemApi("productInventories", docId);
         const userId = toTrimmedString(inventory?.createdById || inventory?.updatedById) || "unknown";
         const userName = firstNonEmptyString(inventory?.createdBy, inventory?.updatedBy, "Користувач");
