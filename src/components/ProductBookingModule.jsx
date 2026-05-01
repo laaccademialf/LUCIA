@@ -1147,8 +1147,15 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   };
 
   const calcSave = () => {
-    const value = toNumber(calcModal.display);
-    const safeValue = Math.max(0, value);
+    let finalValue;
+    if (calcModal.lastOp) {
+      // Finish pending operation
+      const current = toNumber(calcModal.display);
+      finalValue = calcPerform(calcModal.memory, current, calcModal.lastOp);
+    } else {
+      finalValue = toNumber(calcModal.display);
+    }
+    const safeValue = Math.max(0, finalValue);
     setQuantities((prev) => ({
       ...prev,
       [calcModal.productId]: safeValue === 0 ? "" : String(safeValue),
