@@ -949,9 +949,11 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const pendingRestoreRef = useRef(null);
   const [activeRowProductId, setActiveRowProductId] = useState(null);
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
+  // quantities = accumulated/committed totals per productId (used for saving & green highlight)
   const [quantities, setQuantities] = useState({});
+  // inputValues = current delta text in each quantity input box
+  const [inputValues, setInputValues] = useState({});
   const [searchTerm, setSearchTerm] = useState("");
-  const [inventoryStatusFilter, setInventoryStatusFilter] = useState("all");
   const [editingInventoryId, setEditingInventoryId] = useState("");
   const [inventoryDate, setInventoryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [activeSession, setActiveSession] = useState(null);
@@ -986,6 +988,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     const pendingRestore = pendingRestoreRef.current;
     if (pendingRestore && String(pendingRestore.restaurantId || "") === String(restaurantId || "")) {
       setQuantities(pendingRestore.quantities || {});
+      setInputValues({});
       setEditingInventoryId(String(pendingRestore.inventoryId || ""));
       setInventoryDate(String(pendingRestore.inventoryDate || new Date().toISOString().slice(0, 10)));
       pendingRestoreRef.current = null;
@@ -993,6 +996,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }
 
     setQuantities({});
+    setInputValues({});
     setEditingInventoryId("");
   }, [restaurantId]);
 
@@ -1012,15 +1016,26 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       .slice(0, 8);
   }, [scopedProducts, searchTerm]);
 
-  const adjustQuantity = (productId, delta) => {
+  // Auto-focus on the single matching product's quantity input when searching.
+  useEffect(() => {
+    if (filteredProducts.length === 1 && searchTerm.trim()) {
+      requestAnimationFrame(() => focusQuantityInput(filteredProducts[0].id));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredProducts.length === 1 ? filteredProducts[0]?.id : null, searchTerm]);
+
+  // Calculator-style: applies the currently-typed delta to the accumulated total.
+  // sign=+1 adds, sign=-1 subtracts. After applying, clears the input field and re-focuses.
+  const applyDelta = (productId, sign) => {
+    const delta = toNumber(inputValues[productId]);
+    if (delta === 0) return;
     setQuantities((prev) => {
-      const current = toNumber(prev[productId]);
-      const next = Math.max(0, current + delta);
-      return {
-        ...prev,
-        [productId]: next === 0 ? "" : String(next),
-      };
+      const next = Math.max(0, toNumber(prev[productId]) + sign * delta);
+      return { ...prev, [productId]: next === 0 ? "" : String(next) };
     });
+    setInputValues((prev) => ({ ...prev, [productId]: "" }));
+    // Re-focus so the user can immediately type the next delta.
+    requestAnimationFrame(() => focusQuantityInput(productId));
   };
 
   const focusQuantityInput = (productId) => {
@@ -1067,10 +1082,11 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const inventoriedProductIds = useMemo(() => {
     const productIds = new Set(savedInventoriedProductIds);
 
-    Object.entries(quantities || {}).forEach(([productId, rawValue]) => {
-      const normalizedId = String(productId || "").trim();
+    scopedProducts.forEach((product) => {
+      const effectiveQty = toNumber(quantities[product.id]) + toNumber(inputValues[product.id]);
+      const normalizedId = String(product.id || "").trim();
       if (!normalizedId) return;
-      if (toNumber(rawValue) > 0) {
+      if (effectiveQty > 0) {
         productIds.add(normalizedId);
       } else {
         productIds.delete(normalizedId);
@@ -1078,28 +1094,26 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     });
 
     return productIds;
-  }, [savedInventoriedProductIds, quantities]);
+  }, [savedInventoriedProductIds, quantities, inputValues, scopedProducts]);
 
   const filteredProducts = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
     return scopedProducts.filter((item) => {
-      const bySearch = normalizedSearch
+      return normalizedSearch
         ? [item.name, item.code1C, item.category]
             .filter(Boolean)
             .join(" ")
             .toLowerCase()
             .includes(normalizedSearch)
         : true;
-      const isInventoried = inventoriedProductIds.has(String(item?.id || ""));
-      const byInventoryStatus = inventoryStatusFilter === "inventoried" ? isInventoried : true;
-      return bySearch && byInventoryStatus;
     });
-  }, [scopedProducts, searchTerm, inventoryStatusFilter, inventoriedProductIds]);
+  }, [scopedProducts, searchTerm]);
 
   const filledLines = useMemo(() => {
     return scopedProducts
       .map((product) => {
-        const qty = toNumber(quantities[product.id]);
+        // Effective qty = committed total + any typed-but-not-yet-applied delta.
+        const qty = toNumber(quantities[product.id]) + toNumber(inputValues[product.id]);
         if (qty <= 0) return null;
         const unitPrice = toNumber(product.unitPrice);
         return {
@@ -1114,7 +1128,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         };
       })
       .filter(Boolean);
-  }, [scopedProducts, quantities]);
+  }, [scopedProducts, quantities, inputValues]);
 
   const buildRestoredQuantities = (inventory, targetRestaurantId) => {
     const normalizedRestaurantId = String(targetRestaurantId || "");
@@ -1259,6 +1273,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }
 
     setQuantities({});
+    setInputValues({});
     setEditingInventoryId("");
     setInventoryDate(new Date().toISOString().slice(0, 10));
     alert(editingInventoryId ? "Інвентаризацію успішно оновлено." : "Інвентаризацію успішно збережено.");
@@ -1283,6 +1298,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       setRestaurantId(targetRestaurantId);
     } else {
       setQuantities(restoredQuantities);
+      setInputValues({});
       setEditingInventoryId(String(inventory?.id || ""));
       setInventoryDate(nextInventoryDate);
     }
@@ -1317,6 +1333,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     if (String(editingInventoryId || "") === String(inventory?.id || "")) {
       setEditingInventoryId("");
       setQuantities({});
+      setInputValues({});
     }
   };
 
@@ -1338,6 +1355,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       }
       setEditingInventoryId("");
       setQuantities({});
+      setInputValues({});
     } catch (error) {
       console.error("Помилка старту інвентаризації продуктів:", error);
       alert(getErrorMessage(error, "Не вдалося почати інвентаризацію."));
@@ -1348,6 +1366,15 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     if (!activeSession?.id) {
       alert("Немає активної інвентаризації для завершення.");
       return;
+    }
+
+    // Warn if current user has uncommitted input that hasn't been saved yet.
+    const hasLocalUnsaved = filledLines.length > 0;
+    if (hasLocalUnsaved) {
+      const ok = window.confirm(
+        "У вас є незбережені дані інвентаризації.\nЗбережіть їх перед завершенням або натисніть OK, щоб все одно завершити."
+      );
+      if (!ok) return;
     }
 
     try {
@@ -1381,6 +1408,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       setActiveSession(null);
       setEditingInventoryId("");
       setQuantities({});
+      setInputValues({});
       if (syncError) {
         alert(getErrorMessage(syncError, "Сесію завершено, але не вдалося оновити автора завершення в журналі."));
       }
@@ -1393,6 +1421,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const handleCancelEditing = () => {
     setEditingInventoryId("");
     setQuantities({});
+    setInputValues({});
     setInventoryDate(new Date().toISOString().slice(0, 10));
     if (isGlobalAdmin) {
       setRestaurantId("");
@@ -1590,96 +1619,109 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   return (
     <div className="space-y-5">
       <div className={`${cardClass} pt-2 sm:pt-3 px-2 sm:px-5 pb-2 sm:pb-3`}>
+        {/* ── Compact top controls ── */}
         {isGlobalAdmin && (
-          <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-1">
-            <div>
-              <label className="text-sm font-semibold text-slate-800">Ресторан</label>
-              <select
-                className={inputClass}
-                value={restaurantId}
-                onChange={(e) => setRestaurantId(e.target.value)}
-              >
-                <option value="">Оберіть ресторан</option>
-                {availableRestaurants.map((restaurant) => (
-                  <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
-                ))}
-              </select>
-            </div>
+          <div className="mb-2">
+            <select
+              className="h-8 w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none"
+              value={restaurantId}
+              onChange={(e) => setRestaurantId(e.target.value)}
+            >
+              <option value="">Оберіть ресторан</option>
+              {availableRestaurants.map((restaurant) => (
+                <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
+              ))}
+            </select>
           </div>
         )}
 
-        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm">
-              {activeSession?.id ? (
-                <p className="font-semibold text-emerald-700">
-                  Інвентаризація активна з {formatDateUk(String(activeSession.startedAt || "").slice(0, 10))}
-                </p>
-              ) : (
-                <p className="font-semibold text-slate-700">Інвентаризація не активна</p>
-              )}
-              <p className="text-xs text-slate-600">Усі збереження під час активної сесії зливаються в одну інвентаризацію.</p>
-            </div>
-            <div className="flex gap-2">
-              {!activeSession?.id ? (
-                <button
-                  type="button"
-                  onClick={handleStartInventorySession}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-                >
-                  Почати інвентаризацію
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleEndInventorySession}
-                  className="rounded-lg border border-rose-300 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100"
-                >
-                  Завершити інвентаризацію
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="mb-4 grid grid-cols-2 gap-2 sm:gap-3">
-          <div>
-            <label className="text-xs sm:text-sm font-semibold text-slate-800">Статус інвентаризації</label>
-            <select
-              className="mt-1 h-8 sm:h-9 w-full rounded-lg border border-slate-300 bg-white px-2 sm:px-3 py-1 text-xs sm:text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
-              value={inventoryStatusFilter}
-              onChange={(e) => setInventoryStatusFilter(e.target.value)}
-            >
-              <option value="inventoried">Проінвентаризовані</option>
-              <option value="all">Всі</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-xs sm:text-sm font-semibold text-slate-800">Пошук по назві</label>
-            <div className="relative mt-1">
-              <input
-                className="h-8 sm:h-9 w-full rounded-lg border border-slate-300 bg-white px-2 pr-7 sm:px-3 sm:pr-8 py-1 text-xs sm:text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Введіть назву продукту"
-                list="inventory-product-suggestions"
-              />
-              {searchTerm && (
-                <button
-                  type="button"
-                  className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                  onClick={() => setSearchTerm("")}
-                  aria-label="Очистити пошук"
-                >
-                  <X size={14} />
-                </button>
-              )}
-            </div>
+        {/* Search + session status in one compact row */}
+        <div className="mb-2 flex items-center gap-2">
+          <div className="relative flex-1">
+            <input
+              className="h-8 w-full rounded-lg border border-slate-300 bg-white px-2 pr-7 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Пошук продукту…"
+              list="inventory-product-suggestions"
+              autoComplete="off"
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-slate-700"
+                onClick={() => setSearchTerm("")}
+                aria-label="Очистити пошук"
+              >
+                <X size={13} />
+              </button>
+            )}
             <datalist id="inventory-product-suggestions">
               {keywordSuggestions.map((name) => (
                 <option key={name} value={name} />
               ))}
             </datalist>
+          </div>
+          {activeSession?.id ? (
+            <button
+              type="button"
+              onClick={handleEndInventorySession}
+              className="shrink-0 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 whitespace-nowrap"
+            >
+              Завершити
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleStartInventorySession}
+              className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 whitespace-nowrap"
+            >
+              Почати
+            </button>
+          )}
+        </div>
+
+        {/* Session status hint */}
+        <div className="mb-2 flex items-center gap-2 text-[11px]">
+          {activeSession?.id ? (
+            <span className="font-semibold text-emerald-700">
+              ✓ Активна з {formatDateUk(String(activeSession.startedAt || "").slice(0, 10))}
+            </span>
+          ) : (
+            <span className="text-slate-500">Інвентаризація не активна</span>
+          )}
+          {editingInventoryId && (
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">Ред. режим</span>
+          )}
+        </div>
+
+        {/* Sticky save row above the table */}
+        <div className="sticky top-0 z-10 mb-1 flex items-center justify-between gap-2 rounded-lg bg-white/95 py-1 backdrop-blur">
+          <span className="text-xs text-slate-600">
+            Позицій: <span className="font-semibold">{filledLines.length}</span>
+            {filledLines.length > 0 && (
+              <span className="ml-2 text-slate-500">
+                • {formatDateUk(activeSession?.startedAt ? String(activeSession.startedAt).slice(0, 10) : inventoryDate)}
+              </span>
+            )}
+          </span>
+          <div className="flex items-center gap-1.5">
+            {editingInventoryId && (
+              <button
+                type="button"
+                onClick={handleCancelEditing}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Скасувати
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleSaveInventory}
+              className="rounded-lg bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500"
+            >
+              {editingInventoryId ? "Оновити" : "Зберегти"}
+            </button>
           </div>
         </div>
 
@@ -1688,7 +1730,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
           <div className="text-left">Кількість</div>
         </div>
 
-        <div className="-mx-1 sm:mx-0 overflow-x-auto overflow-y-auto max-h-[380px] sm:max-h-[520px] rounded-lg border border-slate-200">
+        <div className="-mx-1 sm:mx-0 overflow-x-auto overflow-y-auto max-h-[52vh] sm:max-h-[60vh] rounded-lg border border-slate-200">
           <table className="min-w-full text-sm">
             <thead className="hidden sm:table-header-group bg-slate-50 text-slate-700">
               <tr>
@@ -1719,50 +1761,57 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                   <td className="hidden sm:table-cell px-2 py-1 text-xs">{product.category || "-"}</td>
                   <td className="hidden sm:table-cell px-2 py-1 text-xs">{product.unit || "-"}</td>
                   <td className="px-2 py-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
                       <button
                         type="button"
-                        className="inline-flex h-6 w-6 items-center justify-center rounded border border-slate-300 bg-white text-[11px] font-bold text-slate-700 hover:bg-slate-100"
-                        onClick={() => adjustQuantity(product.id, -1)}
-                        aria-label={`Зменшити кількість ${product.name}`}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded border border-rose-300 bg-rose-50 text-[11px] font-bold text-rose-700 hover:bg-rose-100"
+                        onClick={() => applyDelta(product.id, -1)}
+                        aria-label={`Відняти від кількості ${product.name}`}
+                        title="Відняти введену кількість від накопиченої суми"
                       >
                         −
                       </button>
-                      <input
-                        type="text"
-                        min="0"
-                        step="0.01"
-                        inputMode="decimal"
-                        pattern="[0-9]*[.,]?[0-9]*"
-                        className="h-6 w-12 sm:w-16 rounded border border-slate-300 bg-white px-1 py-0 text-[11px] sm:text-xs"
-                        ref={(el) => {
-                          if (el) {
-                            quantityInputRefs.current[product.id] = el;
-                          } else {
-                            delete quantityInputRefs.current[product.id];
-                          }
-                        }}
-                        onFocus={() => setActiveRowProductId(product.id)}
-                        onBlur={() => {
-                          setTimeout(() => {
-                            const current = quantityInputRefs.current?.[product.id];
-                            if (!current || document.activeElement !== current) {
-                              setActiveRowProductId((prev) => (prev === product.id ? null : prev));
+                      <div className="flex flex-col items-center">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          pattern="[0-9]*[.,]?[0-9]*"
+                          placeholder={toNumber(quantities[product.id]) > 0 ? String(quantities[product.id]) : "0"}
+                          className="h-6 w-12 sm:w-16 rounded border border-slate-300 bg-white px-1 py-0 text-[11px] sm:text-xs text-center"
+                          ref={(el) => {
+                            if (el) {
+                              quantityInputRefs.current[product.id] = el;
+                            } else {
+                              delete quantityInputRefs.current[product.id];
                             }
-                          }, 0);
-                        }}
-                        value={quantities[product.id] || ""}
-                        onChange={(e) => {
-                          const rawValue = String(e.target.value || "");
-                          const sanitized = rawValue.replace(/[^0-9.,]/g, "");
-                          setQuantities((prev) => ({ ...prev, [product.id]: sanitized }));
-                        }}
-                      />
+                          }}
+                          onFocus={() => setActiveRowProductId(product.id)}
+                          onBlur={() => {
+                            setTimeout(() => {
+                              const current = quantityInputRefs.current?.[product.id];
+                              if (!current || document.activeElement !== current) {
+                                setActiveRowProductId((prev) => (prev === product.id ? null : prev));
+                              }
+                            }, 0);
+                          }}
+                          value={inputValues[product.id] || ""}
+                          onChange={(e) => {
+                            const sanitized = String(e.target.value || "").replace(/[^0-9.,]/g, "");
+                            setInputValues((prev) => ({ ...prev, [product.id]: sanitized }));
+                          }}
+                        />
+                        {toNumber(quantities[product.id]) > 0 && (
+                          <span className="text-[9px] leading-none text-emerald-700 font-semibold">
+                            Σ {quantities[product.id]}
+                          </span>
+                        )}
+                      </div>
                       <button
                         type="button"
-                        className="inline-flex h-6 w-6 items-center justify-center rounded border border-slate-300 bg-white text-[11px] font-bold text-slate-700 hover:bg-slate-100"
-                        onClick={() => adjustQuantity(product.id, 1)}
-                        aria-label={`Збільшити кількість ${product.name}`}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded border border-emerald-300 bg-emerald-50 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"
+                        onClick={() => applyDelta(product.id, 1)}
+                        aria-label={`Додати до кількості ${product.name}`}
+                        title="Додати введену кількість до накопиченої суми"
                       >
                         +
                       </button>
@@ -1775,41 +1824,12 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               {filteredProducts.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
-                    {restaurantId ? "За поточними фільтрами продукти не знайдено." : "Спочатку оберіть заклад."}
+                    {restaurantId ? "За поточним пошуком продукти не знайдено." : "Спочатку оберіть заклад."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
-        </div>
-
-        <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm text-slate-700">
-            <p>
-              Заповнених позицій: <span className="font-semibold">{filledLines.length}</span>
-              <span className="mx-2 text-slate-400">•</span>
-              <span className="font-semibold">Дата: {formatDateUk(activeSession?.startedAt ? String(activeSession.startedAt).slice(0, 10) : inventoryDate)}</span>
-            </p>
-            {editingInventoryId && <p className="mt-1 text-amber-700 font-semibold">Режим редагування інвентаризації</p>}
-          </div>
-          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-            {editingInventoryId && (
-              <button
-                type="button"
-                onClick={handleCancelEditing}
-                className="w-full sm:w-auto rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
-              >
-                Скасувати редагування
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={handleSaveInventory}
-              className="w-full sm:w-auto rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
-            >
-              {editingInventoryId ? "Оновити інвентаризацію" : "Зберегти інвентаризацію"}
-            </button>
-          </div>
         </div>
       </div>
 

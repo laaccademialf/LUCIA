@@ -216,21 +216,45 @@ const normalizeCollectionRecords = (items, normalizeOne) => {
   return items.map((item) => normalizeOne(item));
 };
 
+// Compute merged items from a per-user contributions map.
+// Each key in contributionsMap is a userId, value is an array of item objects.
+// Items with the same productId across different users have their qty/amount SUMMED.
+const computeItemsFromContributions = (contributionsMap = {}) => {
+  const productTotals = new Map();
+  Object.values(contributionsMap).forEach((userItems) => {
+    (Array.isArray(userItems) ? userItems : []).forEach((item) => {
+      const productId = toTrimmedString(item?.productId);
+      if (!productId) return;
+      const existing = productTotals.get(productId);
+      if (existing) {
+        productTotals.set(productId, {
+          ...existing,
+          qty: toNumberWithFallback(existing.qty, 0) + toNumberWithFallback(item.qty, 0),
+          amount: toNumberWithFallback(existing.amount, 0) + toNumberWithFallback(item.amount, 0),
+        });
+      } else {
+        productTotals.set(productId, { ...item });
+      }
+    });
+  });
+  return Array.from(productTotals.values()).sort((a, b) =>
+    String(a?.productName || "").localeCompare(String(b?.productName || ""), "uk")
+  );
+};
+
+// Legacy merge: keeps last-writer-wins (used where userContributions not available).
 const mergeInventoryItems = (existingItems = [], incomingItems = []) => {
   const mergedByProductId = new Map();
-
   (Array.isArray(existingItems) ? existingItems : []).forEach((item) => {
     const productId = toTrimmedString(item?.productId);
     if (!productId) return;
     mergedByProductId.set(productId, item);
   });
-
   (Array.isArray(incomingItems) ? incomingItems : []).forEach((item) => {
     const productId = toTrimmedString(item?.productId);
     if (!productId) return;
     mergedByProductId.set(productId, item);
   });
-
   return Array.from(mergedByProductId.values()).sort((a, b) =>
     String(a?.productName || "").localeCompare(String(b?.productName || ""), "uk")
   );
@@ -655,27 +679,37 @@ export const useProductBooking = (enableRealtime = true) => {
         const datePart = dateRaw ? dateRaw.slice(0, 10) : "";
         const docId = sessionId || `${restaurantId}__${datePart}`;
         const existing = await getCollectionItemApi("productInventories", docId);
+        const userId = toTrimmedString(inventory?.createdById || inventory?.updatedById) || "unknown";
+        const userName = firstNonEmptyString(inventory?.createdBy, inventory?.updatedBy, "Користувач");
+        const nowIso = new Date().toISOString();
+
+        // Per-user contributions: each user's full item list is stored separately.
+        // Merging sums qty/amount for same productId across all users, overwriting only this user's portion.
+        const existingContributions =
+          existing && typeof existing.userContributions === "object" && existing.userContributions !== null
+            ? existing.userContributions
+            : {};
+        // Seed from existing items when migrating legacy records without userContributions.
+        const seedContributions =
+          !existing?.userContributions && Array.isArray(existing?.items) && existing.items.length > 0
+            ? { ...existingContributions, __legacy__: existing.items }
+            : existingContributions;
+        const updatedContributions = { ...seedContributions, [userId]: inventory.items };
+
+        const mergedItems = computeItemsFromContributions(updatedContributions);
+        const totalItems = mergedItems.reduce((sum, item) => sum + toNumberWithFallback(item?.qty, 0), 0);
+        const totalAmount = mergedItems.reduce((sum, item) => sum + toNumberWithFallback(item?.amount, 0), 0);
+
+        const contributor = { userId, name: userName, at: nowIso };
+        const contributorsMap = new Map();
+        (Array.isArray(existing?.contributors) ? existing.contributors : []).forEach((entry) => {
+          const key = toTrimmedString(entry?.userId || entry?.name);
+          if (!key) return;
+          contributorsMap.set(key, entry);
+        });
+        if (userId) contributorsMap.set(userId, contributor);
+
         if (existing) {
-          const mergedItems = mergeInventoryItems(existing?.items, inventory?.items);
-          const totalItems = mergedItems.reduce((sum, item) => sum + toNumberWithFallback(item?.qty, 0), 0);
-          const totalAmount = mergedItems.reduce((sum, item) => sum + toNumberWithFallback(item?.amount, 0), 0);
-          const nowIso = new Date().toISOString();
-          const contributor = {
-            userId: toTrimmedString(inventory?.createdById || inventory?.updatedById),
-            name: firstNonEmptyString(inventory?.createdBy, inventory?.updatedBy, "Користувач"),
-            at: nowIso,
-          };
-          const contributorsMap = new Map();
-
-          (Array.isArray(existing?.contributors) ? existing.contributors : []).forEach((entry) => {
-            const key = toTrimmedString(entry?.userId || entry?.name);
-            if (!key) return;
-            contributorsMap.set(key, entry);
-          });
-
-          const contributorKey = toTrimmedString(contributor.userId || contributor.name);
-          if (contributorKey) contributorsMap.set(contributorKey, contributor);
-
           await updateCollectionItemApi("productInventories", docId, {
             ...existing,
             ...inventory,
@@ -684,24 +718,25 @@ export const useProductBooking = (enableRealtime = true) => {
             items: mergedItems,
             totalItems,
             totalAmount,
+            userContributions: updatedContributions,
             contributors: Array.from(contributorsMap.values()),
-            lastContributorName: contributor.name,
-            lastContributorId: contributor.userId,
-            updatedBy: contributor.name,
-            updatedById: contributor.userId,
+            lastContributorName: userName,
+            lastContributorId: userId,
+            updatedBy: userName,
+            updatedById: userId,
             updatedAt: nowIso,
           });
         } else {
           await createCollectionItemApi("productInventories", {
             id: docId,
-            contributors: [{
-              userId: toTrimmedString(inventory?.createdById || inventory?.updatedById),
-              name: firstNonEmptyString(inventory?.createdBy, inventory?.updatedBy, "Користувач"),
-              at: new Date().toISOString(),
-            }],
-            lastContributorName: firstNonEmptyString(inventory?.createdBy, inventory?.updatedBy, "Користувач"),
-            lastContributorId: toTrimmedString(inventory?.createdById || inventory?.updatedById),
+            userContributions: updatedContributions,
+            contributors: [contributor],
+            lastContributorName: userName,
+            lastContributorId: userId,
             ...inventory,
+            items: mergedItems,
+            totalItems,
+            totalAmount,
           });
         }
         id = docId;
