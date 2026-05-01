@@ -1066,11 +1066,8 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     if (editingInventoryId) {
       return visibleInventories.find((item) => String(item?.id || "") === String(editingInventoryId)) || null;
     }
-    if (!activeSession?.id) return null;
-    return visibleInventories.find(
-      (item) => String(item?.inventorySessionId || "") === String(activeSession.id || "")
-    ) || null;
-  }, [visibleInventories, editingInventoryId, activeSession]);
+    return null;
+  }, [visibleInventories, editingInventoryId]);
 
   const savedInventoriedProductIds = useMemo(() => {
     const productIds = new Set();
@@ -1180,72 +1177,12 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }, {});
   };
 
-  const ensureSessionForRestaurant = async (targetRestaurantId) => {
-    const normalizedRestaurantId = String(targetRestaurantId || "").trim();
-    if (!normalizedRestaurantId) return null;
-
-    const hasMatchingActiveSession =
-      activeSession?.id
-      && String(activeSession?.restaurantId || activeSession?.scopeId || "") === normalizedRestaurantId;
-    if (hasMatchingActiveSession) return activeSession;
-
-    const currentSharedSession = await getActiveProductInventorySession(normalizedRestaurantId);
-    if (currentSharedSession?.id) {
-      setActiveSession(currentSharedSession);
-      return currentSharedSession;
-    }
-
-    const nowIso = new Date().toISOString();
-    const selectedRestaurantName =
-      restaurants.find((item) => String(item.id) === normalizedRestaurantId)?.name || "Невідомий ресторан";
-
-    const sessionId = await startProductInventorySession(normalizedRestaurantId, {
-      restaurantId: normalizedRestaurantId,
-      restaurantName: selectedRestaurantName,
-      startedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
-      startedById: user?.uid || "",
-    });
-
-    const nextSession = {
-      id: String(sessionId || ""),
-      scopeId: normalizedRestaurantId,
-      restaurantId: normalizedRestaurantId,
-      restaurantName: selectedRestaurantName,
-      isActive: true,
-      startedAt: nowIso,
-      updatedAt: nowIso,
-      startedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
-      startedById: user?.uid || "",
-    };
-
-    setActiveSession(nextSession);
-    return nextSession;
-  };
-
+  // Per-user inventory: each user saves their own record independently.
+  // No shared session needed — inventoryDate + userId serve as the grouping key.
   const handleSaveInventory = async () => {
     if (!restaurantId) {
       alert("Оберіть ресторан для інвентаризації.");
       return;
-    }
-
-    let effectiveSession = activeSession;
-    if (!effectiveSession?.id) {
-      // For restored/edit mode, auto-start a fresh session to keep update flow smooth.
-      if (!editingInventoryId) {
-        alert("Спочатку почніть інвентаризацію кнопкою 'Почати інвентаризацію'.");
-        return;
-      }
-
-      try {
-        effectiveSession = await ensureSessionForRestaurant(restaurantId);
-        if (!effectiveSession?.id) {
-          alert("Не вдалося автоматично почати інвентаризацію для оновлення.");
-          return;
-        }
-      } catch (error) {
-        alert(getErrorMessage(error, "Не вдалося автоматично почати інвентаризацію для оновлення."));
-        return;
-      }
     }
 
     if (filledLines.length === 0) {
@@ -1258,17 +1195,17 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     const restaurantRegNumber = String(selectedRestaurant?.regNumber || "");
     const totalItems = filledLines.reduce((sum, item) => sum + toNumber(item.qty), 0);
     const totalAmount = filledLines.reduce((sum, item) => sum + toNumber(item.amount), 0);
+    const nowIso = new Date().toISOString();
 
     const payload = {
       restaurantId: String(restaurantId),
       restaurantName,
       restaurantRegNumber,
-      inventoryDate: String(effectiveSession?.startedAt || inventoryDate).slice(0, 10),
-      inventorySessionId: String(effectiveSession?.id || ""),
-      inventorySessionStartedAt: String(effectiveSession?.startedAt || ""),
+      inventoryDate: inventoryDate,
       items: filledLines,
       totalItems,
       totalAmount,
+      isMerged: false,
       createdBy: user?.displayName || user?.fullName || user?.email || "Користувач",
       createdById: user?.uid || "",
     };
@@ -1278,6 +1215,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
           ...payload,
           updatedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
           updatedById: user?.uid || "",
+          updatedAt: nowIso,
         })
       : await createInventory(payload);
 
@@ -1286,20 +1224,19 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       return;
     }
 
-    setQuantities({});
+    if (result.id && !editingInventoryId) {
+      setEditingInventoryId(String(result.id));
+    }
     setInputValues({});
-    setEditingInventoryId("");
-    setInventoryDate(new Date().toISOString().slice(0, 10));
-    alert(editingInventoryId ? "Інвентаризацію успішно оновлено." : "Інвентаризацію успішно збережено.");
+    // Do NOT clear quantities — user can keep adding to the same inventory.
+    alert(editingInventoryId ? "Інвентаризацію оновлено." : "Інвентаризацію збережено.");
   };
 
   const handleRestoreInventory = async (inventory) => {
     const targetRestaurantId = String(inventory?.restaurantId || restaurantId || "");
     const restoredQuantities = buildRestoredQuantities(inventory, targetRestaurantId);
     const nextInventoryDate = String(
-      inventory?.inventoryDate ||
-        String(inventory?.inventorySessionStartedAt || "").slice(0, 10) ||
-        new Date().toISOString().slice(0, 10)
+      inventory?.inventoryDate || new Date().toISOString().slice(0, 10)
     );
 
     if (String(targetRestaurantId || "") !== String(restaurantId || "")) {
@@ -1315,15 +1252,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       setInputValues({});
       setEditingInventoryId(String(inventory?.id || ""));
       setInventoryDate(nextInventoryDate);
-    }
-
-    try {
-      const session = await ensureSessionForRestaurant(targetRestaurantId);
-      if (!session?.id) {
-        alert("Не вдалося активувати сесію інвентаризації після повернення.");
-      }
-    } catch (error) {
-      alert(getErrorMessage(error, "Не вдалося активувати сесію інвентаризації після повернення."));
     }
   };
 
@@ -1351,85 +1279,69 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }
   };
 
-  const handleStartInventorySession = async () => {
-    if (!restaurantId) {
-      alert("Оберіть заклад перед стартом інвентаризації.");
-      return;
-    }
-    if (activeSession?.id) {
-      alert("Інвентаризація вже активна для цього закладу.");
-      return;
-    }
+  const [selectedInventoryIds, setSelectedInventoryIds] = useState(new Set());
 
-    try {
-      const startedSession = await ensureSessionForRestaurant(restaurantId);
-      if (!startedSession?.id) {
-        alert("Не вдалося почати інвентаризацію.");
-        return;
-      }
-      setEditingInventoryId("");
-      setQuantities({});
-      setInputValues({});
-    } catch (error) {
-      console.error("Помилка старту інвентаризації продуктів:", error);
-      alert(getErrorMessage(error, "Не вдалося почати інвентаризацію."));
-    }
+  const toggleInventorySelection = (id) => {
+    setSelectedInventoryIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
-  const handleEndInventorySession = async () => {
-    if (!activeSession?.id) {
-      alert("Немає активної інвентаризації для завершення.");
+  const handleMergeInventories = async () => {
+    const ids = Array.from(selectedInventoryIds);
+    if (ids.length < 2) {
+      alert("Оберіть щонайменше 2 інвентаризації для об'єднання.");
       return;
     }
-
-    // Warn if current user has uncommitted input that hasn't been saved yet.
-    const hasLocalUnsaved = filledLines.length > 0;
-    if (hasLocalUnsaved) {
-      const ok = window.confirm(
-        "У вас є незбережені дані інвентаризації.\nЗбережіть їх перед завершенням або натисніть OK, щоб все одно завершити."
-      );
-      if (!ok) return;
+    const selected = visibleInventories.filter((inv) => ids.includes(inv.id));
+    const restaurantIds = [...new Set(selected.map((inv) => String(inv.restaurantId || "")))].filter(Boolean);
+    if (restaurantIds.length > 1) {
+      alert("Можна об'єднати лише інвентаризації одного закладу.");
+      return;
     }
-
-    try {
-      const endedByName = user?.displayName || user?.fullName || user?.email || "Користувач";
-      const endedById = user?.uid || "";
-      const endedAt = new Date().toISOString();
-
-      await endProductInventorySession(activeSession.id, {
-        endedBy: endedByName,
-        endedById,
-        endedAt,
-      });
-
-      const relatedInventories = visibleInventories.filter(
-        (inventory) => String(inventory?.inventorySessionId || "") === String(activeSession.id || "")
-      );
-
-      let syncError = null;
-      for (const inventory of relatedInventories) {
-        const result = await updateInventory(String(inventory?.id || ""), {
-          inventorySessionEndedBy: endedByName,
-          inventorySessionEndedById: endedById,
-          inventorySessionEndedAt: endedAt,
-        });
-        if (!result.success) {
-          syncError = result.error;
-          break;
-        }
+    // Sum items by productId across selected inventories
+    const totals = new Map();
+    for (const inv of selected) {
+      for (const item of (inv.items || [])) {
+        const key = String(item.productId || item.code1C || item.productName || "");
+        if (!key) continue;
+        const existing = totals.get(key) || { ...item, qty: 0, amount: 0 };
+        const qty = toNumber(existing.qty) + toNumber(item.qty);
+        const unitPrice = toNumber(item.unitPrice) || toNumber(existing.unitPrice);
+        totals.set(key, { ...existing, qty, amount: qty * unitPrice });
       }
-
-      setActiveSession(null);
-      setEditingInventoryId("");
-      setQuantities({});
-      setInputValues({});
-      if (syncError) {
-        alert(getErrorMessage(syncError, "Сесію завершено, але не вдалося оновити автора завершення в журналі."));
-      }
-    } catch (error) {
-      console.error("Помилка завершення інвентаризації продуктів:", error);
-      alert(getErrorMessage(error, "Не вдалося завершити інвентаризацію."));
     }
+    const mergedItems = Array.from(totals.values());
+    const firstInv = selected[0];
+    const totalItems = mergedItems.reduce((s, i) => s + toNumber(i.qty), 0);
+    const totalAmount = mergedItems.reduce((s, i) => s + toNumber(i.amount), 0);
+    const payload = {
+      restaurantId: String(firstInv.restaurantId || ""),
+      restaurantName: firstInv.restaurantName || "",
+      restaurantRegNumber: firstInv.restaurantRegNumber || "",
+      inventoryDate: firstInv.inventoryDate,
+      items: mergedItems,
+      totalItems,
+      totalAmount,
+      isMerged: true,
+      mergedFromIds: ids,
+      createdBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+      createdById: user?.uid || "",
+    };
+    const confirmed = window.confirm(
+      `Об'єднати ${ids.length} інвентаризації в одну (${mergedItems.length} позицій, сума ${formatMoney(totalAmount)})?`
+    );
+    if (!confirmed) return;
+    const result = await createInventory(payload);
+    if (!result.success) {
+      alert("Не вдалося створити об'єднану інвентаризацію.");
+      return;
+    }
+    setSelectedInventoryIds(new Set());
+    alert("Об'єднану інвентаризацію створено.");
   };
 
   const handleCancelEditing = () => {
@@ -1675,36 +1587,21 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                 ))}
               </datalist>
             </div>
-            {/* Session start/end — always visible */}
-            {activeSession?.id ? (
-              <button
-                type="button"
-                onClick={handleEndInventorySession}
-                className="shrink-0 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 whitespace-nowrap"
-              >
-                Завершити
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleStartInventorySession}
-                className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 whitespace-nowrap"
-              >
-                Почати
-              </button>
-            )}
+            {/* Date picker for this user's inventory */}
+            <input
+              type="date"
+              className="h-8 shrink-0 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none"
+              value={inventoryDate}
+              onChange={(e) => setInventoryDate(e.target.value)}
+              title="Дата інвентаризації"
+            />
           </div>
 
           {/* Save row + status */}
           <div className="flex items-center justify-between gap-2">
             <div className="text-[11px] text-slate-500 leading-tight">
-              {activeSession?.id ? (
-                <span className="font-semibold text-emerald-700">✓ Активна з {formatDateUk(String(activeSession.startedAt || "").slice(0, 10))}</span>
-              ) : (
-                <span>Не активна</span>
-              )}
-              {editingInventoryId && <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">Ред. режим</span>}
-              {filledLines.length > 0 && <span className="ml-2">· {filledLines.length} поз.</span>}
+              {editingInventoryId && <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">Ред. режим</span>}
+              {filledLines.length > 0 && <span className="ml-1">· {filledLines.length} поз.</span>}
             </div>
             <div className="flex items-center gap-1.5">
               {editingInventoryId && (
@@ -1801,6 +1698,12 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                             const sanitized = String(e.target.value || "").replace(/[^0-9.,]/g, "");
                             setInputValues((prev) => ({ ...prev, [product.id]: sanitized }));
                           }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              applyDelta(product.id, 1);
+                            }
+                          }}
                         />
                         {toNumber(quantities[product.id]) > 0 && (
                           <span className="text-[9px] leading-none text-emerald-700 font-semibold">
@@ -1836,11 +1739,23 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       </div>
 
       <div className={`${cardClass} px-2 sm:px-5`}>
-        <h3 className="mb-3 text-base font-semibold text-slate-900">Проведені інвентаризації</h3>
+        <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
+          <h3 className="text-base font-semibold text-slate-900">Проведені інвентаризації</h3>
+          {selectedInventoryIds.size >= 2 && (
+            <button
+              type="button"
+              onClick={handleMergeInventories}
+              className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-500"
+            >
+              Об'єднати вибрані ({selectedInventoryIds.size})
+            </button>
+          )}
+        </div>
         <div className="-mx-1 sm:mx-0 overflow-x-auto rounded-lg border border-slate-200">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-700">
               <tr>
+                <th className="px-3 py-2 text-left"></th>
                 <th className="px-3 py-2 text-left">Дата</th>
                 <th className="px-3 py-2 text-left">Ресторан</th>
                 <th className="px-3 py-2 text-left">Позицій</th>
@@ -1852,8 +1767,22 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
             </thead>
             <tbody>
               {visibleInventories.map((inventory) => (
-                <tr key={inventory.id} className="border-t border-slate-200">
-                  <td className="px-3 py-2">{formatDateUk(inventory.inventoryDate)}</td>
+                <tr key={inventory.id} className={`border-t border-slate-200${selectedInventoryIds.has(inventory.id) ? " bg-violet-50" : ""}`}>
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 cursor-pointer accent-violet-600"
+                      checked={selectedInventoryIds.has(inventory.id)}
+                      onChange={() => toggleInventorySelection(inventory.id)}
+                      aria-label={`Вибрати інвентаризацію від ${formatDateUk(inventory.inventoryDate)}`}
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    {formatDateUk(inventory.inventoryDate)}
+                    {inventory.isMerged && (
+                      <span className="ml-2 inline-flex items-center rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700">Зведена</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2">{inventory.restaurantName || "-"}</td>
                   <td className="px-3 py-2">{Array.isArray(inventory.items) ? inventory.items.length : 0}</td>
                   <td className="px-3 py-2 font-medium">{formatMoney(inventory.totalAmount)}</td>
@@ -1906,7 +1835,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               ))}
               {visibleInventories.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-slate-500">Інвентаризацій поки немає.</td>
+                  <td colSpan={8} className="px-3 py-6 text-center text-slate-500">Інвентаризацій поки немає.</td>
                 </tr>
               )}
             </tbody>
