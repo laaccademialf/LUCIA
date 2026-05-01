@@ -947,6 +947,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const isGlobalAdmin = isGlobalAdminUser(user);
   const quantityInputRefs = useRef({});
   const pendingRestoreRef = useRef(null);
+  const pendingDeltaActionRef = useRef(null);
   const [activeRowProductId, setActiveRowProductId] = useState(null);
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
   // quantities = accumulated/committed totals per productId (used for saving & green highlight)
@@ -1042,6 +1043,19 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     setInputValues((prev) => ({ ...prev, [productId]: "" }));
     // Re-focus so the user can immediately type the next delta.
     requestAnimationFrame(() => focusQuantityInput(productId));
+  };
+
+  const commitPendingDelta = (productId, sign, shouldRefocus = false) => {
+    const delta = toNumber(inputValues[productId]);
+    if (delta === 0) return;
+    setQuantities((prev) => {
+      const next = Math.max(0, toNumber(prev[productId]) + sign * delta);
+      return { ...prev, [productId]: next === 0 ? "" : String(next) };
+    });
+    setInputValues((prev) => ({ ...prev, [productId]: "" }));
+    if (shouldRefocus) {
+      requestAnimationFrame(() => focusQuantityInput(productId));
+    }
   };
 
   const focusQuantityInput = (productId) => {
@@ -1664,6 +1678,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                       <button
                         type="button"
                         className="inline-flex h-6 w-6 items-center justify-center rounded border border-rose-300 bg-rose-50 text-[11px] font-bold text-rose-700 hover:bg-rose-100"
+                        onMouseDown={() => {
+                          pendingDeltaActionRef.current = { productId, sign: -1 };
+                        }}
                         onClick={() => applyDelta(product.id, -1)}
                         aria-label={`Відняти від кількості ${product.name}`}
                         title="Відняти введену кількість від накопиченої суми"
@@ -1686,15 +1703,10 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                           }}
                           onFocus={() => setActiveRowProductId(product.id)}
                           onBlur={() => {
-                            // Auto-apply typed delta when leaving the field (same as pressing +)
-                            const delta = toNumber(inputValues[product.id]);
-                            if (delta !== 0) {
-                              setQuantities((prev) => {
-                                const next = Math.max(0, toNumber(prev[product.id]) + delta);
-                                return { ...prev, [product.id]: next === 0 ? "" : String(next) };
-                              });
-                              setInputValues((prev) => ({ ...prev, [product.id]: "" }));
-                            }
+                            const pendingAction = pendingDeltaActionRef.current;
+                            const sign = pendingAction?.productId === product.id ? pendingAction.sign : 1;
+                            commitPendingDelta(product.id, sign, false);
+                            pendingDeltaActionRef.current = null;
                             setTimeout(() => {
                               const current = quantityInputRefs.current?.[product.id];
                               if (!current || document.activeElement !== current) {
@@ -1723,6 +1735,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                       <button
                         type="button"
                         className="inline-flex h-6 w-6 items-center justify-center rounded border border-emerald-300 bg-emerald-50 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"
+                        onMouseDown={() => {
+                          pendingDeltaActionRef.current = { productId, sign: 1 };
+                        }}
                         onClick={() => applyDelta(product.id, 1)}
                         aria-label={`Додати до кількості ${product.name}`}
                         title="Додати введену кількість до накопиченої суми"
