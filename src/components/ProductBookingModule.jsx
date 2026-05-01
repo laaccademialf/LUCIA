@@ -970,7 +970,21 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }
 
     const unsubscribe = subscribeToActiveProductInventorySession(restaurantId, (session) => {
-      setActiveSession(session || null);
+      if (session) {
+        setActiveSession(session);
+        return;
+      }
+      // Poll returned null — guard against stale/racing poll responses that could wipe a
+      // freshly-created session. Re-verify directly before clearing the local state.
+      setActiveSession((prev) => {
+        if (!prev?.id) return null; // already clear — nothing to protect
+        getActiveProductInventorySession(restaurantId).then((fresh) => {
+          setActiveSession(fresh || null);
+        }).catch(() => {
+          setActiveSession(null);
+        });
+        return prev; // keep for now while the direct check is in flight
+      });
     });
 
     return () => {
