@@ -958,6 +958,16 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const [editingInventoryId, setEditingInventoryId] = useState("");
   const [inventoryDate, setInventoryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [activeSession, setActiveSession] = useState(null);
+  // Calculator modal state
+  const [calcModal, setCalcModal] = useState({
+    isOpen: false,
+    productId: null,
+    productName: "",
+    display: "0",
+    memory: 0,
+    lastOp: null,
+    newNumber: true,
+  });
 
   useEffect(() => {
     if (isGlobalAdmin) return;
@@ -1030,6 +1040,121 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       })
       .slice(0, 8);
   }, [scopedProducts, searchTerm]);
+
+  const openCalcModal = (productId, productName) => {
+    setCalcModal({
+      isOpen: true,
+      productId,
+      productName,
+      display: String(toNumber(quantities[productId]) || "0"),
+      memory: 0,
+      lastOp: null,
+      newNumber: false,
+    });
+  };
+
+  const closeCalcModal = () => {
+    setCalcModal((prev) => ({ ...prev, isOpen: false }));
+  };
+
+  const calcInput = (digit) => {
+    setCalcModal((prev) => {
+      if (prev.newNumber) {
+        return { ...prev, display: String(digit), newNumber: false };
+      }
+      const newDisplay = prev.display === "0" ? String(digit) : prev.display + String(digit);
+      return { ...prev, display: newDisplay };
+    });
+  };
+
+  const calcDot = () => {
+    setCalcModal((prev) => {
+      if (prev.newNumber) {
+        return { ...prev, display: "0.", newNumber: false };
+      }
+      if (prev.display.includes(".")) return prev;
+      return { ...prev, display: prev.display + "." };
+    });
+  };
+
+  const calcClear = () => {
+    setCalcModal((prev) => ({
+      ...prev,
+      display: "0",
+      memory: 0,
+      lastOp: null,
+      newNumber: true,
+    }));
+  };
+
+  const calcBackspace = () => {
+    setCalcModal((prev) => {
+      const newDisplay = prev.display.slice(0, -1) || "0";
+      return { ...prev, display: newDisplay };
+    });
+  };
+
+  const calcPerform = (a, b, op) => {
+    switch (op) {
+      case "+":
+        return a + b;
+      case "-":
+        return a - b;
+      case "*":
+        return a * b;
+      case "/":
+        return b !== 0 ? a / b : a;
+      default:
+        return b;
+    }
+  };
+
+  const calcOperation = (op) => {
+    setCalcModal((prev) => {
+      const current = toNumber(prev.display);
+      if (prev.lastOp && !prev.newNumber) {
+        const result = calcPerform(prev.memory, current, prev.lastOp);
+        return {
+          ...prev,
+          display: String(result),
+          memory: result,
+          lastOp: op,
+          newNumber: true,
+        };
+      }
+      return {
+        ...prev,
+        memory: current,
+        lastOp: op,
+        newNumber: true,
+      };
+    });
+  };
+
+  const calcEquals = () => {
+    setCalcModal((prev) => {
+      if (!prev.lastOp) return prev;
+      const current = toNumber(prev.display);
+      const result = calcPerform(prev.memory, current, prev.lastOp);
+      return {
+        ...prev,
+        display: String(result),
+        memory: 0,
+        lastOp: null,
+        newNumber: true,
+      };
+    });
+  };
+
+  const calcSave = () => {
+    const value = toNumber(calcModal.display);
+    const safeValue = Math.max(0, value);
+    setQuantities((prev) => ({
+      ...prev,
+      [calcModal.productId]: safeValue === 0 ? "" : String(safeValue),
+    }));
+    closeCalcModal();
+  };
 
   // Calculator-style: applies the currently-typed delta to the accumulated total.
   // sign=+1 adds, sign=-1 subtracts. After applying, clears the input field and re-focuses.
@@ -1346,7 +1471,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       createdById: user?.uid || "",
     };
     const confirmed = window.confirm(
-      `Об'єднати ${ids.length} інвентаризації в одну (${mergedItems.length} позицій, сума ${formatMoney(totalAmount)})?`
+      `Об'єднати ${ids.length} інвентаризації в одну (${mergedItems.length} позицій, сума ${formatMoney(totalAmount)})?\nСтарі записи будуть позначені як об'єднані.`
     );
     if (!confirmed) return;
     const result = await createInventory(payload);
@@ -1354,8 +1479,18 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       alert("Не вдалося створити об'єднану інвентаризацію.");
       return;
     }
+    // Mark old inventories as merged
+    for (const inv of selected) {
+      await updateInventory(inv.id, {
+        isMerged: true,
+        mergedIntoId: result.id,
+        updatedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+        updatedById: user?.uid || "",
+        updatedAt: new Date().toISOString(),
+      });
+    }
     setSelectedInventoryIds(new Set());
-    alert("Об'єднану інвентаризацію створено.");
+    alert("Інвентаризації об'єднано.");
   };
 
   const handleCancelEditing = () => {
@@ -1674,77 +1809,23 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                   <td className="hidden sm:table-cell px-2 py-1 text-xs">{product.category || "-"}</td>
                   <td className="hidden sm:table-cell px-2 py-1 text-xs">{product.unit || "-"}</td>
                   <td className="px-2 py-1">
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        className="inline-flex h-6 w-6 items-center justify-center rounded border border-rose-300 bg-rose-50 text-[11px] font-bold text-rose-700 hover:bg-rose-100"
-                        onMouseDown={() => {
-                          pendingDeltaActionRef.current = { productId, sign: -1 };
-                        }}
-                        onClick={() => applyDelta(product.id, -1)}
-                        aria-label={`Відняти від кількості ${product.name}`}
-                        title="Відняти введену кількість від накопиченої суми"
-                      >
-                        −
-                      </button>
-                      <div className="flex flex-col items-center">
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          pattern="[0-9]*[.,]?[0-9]*"
-                          placeholder={toNumber(quantities[product.id]) > 0 ? String(quantities[product.id]) : "0"}
-                          className="h-6 w-12 sm:w-16 rounded border border-slate-300 bg-white px-1 py-0 text-[11px] sm:text-xs text-center"
-                          ref={(el) => {
-                            if (el) {
-                              quantityInputRefs.current[product.id] = el;
-                            } else {
-                              delete quantityInputRefs.current[product.id];
-                            }
-                          }}
-                          onFocus={() => setActiveRowProductId(product.id)}
-                          onBlur={() => {
-                            const pendingAction = pendingDeltaActionRef.current;
-                            const sign = pendingAction?.productId === product.id ? pendingAction.sign : 1;
-                            commitPendingDelta(product.id, sign, false);
-                            pendingDeltaActionRef.current = null;
-                            setTimeout(() => {
-                              const current = quantityInputRefs.current?.[product.id];
-                              if (!current || document.activeElement !== current) {
-                                setActiveRowProductId((prev) => (prev === product.id ? null : prev));
-                              }
-                            }, 0);
-                          }}
-                          value={inputValues[product.id] || ""}
-                          onChange={(e) => {
-                            const sanitized = String(e.target.value || "").replace(/[^0-9.,]/g, "");
-                            setInputValues((prev) => ({ ...prev, [product.id]: sanitized }));
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              applyDelta(product.id, 1);
-                            }
-                          }}
-                        />
+                    <div className="flex items-center gap-2 justify-between">
+                      <div className="flex flex-col items-start text-xs">
+                        <span className="font-medium text-slate-900">
+                          {toNumber(quantities[product.id]) || "—"}
+                        </span>
                         {toNumber(quantities[product.id]) > 0 && (
-                          <span className="text-[9px] leading-none text-emerald-700 font-semibold">
-                            Σ {quantities[product.id]}
-                          </span>
+                          <span className="text-emerald-700 font-semibold text-[10px]">✓</span>
                         )}
                       </div>
                       <button
                         type="button"
-                        className="inline-flex h-6 w-6 items-center justify-center rounded border border-emerald-300 bg-emerald-50 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"
-                        onMouseDown={() => {
-                          pendingDeltaActionRef.current = { productId, sign: 1 };
-                        }}
-                        onClick={() => applyDelta(product.id, 1)}
-                        aria-label={`Додати до кількості ${product.name}`}
-                        title="Додати введену кількість до накопиченої суми"
+                        onClick={() => openCalcModal(product.id, product.name)}
+                        className="rounded bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 text-xs font-semibold"
+                        title="Відкрити калькулятор"
                       >
-                        +
+                        🧮
                       </button>
-                      <span className="text-xs text-slate-500">{product.unit || "од."}</span>
                     </div>
                   </td>
                 </tr>
@@ -1866,6 +1947,52 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
           </table>
         </div>
       </div>
+
+      {/* Calculator Modal */}
+      {calcModal.isOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={closeCalcModal}
+        >
+          <div
+            className="bg-white rounded-lg shadow-lg p-4 w-80 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-slate-900">{calcModal.productName}</h3>
+            <div className="bg-slate-100 rounded p-3 text-right text-2xl font-mono font-bold text-slate-900 break-words">
+              {calcModal.display}
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              <button onClick={() => calcInput(7)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">7</button>
+              <button onClick={() => calcInput(8)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">8</button>
+              <button onClick={() => calcInput(9)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">9</button>
+              <button onClick={() => calcOperation("/")} className="bg-orange-200 hover:bg-orange-300 p-2 rounded font-bold">÷</button>
+              
+              <button onClick={() => calcInput(4)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">4</button>
+              <button onClick={() => calcInput(5)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">5</button>
+              <button onClick={() => calcInput(6)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">6</button>
+              <button onClick={() => calcOperation("*")} className="bg-orange-200 hover:bg-orange-300 p-2 rounded font-bold">×</button>
+              
+              <button onClick={() => calcInput(1)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">1</button>
+              <button onClick={() => calcInput(2)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">2</button>
+              <button onClick={() => calcInput(3)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">3</button>
+              <button onClick={() => calcOperation("-")} className="bg-orange-200 hover:bg-orange-300 p-2 rounded font-bold">−</button>
+              
+              <button onClick={() => calcInput(0)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold col-span-2">0</button>
+              <button onClick={calcDot} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">.</button>
+              <button onClick={() => calcOperation("+")} className="bg-orange-200 hover:bg-orange-300 p-2 rounded font-bold">+</button>
+              
+              <button onClick={calcBackspace} className="bg-red-200 hover:bg-red-300 p-2 rounded font-bold col-span-2 text-sm">Видалити</button>
+              <button onClick={calcClear} className="bg-red-200 hover:bg-red-300 p-2 rounded font-bold col-span-2">C</button>
+            </div>
+            <button onClick={calcEquals} className="w-full bg-blue-500 hover:bg-blue-600 text-white p-2 rounded font-bold">=</button>
+            <div className="flex gap-2">
+              <button onClick={closeCalcModal} className="flex-1 bg-slate-300 hover:bg-slate-400 p-2 rounded font-semibold">Скасувати</button>
+              <button onClick={calcSave} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white p-2 rounded font-semibold">OK</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
