@@ -951,7 +951,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
   const [quantities, setQuantities] = useState({});
   const [searchTerm, setSearchTerm] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("");
+  const [inventoryStatusFilter, setInventoryStatusFilter] = useState("all");
   const [editingInventoryId, setEditingInventoryId] = useState("");
   const [inventoryDate, setInventoryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [activeSession, setActiveSession] = useState(null);
@@ -981,10 +981,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     if (!selectedRestaurantId) return [];
     return products.filter((item) => item.isActive !== false && sameRestaurant(item.restaurantId, selectedRestaurantId));
   }, [products, restaurantId]);
-
-  const availableCategories = useMemo(() => {
-    return Array.from(new Set(scopedProducts.map((item) => item.category).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
-  }, [scopedProducts]);
 
   useEffect(() => {
     const pendingRestore = pendingRestoreRef.current;
@@ -1016,21 +1012,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       .slice(0, 8);
   }, [scopedProducts, searchTerm]);
 
-  const filteredProducts = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
-    return scopedProducts.filter((item) => {
-      const bySearch = normalizedSearch
-        ? [item.name, item.code1C, item.category]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase()
-            .includes(normalizedSearch)
-        : true;
-      const byCategory = categoryFilter ? String(item.category || "") === categoryFilter : true;
-      return bySearch && byCategory;
-    });
-  }, [scopedProducts, searchTerm, categoryFilter]);
-
   const adjustQuantity = (productId, delta) => {
     setQuantities((prev) => {
       const current = toNumber(prev[productId]);
@@ -1059,6 +1040,61 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     if (isGlobalAdmin) return inventories;
     return inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
   }, [inventories, user, isGlobalAdmin]);
+
+  const currentWorkingInventory = useMemo(() => {
+    if (editingInventoryId) {
+      return visibleInventories.find((item) => String(item?.id || "") === String(editingInventoryId)) || null;
+    }
+    if (!activeSession?.id) return null;
+    return visibleInventories.find(
+      (item) => String(item?.inventorySessionId || "") === String(activeSession.id || "")
+    ) || null;
+  }, [visibleInventories, editingInventoryId, activeSession]);
+
+  const savedInventoriedProductIds = useMemo(() => {
+    const productIds = new Set();
+
+    (Array.isArray(currentWorkingInventory?.items) ? currentWorkingInventory.items : []).forEach((item) => {
+      const productId = String(item?.productId || "").trim();
+      if (productId && toNumber(item?.qty) > 0) {
+        productIds.add(productId);
+      }
+    });
+
+    return productIds;
+  }, [currentWorkingInventory]);
+
+  const inventoriedProductIds = useMemo(() => {
+    const productIds = new Set(savedInventoriedProductIds);
+
+    Object.entries(quantities || {}).forEach(([productId, rawValue]) => {
+      const normalizedId = String(productId || "").trim();
+      if (!normalizedId) return;
+      if (toNumber(rawValue) > 0) {
+        productIds.add(normalizedId);
+      } else {
+        productIds.delete(normalizedId);
+      }
+    });
+
+    return productIds;
+  }, [savedInventoriedProductIds, quantities]);
+
+  const filteredProducts = useMemo(() => {
+    const normalizedSearch = searchTerm.trim().toLowerCase();
+    return scopedProducts.filter((item) => {
+      const bySearch = normalizedSearch
+        ? [item.name, item.code1C, item.category]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedSearch)
+        : true;
+      const isInventoried = inventoriedProductIds.has(String(item?.id || ""));
+      const byInventoryStatus = inventoryStatusFilter === "inventoried" ? isInventoried : true;
+      return bySearch && byInventoryStatus;
+    });
+  }, [scopedProducts, searchTerm, inventoryStatusFilter, inventoriedProductIds]);
 
   const filledLines = useMemo(() => {
     return scopedProducts
@@ -1608,16 +1644,14 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
 
         <div className="mb-4 grid grid-cols-2 gap-2 sm:gap-3">
           <div>
-            <label className="text-xs sm:text-sm font-semibold text-slate-800">Фільтр по категорії</label>
+            <label className="text-xs sm:text-sm font-semibold text-slate-800">Статус інвентаризації</label>
             <select
               className="mt-1 h-8 sm:h-9 w-full rounded-lg border border-slate-300 bg-white px-2 sm:px-3 py-1 text-xs sm:text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
+              value={inventoryStatusFilter}
+              onChange={(e) => setInventoryStatusFilter(e.target.value)}
             >
-              <option value="">Всі категорії</option>
-              {availableCategories.map((category) => (
-                <option key={category} value={category}>{category}</option>
-              ))}
+              <option value="inventoried">Проінвентаризовані</option>
+              <option value="all">Всі</option>
             </select>
           </div>
           <div>
@@ -1666,10 +1700,13 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               </tr>
             </thead>
             <tbody>
-              {filteredProducts.map((product) => (
+              {filteredProducts.map((product) => {
+                const isInventoried = inventoriedProductIds.has(String(product?.id || ""));
+
+                return (
                 <tr
                   key={product.id}
-                  className={`border-t border-slate-200 transition-colors ${activeRowProductId === product.id ? "bg-amber-100/70" : ""}`}
+                  className={`border-t border-slate-200 transition-colors ${activeRowProductId === product.id ? "bg-amber-100/70" : isInventoried ? "bg-emerald-100/80" : ""}`}
                 >
                   <td
                     className="px-2 py-1 font-medium text-slate-900 text-[11px] sm:text-xs leading-tight whitespace-normal break-words cursor-pointer"
@@ -1733,7 +1770,8 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {filteredProducts.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-3 py-6 text-center text-slate-500">
