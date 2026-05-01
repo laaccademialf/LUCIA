@@ -1016,14 +1016,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       .slice(0, 8);
   }, [scopedProducts, searchTerm]);
 
-  // Auto-focus on the single matching product's quantity input when searching.
-  useEffect(() => {
-    if (filteredProducts.length === 1 && searchTerm.trim()) {
-      requestAnimationFrame(() => focusQuantityInput(filteredProducts[0].id));
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredProducts.length === 1 ? filteredProducts[0]?.id : null, searchTerm]);
-
   // Calculator-style: applies the currently-typed delta to the accumulated total.
   // sign=+1 adds, sign=-1 subtracts. After applying, clears the input field and re-focuses.
   const applyDelta = (productId, sign) => {
@@ -1108,6 +1100,14 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         : true;
     });
   }, [scopedProducts, searchTerm]);
+
+  // Auto-focus on the single matching product's quantity input when searching.
+  useEffect(() => {
+    if (filteredProducts.length === 1 && searchTerm.trim()) {
+      requestAnimationFrame(() => focusQuantityInput(filteredProducts[0].id));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredProducts.length === 1 ? filteredProducts[0]?.id : null, searchTerm]);
 
   const filledLines = useMemo(() => {
     return scopedProducts
