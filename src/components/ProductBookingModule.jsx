@@ -1221,11 +1221,22 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const calcOperation = (op) => {
     setCalcModal((prev) => {
       if (prev.newNumber) {
-        // If user presses operators in sequence, replace the trailing operator.
-        const replacedExpression = String(prev.expression || "")
-          .replace(/[+\-*/]+$/, "")
-          .concat(op);
-        return { ...prev, expression: replacedExpression };
+        const currentExpression = String(prev.expression || "");
+        if (!currentExpression) {
+          // After '=', continue from the shown result (memory-like behavior).
+          return { ...prev, expression: `${prev.display}${op}` };
+        }
+        // If user presses operators in sequence, replace only trailing operator.
+        if (/[+\-*/]$/.test(currentExpression)) {
+          return {
+            ...prev,
+            expression: currentExpression.replace(/[+\-*/]+$/, op),
+          };
+        }
+        return {
+          ...prev,
+          expression: `${currentExpression}${op}`,
+        };
       }
 
       const nextExpression = `${prev.expression || ""}${prev.display}${op}`;
