@@ -964,6 +964,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     productId: null,
     productName: "",
     display: "0",
+    expression: "",
     memory: 0,
     lastOp: null,
     newNumber: true,
@@ -1047,6 +1048,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       productId,
       productName,
       display: String(toNumber(quantities[productId]) || "0"),
+      expression: "",
       memory: 0,
       lastOp: null,
       newNumber: false,
@@ -1081,6 +1083,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     setCalcModal((prev) => ({
       ...prev,
       display: "0",
+      expression: "",
       memory: 0,
       lastOp: null,
       newNumber: true,
@@ -1117,6 +1120,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         return {
           ...prev,
           display: String(result),
+          expression: `${result}${op}`,
           memory: result,
           lastOp: op,
           newNumber: true,
@@ -1124,6 +1128,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       }
       return {
         ...prev,
+        expression: `${current}${op}`,
         memory: current,
         lastOp: op,
         newNumber: true,
@@ -1131,27 +1136,13 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     });
   };
 
-  const calcEquals = () => {
-    setCalcModal((prev) => {
-      if (!prev.lastOp) return prev;
-      const current = toNumber(prev.display);
-      const result = calcPerform(prev.memory, current, prev.lastOp);
-      return {
-        ...prev,
-        display: String(result),
-        memory: 0,
-        lastOp: null,
-        newNumber: true,
-      };
-    });
-  };
-
   const calcSave = () => {
     let finalValue;
-    if (calcModal.lastOp) {
-      // Finish pending operation
+    if (calcModal.lastOp && !calcModal.newNumber) {
       const current = toNumber(calcModal.display);
       finalValue = calcPerform(calcModal.memory, current, calcModal.lastOp);
+    } else if (calcModal.lastOp && calcModal.newNumber) {
+      finalValue = calcModal.memory;
     } else {
       finalValue = toNumber(calcModal.display);
     }
@@ -1967,7 +1958,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
           >
             <h3 className="text-lg font-semibold text-slate-900">{calcModal.productName}</h3>
             <div className="bg-slate-100 rounded p-3 text-right text-2xl font-mono font-bold text-slate-900 break-words">
-              {calcModal.display}
+              {calcModal.expression}{calcModal.newNumber ? "" : calcModal.display}
             </div>
             <div className="grid grid-cols-4 gap-2">
               <button onClick={() => calcInput(7)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">7</button>
@@ -1992,7 +1983,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               <button onClick={calcBackspace} className="bg-red-200 hover:bg-red-300 p-2 rounded font-bold col-span-2 text-sm">Видалити</button>
               <button onClick={calcClear} className="bg-red-200 hover:bg-red-300 p-2 rounded font-bold col-span-2">C</button>
             </div>
-            <button onClick={calcEquals} className="w-full bg-blue-500 hover:bg-blue-600 text-white p-2 rounded font-bold">=</button>
             <div className="flex gap-2">
               <button onClick={closeCalcModal} className="flex-1 bg-slate-300 hover:bg-slate-400 p-2 rounded font-semibold">Скасувати</button>
               <button onClick={calcSave} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white p-2 rounded font-semibold">OK</button>
