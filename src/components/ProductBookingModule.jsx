@@ -1445,6 +1445,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       isMerged: false,
       createdBy: user?.displayName || user?.fullName || user?.email || "Користувач",
       createdById: user?.uid || "",
+      inventorySessionEndedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+      inventorySessionEndedById: user?.uid || "",
+      inventorySessionEndedAt: nowIso,
     };
 
     const result = editingInventoryId

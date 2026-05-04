@@ -305,6 +305,7 @@ export const useProductBooking = (enableRealtime = true) => {
     let unsubscribeSuppliers;
     let unsubscribeTypicalFields;
     let unsubscribeInventories;
+    let apiRefreshIntervalId;
     const apiMode = isCollectionsApiEnabled();
 
     if (apiMode) {
@@ -320,7 +321,15 @@ export const useProductBooking = (enableRealtime = true) => {
       };
 
       fetchData();
-      return () => {};
+      // API mode has no realtime subscriptions, so refresh periodically
+      // to keep inventories synchronized across users without manual reload.
+      apiRefreshIntervalId = setInterval(() => {
+        void fetchData();
+      }, 5000);
+
+      return () => {
+        if (apiRefreshIntervalId) clearInterval(apiRefreshIntervalId);
+      };
     }
 
     if (enableRealtime) {
