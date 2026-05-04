@@ -1166,6 +1166,17 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }));
   };
 
+  const calcBackspace = () => {
+    setCalcModal((prev) => {
+      if (prev.newNumber) return prev;
+      const nextDisplay = String(prev.display || "").slice(0, -1);
+      return {
+        ...prev,
+        display: nextDisplay || "0",
+      };
+    });
+  };
+
   const evaluateCalcExpression = (rawExpression) => {
     const expression = String(rawExpression || "")
       .replace(/,/g, ".")
@@ -2082,7 +2093,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
             </div>
             <div className="grid grid-cols-4 gap-2.5">
               <button onClick={calcClear} className="h-16 rounded-full bg-[#5f6065] text-2xl font-medium text-white transition hover:bg-[#6a6b70]">C</button>
-              <div className="h-16" />
+              <button onClick={calcBackspace} className="h-16 rounded-full bg-[#5f6065] text-2xl font-medium text-white transition hover:bg-[#6a6b70]">⌫</button>
               <div className="h-16" />
               <button onClick={() => calcOperation("/")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">÷</button>
 
