@@ -93,6 +93,24 @@ const getInventoryEndedByLabel = (inventory) => {
   return endedBy || "-";
 };
 
+const getMergedFromIds = (inventory) => {
+  const direct = inventory?.mergedFromIds ?? inventory?.merged_from_ids;
+  if (Array.isArray(direct)) return direct;
+  if (typeof direct === "string") {
+    const trimmed = direct.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      return trimmed.split(",").map((item) => item.trim()).filter(Boolean);
+    }
+  }
+  return [];
+};
+
+const getMergedIntoId = (inventory) => String(inventory?.mergedIntoId || inventory?.merged_into_id || "").trim();
+
 const normalizeComparableToken = (value) => String(value || "").trim().toLowerCase();
 
 const sameRestaurant = (productRestaurantId, restaurantId) => normalizeComparableToken(productRestaurantId) === normalizeComparableToken(restaurantId);
@@ -1221,8 +1239,8 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
 
   const mergeCandidates = useMemo(() => {
     return visibleInventories.filter((item) => {
-      const isFinalMerged = Array.isArray(item?.mergedFromIds) && item.mergedFromIds.length > 0;
-      const isSourceMerged = Boolean(item?.mergedIntoId);
+      const isFinalMerged = getMergedFromIds(item).length > 0;
+      const isSourceMerged = Boolean(getMergedIntoId(item));
       return !isFinalMerged && !isSourceMerged;
     });
   }, [visibleInventories]);
@@ -1926,27 +1944,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => handleExportSingleInventory(inventory)}
-                        className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500"
-                      >
-                        <Download size={14} /> Ексель
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleExportSingleInventory1C(inventory)}
-                        className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
-                      >
-                        <Download size={14} /> Ексель 1С
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handlePrintSingleInventory(inventory)}
-                        className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                      >
-                        <Printer size={14} /> Друк
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => handleRestoreInventory(inventory)}
                         className="inline-flex items-center rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
                       >
@@ -2267,7 +2264,7 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
       : inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
 
     // Journal should contain only final merged inventory documents.
-    return scoped.filter((item) => Array.isArray(item?.mergedFromIds) && item.mergedFromIds.length > 0);
+    return scoped.filter((item) => getMergedFromIds(item).length > 0);
   }, [inventories, user, isGlobalAdmin]);
 
   const handleExportSingleInventory = async (inventory) => {
