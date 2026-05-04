@@ -1503,6 +1503,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       mergedFromIds: ids,
       createdBy: user?.displayName || user?.fullName || user?.email || "Користувач",
       createdById: user?.uid || "",
+      inventorySessionEndedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+      inventorySessionEndedById: user?.uid || "",
+      inventorySessionEndedAt: new Date().toISOString(),
     };
     const confirmed = window.confirm(
       `Об'єднати ${ids.length} інвентаризації в одну (${mergedItems.length} позицій, сума ${formatMoney(totalAmount)})?\nСтарі записи будуть позначені як об'єднані.`
@@ -1513,15 +1516,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       alert("Не вдалося створити об'єднану інвентаризацію.");
       return;
     }
-    // Mark source inventories as already merged into final document
+    // Remove source documents so only the final merged document remains.
     for (const inv of selected) {
-      await updateInventory(inv.id, {
-        isMergedSource: true,
-        mergedIntoId: result.id,
-        updatedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
-        updatedById: user?.uid || "",
-        updatedAt: new Date().toISOString(),
-      });
+      await deleteInventory(String(inv.id || ""));
     }
     setSelectedInventoryIds(new Set());
     alert("Інвентаризації об'єднано.");
@@ -1899,7 +1896,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                 <th className="px-3 py-2 text-left">Ресторан</th>
                 <th className="px-3 py-2 text-left">Позицій</th>
                 <th className="px-3 py-2 text-left">Сума</th>
-                <th className="px-3 py-2 text-left">Хто створив</th>
                 <th className="px-3 py-2 text-left">Хто завершив</th>
                 <th className="px-3 py-2 text-left">Дії</th>
               </tr>
@@ -1925,7 +1921,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                   <td className="px-3 py-2">{inventory.restaurantName || "-"}</td>
                   <td className="px-3 py-2">{Array.isArray(inventory.items) ? inventory.items.length : 0}</td>
                   <td className="px-3 py-2 font-medium">{formatMoney(inventory.totalAmount)}</td>
-                  <td className="px-3 py-2">{inventory.createdBy || "-"}</td>
                   <td className="px-3 py-2">{getInventoryEndedByLabel(inventory)}</td>
                   <td className="px-3 py-2">
                     <div className="flex flex-wrap gap-2">
@@ -1974,7 +1969,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               ))}
               {mergeCandidates.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-slate-500">Немає окремих інвентаризацій для об'єднання.</td>
+                  <td colSpan={7} className="px-3 py-6 text-center text-slate-500">Немає окремих інвентаризацій для об'єднання.</td>
                 </tr>
               )}
             </tbody>
@@ -2430,7 +2425,6 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
               <th className="px-3 py-2 text-left">Ресторан</th>
               <th className="px-3 py-2 text-left">Позицій</th>
               <th className="px-3 py-2 text-left">Сума</th>
-              <th className="px-3 py-2 text-left">Хто створив</th>
               <th className="px-3 py-2 text-left">Хто завершив</th>
               <th className="px-3 py-2 text-left">Дії</th>
             </tr>
@@ -2442,7 +2436,6 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
                 <td className="px-3 py-2">{inventory.restaurantName || "-"}</td>
                 <td className="px-3 py-2">{Array.isArray(inventory.items) ? inventory.items.length : 0}</td>
                 <td className="px-3 py-2 font-medium">{formatMoney(inventory.totalAmount)}</td>
-                <td className="px-3 py-2">{inventory.createdBy || "-"}</td>
                 <td className="px-3 py-2">{getInventoryEndedByLabel(inventory)}</td>
                 <td className="px-3 py-2">
                   <div className="flex flex-wrap gap-2">
@@ -2484,7 +2477,7 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
             ))}
             {visibleInventories.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-slate-500">Зведених інвентаризацій поки немає.</td>
+                <td colSpan={6} className="px-3 py-6 text-center text-slate-500">Зведених інвентаризацій поки немає.</td>
               </tr>
             )}
           </tbody>
