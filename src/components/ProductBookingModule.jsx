@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2, Download, Upload, FileDown, X, Printer } from "lucide-react";
+import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2, Download, Upload, FileDown, X, Printer, Calculator } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
 import {
   endProductInventorySession,
@@ -1016,7 +1016,7 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
   );
 }
 
-function InventoryTab({ products, inventories, restaurants, user, createInventory, updateInventory, deleteInventory }) {
+function InventoryTab({ products, inventories, restaurants, typicalFields, user, createInventory, updateInventory, deleteInventory }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const quantityInputRefs = useRef({});
   const pendingRestoreRef = useRef(null);
@@ -1030,6 +1030,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const [searchTerm, setSearchTerm] = useState("");
   const [editingInventoryId, setEditingInventoryId] = useState("");
   const [inventoryDate, setInventoryDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [stockTakingPlace, setStockTakingPlace] = useState("");
   const [activeSession, setActiveSession] = useState(null);
   // Calculator modal state
   const [calcModal, setCalcModal] = useState({
@@ -1090,6 +1091,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       setInputValues({});
       setEditingInventoryId(String(pendingRestore.inventoryId || ""));
       setInventoryDate(String(pendingRestore.inventoryDate || new Date().toISOString().slice(0, 10)));
+      setStockTakingPlace(String(pendingRestore.stockTakingPlace || ""));
       pendingRestoreRef.current = null;
       return;
     }
@@ -1097,7 +1099,33 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     setQuantities({});
     setInputValues({});
     setEditingInventoryId("");
+    setStockTakingPlace("");
   }, [restaurantId]);
+
+  const stockTakingPlaceOptions = useMemo(() => {
+    const activeFields = (Array.isArray(typicalFields) ? typicalFields : [])
+      .filter((field) => field?.isActive !== false)
+      .map((field) => ({
+        name: String(field?.name || "").trim(),
+        type: String(field?.type || "").trim().toLowerCase(),
+        categoryName: String(field?.categoryName || "").trim().toLowerCase(),
+      }))
+      .filter((field) => field.name);
+
+    const byPlaceType = activeFields.filter((field) => {
+      const typeToken = `${field.type} ${field.categoryName}`;
+      return (
+        typeToken.includes("місце")
+        || typeToken.includes("процес")
+        || typeToken.includes("place")
+        || typeToken.includes("location")
+        || typeToken.includes("process")
+      );
+    });
+
+    const source = byPlaceType.length > 0 ? byPlaceType : activeFields;
+    return Array.from(new Set(source.map((field) => field.name))).sort((a, b) => a.localeCompare(b, "uk"));
+  }, [typicalFields]);
 
   const keywordSuggestions = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -1439,6 +1467,8 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       restaurantName,
       restaurantRegNumber,
       inventoryDate: inventoryDate,
+      stockTakingPlace: String(stockTakingPlace || "").trim(),
+      stock_taking_place: String(stockTakingPlace || "").trim(),
       items: filledLines,
       totalItems,
       totalAmount,
@@ -1485,6 +1515,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         quantities: restoredQuantities,
         inventoryId: String(inventory?.id || ""),
         inventoryDate: nextInventoryDate,
+        stockTakingPlace: String(inventory?.stockTakingPlace || inventory?.stock_taking_place || ""),
       };
       setRestaurantId(targetRestaurantId);
     } else {
@@ -1492,6 +1523,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       setInputValues({});
       setEditingInventoryId(String(inventory?.id || ""));
       setInventoryDate(nextInventoryDate);
+      setStockTakingPlace(String(inventory?.stockTakingPlace || inventory?.stock_taking_place || ""));
     }
   };
 
@@ -1604,6 +1636,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     setQuantities({});
     setInputValues({});
     setInventoryDate(new Date().toISOString().slice(0, 10));
+    setStockTakingPlace("");
     if (isGlobalAdmin) {
       setRestaurantId("");
     }
@@ -1852,6 +1885,20 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
             />
           </div>
 
+          <div className="flex items-center gap-2">
+            <label className="shrink-0 text-[11px] font-semibold text-slate-600">Місце зняття залишків</label>
+            <select
+              className="h-8 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none"
+              value={stockTakingPlace}
+              onChange={(e) => setStockTakingPlace(e.target.value)}
+            >
+              <option value="">Оберіть місце</option>
+              {stockTakingPlaceOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Save row + status */}
           <div className="flex items-center justify-between gap-2">
             <div className="text-[11px] text-slate-500 leading-tight">
@@ -1927,10 +1974,10 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                       <button
                         type="button"
                         onClick={() => openCalcModal(product.id, product.name)}
-                        className="rounded bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-1 text-xs font-semibold"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 shadow-sm transition hover:bg-indigo-100 hover:text-indigo-800"
                         title="Відкрити калькулятор"
                       >
-                        🧮
+                        <Calculator size={16} strokeWidth={2.2} />
                       </button>
                     </div>
                   </td>
