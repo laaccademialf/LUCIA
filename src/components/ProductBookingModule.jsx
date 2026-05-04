@@ -1097,55 +1097,75 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     });
   };
 
-  const calcPerform = (a, b, op) => {
-    switch (op) {
-      case "+":
-        return a + b;
-      case "-":
-        return a - b;
-      case "*":
-        return a * b;
-      case "/":
-        return b !== 0 ? a / b : a;
-      default:
-        return b;
+  const evaluateCalcExpression = (rawExpression) => {
+    const expression = String(rawExpression || "")
+      .replace(/,/g, ".")
+      .replace(/\s+/g, "")
+      .replace(/[+\-*/]+$/, "");
+
+    if (!expression) return 0;
+
+    const tokens = expression.match(/\d*\.?\d+|[+\-*/]/g);
+    if (!tokens || tokens.length === 0) return 0;
+
+    // Pass 1: * and /
+    const folded = [];
+    let current = toNumber(tokens[0]);
+
+    for (let i = 1; i < tokens.length; i += 2) {
+      const op = tokens[i];
+      const next = toNumber(tokens[i + 1]);
+      if (op === "*") {
+        current *= next;
+      } else if (op === "/") {
+        current = next === 0 ? current : current / next;
+      } else {
+        folded.push(current, op);
+        current = next;
+      }
     }
+    folded.push(current);
+
+    // Pass 2: + and -
+    let result = toNumber(folded[0]);
+    for (let i = 1; i < folded.length; i += 2) {
+      const op = folded[i];
+      const next = toNumber(folded[i + 1]);
+      if (op === "+") result += next;
+      if (op === "-") result -= next;
+    }
+
+    return result;
   };
 
   const calcOperation = (op) => {
     setCalcModal((prev) => {
-      const current = toNumber(prev.display);
-      if (prev.lastOp && !prev.newNumber) {
-        const result = calcPerform(prev.memory, current, prev.lastOp);
-        return {
-          ...prev,
-          display: String(result),
-          expression: `${result}${op}`,
-          memory: result,
-          lastOp: op,
-          newNumber: true,
-        };
+      if (prev.newNumber) {
+        // If user presses operators in sequence, replace the trailing operator.
+        const replacedExpression = String(prev.expression || "")
+          .replace(/[+\-*/]+$/, "")
+          .concat(op);
+        return { ...prev, expression: replacedExpression };
       }
+
+      const nextExpression = `${prev.expression || ""}${prev.display}${op}`;
       return {
         ...prev,
-        expression: `${current}${op}`,
-        memory: current,
-        lastOp: op,
+        expression: nextExpression,
         newNumber: true,
       };
     });
   };
 
   const calcSave = () => {
-    let finalValue;
-    if (calcModal.lastOp && !calcModal.newNumber) {
-      const current = toNumber(calcModal.display);
-      finalValue = calcPerform(calcModal.memory, current, calcModal.lastOp);
-    } else if (calcModal.lastOp && calcModal.newNumber) {
-      finalValue = calcModal.memory;
-    } else {
-      finalValue = toNumber(calcModal.display);
-    }
+    const fullExpression = calcModal.newNumber
+      ? String(calcModal.expression || "").replace(/[+\-*/]+$/, "")
+      : `${calcModal.expression || ""}${calcModal.display}`;
+
+    const finalValue = fullExpression
+      ? evaluateCalcExpression(fullExpression)
+      : toNumber(calcModal.display);
+
     const safeValue = Math.max(0, finalValue);
     setQuantities((prev) => ({
       ...prev,
