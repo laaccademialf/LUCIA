@@ -2665,10 +2665,9 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
                             {mergedSources.map((sourceDoc, index) => {
                               const sourceKey = `${String(inventory?.id || "")}::${String(sourceDoc?.id || index)}`;
                               const isSourceExpanded = expandedSourceKeys.has(sourceKey);
-                              const sourceTotalUnits = toNumber(sourceDoc?.totalItems)
-                                || (Array.isArray(sourceDoc?.items)
-                                  ? sourceDoc.items.reduce((sum, item) => sum + toNumber(item?.qty), 0)
-                                  : 0);
+                              const sourcePositionsCount = Array.isArray(sourceDoc?.items)
+                                ? sourceDoc.items.length
+                                : Math.max(0, Math.round(toNumber(sourceDoc?.totalItems)));
 
                               return (
                                 <div key={`${sourceDoc?.id || index}`} className="rounded-lg border border-slate-200 bg-white p-3">
@@ -2678,7 +2677,7 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
                                       <span className="ml-2">{formatDateUk(sourceDoc?.inventoryDate)}</span>
                                       <span className="ml-2">Місце: {sourceDoc?.stockTakingPlace || sourceDoc?.stock_taking_place || "-"}</span>
                                       <span className="ml-2">Виконавець: {getInventoryEndedByLabel(sourceDoc)}</span>
-                                      <span className="ml-2">Одиниць: {sourceTotalUnits.toFixed(2)}</span>
+                                      <span className="ml-2">Позицій: {sourcePositionsCount}</span>
                                     </div>
                                     <div className="flex flex-wrap gap-2">
                                       <button
