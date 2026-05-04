@@ -2411,6 +2411,7 @@ function InventoryListTab({ listProducts, restaurants, user, canManage, replaceI
 function InventoryJournalTab({ inventories, user, deleteInventory }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const [expandedMergedIds, setExpandedMergedIds] = useState(new Set());
+  const [expandedSourceKeys, setExpandedSourceKeys] = useState(new Set());
   const visibleInventories = useMemo(() => {
     const scoped = inventories.filter((item) => isInventoryVisibleForUserRestaurant(item, user, [], isGlobalAdmin));
 
@@ -2423,6 +2424,16 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSourceExpanded = (mergedId, sourceId, sourceIndex) => {
+    const key = `${String(mergedId || "")}::${String(sourceId || sourceIndex || "")}`;
+    setExpandedSourceKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -2651,63 +2662,83 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
                         </div>
                         {mergedSources.length > 0 ? (
                           <div className="space-y-3">
-                            {mergedSources.map((sourceDoc, index) => (
-                              <div key={`${sourceDoc?.id || index}`} className="rounded-lg border border-slate-200 bg-white p-3">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div className="text-xs text-slate-700">
-                                    <span className="font-semibold">#{index + 1}</span>
-                                    <span className="ml-2">{formatDateUk(sourceDoc?.inventoryDate)}</span>
-                                    <span className="ml-2">{sourceDoc?.stockTakingPlace || sourceDoc?.stock_taking_place || "-"}</span>
-                                    <span className="ml-2">Виконавець: {getInventoryEndedByLabel(sourceDoc)}</span>
+                            {mergedSources.map((sourceDoc, index) => {
+                              const sourceKey = `${String(inventory?.id || "")}::${String(sourceDoc?.id || index)}`;
+                              const isSourceExpanded = expandedSourceKeys.has(sourceKey);
+                              const sourceTotalUnits = toNumber(sourceDoc?.totalItems)
+                                || (Array.isArray(sourceDoc?.items)
+                                  ? sourceDoc.items.reduce((sum, item) => sum + toNumber(item?.qty), 0)
+                                  : 0);
+
+                              return (
+                                <div key={`${sourceDoc?.id || index}`} className="rounded-lg border border-slate-200 bg-white p-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="text-xs text-slate-700">
+                                      <span className="font-semibold">#{index + 1}</span>
+                                      <span className="ml-2">{formatDateUk(sourceDoc?.inventoryDate)}</span>
+                                      <span className="ml-2">Місце: {sourceDoc?.stockTakingPlace || sourceDoc?.stock_taking_place || "-"}</span>
+                                      <span className="ml-2">Виконавець: {getInventoryEndedByLabel(sourceDoc)}</span>
+                                      <span className="ml-2">Одиниць: {sourceTotalUnits.toFixed(2)}</span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleSourceExpanded(inventory?.id, sourceDoc?.id, index)}
+                                        className="inline-flex items-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2 py-1 text-[11px] font-semibold text-violet-700 hover:bg-violet-100"
+                                      >
+                                        {isSourceExpanded ? "Сховати одиниці" : "Одиниці"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleExportSingleInventory(sourceDoc)}
+                                        className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-blue-500"
+                                      >
+                                        <Download size={12} /> Ексель
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleExportSingleInventory1C(sourceDoc)}
+                                        className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-500"
+                                      >
+                                        <Download size={12} /> 1С
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handlePrintSingleInventory(sourceDoc)}
+                                        className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                                      >
+                                        <Printer size={12} /> Друк
+                                      </button>
+                                    </div>
                                   </div>
-                                  <div className="flex flex-wrap gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleExportSingleInventory(sourceDoc)}
-                                      className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-blue-500"
-                                    >
-                                      <Download size={12} /> Ексель
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleExportSingleInventory1C(sourceDoc)}
-                                      className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-500"
-                                    >
-                                      <Download size={12} /> 1С
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handlePrintSingleInventory(sourceDoc)}
-                                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
-                                    >
-                                      <Printer size={12} /> Друк
-                                    </button>
-                                  </div>
+
+                                  {isSourceExpanded && (
+                                    <div className="mt-2 overflow-x-auto">
+                                      <table className="min-w-full text-xs">
+                                        <thead className="text-slate-600">
+                                          <tr>
+                                            <th className="px-2 py-1 text-left">Продукт</th>
+                                            <th className="px-2 py-1 text-left">Код 1С</th>
+                                            <th className="px-2 py-1 text-left">К-сть</th>
+                                            <th className="px-2 py-1 text-left">Сума</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {(Array.isArray(sourceDoc?.items) ? sourceDoc.items : []).map((item, itemIndex) => (
+                                            <tr key={`${sourceDoc?.id || index}_${itemIndex}`} className="border-t border-slate-100">
+                                              <td className="px-2 py-1">{item?.productName || "-"}</td>
+                                              <td className="px-2 py-1">{item?.code1C || "-"}</td>
+                                              <td className="px-2 py-1">{toNumber(item?.qty).toFixed(2)} {item?.unit || ""}</td>
+                                              <td className="px-2 py-1">{formatMoney(item?.amount)}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
                                 </div>
-                                <div className="mt-2 overflow-x-auto">
-                                  <table className="min-w-full text-xs">
-                                    <thead className="text-slate-600">
-                                      <tr>
-                                        <th className="px-2 py-1 text-left">Продукт</th>
-                                        <th className="px-2 py-1 text-left">Код 1С</th>
-                                        <th className="px-2 py-1 text-left">К-сть</th>
-                                        <th className="px-2 py-1 text-left">Сума</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {(Array.isArray(sourceDoc?.items) ? sourceDoc.items : []).map((item, itemIndex) => (
-                                        <tr key={`${sourceDoc?.id || index}_${itemIndex}`} className="border-t border-slate-100">
-                                          <td className="px-2 py-1">{item?.productName || "-"}</td>
-                                          <td className="px-2 py-1">{item?.code1C || "-"}</td>
-                                          <td className="px-2 py-1">{toNumber(item?.qty).toFixed(2)} {item?.unit || ""}</td>
-                                          <td className="px-2 py-1">{formatMoney(item?.amount)}</td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         ) : (
                           <div className="text-xs text-slate-500">Деталі по вхідних документах недоступні для цього зведення.</div>
