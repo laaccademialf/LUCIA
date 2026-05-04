@@ -115,6 +115,61 @@ const normalizeComparableToken = (value) => String(value || "").trim().toLowerCa
 
 const sameRestaurant = (productRestaurantId, restaurantId) => normalizeComparableToken(productRestaurantId) === normalizeComparableToken(restaurantId);
 
+const collectRestaurantTokens = (source = {}) => {
+  return new Set(
+    [
+      source?.restaurantId,
+      source?.restaurant_id,
+      source?.restaurant,
+      source?.restaurantName,
+      source?.restaurant_name,
+      source?.restaurantRegNumber,
+      source?.restaurant_reg_number,
+      source?.regNumber,
+      source?.reg_number,
+      source?.id,
+      source?.name,
+      source?.code,
+    ]
+      .map((value) => normalizeComparableToken(value))
+      .filter(Boolean)
+  );
+};
+
+const hasRestaurantTokenOverlap = (leftTokens, rightTokens) => {
+  if (!(leftTokens instanceof Set) || !(rightTokens instanceof Set)) return false;
+  if (!leftTokens.size || !rightTokens.size) return false;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) return true;
+  }
+  return false;
+};
+
+const buildUserRestaurantTokens = (user, restaurants = []) => {
+  const userTokens = collectRestaurantTokens(user || {});
+  if (!userTokens.size) return userTokens;
+
+  // Expand tokens from the matched restaurant record so we can compare by id/name/regNumber interchangeably.
+  const matchedRestaurant = (Array.isArray(restaurants) ? restaurants : []).find((item) =>
+    hasRestaurantTokenOverlap(userTokens, collectRestaurantTokens(item || {}))
+  );
+
+  if (matchedRestaurant) {
+    for (const token of collectRestaurantTokens(matchedRestaurant)) {
+      userTokens.add(token);
+    }
+  }
+
+  return userTokens;
+};
+
+const isInventoryVisibleForUserRestaurant = (inventory, user, restaurants = [], isGlobalAdmin = false) => {
+  if (isGlobalAdmin) return true;
+  const userRestaurantTokens = buildUserRestaurantTokens(user, restaurants);
+  const inventoryTokens = collectRestaurantTokens(inventory || {});
+  return hasRestaurantTokenOverlap(userRestaurantTokens, inventoryTokens);
+};
+
 const findRestaurantByAnyReference = (restaurants = [], references = []) => {
   if (!Array.isArray(restaurants) || restaurants.length === 0) return null;
 
@@ -1233,9 +1288,8 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   }, [restaurants, user, isGlobalAdmin]);
 
   const visibleInventories = useMemo(() => {
-    if (isGlobalAdmin) return inventories;
-    return inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
-  }, [inventories, user, isGlobalAdmin]);
+    return inventories.filter((item) => isInventoryVisibleForUserRestaurant(item, user, restaurants, isGlobalAdmin));
+  }, [inventories, user, restaurants, isGlobalAdmin]);
 
   const mergeCandidates = useMemo(() => {
     return visibleInventories.filter((item) => {
@@ -2259,9 +2313,7 @@ function InventoryListTab({ listProducts, restaurants, user, canManage, replaceI
 function InventoryJournalTab({ inventories, user, deleteInventory }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const visibleInventories = useMemo(() => {
-    const scoped = isGlobalAdmin
-      ? inventories
-      : inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
+    const scoped = inventories.filter((item) => isInventoryVisibleForUserRestaurant(item, user, [], isGlobalAdmin));
 
     // Journal should contain only final merged inventory documents.
     return scoped.filter((item) => getMergedFromIds(item).length > 0);
