@@ -678,10 +678,34 @@ export const useProductBooking = (enableRealtime = true) => {
         const dateRaw = String(inventory?.inventoryDate || "").trim();
         const datePart = dateRaw ? dateRaw.slice(0, 10) : "";
         const userId = toTrimmedString(inventory?.createdById || inventory?.updatedById) || "unknown";
-        const docId = sessionId || `${restaurantId}__${datePart}__${userId}`;
-        const existing = await getCollectionItemApi("productInventories", docId);
         const userName = firstNonEmptyString(inventory?.createdBy, inventory?.updatedBy, "Користувач");
         const nowIso = new Date().toISOString();
+
+        const isMergedInventory = toBooleanWithFallback(inventory?.isMerged, false)
+          && Array.isArray(inventory?.mergedFromIds)
+          && inventory.mergedFromIds.length > 0;
+
+        // Merged inventories must be stored as a separate final document,
+        // without per-user contribution merge/upsert behavior.
+        if (isMergedInventory) {
+          const mergedDocId = `merged__${restaurantId}__${datePart || "date"}__${Date.now()}`;
+          await createCollectionItemApi("productInventories", {
+            id: mergedDocId,
+            ...inventory,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+            createdBy: userName,
+            createdById: userId,
+            updatedBy: userName,
+            updatedById: userId,
+          });
+          id = mergedDocId;
+          await reloadAllApi();
+          return { success: true, id };
+        }
+
+        const docId = sessionId || `${restaurantId}__${datePart}__${userId}`;
+        const existing = await getCollectionItemApi("productInventories", docId);
 
         // Per-user contributions: each user's full item list is stored separately.
         // Merging sums qty/amount for same productId across all users, overwriting only this user's portion.

@@ -1219,6 +1219,14 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     return inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
   }, [inventories, user, isGlobalAdmin]);
 
+  const mergeCandidates = useMemo(() => {
+    return visibleInventories.filter((item) => {
+      const isFinalMerged = Array.isArray(item?.mergedFromIds) && item.mergedFromIds.length > 0;
+      const isSourceMerged = Boolean(item?.mergedIntoId);
+      return !isFinalMerged && !isSourceMerged;
+    });
+  }, [visibleInventories]);
+
   const currentWorkingInventory = useMemo(() => {
     if (editingInventoryId) {
       return visibleInventories.find((item) => String(item?.id || "") === String(editingInventoryId)) || null;
@@ -1438,6 +1446,14 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
 
   const [selectedInventoryIds, setSelectedInventoryIds] = useState(new Set());
 
+  useEffect(() => {
+    const allowedIds = new Set(mergeCandidates.map((item) => String(item.id)));
+    setSelectedInventoryIds((prev) => {
+      const next = new Set(Array.from(prev).filter((id) => allowedIds.has(String(id))));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [mergeCandidates]);
+
   const toggleInventorySelection = (id) => {
     setSelectedInventoryIds((prev) => {
       const next = new Set(prev);
@@ -1453,7 +1469,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       alert("Оберіть щонайменше 2 інвентаризації для об'єднання.");
       return;
     }
-    const selected = visibleInventories.filter((inv) => ids.includes(inv.id));
+    const selected = mergeCandidates.filter((inv) => ids.includes(inv.id));
     const restaurantIds = [...new Set(selected.map((inv) => String(inv.restaurantId || "")))].filter(Boolean);
     if (restaurantIds.length > 1) {
       alert("Можна об'єднати лише інвентаризації одного закладу.");
@@ -1497,10 +1513,10 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       alert("Не вдалося створити об'єднану інвентаризацію.");
       return;
     }
-    // Mark old inventories as merged
+    // Mark source inventories as already merged into final document
     for (const inv of selected) {
       await updateInventory(inv.id, {
-        isMerged: true,
+        isMergedSource: true,
         mergedIntoId: result.id,
         updatedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
         updatedById: user?.uid || "",
@@ -1889,7 +1905,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               </tr>
             </thead>
             <tbody>
-              {visibleInventories.map((inventory) => (
+              {mergeCandidates.map((inventory) => (
                 <tr key={inventory.id} className={`border-t border-slate-200${selectedInventoryIds.has(inventory.id) ? " bg-violet-50" : ""}`}>
                   <td className="px-3 py-2">
                     <input
@@ -1956,9 +1972,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                   </td>
                 </tr>
               ))}
-              {visibleInventories.length === 0 && (
+              {mergeCandidates.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-slate-500">Інвентаризацій поки немає.</td>
+                  <td colSpan={8} className="px-3 py-6 text-center text-slate-500">Немає окремих інвентаризацій для об'єднання.</td>
                 </tr>
               )}
             </tbody>
@@ -2251,8 +2267,12 @@ function InventoryListTab({ listProducts, restaurants, user, canManage, replaceI
 function InventoryJournalTab({ inventories, user, deleteInventory }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const visibleInventories = useMemo(() => {
-    if (isGlobalAdmin) return inventories;
-    return inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
+    const scoped = isGlobalAdmin
+      ? inventories
+      : inventories.filter((item) => String(item.restaurantId || "") === String(user?.restaurant || ""));
+
+    // Journal should contain only final merged inventory documents.
+    return scoped.filter((item) => Array.isArray(item?.mergedFromIds) && item.mergedFromIds.length > 0);
   }, [inventories, user, isGlobalAdmin]);
 
   const handleExportSingleInventory = async (inventory) => {
@@ -2464,7 +2484,7 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
             ))}
             {visibleInventories.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-slate-500">Інвентаризацій поки немає.</td>
+                <td colSpan={7} className="px-3 py-6 text-center text-slate-500">Зведених інвентаризацій поки немає.</td>
               </tr>
             )}
           </tbody>
