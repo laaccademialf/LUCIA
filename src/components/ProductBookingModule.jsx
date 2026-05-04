@@ -2007,6 +2007,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                 <th className="px-3 py-2 text-left"></th>
                 <th className="px-3 py-2 text-left">Дата</th>
                 <th className="px-3 py-2 text-left">Ресторан</th>
+                <th className="px-3 py-2 text-left">Місце зняття залишків</th>
                 <th className="px-3 py-2 text-left">Позицій</th>
                 <th className="px-3 py-2 text-left">Сума</th>
                 <th className="px-3 py-2 text-left">Хто завершив</th>
@@ -2032,6 +2033,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                     )}
                   </td>
                   <td className="px-3 py-2">{inventory.restaurantName || "-"}</td>
+                  <td className="px-3 py-2">{inventory.stockTakingPlace || inventory.stock_taking_place || "-"}</td>
                   <td className="px-3 py-2">{Array.isArray(inventory.items) ? inventory.items.length : 0}</td>
                   <td className="px-3 py-2 font-medium">{formatMoney(inventory.totalAmount)}</td>
                   <td className="px-3 py-2">{getInventoryEndedByLabel(inventory)}</td>
@@ -2061,7 +2063,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               ))}
               {mergeCandidates.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-slate-500">Немає окремих інвентаризацій для об'єднання.</td>
+                  <td colSpan={8} className="px-3 py-6 text-center text-slate-500">Немає окремих інвентаризацій для об'єднання.</td>
                 </tr>
               )}
             </tbody>
