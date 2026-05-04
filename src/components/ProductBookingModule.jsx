@@ -1166,13 +1166,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }));
   };
 
-  const calcBackspace = () => {
-    setCalcModal((prev) => {
-      const newDisplay = prev.display.slice(0, -1) || "0";
-      return { ...prev, display: newDisplay };
-    });
-  };
-
   const evaluateCalcExpression = (rawExpression) => {
     const expression = String(rawExpression || "")
       .replace(/,/g, ".")
@@ -2074,43 +2067,47 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       {/* Calculator Modal */}
       {calcModal.isOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-3"
           onClick={closeCalcModal}
         >
           <div
-            className="bg-white rounded-lg shadow-lg p-4 w-80 space-y-4"
+            className="w-full max-w-sm rounded-[28px] bg-[#0f1116] p-4 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-lg font-semibold text-slate-900">{calcModal.productName}</h3>
-            <div className="bg-slate-100 rounded p-3 text-right text-2xl font-mono font-bold text-slate-900 break-words">
-              {calcModal.expression}{calcModal.newNumber ? "" : calcModal.display}
+            <div className="mb-3 text-right">
+              <p className="truncate text-[11px] uppercase tracking-wide text-slate-400">{calcModal.productName}</p>
+              <div className="mt-2 min-h-[56px] break-words rounded-2xl bg-[#11151f] px-3 py-2 text-right text-4xl font-light text-white">
+                {calcModal.expression}{calcModal.newNumber ? "" : calcModal.display}
+              </div>
             </div>
-            <div className="grid grid-cols-4 gap-2">
-              <button onClick={() => calcInput(7)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">7</button>
-              <button onClick={() => calcInput(8)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">8</button>
-              <button onClick={() => calcInput(9)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">9</button>
-              <button onClick={() => calcOperation("/")} className="bg-orange-200 hover:bg-orange-300 p-2 rounded font-bold">÷</button>
-              
-              <button onClick={() => calcInput(4)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">4</button>
-              <button onClick={() => calcInput(5)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">5</button>
-              <button onClick={() => calcInput(6)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">6</button>
-              <button onClick={() => calcOperation("*")} className="bg-orange-200 hover:bg-orange-300 p-2 rounded font-bold">×</button>
-              
-              <button onClick={() => calcInput(1)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">1</button>
-              <button onClick={() => calcInput(2)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">2</button>
-              <button onClick={() => calcInput(3)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">3</button>
-              <button onClick={() => calcOperation("-")} className="bg-orange-200 hover:bg-orange-300 p-2 rounded font-bold">−</button>
-              
-              <button onClick={() => calcInput(0)} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold col-span-2">0</button>
-              <button onClick={calcDot} className="bg-slate-200 hover:bg-slate-300 p-2 rounded font-bold">.</button>
-              <button onClick={() => calcOperation("+")} className="bg-orange-200 hover:bg-orange-300 p-2 rounded font-bold">+</button>
-              
-              <button onClick={calcEquals} className="bg-blue-500 hover:bg-blue-600 text-white p-2 rounded font-bold col-span-2">=</button>
-              <button onClick={calcClear} className="bg-red-200 hover:bg-red-300 p-2 rounded font-bold col-span-2">C</button>
+            <div className="grid grid-cols-4 gap-2.5">
+              <button onClick={calcClear} className="h-16 rounded-full bg-[#5f6065] text-2xl font-medium text-white transition hover:bg-[#6a6b70]">C</button>
+              <div className="h-16" />
+              <div className="h-16" />
+              <button onClick={() => calcOperation("/")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">÷</button>
+
+              <button onClick={() => calcInput(7)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">7</button>
+              <button onClick={() => calcInput(8)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">8</button>
+              <button onClick={() => calcInput(9)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">9</button>
+              <button onClick={() => calcOperation("*")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">×</button>
+
+              <button onClick={() => calcInput(4)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">4</button>
+              <button onClick={() => calcInput(5)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">5</button>
+              <button onClick={() => calcInput(6)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">6</button>
+              <button onClick={() => calcOperation("-")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">−</button>
+
+              <button onClick={() => calcInput(1)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">1</button>
+              <button onClick={() => calcInput(2)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">2</button>
+              <button onClick={() => calcInput(3)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">3</button>
+              <button onClick={() => calcOperation("+")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">+</button>
+
+              <button onClick={() => calcInput(0)} className="col-span-2 h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">0</button>
+              <button onClick={calcDot} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">,</button>
+              <button onClick={calcEquals} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">=</button>
             </div>
-            <div className="flex gap-2">
-              <button onClick={closeCalcModal} className="flex-1 bg-slate-300 hover:bg-slate-400 p-2 rounded font-semibold">Скасувати</button>
-              <button onClick={calcSave} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white p-2 rounded font-semibold">OK</button>
+            <div className="mt-4 flex gap-2.5">
+              <button onClick={closeCalcModal} className="flex-1 rounded-xl border border-slate-600 bg-[#1f2532] px-3 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-[#2a3244]">Скасувати</button>
+              <button onClick={calcSave} className="flex-1 rounded-xl bg-emerald-600 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500">OK</button>
             </div>
           </div>
         </div>
