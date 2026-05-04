@@ -2088,7 +2088,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
             <div className="mb-3 text-right">
               <p className="truncate text-[11px] uppercase tracking-wide text-slate-400">{calcModal.productName}</p>
               <div className="mt-2 min-h-[56px] break-words rounded-2xl bg-[#11151f] px-3 py-2 text-right text-4xl font-light text-white">
-                {calcModal.expression}{calcModal.newNumber ? "" : calcModal.display}
+                {calcModal.newNumber
+                  ? (calcModal.expression || calcModal.display)
+                  : `${calcModal.expression}${calcModal.display}`}
               </div>
             </div>
             <div className="grid grid-cols-4 gap-2.5">
