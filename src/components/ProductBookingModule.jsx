@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Package, ShoppingCart, ClipboardCheck, Trash2, Download, Upload, FileDown, X, Printer, Calculator } from "lucide-react";
+import { Package, ShoppingCart, ClipboardCheck, Trash2, Download, Upload, FileDown, X, Printer, Calculator, BarChart2 } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
 import {
   endProductInventorySession,
@@ -48,6 +48,7 @@ const normalizeTabKind = (tabId = "") => {
     value.includes("типов") ||
     (value.includes("typ") && value.includes("cal"))
   ) return "typicalFields";
+  if (value.includes("report") || value.includes("звіт")) return "orderReport";
   if (value.includes("product") || value.includes("admin") && value.includes("prod")) return "products";
   if (value.includes("order") || value.includes("manage")) return "orders";
   return "booking";
@@ -5816,6 +5817,491 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
   );
 }
 
+function OrderPurchaseReportTab({ orders, suppliers, restaurants }) {
+  const [dateFrom, setDateFrom] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 3);
+    return d.toISOString().slice(0, 10);
+  });
+  const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [activeSection, setActiveSection] = useState("suppliers");
+
+  const filteredOrders = useMemo(() => {
+    return orders.filter((order) => {
+      const d = String(order.createdAt || "").slice(0, 10);
+      return (!dateFrom || d >= dateFrom) && (!dateTo || d <= dateTo);
+    });
+  }, [orders, dateFrom, dateTo]);
+
+  // ── KPI ─────────────────────────────────────────────────────────────────────
+  const kpi = useMemo(() => {
+    const total = filteredOrders.length;
+    const totalAmount = filteredOrders.reduce((s, o) => s + toNumber(o.totalAmount), 0);
+    const completed = filteredOrders.filter((o) => o.status === "completed").length;
+    const allItems = filteredOrders.flatMap((o) => Array.isArray(o.items) ? o.items : []);
+    const totalQty = allItems.reduce((s, i) => s + toNumber(i.qty), 0);
+    return { total, totalAmount, completed, totalQty, avgAmount: total ? totalAmount / total : 0 };
+  }, [filteredOrders]);
+
+  // ── Supplier Analytics ────────────────────────────────────────────────────
+  const supplierStats = useMemo(() => {
+    const map = new Map();
+    for (const order of filteredOrders) {
+      for (const item of Array.isArray(order.items) ? order.items : []) {
+        const supplierName = String(item.supplier || "Без постачальника").trim();
+        if (!map.has(supplierName)) {
+          map.set(supplierName, {
+            name: supplierName,
+            ordersCount: new Set(),
+            totalAmount: 0,
+            totalQty: 0,
+            completedOrders: new Set(),
+            cancelledOrders: new Set(),
+            products: new Set(),
+          });
+        }
+        const s = map.get(supplierName);
+        s.ordersCount.add(order.id);
+        s.totalAmount += toNumber(item.amount);
+        s.totalQty += toNumber(item.qty);
+        s.products.add(String(item.productName || item.productId || "").trim());
+        if (order.status === "completed") s.completedOrders.add(order.id);
+        if (order.status === "cancelled") s.cancelledOrders.add(order.id);
+      }
+    }
+    return Array.from(map.values())
+      .map((s) => ({
+        ...s,
+        ordersCount: s.ordersCount.size,
+        completedOrders: s.completedOrders.size,
+        cancelledOrders: s.cancelledOrders.size,
+        products: s.products.size,
+        fulfillmentRate: s.ordersCount.size > 0 ? Math.round((s.completedOrders.size / s.ordersCount.size) * 100) : 0,
+      }))
+      .sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [filteredOrders]);
+
+  // ── Price Comparison by Product ──────────────────────────────────────────
+  const priceComparison = useMemo(() => {
+    const map = new Map();
+    for (const order of filteredOrders) {
+      for (const item of Array.isArray(order.items) ? order.items : []) {
+        const productKey = String(item.productName || item.productId || "").trim();
+        const supplierName = String(item.supplier || "Без постачальника").trim();
+        const price = toNumber(item.unitPrice);
+        if (!productKey || price <= 0) continue;
+        if (!map.has(productKey)) {
+          map.set(productKey, { productName: productKey, unit: item.unit || "", suppliers: new Map() });
+        }
+        const p = map.get(productKey);
+        if (!p.suppliers.has(supplierName)) p.suppliers.set(supplierName, []);
+        p.suppliers.get(supplierName).push(price);
+      }
+    }
+    return Array.from(map.values())
+      .filter((p) => p.suppliers.size > 1)
+      .map((p) => {
+        const supplierPrices = Array.from(p.suppliers.entries()).map(([name, prices]) => ({
+          name,
+          avgPrice: prices.reduce((a, b) => a + b, 0) / prices.length,
+          minPrice: Math.min(...prices),
+          maxPrice: Math.max(...prices),
+          count: prices.length,
+        })).sort((a, b) => a.avgPrice - b.avgPrice);
+        const minAvg = supplierPrices[0]?.avgPrice || 0;
+        const maxAvg = supplierPrices[supplierPrices.length - 1]?.avgPrice || 0;
+        return { ...p, supplierPrices, spread: minAvg > 0 ? Math.round(((maxAvg - minAvg) / minAvg) * 100) : 0 };
+      })
+      .sort((a, b) => b.spread - a.spread)
+      .slice(0, 50);
+  }, [filteredOrders]);
+
+  // ── Restaurant Breakdown ─────────────────────────────────────────────────
+  const restaurantStats = useMemo(() => {
+    const map = new Map();
+    for (const order of filteredOrders) {
+      const rName = String(order.restaurantName || order.restaurantId || "Невідомий").trim();
+      if (!map.has(rName)) map.set(rName, { name: rName, orders: 0, totalAmount: 0, completed: 0 });
+      const r = map.get(rName);
+      r.orders += 1;
+      r.totalAmount += toNumber(order.totalAmount);
+      if (order.status === "completed") r.completed += 1;
+    }
+    return Array.from(map.values()).sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [filteredOrders]);
+
+  // ── Top Products by Amount ───────────────────────────────────────────────
+  const topProducts = useMemo(() => {
+    const map = new Map();
+    for (const order of filteredOrders) {
+      for (const item of Array.isArray(order.items) ? order.items : []) {
+        const key = String(item.productName || item.productId || "").trim();
+        if (!key) continue;
+        if (!map.has(key)) map.set(key, { productName: key, unit: item.unit || "", totalQty: 0, totalAmount: 0, suppliersSet: new Set() });
+        const p = map.get(key);
+        p.totalQty += toNumber(item.qty);
+        p.totalAmount += toNumber(item.amount);
+        p.suppliersSet.add(String(item.supplier || "").trim());
+      }
+    }
+    return Array.from(map.values())
+      .map((p) => ({ ...p, suppliers: p.suppliersSet.size }))
+      .sort((a, b) => b.totalAmount - a.totalAmount)
+      .slice(0, 30);
+  }, [filteredOrders]);
+
+  // ── Monthly Dynamics ─────────────────────────────────────────────────────
+  const monthlyDynamics = useMemo(() => {
+    const map = new Map();
+    for (const order of filteredOrders) {
+      const month = String(order.createdAt || "").slice(0, 7);
+      if (!month) continue;
+      if (!map.has(month)) map.set(month, { month, orders: 0, totalAmount: 0 });
+      const m = map.get(month);
+      m.orders += 1;
+      m.totalAmount += toNumber(order.totalAmount);
+    }
+    return Array.from(map.values()).sort((a, b) => a.month.localeCompare(b.month));
+  }, [filteredOrders]);
+
+  const maxMonthAmount = useMemo(() => Math.max(...monthlyDynamics.map((m) => m.totalAmount), 1), [monthlyDynamics]);
+
+  const sections = [
+    { id: "suppliers", label: "Сервіс-рівень постачальників" },
+    { id: "prices", label: "Порівняння цін" },
+    { id: "products", label: "Топ продуктів" },
+    { id: "restaurants", label: "По закладах" },
+    { id: "dynamics", label: "Динаміка закупівель" },
+  ];
+
+  return (
+    <div className="space-y-5">
+      {/* Filters */}
+      <div className={cardClass}>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-1.5">
+            <BarChart2 size={18} className="text-indigo-600" />
+            <h2 className="text-lg font-semibold">Звіт із закупівель</h2>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <label className="text-sm text-slate-700">Від:</label>
+            <input type="date" className="rounded border border-slate-300 px-2 py-1 text-sm" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <label className="text-sm text-slate-700">До:</label>
+            <input type="date" className="rounded border border-slate-300 px-2 py-1 text-sm" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
+        </div>
+      </div>
+
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        {[
+          { label: "Заявок", value: kpi.total, color: "bg-indigo-50 text-indigo-700" },
+          { label: "Виконано", value: kpi.completed, color: "bg-emerald-50 text-emerald-700" },
+          { label: "Сума закупівель", value: `${(kpi.totalAmount / 1000).toFixed(1)}к грн`, color: "bg-amber-50 text-amber-700" },
+          { label: "Ср. сума заявки", value: `${(kpi.avgAmount / 1000).toFixed(1)}к грн`, color: "bg-blue-50 text-blue-700" },
+          { label: "% виконання", value: kpi.total ? `${Math.round((kpi.completed / kpi.total) * 100)}%` : "—", color: "bg-rose-50 text-rose-700" },
+        ].map((card) => (
+          <div key={card.label} className={`rounded-xl border border-slate-200 p-4 text-center ${card.color}`}>
+            <div className="text-2xl font-bold">{card.value}</div>
+            <div className="mt-1 text-xs font-semibold opacity-80">{card.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Section Tabs */}
+      <div className={cardClass}>
+        <div className="mb-4 flex flex-wrap gap-1 border-b border-slate-200 pb-3">
+          {sections.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => setActiveSection(s.id)}
+              className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${activeSection === s.id ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── Supplier Service Level ─────────────────────────────────────────── */}
+        {activeSection === "suppliers" && (
+          <div>
+            <h3 className="mb-3 text-sm font-bold text-slate-800">Сервіс-рівень по постачальниках</h3>
+            {supplierStats.length === 0 ? (
+              <p className="text-sm text-slate-500">Немає даних за вибраний період.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b-2 border-slate-300 bg-slate-100 text-left">
+                      <th className="px-3 py-2 font-semibold text-slate-700">Постачальник</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Заявок</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Виконано</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Скасовано</th>
+                      <th className="px-3 py-2 text-center font-semibold text-slate-700">Рівень сервісу</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Сума, грн</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Кількість SKU</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {supplierStats.map((s, i) => (
+                      <tr key={s.name} className={`border-b border-slate-200 ${i % 2 === 0 ? "bg-white" : "bg-slate-50"} hover:bg-blue-50`}>
+                        <td className="px-3 py-2 font-semibold text-slate-900">{s.name}</td>
+                        <td className="px-3 py-2 text-right text-slate-700">{s.ordersCount}</td>
+                        <td className="px-3 py-2 text-right text-emerald-700">{s.completedOrders}</td>
+                        <td className="px-3 py-2 text-right text-rose-600">{s.cancelledOrders}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
+                              <div
+                                className={`h-2 rounded-full ${s.fulfillmentRate >= 80 ? "bg-emerald-500" : s.fulfillmentRate >= 50 ? "bg-amber-400" : "bg-rose-500"}`}
+                                style={{ width: `${s.fulfillmentRate}%` }}
+                              />
+                            </div>
+                            <span className={`w-9 text-right font-semibold ${s.fulfillmentRate >= 80 ? "text-emerald-700" : s.fulfillmentRate >= 50 ? "text-amber-700" : "text-rose-600"}`}>
+                              {s.fulfillmentRate}%
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-right font-semibold text-slate-900">{s.totalAmount.toLocaleString("uk-UA", { maximumFractionDigits: 0 })}</td>
+                        <td className="px-3 py-2 text-right text-slate-700">{s.products}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-slate-300 bg-slate-100 font-bold">
+                      <td className="px-3 py-2 text-slate-800">Разом</td>
+                      <td className="px-3 py-2 text-right">{supplierStats.reduce((s, r) => s + r.ordersCount, 0)}</td>
+                      <td className="px-3 py-2 text-right text-emerald-700">{supplierStats.reduce((s, r) => s + r.completedOrders, 0)}</td>
+                      <td className="px-3 py-2 text-right text-rose-600">{supplierStats.reduce((s, r) => s + r.cancelledOrders, 0)}</td>
+                      <td className="px-3 py-2" />
+                      <td className="px-3 py-2 text-right">{supplierStats.reduce((s, r) => s + r.totalAmount, 0).toLocaleString("uk-UA", { maximumFractionDigits: 0 })}</td>
+                      <td className="px-3 py-2" />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Price Comparison ───────────────────────────────────────────────── */}
+        {activeSection === "prices" && (
+          <div>
+            <h3 className="mb-1 text-sm font-bold text-slate-800">Порівняння цін по постачальниках</h3>
+            <p className="mb-3 text-xs text-slate-500">Показано тільки продукти, які закуповувались у 2+ постачальників. Відсортовано за розкидом ціни (найбільша різниця — першою).</p>
+            {priceComparison.length === 0 ? (
+              <p className="text-sm text-slate-500">Немає продуктів із закупівлями у кількох постачальників за вибраний період.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b-2 border-slate-300 bg-slate-100 text-left">
+                      <th className="px-3 py-2 font-semibold text-slate-700">Продукт</th>
+                      <th className="px-3 py-2 font-semibold text-slate-700">Од.</th>
+                      <th className="px-3 py-2 font-semibold text-slate-700">Постачальник</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Мін ціна</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Ср. ціна</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Макс ціна</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Замовлень</th>
+                      <th className="px-3 py-2 text-center font-semibold text-slate-700">Розкид</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {priceComparison.flatMap((p) =>
+                      p.supplierPrices.map((sp, spIdx) => (
+                        <tr key={`${p.productName}_${sp.name}`} className={`border-b border-slate-200 ${spIdx === 0 ? "bg-emerald-50" : spIdx === p.supplierPrices.length - 1 && p.supplierPrices.length > 1 ? "bg-rose-50" : "bg-white"} hover:bg-blue-50`}>
+                          {spIdx === 0 && (
+                            <td className="px-3 py-2 font-semibold text-slate-900" rowSpan={p.supplierPrices.length}>
+                              {p.productName}
+                            </td>
+                          )}
+                          {spIdx === 0 && (
+                            <td className="px-3 py-2 text-slate-500" rowSpan={p.supplierPrices.length}>{p.unit}</td>
+                          )}
+                          <td className="px-3 py-2 text-slate-700">{sp.name}</td>
+                          <td className="px-3 py-2 text-right text-slate-700">{sp.minPrice.toFixed(2)}</td>
+                          <td className="px-3 py-2 text-right font-semibold text-slate-900">{sp.avgPrice.toFixed(2)}</td>
+                          <td className="px-3 py-2 text-right text-slate-700">{sp.maxPrice.toFixed(2)}</td>
+                          <td className="px-3 py-2 text-right text-slate-500">{sp.count}</td>
+                          {spIdx === 0 && (
+                            <td className="px-3 py-2 text-center" rowSpan={p.supplierPrices.length}>
+                              <span className={`rounded-full px-2 py-0.5 font-bold ${p.spread > 20 ? "bg-rose-100 text-rose-700" : p.spread > 10 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
+                                {p.spread}%
+                              </span>
+                            </td>
+                          )}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Top Products ──────────────────────────────────────────────────── */}
+        {activeSection === "products" && (
+          <div>
+            <h3 className="mb-3 text-sm font-bold text-slate-800">Топ продуктів за сумою закупівель</h3>
+            {topProducts.length === 0 ? (
+              <p className="text-sm text-slate-500">Немає даних за вибраний період.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b-2 border-slate-300 bg-slate-100 text-left">
+                      <th className="px-3 py-2 w-8 font-semibold text-slate-700">#</th>
+                      <th className="px-3 py-2 font-semibold text-slate-700">Продукт</th>
+                      <th className="px-3 py-2 font-semibold text-slate-700">Од.</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Кількість</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Сума, грн</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Постачальників</th>
+                      <th className="px-3 py-2 font-semibold text-slate-700">Частка</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      const grandTotal = topProducts.reduce((s, p) => s + p.totalAmount, 0);
+                      return topProducts.map((p, i) => {
+                        const share = grandTotal > 0 ? (p.totalAmount / grandTotal) * 100 : 0;
+                        return (
+                          <tr key={p.productName} className={`border-b border-slate-200 ${i % 2 === 0 ? "bg-white" : "bg-slate-50"} hover:bg-blue-50`}>
+                            <td className="px-3 py-2 text-slate-500">{i + 1}</td>
+                            <td className="px-3 py-2 font-semibold text-slate-900">{p.productName}</td>
+                            <td className="px-3 py-2 text-slate-500">{p.unit}</td>
+                            <td className="px-3 py-2 text-right text-slate-700">{p.totalQty.toLocaleString("uk-UA", { maximumFractionDigits: 2 })}</td>
+                            <td className="px-3 py-2 text-right font-semibold text-slate-900">{p.totalAmount.toLocaleString("uk-UA", { maximumFractionDigits: 0 })}</td>
+                            <td className="px-3 py-2 text-right text-indigo-700">{p.suppliers}</td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-1.5">
+                                <div className="h-2 w-24 overflow-hidden rounded-full bg-slate-200">
+                                  <div className="h-2 rounded-full bg-indigo-500" style={{ width: `${Math.min(share, 100)}%` }} />
+                                </div>
+                                <span className="text-[10px] text-slate-500">{share.toFixed(1)}%</span>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      });
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Restaurant Breakdown ──────────────────────────────────────────── */}
+        {activeSection === "restaurants" && (
+          <div>
+            <h3 className="mb-3 text-sm font-bold text-slate-800">Закупівлі по закладах</h3>
+            {restaurantStats.length === 0 ? (
+              <p className="text-sm text-slate-500">Немає даних за вибраний період.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b-2 border-slate-300 bg-slate-100 text-left">
+                      <th className="px-3 py-2 font-semibold text-slate-700">Заклад</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Заявок</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Виконано</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Сума, грн</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Ср. заявка, грн</th>
+                      <th className="px-3 py-2 font-semibold text-slate-700">Частка бюджету</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      const grandTotal = restaurantStats.reduce((s, r) => s + r.totalAmount, 0);
+                      return restaurantStats.map((r, i) => {
+                        const share = grandTotal > 0 ? (r.totalAmount / grandTotal) * 100 : 0;
+                        return (
+                          <tr key={r.name} className={`border-b border-slate-200 ${i % 2 === 0 ? "bg-white" : "bg-slate-50"} hover:bg-blue-50`}>
+                            <td className="px-3 py-2 font-semibold text-slate-900">{r.name}</td>
+                            <td className="px-3 py-2 text-right text-slate-700">{r.orders}</td>
+                            <td className="px-3 py-2 text-right text-emerald-700">{r.completed}</td>
+                            <td className="px-3 py-2 text-right font-semibold text-slate-900">{r.totalAmount.toLocaleString("uk-UA", { maximumFractionDigits: 0 })}</td>
+                            <td className="px-3 py-2 text-right text-slate-700">{r.orders > 0 ? Math.round(r.totalAmount / r.orders).toLocaleString("uk-UA") : "—"}</td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-1.5">
+                                <div className="h-2 w-24 overflow-hidden rounded-full bg-slate-200">
+                                  <div className="h-2 rounded-full bg-indigo-500" style={{ width: `${Math.min(share, 100)}%` }} />
+                                </div>
+                                <span className="text-[10px] text-slate-500">{share.toFixed(1)}%</span>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      });
+                    })()}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-slate-300 bg-slate-100 font-bold">
+                      <td className="px-3 py-2 text-slate-800">Разом</td>
+                      <td className="px-3 py-2 text-right">{restaurantStats.reduce((s, r) => s + r.orders, 0)}</td>
+                      <td className="px-3 py-2 text-right text-emerald-700">{restaurantStats.reduce((s, r) => s + r.completed, 0)}</td>
+                      <td className="px-3 py-2 text-right">{restaurantStats.reduce((s, r) => s + r.totalAmount, 0).toLocaleString("uk-UA", { maximumFractionDigits: 0 })}</td>
+                      <td className="px-3 py-2" />
+                      <td className="px-3 py-2" />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Monthly Dynamics ──────────────────────────────────────────────── */}
+        {activeSection === "dynamics" && (
+          <div>
+            <h3 className="mb-3 text-sm font-bold text-slate-800">Динаміка закупівель по місяцях</h3>
+            {monthlyDynamics.length === 0 ? (
+              <p className="text-sm text-slate-500">Немає даних за вибраний період.</p>
+            ) : (
+              <div className="space-y-4">
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b-2 border-slate-300 bg-slate-100 text-left">
+                        <th className="px-3 py-2 font-semibold text-slate-700">Місяць</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-700">Заявок</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-700">Сума, грн</th>
+                        <th className="px-3 py-2 font-semibold text-slate-700">Графік</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthlyDynamics.map((m, i) => {
+                        const [year, month] = m.month.split("-");
+                        const monthNames = ["Січ", "Лют", "Бер", "Кві", "Тра", "Чер", "Лип", "Сер", "Вер", "Жов", "Лис", "Гру"];
+                        const label = `${monthNames[parseInt(month, 10) - 1]} ${year}`;
+                        const barW = Math.round((m.totalAmount / maxMonthAmount) * 100);
+                        return (
+                          <tr key={m.month} className={`border-b border-slate-200 ${i % 2 === 0 ? "bg-white" : "bg-slate-50"}`}>
+                            <td className="px-3 py-2 font-semibold text-slate-900">{label}</td>
+                            <td className="px-3 py-2 text-right text-slate-700">{m.orders}</td>
+                            <td className="px-3 py-2 text-right font-semibold text-slate-900">{m.totalAmount.toLocaleString("uk-UA", { maximumFractionDigits: 0 })}</td>
+                            <td className="px-3 py-2 w-48">
+                              <div className="h-4 w-full overflow-hidden rounded bg-slate-200">
+                                <div className="h-4 rounded bg-indigo-500" style={{ width: `${barW}%` }} />
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ProductBookingModule({ topTab, restaurants = [], user }) {
   const {
     products,
@@ -6074,6 +6560,16 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
         createSupplierDispatch={createSupplierDispatch}
         canManageOrders={canManageOrders}
         user={user}
+      />
+    );
+  }
+
+  if (tabKind === "orderReport") {
+    return (
+      <OrderPurchaseReportTab
+        orders={normalizedOrders}
+        suppliers={suppliers}
+        restaurants={effectiveRestaurants}
       />
     );
   }
