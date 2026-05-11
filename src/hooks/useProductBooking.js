@@ -29,6 +29,7 @@ import {
   updateInventoryListProduct,
   updateProductInventory,
   updateProductOrder,
+  deleteProductOrder,
   deleteProductInventory,
 } from "../firebase/firestore";
 import {
@@ -163,11 +164,33 @@ const normalizeSupplierRecord = (item) => {
 
 const normalizeTypicalFieldRecord = (item) => {
   if (!item || typeof item !== "object") return item;
+  const normalizedCode = firstNonEmptyString(item.code1C, item.code_1c, item.code1_c, item.code1c, item.code);
   return {
     ...item,
     type: firstNonEmptyString(item.type, item.fieldType, item.field_type),
     name: firstNonEmptyString(item.name, item.fieldName, item.field_name),
     categoryName: firstNonEmptyString(item.categoryName, item.category_name),
+    productGroup: firstNonEmptyString(item.productGroup, item.product_group),
+    supplier: firstNonEmptyString(item.supplier, item.vendor, item.vendor_name),
+    unit: firstNonEmptyString(item.unit, item.unitName, item.unit_name, item.measure),
+    restaurantId: firstNonEmptyString(
+      item.restaurantId,
+      item.restaurant_id,
+      item.restaurant,
+      item.restaurantCode,
+      item.restaurant_code,
+      item.restaurantRegNumber,
+      item.restaurant_reg_number
+    ),
+    restaurantName: firstNonEmptyString(item.restaurantName, item.restaurant_name, item.restaurantTitle, item.restaurant_title),
+    restaurantRegNumber: firstNonEmptyString(item.restaurantRegNumber, item.restaurant_reg_number, item.regNumber, item.reg_number),
+    restaurantLookupKey: firstNonEmptyString(item.restaurantLookupKey, item.restaurant_lookup_key),
+    whiteCardName: firstNonEmptyString(item.whiteCardName, item.white_card_name),
+    greenCardName: firstNonEmptyString(item.greenCardName, item.green_card_name),
+    code1C: normalizedCode,
+    code_1c: normalizedCode,
+    code1_c: normalizedCode,
+    unitPrice: toNumberWithFallback(item.unitPrice ?? item.unit_price ?? item.price, 0),
     isActive: toBooleanWithFallback(item.isActive ?? item.is_active ?? item.active, true),
   };
 };
@@ -298,6 +321,18 @@ export const useProductBooking = (enableRealtime = true) => {
     setInventories(normalizeCollectionRecords(inventoriesData, normalizeInventoryRecord));
   };
 
+  const updateProductsState = (updater) => {
+    setProducts((prev) => normalizeCollectionRecords(updater(Array.isArray(prev) ? prev : []), normalizeProductRecord));
+  };
+
+  const updateSuppliersState = (updater) => {
+    setSuppliers((prev) => normalizeCollectionRecords(updater(Array.isArray(prev) ? prev : []), normalizeSupplierRecord));
+  };
+
+  const updateTypicalFieldsState = (updater) => {
+    setTypicalFields((prev) => normalizeCollectionRecords(updater(Array.isArray(prev) ? prev : []), normalizeTypicalFieldRecord));
+  };
+
   useEffect(() => {
     let unsubscribeProducts;
     let unsubscribeInventoryListProducts;
@@ -405,12 +440,20 @@ export const useProductBooking = (enableRealtime = true) => {
     };
   }, [enableRealtime]);
 
-  const addProduct = async (product) => {
+  const addProduct = async (product, options = {}) => {
     try {
+      const skipReload = Boolean(options?.skipReload);
       const id = isCollectionsApiEnabled()
         ? await createCollectionItemApi("bookingProducts", product)
         : await addBookingProduct(product);
-      if (isCollectionsApiEnabled()) await reloadAllApi();
+      if (isCollectionsApiEnabled()) {
+        if (skipReload) {
+          const nextId = String(id || product?.id || "").trim();
+          updateProductsState((prev) => [...prev, { ...product, id: nextId || product?.id || nextId }]);
+        } else {
+          await reloadAllApi();
+        }
+      }
       return { success: true, id };
     } catch (err) {
       setError(err);
@@ -418,11 +461,16 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
-  const updateProduct = async (id, data) => {
+  const updateProduct = async (id, data, options = {}) => {
     try {
+      const skipReload = Boolean(options?.skipReload);
       if (isCollectionsApiEnabled()) {
         await updateCollectionItemApi("bookingProducts", id, data);
-        await reloadAllApi();
+        if (skipReload) {
+          updateProductsState((prev) => prev.map((item) => (String(item.id) === String(id) ? { ...item, ...data, id: String(id) } : item)));
+        } else {
+          await reloadAllApi();
+        }
       } else {
         await updateBookingProduct(id, data);
       }
@@ -433,11 +481,16 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
-  const deleteProduct = async (id) => {
+  const deleteProduct = async (id, options = {}) => {
     try {
+      const skipReload = Boolean(options?.skipReload);
       if (isCollectionsApiEnabled()) {
         await deleteCollectionItemApi("bookingProducts", id);
-        await reloadAllApi();
+        if (skipReload) {
+          updateProductsState((prev) => prev.filter((item) => String(item.id) !== String(id)));
+        } else {
+          await reloadAllApi();
+        }
       } else {
         await deleteBookingProduct(id);
       }
@@ -580,12 +633,35 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
-  const createSupplier = async (supplier) => {
+  const deleteOrder = async (id) => {
     try {
+      if (isCollectionsApiEnabled()) {
+        await deleteCollectionItemApi("productOrders", id);
+        await reloadAllApi();
+      } else {
+        await deleteProductOrder(id);
+      }
+      return { success: true };
+    } catch (err) {
+      setError(err);
+      return { success: false, error: err };
+    }
+  };
+
+  const createSupplier = async (supplier, options = {}) => {
+    try {
+      const skipReload = Boolean(options?.skipReload);
       const id = isCollectionsApiEnabled()
         ? await createCollectionItemApi("bookingSuppliers", supplier)
         : await addBookingSupplier(supplier);
-      if (isCollectionsApiEnabled()) await reloadAllApi();
+      if (isCollectionsApiEnabled()) {
+        if (skipReload) {
+          const nextId = String(id || supplier?.id || "").trim();
+          updateSuppliersState((prev) => [...prev, { ...supplier, id: nextId || supplier?.id || nextId }]);
+        } else {
+          await reloadAllApi();
+        }
+      }
       return { success: true, id };
     } catch (err) {
       setError(err);
@@ -593,11 +669,16 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
-  const updateSupplier = async (id, data) => {
+  const updateSupplier = async (id, data, options = {}) => {
     try {
+      const skipReload = Boolean(options?.skipReload);
       if (isCollectionsApiEnabled()) {
         await updateCollectionItemApi("bookingSuppliers", id, data);
-        await reloadAllApi();
+        if (skipReload) {
+          updateSuppliersState((prev) => prev.map((item) => (String(item.id) === String(id) ? { ...item, ...data, id: String(id) } : item)));
+        } else {
+          await reloadAllApi();
+        }
       } else {
         await updateBookingSupplier(id, data);
       }
@@ -608,11 +689,16 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
-  const removeSupplier = async (id) => {
+  const removeSupplier = async (id, options = {}) => {
     try {
+      const skipReload = Boolean(options?.skipReload);
       if (isCollectionsApiEnabled()) {
         await deleteCollectionItemApi("bookingSuppliers", id);
-        await reloadAllApi();
+        if (skipReload) {
+          updateSuppliersState((prev) => prev.filter((item) => String(item.id) !== String(id)));
+        } else {
+          await reloadAllApi();
+        }
       } else {
         await deleteBookingSupplier(id);
       }
@@ -623,12 +709,20 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
-  const createTypicalField = async (field) => {
+  const createTypicalField = async (field, options = {}) => {
     try {
+      const skipReload = Boolean(options?.skipReload);
       const id = isCollectionsApiEnabled()
         ? await createCollectionItemApi("bookingTypicalFields", field)
         : await addBookingTypicalField(field);
-      if (isCollectionsApiEnabled()) await reloadAllApi();
+      if (isCollectionsApiEnabled()) {
+        if (skipReload) {
+          const nextId = String(id || field?.id || "").trim();
+          updateTypicalFieldsState((prev) => [...prev, { ...field, id: nextId || field?.id || nextId }]);
+        } else {
+          await reloadAllApi();
+        }
+      }
       return { success: true, id };
     } catch (err) {
       setError(err);
@@ -636,11 +730,16 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
-  const updateTypicalField = async (id, data) => {
+  const updateTypicalField = async (id, data, options = {}) => {
     try {
+      const skipReload = Boolean(options?.skipReload);
       if (isCollectionsApiEnabled()) {
         await updateCollectionItemApi("bookingTypicalFields", id, data);
-        await reloadAllApi();
+        if (skipReload) {
+          updateTypicalFieldsState((prev) => prev.map((item) => (String(item.id) === String(id) ? { ...item, ...data, id: String(id) } : item)));
+        } else {
+          await reloadAllApi();
+        }
       } else {
         await updateBookingTypicalField(id, data);
       }
@@ -651,11 +750,16 @@ export const useProductBooking = (enableRealtime = true) => {
     }
   };
 
-  const removeTypicalField = async (id) => {
+  const removeTypicalField = async (id, options = {}) => {
     try {
+      const skipReload = Boolean(options?.skipReload);
       if (isCollectionsApiEnabled()) {
         await deleteCollectionItemApi("bookingTypicalFields", id);
-        await reloadAllApi();
+        if (skipReload) {
+          updateTypicalFieldsState((prev) => prev.filter((item) => String(item.id) !== String(id)));
+        } else {
+          await reloadAllApi();
+        }
       } else {
         await deleteBookingTypicalField(id);
       }
@@ -828,6 +932,7 @@ export const useProductBooking = (enableRealtime = true) => {
     deleteProduct,
     createOrder,
     updateOrder,
+    deleteOrder,
     createSupplier,
     updateSupplier,
     removeSupplier,

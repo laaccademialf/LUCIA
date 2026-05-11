@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Package, ShoppingCart, ClipboardCheck, Plus, Trash2, Download, Upload, FileDown, X, Printer, Calculator } from "lucide-react";
+import { Package, ShoppingCart, ClipboardCheck, Trash2, Download, Upload, FileDown, X, Printer, Calculator } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
 import {
   endProductInventorySession,
@@ -7,12 +7,14 @@ import {
   startProductInventorySession,
   subscribeToActiveProductInventorySession,
 } from "../firebase/firestore";
+import { getUsers } from "../firebase/users";
 
 const loadProductInventoryExcel = () => import("../utils/productInventoryExcel");
 const loadInventoryListExcel = () => import("../utils/inventoryListExcel");
 
 const normalizeTabKind = (tabId = "") => {
   const value = String(tabId).toLowerCase();
+  if (value.includes("orderapl") || value.includes("apl")) return "orderApl";
   if (
     value.includes("inventarizationspisok") ||
     value.includes("inventorylist") ||
@@ -79,6 +81,16 @@ const formatDateUk = (value) => {
   const date = new Date(raw);
   if (!Number.isNaN(date.getTime())) {
     return date.toLocaleDateString("uk-UA");
+  }
+  return raw;
+};
+
+const formatDateTimeSafe = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "-";
+  const date = new Date(raw);
+  if (!Number.isNaN(date.getTime())) {
+    return date.toLocaleString("uk-UA");
   }
   return raw;
 };
@@ -150,6 +162,10 @@ const collectRestaurantTokens = (source = {}) => {
       .map((value) => normalizeComparableToken(value))
       .filter(Boolean)
   );
+};
+
+const buildRestaurantLookupKey = (source = {}) => {
+  return Array.from(collectRestaurantTokens(source || {})).sort((left, right) => left.localeCompare(right, "uk")).join("::");
 };
 
 const hasRestaurantTokenOverlap = (leftTokens, rightTokens) => {
@@ -294,10 +310,6 @@ const buildDerivedRestaurants = (records = []) => {
   );
 };
 
-const getRestaurantNameById = (restaurants = [], restaurantId) => {
-  return restaurants.find((item) => String(item.id) === String(restaurantId || ""))?.name || "";
-};
-
 const hasProcurementAccess = (user) => {
   const roleValue = String(user?.role || "").toLowerCase();
   const workRoleValue = String(user?.workRole || "").toLowerCase();
@@ -315,9 +327,37 @@ const hasProcurementAccess = (user) => {
   return terms.some((term) => roleValue.includes(term) || workRoleValue.includes(term));
 };
 
+const DELIVERY_WEEK_DAYS = [
+  { id: "mon", label: "Пн" },
+  { id: "tue", label: "Вт" },
+  { id: "wed", label: "Ср" },
+  { id: "thu", label: "Чт" },
+  { id: "fri", label: "Пт" },
+  { id: "sat", label: "Сб" },
+  { id: "sun", label: "Нд" },
+];
+
 const isGlobalAdminUser = (user) => String(user?.role || "").toLowerCase() === "admin";
 
-function ProductAdminTab({ products, suppliers, categories, subcategoriesByCategory, units, inventories, restaurants, user, canManageProducts, addProduct, updateProduct, deleteProduct }) {
+function ProductAdminTab({
+  products,
+  suppliers,
+  suppliersDirectory = [],
+  categories,
+  subcategoriesByCategory,
+  inventories,
+  restaurants,
+  user,
+  canManageProducts,
+  addProduct,
+  updateProduct,
+  deleteProduct,
+  createSupplier,
+  updateSupplier,
+  typicalFields,
+  createTypicalField,
+  updateTypicalField,
+}) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const defaultRestaurantId = isGlobalAdmin ? "" : String(user?.restaurant || "");
   const createEmptyDraft = (restaurantId = "") => ({
@@ -331,8 +371,6 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
     unitPrice: "",
   });
   const [createDraft, setCreateDraft] = useState(() => createEmptyDraft(defaultRestaurantId));
-  const [editingProductId, setEditingProductId] = useState("");
-  const [editDraft, setEditDraft] = useState(() => createEmptyDraft(defaultRestaurantId));
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [supplierFilter, setSupplierFilter] = useState("");
@@ -340,100 +378,23 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
   const [statusFilter, setStatusFilter] = useState("all");
   const [restaurantFilter, setRestaurantFilter] = useState(defaultRestaurantId);
   const [importMode, setImportMode] = useState("selected");
-
-  const availableCreateSubcategories = useMemo(() => {
-    if (!createDraft.category) return [];
-    return subcategoriesByCategory?.[createDraft.category] || [];
-  }, [createDraft.category, subcategoriesByCategory]);
-
-  const availableEditSubcategories = useMemo(() => {
-    if (!editDraft.category) return [];
-    return subcategoriesByCategory?.[editDraft.category] || [];
-  }, [editDraft.category, subcategoriesByCategory]);
-
-  const editingProduct = useMemo(
-    () => products.find((item) => String(item.id || "") === String(editingProductId || "")) || null,
-    [products, editingProductId]
-  );
+  const [selectedProductIds, setSelectedProductIds] = useState([]);
+  const [bulkSupplier, setBulkSupplier] = useState("");
+  const [bulkCategory, setBulkCategory] = useState("");
+  const [expandedProductCategories, setExpandedProductCategories] = useState({});
+  const [expandedProductSubcategories, setExpandedProductSubcategories] = useState({});
 
   useEffect(() => {
     if (isGlobalAdmin) return;
     const scopedRestaurant = String(user?.restaurant || "");
     setRestaurantFilter(scopedRestaurant);
     setCreateDraft((prev) => ({ ...prev, restaurantId: scopedRestaurant }));
-    setEditDraft((prev) => ({ ...prev, restaurantId: scopedRestaurant }));
   }, [user, isGlobalAdmin]);
-
-  useEffect(() => {
-    if (!editingProductId || editingProduct) return;
-    setEditingProductId("");
-    setEditDraft(createEmptyDraft(defaultRestaurantId));
-  }, [defaultRestaurantId, editingProduct, editingProductId]);
 
   const availableRestaurants = useMemo(() => {
     if (isGlobalAdmin) return restaurants;
     return restaurants.filter((item) => String(item.id) === String(user?.restaurant || ""));
   }, [restaurants, user, isGlobalAdmin]);
-
-  const resetCreateDraft = () => {
-    setCreateDraft(createEmptyDraft(defaultRestaurantId));
-  };
-
-  const resetEditDraft = () => {
-    setEditingProductId("");
-    setEditDraft(createEmptyDraft(defaultRestaurantId));
-  };
-
-  const buildProductPayload = (draftValue, activeValue = true) => {
-    const selectedRestaurant = restaurants.find((item) => String(item.id) === String(draftValue.restaurantId));
-    return {
-      restaurantId: String(draftValue.restaurantId),
-      restaurantName: selectedRestaurant?.name || "Невідомий ресторан",
-      restaurantRegNumber: String(selectedRestaurant?.regNumber || ""),
-      name: String(draftValue.name || "").trim(),
-      code1C: String(draftValue.code1C || "").trim(),
-      category: String(draftValue.category || "").trim(),
-      subcategory: String(draftValue.subcategory || "").trim(),
-      unit: String(draftValue.unit || "").trim(),
-      supplier: String(draftValue.supplier || "").trim(),
-      unitPrice: toNumber(draftValue.unitPrice),
-      isActive: activeValue,
-    };
-  };
-
-  const validateDraft = (draftValue) => {
-    if (!String(draftValue.restaurantId || "").trim()) {
-      alert("Оберіть заклад для продукту.");
-      return false;
-    }
-    if (!String(draftValue.name || "").trim() || !String(draftValue.category || "").trim() || !String(draftValue.unit || "").trim() || !String(draftValue.supplier || "").trim()) {
-      alert("Заповніть обов'язкові поля: Назва, Категорія, Одиниця, Постачальник.");
-      return false;
-    }
-    return true;
-  };
-
-  const handleDraftCategoryChange = (setDraftState, nextCategory) => {
-    setDraftState((prev) => ({
-      ...prev,
-      category: nextCategory,
-      subcategory: "",
-    }));
-  };
-
-  const handleSelectProductForEdit = (item) => {
-    setEditingProductId(String(item?.id || ""));
-    setEditDraft({
-      restaurantId: String(item?.restaurantId || defaultRestaurantId || ""),
-      name: String(item?.name || ""),
-      code1C: String(item?.code1C || ""),
-      category: String(item?.category || ""),
-      subcategory: String(item?.subcategory || ""),
-      unit: String(item?.unit || ""),
-      supplier: String(item?.supplier || ""),
-      unitPrice: String(item?.unitPrice ?? ""),
-    });
-  };
 
   const filteredProducts = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -460,59 +421,305 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
     });
   }, [products, searchTerm, categoryFilter, subcategoryFilter, supplierFilter, statusFilter, restaurantFilter]);
 
-  const handleAdd = async () => {
-    if (!validateDraft(createDraft)) return;
+  useEffect(() => {
+    const allowed = new Set(products.map((item) => String(item.id || "")).filter(Boolean));
+    setSelectedProductIds((prev) => prev.filter((id) => allowed.has(String(id))));
+  }, [products]);
 
-    const result = await addProduct(buildProductPayload(createDraft, true));
-    if (!result.success) {
-      alert(getErrorMessage(result.error, "Не вдалося додати продукт у базу."));
+  const filteredProductIds = useMemo(
+    () => filteredProducts.map((item) => String(item.id || "")).filter(Boolean),
+    [filteredProducts]
+  );
+
+  const areAllFilteredSelected = useMemo(() => {
+    if (filteredProductIds.length === 0) return false;
+    const selectedSet = new Set(selectedProductIds.map((id) => String(id)));
+    return filteredProductIds.every((id) => selectedSet.has(String(id)));
+  }, [filteredProductIds, selectedProductIds]);
+
+  const toggleSelected = (productId) => {
+    const normalizedId = String(productId || "");
+    if (!normalizedId) return;
+    setSelectedProductIds((prev) => {
+      const next = new Set(prev.map((id) => String(id)));
+      if (next.has(normalizedId)) next.delete(normalizedId);
+      else next.add(normalizedId);
+      return Array.from(next);
+    });
+  };
+
+  const toggleSelectedMany = (productIds = []) => {
+    const normalizedIds = productIds.map((id) => String(id || "")).filter(Boolean);
+    if (normalizedIds.length === 0) return;
+
+    setSelectedProductIds((prev) => {
+      const next = new Set(prev.map((id) => String(id)));
+      const allSelected = normalizedIds.every((id) => next.has(id));
+      if (allSelected) {
+        normalizedIds.forEach((id) => next.delete(id));
+      } else {
+        normalizedIds.forEach((id) => next.add(id));
+      }
+      return Array.from(next);
+    });
+  };
+
+  const toggleSelectAllFiltered = () => {
+    if (areAllFilteredSelected) {
+      const filteredSet = new Set(filteredProductIds.map((id) => String(id)));
+      setSelectedProductIds((prev) => prev.filter((id) => !filteredSet.has(String(id))));
       return;
     }
 
-    resetCreateDraft();
+    setSelectedProductIds((prev) => {
+      const next = new Set(prev.map((id) => String(id)));
+      filteredProductIds.forEach((id) => next.add(String(id)));
+      return Array.from(next);
+    });
   };
 
-  const handleSaveEdit = async () => {
-    if (!editingProductId || !editingProduct) {
-      alert("Спочатку оберіть продукт для редагування.");
+  const selectedProducts = useMemo(() => {
+    const selectedSet = new Set(selectedProductIds.map((id) => String(id)));
+    return products.filter((item) => selectedSet.has(String(item.id || "")));
+  }, [products, selectedProductIds]);
+
+  const groupedProducts = useMemo(() => {
+    const categoryMap = new Map();
+
+    filteredProducts.forEach((item) => {
+      const categoryName = String(item.category || "Без категорії").trim() || "Без категорії";
+      const subcategoryName = String(item.subcategory || "Без підкатегорії").trim() || "Без підкатегорії";
+
+      if (!categoryMap.has(categoryName)) {
+        categoryMap.set(categoryName, new Map());
+      }
+
+      const subcategoryMap = categoryMap.get(categoryName);
+      if (!subcategoryMap.has(subcategoryName)) {
+        subcategoryMap.set(subcategoryName, []);
+      }
+
+      subcategoryMap.get(subcategoryName).push(item);
+    });
+
+    const toGroupedProductRows = (items) => {
+      const grouped = new Map();
+
+      items.forEach((item) => {
+        const key = String(item.code1C || "").trim().toLowerCase() || String(item.name || "").trim().toLowerCase();
+        const safeKey = key || `item_${String(item.id || "")}`;
+        if (!grouped.has(safeKey)) {
+          grouped.set(safeKey, []);
+        }
+        grouped.get(safeKey).push(item);
+      });
+
+      return Array.from(grouped.values()).map((groupItems) => {
+        const sample = groupItems[0] || {};
+        const uniqueSuppliers = Array.from(new Set(groupItems.map((entry) => String(entry.supplier || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
+        const uniqueRestaurants = Array.from(new Set(groupItems.map((entry) => String(entry.restaurantName || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
+        const uniqueUnits = Array.from(new Set(groupItems.map((entry) => String(entry.unit || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
+
+        const prices = Array.from(
+          new Set(
+            groupItems
+              .map((entry) => toNumber(entry.unitPrice))
+              .filter((price) => Number.isFinite(price) && price >= 0)
+              .map((price) => Number(price.toFixed(2)))
+          )
+        ).sort((left, right) => left - right);
+
+        const aggregatedSuppliers = uniqueSuppliers.length > 0 ? uniqueSuppliers.join(", ") : "-";
+        const aggregatedRestaurants = uniqueRestaurants.length > 0 ? uniqueRestaurants.join(", ") : "-";
+        const aggregatedUnits = uniqueUnits.length > 0 ? uniqueUnits.join(", ") : "-";
+
+        let aggregatedPrice = "-";
+        if (prices.length === 1) {
+          aggregatedPrice = formatMoney(prices[0]);
+        } else if (prices.length > 1) {
+          aggregatedPrice = `${formatMoney(prices[0])} - ${formatMoney(prices[prices.length - 1])}`;
+        }
+
+        return {
+          key: String(sample.id || ""),
+          name: String(sample.name || "").trim() || "Без назви",
+          code1C: String(sample.code1C || "").trim(),
+          supplierText: aggregatedSuppliers,
+          restaurantText: aggregatedRestaurants,
+          unitText: aggregatedUnits,
+          priceText: aggregatedPrice,
+          ids: groupItems.map((entry) => String(entry.id || "")).filter(Boolean),
+          isActive: groupItems.some((entry) => entry.isActive !== false),
+          totalSuppliers: uniqueSuppliers.length,
+        };
+      });
+    };
+
+    return Array.from(categoryMap.entries())
+      .sort(([left], [right]) => left.localeCompare(right, "uk"))
+      .map(([categoryName, subcategoryMap]) => ({
+        categoryName,
+        subcategories: Array.from(subcategoryMap.entries())
+          .sort(([left], [right]) => left.localeCompare(right, "uk"))
+          .map(([subcategoryName, items]) => ({
+            subcategoryName,
+            items: [...items].sort((left, right) => String(left.name || "").localeCompare(String(right.name || ""), "uk")),
+            groupedItems: toGroupedProductRows(items).sort((left, right) => String(left.name || "").localeCompare(String(right.name || ""), "uk")),
+          })),
+      }));
+  }, [filteredProducts]);
+
+  const isProductCategoryExpanded = (categoryName) => Boolean(Object.prototype.hasOwnProperty.call(expandedProductCategories, categoryName)
+    ? expandedProductCategories[categoryName]
+    : false);
+
+  const isProductSubcategoryExpanded = (categoryName, subcategoryName) => {
+    const key = `${categoryName}::${subcategoryName}`;
+    return Boolean(Object.prototype.hasOwnProperty.call(expandedProductSubcategories, key)
+      ? expandedProductSubcategories[key]
+      : false);
+  };
+
+  const toggleProductCategory = (categoryName) => {
+    setExpandedProductCategories((prev) => ({
+      ...prev,
+      [categoryName]: !(Object.prototype.hasOwnProperty.call(prev, categoryName) ? prev[categoryName] : true),
+    }));
+  };
+
+  const toggleProductSubcategory = (categoryName, subcategoryName) => {
+    const key = `${categoryName}::${subcategoryName}`;
+    setExpandedProductSubcategories((prev) => ({
+      ...prev,
+      [key]: !(Object.prototype.hasOwnProperty.call(prev, key) ? prev[key] : true),
+    }));
+  };
+
+  const applyBulkStatus = async (isActive) => {
+    if (selectedProducts.length === 0) {
+      alert("Оберіть продукти для масової операції.");
       return;
     }
-    if (!validateDraft(editDraft)) return;
 
-    const result = await updateProduct(
-      editingProductId,
-      buildProductPayload(editDraft, editingProduct.isActive !== false)
-    );
-    if (!result.success) {
-      alert(getErrorMessage(result.error, "Не вдалося зберегти зміни продукту."));
+    let success = 0;
+    let failed = 0;
+    for (const item of selectedProducts) {
+      const { id, ...payload } = item;
+      const result = await updateProduct(id, { ...payload, isActive });
+      if (result?.success) success += 1;
+      else failed += 1;
+    }
+
+    alert(`Оновлено статус. Успішно: ${success}. Помилок: ${failed}.`);
+  };
+
+  const applyBulkSupplier = async () => {
+    if (!bulkSupplier) {
+      alert("Оберіть постачальника для масового оновлення.");
+      return;
+    }
+    if (selectedProducts.length === 0) {
+      alert("Оберіть продукти для масової операції.");
       return;
     }
 
-    alert("Зміни продукту збережено.");
-  };
-
-  const toggleActive = async (item) => {
-    const { id, ...payload } = item;
-    const result = await updateProduct(id, { ...payload, isActive: !item.isActive });
-    if (!result.success) {
-      alert(getErrorMessage(result.error, "Не вдалося оновити статус продукту."));
+    let success = 0;
+    let failed = 0;
+    for (const item of selectedProducts) {
+      const { id, ...payload } = item;
+      const result = await updateProduct(id, { ...payload, supplier: bulkSupplier });
+      if (result?.success) success += 1;
+      else failed += 1;
     }
+
+    alert(`Масово оновлено постачальника. Успішно: ${success}. Помилок: ${failed}.`);
   };
 
-  const handleDeleteProduct = async (item) => {
-    const confirmed = window.confirm(
-      `Видалити продукт "${item?.name || "без назви"}"?\nЦю дію неможливо скасувати.`
-    );
+  const applyBulkCategory = async () => {
+    if (!bulkCategory) {
+      alert("Оберіть категорію для масового оновлення.");
+      return;
+    }
+    if (selectedProducts.length === 0) {
+      alert("Оберіть продукти для масової операції.");
+      return;
+    }
+
+    let success = 0;
+    let failed = 0;
+
+    const runInBatches = async (items, batchSize, worker) => {
+      const source = Array.isArray(items) ? items : [];
+      const size = Math.max(1, Number(batchSize) || 1);
+      for (let i = 0; i < source.length; i += size) {
+        const batch = source.slice(i, i + size);
+        const results = await Promise.allSettled(batch.map((entry) => worker(entry)));
+        results.forEach((result) => {
+          const value = result.status === "fulfilled" ? result.value : null;
+          if (value?.success) success += 1;
+          else failed += 1;
+        });
+      }
+    };
+
+    await runInBatches(selectedProducts, 8, async (item) => {
+      const { id, ...payload } = item;
+      return updateProduct(id, {
+        ...payload,
+        category: bulkCategory,
+        subcategory: "",
+      }, { skipReload: true });
+    });
+
+    alert(`Масово оновлено категорію. Успішно: ${success}. Помилок: ${failed}.`);
+  };
+
+  const applyBulkDelete = async () => {
+    if (selectedProducts.length === 0) {
+      alert("Оберіть продукти для масового видалення.");
+      return;
+    }
+
+    const confirmed = window.confirm(`Видалити ${selectedProducts.length} вибраних продуктів? Дію неможливо скасувати.`);
     if (!confirmed) return;
 
-    const result = await deleteProduct(item.id);
-    if (!result.success) {
-      alert(getErrorMessage(result.error, "Не вдалося видалити продукт."));
-    }
+    let success = 0;
+    let failed = 0;
 
-    if (String(editingProductId || "") === String(item?.id || "")) {
-      resetEditDraft();
-    }
+    const runInBatches = async (items, batchSize, worker) => {
+      const source = Array.isArray(items) ? items : [];
+      const size = Math.max(1, Number(batchSize) || 1);
+      for (let i = 0; i < source.length; i += size) {
+        const batch = source.slice(i, i + size);
+        const results = await Promise.allSettled(batch.map((entry) => worker(entry)));
+        results.forEach((result) => {
+          const value = result.status === "fulfilled" ? result.value : null;
+          if (value?.success) success += 1;
+          else failed += 1;
+        });
+      }
+    };
+
+    await runInBatches(selectedProducts, 10, async (item) => deleteProduct(item.id, { skipReload: true }));
+
+    setSelectedProductIds([]);
+    alert(`Масове видалення завершено. Видалено: ${success}. Помилок: ${failed}.`);
+  };
+
+  const aplAssignments = useMemo(
+    () => (typicalFields || []).filter((item) => String(item?.type || "") === "aplAssignment"),
+    [typicalFields]
+  );
+
+  const makeAplAssignmentKey = (entry) => {
+    return [
+      String(entry?.restaurantId || "").trim().toLowerCase(),
+      String(entry?.restaurantRegNumber || "").trim().toLowerCase(),
+      String(entry?.supplier || "").trim().toLowerCase(),
+      String(entry?.greenCardName || "").trim().toLowerCase(),
+      String(entry?.whiteCardName || "").trim().toLowerCase(),
+      String(entry?.code1C || "").trim().toLowerCase(),
+    ].join("::");
   };
 
   const handleExportProductsAndInventories = async () => {
@@ -561,16 +768,107 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
         return;
       }
 
+      const normalizeSupplierKey = (value) => String(value || "").trim().toLowerCase();
+      const nextContractId = (supplierId, restaurantId, index) => `${String(supplierId || "supplier")}__${String(restaurantId || "restaurant")}__${Date.now()}__${index}`;
+      const normalizeSupplierContracts = (supplier) => {
+        const source = Array.isArray(supplier?.contracts) ? supplier.contracts : [];
+        return source
+          .map((contract, index) => ({
+            id: String(contract?.id || `${String(supplier?.id || "supplier")}_${index}`).trim(),
+            restaurantId: String(contract?.restaurantId || "").trim(),
+            restaurantName: String(contract?.restaurantName || "").trim(),
+            currency: String(contract?.currency || "UAH").trim() || "UAH",
+            contractNumber: String(contract?.contractNumber || "").trim(),
+            terms: String(contract?.terms || "").trim(),
+            deliveryLeadDays: Math.max(0, Math.round(toNumber(contract?.deliveryLeadDays || 0))),
+            paymentDelayDays: Math.max(0, Math.round(toNumber(contract?.paymentDelayDays || 0))),
+            deliveryDays: Array.from(new Set((Array.isArray(contract?.deliveryDays) ? contract.deliveryDays : []).map((day) => String(day || "").trim()).filter(Boolean))),
+          }))
+          .filter((contract) => contract.restaurantId);
+      };
+
+      const supplierRestaurantMap = new Map();
+      importedProducts.forEach((product) => {
+        const supplierName = String(product?.supplier || "").trim();
+        const restaurantId = String(product?.restaurantId || "").trim();
+        if (!supplierName || !restaurantId) return;
+
+        if (!supplierRestaurantMap.has(supplierName)) {
+          supplierRestaurantMap.set(supplierName, new Map());
+        }
+
+        supplierRestaurantMap.get(supplierName).set(restaurantId, String(product?.restaurantName || "").trim());
+      });
+
+      if (supplierRestaurantMap.size > 0) {
+        const directoryByName = new Map(
+          (Array.isArray(suppliersDirectory) ? suppliersDirectory : [])
+            .map((item) => [normalizeSupplierKey(item?.name), item])
+            .filter(([key]) => Boolean(key))
+        );
+
+        for (const [supplierName, restaurantMap] of supplierRestaurantMap.entries()) {
+          const key = normalizeSupplierKey(supplierName);
+          if (!key) continue;
+
+          const existingSupplier = directoryByName.get(key);
+          const importedContracts = Array.from(restaurantMap.entries()).map(([restaurantId, restaurantName], index) => ({
+            id: nextContractId(existingSupplier?.id, restaurantId, index),
+            restaurantId: String(restaurantId || "").trim(),
+            restaurantName: String(
+              restaurantName ||
+              restaurants.find((restaurant) => String(restaurant?.id || "") === String(restaurantId || ""))?.name ||
+              ""
+            ).trim(),
+            currency: "UAH",
+            contractNumber: "",
+            terms: "",
+            deliveryLeadDays: 0,
+            paymentDelayDays: 0,
+            deliveryDays: [],
+          }));
+
+          if (existingSupplier?.id) {
+            const existingContracts = normalizeSupplierContracts(existingSupplier);
+            const existingRestaurantIds = new Set(existingContracts.map((contract) => String(contract.restaurantId || "").trim()).filter(Boolean));
+            const contractsToAdd = importedContracts.filter((contract) => !existingRestaurantIds.has(String(contract.restaurantId || "").trim()));
+            if (contractsToAdd.length > 0) {
+              const { id, ...payload } = existingSupplier;
+              await updateSupplier(id, {
+                ...payload,
+                contracts: [...existingContracts, ...contractsToAdd],
+              }, { skipReload: true });
+            }
+            continue;
+          }
+
+          await createSupplier({
+            name: supplierName,
+            isActive: true,
+            legalEntities: [],
+            minimumOrderAmount: 0,
+            contracts: importedContracts,
+          }, { skipReload: true });
+        }
+      }
+
       let successCount = 0;
       let updatedCount = 0;
       let skippedCount = 0;
       let failCount = 0;
+      let aplSyncCount = 0;
 
-      for (const product of importedProducts) {
+      const aplByKey = new Map(
+        aplAssignments.map((item) => [
+          makeAplAssignmentKey(item),
+          item,
+        ])
+      );
+
+      const processImportedProduct = async (product) => {
         const normalizedCode1C = String(product.code1C || "").trim().toLowerCase();
         if (!normalizedCode1C) {
-          skippedCount += 1;
-          continue;
+          return { skippedCount: 1, successCount: 0, updatedCount: 0, failCount: 0, aplSyncCount: 0 };
         }
 
         const existingItem = products.find(
@@ -579,23 +877,95 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
             String(item.code1C || "").trim().toLowerCase() === normalizedCode1C
         );
 
+        let successDelta = 0;
+        let updatedDelta = 0;
+        let failDelta = 0;
+        let aplDelta = 0;
+
         if (existingItem) {
           const { id: existingId, ...existingPayload } = existingItem;
           const result = await updateProduct(existingId, {
             ...existingPayload,
             ...product,
-          });
-          if (result.success) updatedCount += 1;
-          else failCount += 1;
-          continue;
+          }, { skipReload: true });
+          if (result.success) updatedDelta += 1;
+          else failDelta += 1;
+        } else {
+          const result = await addProduct(product, { skipReload: true });
+          if (result.success) successDelta += 1;
+          else failDelta += 1;
         }
 
-        const result = await addProduct(product);
-        if (result.success) successCount += 1;
-        else failCount += 1;
-      }
+        const whiteCardName = String(product.whiteCardName || product.name || "").trim();
+        const greenCardName = String(product.greenCardName || product.subcategory || "").trim();
+        const code1C = String(product.code1C || "").trim();
+        const restaurantId = String(product.restaurantId || "").trim();
 
-      alert(`Імпорт завершено. Додано: ${successCount}. Оновлено: ${updatedCount}. Пропущено: ${skippedCount}. Помилок: ${failCount}.`);
+        if (whiteCardName && greenCardName && restaurantId) {
+          const assignmentPayload = {
+            type: "aplAssignment",
+            name: `${greenCardName} / ${whiteCardName}`,
+            categoryName: String(product.category || "").trim(),
+            restaurantId,
+            restaurantName: String(product.restaurantName || "").trim(),
+            restaurantRegNumber: String(product.restaurantRegNumber || "").trim(),
+            supplier: String(product.supplier || "").trim(),
+            productGroup: String(product.category || "").trim(),
+            code1C,
+            whiteCardName,
+            greenCardName,
+            unit: String(product.unit || "").trim(),
+            unitPrice: toNumber(product.unitPrice),
+            isActive: true,
+          };
+
+          const key = makeAplAssignmentKey(assignmentPayload);
+          const existingAssignment = aplByKey.get(key);
+          if (existingAssignment?.id) {
+            const { id, ...existingPayload } = existingAssignment;
+            const updated = await updateTypicalField(id, {
+              ...existingPayload,
+              ...assignmentPayload,
+            }, { skipReload: true });
+            if (updated?.success) aplDelta += 1;
+          } else {
+            const created = await createTypicalField(assignmentPayload, { skipReload: true });
+            if (created?.success) {
+              aplDelta += 1;
+              aplByKey.set(key, { id: created.id, ...assignmentPayload });
+            }
+          }
+        }
+
+        return {
+          skippedCount: 0,
+          successCount: successDelta,
+          updatedCount: updatedDelta,
+          failCount: failDelta,
+          aplSyncCount: aplDelta,
+        };
+      };
+
+      const runInBatches = async (items, batchSize, worker) => {
+        const source = Array.isArray(items) ? items : [];
+        const size = Math.max(1, Number(batchSize) || 1);
+        for (let i = 0; i < source.length; i += size) {
+          const batch = source.slice(i, i + size);
+          const results = await Promise.allSettled(batch.map((entry) => worker(entry)));
+          for (const result of results) {
+            if (result.status !== "fulfilled" || !result.value) continue;
+            successCount += result.value.successCount || 0;
+            updatedCount += result.value.updatedCount || 0;
+            skippedCount += result.value.skippedCount || 0;
+            failCount += result.value.failCount || 0;
+            aplSyncCount += result.value.aplSyncCount || 0;
+          }
+        }
+      };
+
+      await runInBatches(importedProducts, 8, processImportedProduct);
+
+      alert(`Імпорт завершено. Додано: ${successCount}. Оновлено: ${updatedCount}. Пропущено: ${skippedCount}. Помилок: ${failCount}. APL синхронізацій: ${aplSyncCount}.`);
     } catch (error) {
       console.error("Помилка імпорту продуктів:", error);
       alert("Не вдалося імпортувати файл продуктів.");
@@ -676,205 +1046,62 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
       {canManageProducts && (
         <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
           {importMode === "selected"
-            ? "Режим імпорту: всі рядки з Excel будуть прив'язані до обраного закладу. Підтримується формат 1С та внутрішній шаблон з полями категорії і підкатегорії."
-            : "Режим імпорту: заклад береться з колонок 'Код закладу' (обліковий №, напр. 101КВ) або 'Заклад'."}
+            ? "Режим імпорту: всі рядки з Excel будуть прив'язані до обраного закладу."
+            : "Режим імпорту: заклад визначається з колонки Организация/облікового номера у файлі."}
         </div>
       )}
 
       {canManageProducts && (
-        <div className="mb-5 grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <section className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">Новий продукт</h3>
-                <p className="text-sm text-slate-600">Створення нового продукту окремо від редагування вже наявних позицій.</p>
-              </div>
-              <button
-                type="button"
-                onClick={resetCreateDraft}
-                className="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
-              >
-                Очистити
-              </button>
-            </div>
+        <div className="mb-5 rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 text-sm text-indigo-900">
+          Ручне створення та ручне редагування довідника продуктів вимкнено. Актуалізація позицій виконується тільки через імпорт з 1С.
+        </div>
+      )}
 
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <div>
-                <label className="text-sm font-semibold text-slate-800">Заклад</label>
-                <select className={inputClass} value={createDraft.restaurantId} onChange={(e) => setCreateDraft((prev) => ({ ...prev, restaurantId: e.target.value }))}>
-                  <option value="">Оберіть заклад</option>
-                  {availableRestaurants.map((restaurant) => (
-                    <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-slate-800">Назва</label>
-                <input className={inputClass} value={createDraft.name} onChange={(e) => setCreateDraft((prev) => ({ ...prev, name: e.target.value }))} placeholder="Наприклад, Соус ванільний" />
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-slate-800">Код 1С</label>
-                <input className={inputClass} value={createDraft.code1C} onChange={(e) => setCreateDraft((prev) => ({ ...prev, code1C: e.target.value }))} placeholder="Якщо є у довіднику" />
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-slate-800">Категорія</label>
-                <select className={inputClass} value={createDraft.category} onChange={(e) => handleDraftCategoryChange(setCreateDraft, e.target.value)}>
-                  <option value="">Оберіть категорію</option>
-                  {categories.map((category) => (
-                    <option key={category} value={category}>{category}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-slate-800">Підкатегорія</label>
-                <select className={inputClass} value={createDraft.subcategory} onChange={(e) => setCreateDraft((prev) => ({ ...prev, subcategory: e.target.value }))} disabled={!createDraft.category}>
-                  <option value="">{createDraft.category ? "Оберіть підкатегорію" : "Спочатку оберіть категорію"}</option>
-                  {availableCreateSubcategories.map((subcategory) => (
-                    <option key={subcategory} value={subcategory}>{subcategory}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-slate-800">Одиниця</label>
-                <select className={inputClass} value={createDraft.unit} onChange={(e) => setCreateDraft((prev) => ({ ...prev, unit: e.target.value }))}>
-                  <option value="">Оберіть одиницю</option>
-                  {units.map((unit) => (
-                    <option key={unit} value={unit}>{unit}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-slate-800">Постачальник</label>
-                <select className={inputClass} value={createDraft.supplier} onChange={(e) => setCreateDraft((prev) => ({ ...prev, supplier: e.target.value }))}>
-                  <option value="">Оберіть постачальника</option>
-                  {suppliers.map((supplier) => (
-                    <option key={supplier} value={supplier}>{supplier}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-slate-800">Ціна за одиницю (грн)</label>
-                <input type="number" min="0" step="0.01" className={inputClass} value={createDraft.unitPrice} onChange={(e) => setCreateDraft((prev) => ({ ...prev, unitPrice: e.target.value }))} placeholder="0.00" />
-              </div>
-            </div>
+      {canManageProducts && (
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+            <button
+              type="button"
+              onClick={toggleSelectAllFiltered}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              {areAllFilteredSelected ? "Зняти вибір з видимих" : "Вибрати всі видимі"}
+            </button>
+            <span className="text-xs font-semibold text-slate-600">Вибрано: {selectedProductIds.length}</span>
+          </div>
 
-            <div className="mt-4 flex justify-end">
-              <button
-                type="button"
-                onClick={handleAdd}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-              >
-                <Plus size={16} /> Додати продукт
-              </button>
-            </div>
-          </section>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+            <button type="button" onClick={() => { void applyBulkStatus(true); }} className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">
+              Масово активувати
+            </button>
+            <button type="button" onClick={() => { void applyBulkStatus(false); }} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-semibold text-amber-700 hover:bg-amber-100">
+              Масово вимкнути
+            </button>
+            <button type="button" onClick={() => { void applyBulkDelete(); }} className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-sm font-semibold text-rose-700 hover:bg-rose-100">
+              Масово видалити
+            </button>
+          </div>
 
-          <section className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">Редагування продукту</h3>
-                <p className="text-sm text-slate-600">Оберіть позицію в таблиці нижче, щоб відкрити її для редагування в окремому блоці.</p>
-              </div>
-              {editingProductId ? (
-                <button
-                  type="button"
-                  onClick={resetEditDraft}
-                  className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
-                >
-                  <X size={15} /> Скасувати
-                </button>
-              ) : null}
-            </div>
-
-            {!editingProductId ? (
-              <div className="rounded-xl border border-dashed border-blue-300 bg-white/70 px-4 py-6 text-sm text-slate-600">
-                Продукт для редагування ще не вибрано. Натисніть "Редагувати" у таблиці, щоб змінити назву, категорію, постачальника або інші поля.
-              </div>
-            ) : (
-              <>
-                <div className="mb-3 rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm text-slate-700">
-                  Редагується: <span className="font-semibold text-slate-900">{editingProduct?.name || "Без назви"}</span>
-                </div>
-
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <div>
-                    <label className="text-sm font-semibold text-slate-800">Заклад</label>
-                    <select className={inputClass} value={editDraft.restaurantId} onChange={(e) => setEditDraft((prev) => ({ ...prev, restaurantId: e.target.value }))}>
-                      <option value="">Оберіть заклад</option>
-                      {availableRestaurants.map((restaurant) => (
-                        <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-sm font-semibold text-slate-800">Назва</label>
-                    <input className={inputClass} value={editDraft.name} onChange={(e) => setEditDraft((prev) => ({ ...prev, name: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="text-sm font-semibold text-slate-800">Код 1С</label>
-                    <input className={inputClass} value={editDraft.code1C} onChange={(e) => setEditDraft((prev) => ({ ...prev, code1C: e.target.value }))} />
-                  </div>
-                  <div>
-                    <label className="text-sm font-semibold text-slate-800">Категорія</label>
-                    <select className={inputClass} value={editDraft.category} onChange={(e) => handleDraftCategoryChange(setEditDraft, e.target.value)}>
-                      <option value="">Оберіть категорію</option>
-                      {categories.map((category) => (
-                        <option key={category} value={category}>{category}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-sm font-semibold text-slate-800">Підкатегорія</label>
-                    <select className={inputClass} value={editDraft.subcategory} onChange={(e) => setEditDraft((prev) => ({ ...prev, subcategory: e.target.value }))} disabled={!editDraft.category}>
-                      <option value="">{editDraft.category ? "Оберіть підкатегорію" : "Спочатку оберіть категорію"}</option>
-                      {availableEditSubcategories.map((subcategory) => (
-                        <option key={subcategory} value={subcategory}>{subcategory}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-sm font-semibold text-slate-800">Одиниця</label>
-                    <select className={inputClass} value={editDraft.unit} onChange={(e) => setEditDraft((prev) => ({ ...prev, unit: e.target.value }))}>
-                      <option value="">Оберіть одиницю</option>
-                      {units.map((unit) => (
-                        <option key={unit} value={unit}>{unit}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-sm font-semibold text-slate-800">Постачальник</label>
-                    <select className={inputClass} value={editDraft.supplier} onChange={(e) => setEditDraft((prev) => ({ ...prev, supplier: e.target.value }))}>
-                      <option value="">Оберіть постачальника</option>
-                      {suppliers.map((supplier) => (
-                        <option key={supplier} value={supplier}>{supplier}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-sm font-semibold text-slate-800">Ціна за одиницю (грн)</label>
-                    <input type="number" min="0" step="0.01" className={inputClass} value={editDraft.unitPrice} onChange={(e) => setEditDraft((prev) => ({ ...prev, unitPrice: e.target.value }))} />
-                  </div>
-                </div>
-
-                <div className="mt-4 flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={resetEditDraft}
-                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
-                  >
-                    Скасувати зміни
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveEdit}
-                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500"
-                  >
-                    Зберегти зміни
-                  </button>
-                </div>
-              </>
-            )}
-          </section>
+          <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+            <select className={inputClass} value={bulkSupplier} onChange={(e) => setBulkSupplier(e.target.value)}>
+              <option value="">Оберіть постачальника для масової заміни</option>
+              {suppliers.map((supplier) => (
+                <option key={`bulk_supplier_${supplier}`} value={supplier}>{supplier}</option>
+              ))}
+            </select>
+            <button type="button" onClick={() => { void applyBulkSupplier(); }} className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-100">
+              Застосувати постачальника
+            </button>
+            <select className={inputClass} value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)}>
+              <option value="">Оберіть категорію для масової заміни</option>
+              {categories.map((category) => (
+                <option key={`bulk_category_${category}`} value={category}>{category}</option>
+              ))}
+            </select>
+            <button type="button" onClick={() => { void applyBulkCategory(); }} className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-100">
+              Застосувати категорію
+            </button>
+          </div>
         </div>
       )}
 
@@ -958,75 +1185,121 @@ function ProductAdminTab({ products, suppliers, categories, subcategoriesByCateg
         <span>Показано {filteredProducts.length} з {products.length}</span>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-slate-200">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-50 text-slate-700">
-            <tr>
-              <th className="px-3 py-2 text-left">Назва</th>
-              <th className="px-3 py-2 text-left">Код 1С</th>
-              <th className="px-3 py-2 text-left">Категорія</th>
-              <th className="px-3 py-2 text-left">Підкатегорія</th>
-              <th className="px-3 py-2 text-left">Одиниця</th>
-              <th className="px-3 py-2 text-left">Ціна за од.</th>
-              <th className="px-3 py-2 text-left">Постачальник</th>
-              <th className="px-3 py-2 text-left">Заклад</th>
-              <th className="px-3 py-2 text-left">Статус</th>
-              {canManageProducts && <th className="px-3 py-2 text-left">Дії</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {filteredProducts.map((item) => {
-              const isEditingCurrentItem = String(editingProductId || "") === String(item.id || "");
-              return (
-                <tr key={item.id} className="border-t border-slate-200">
-                  <td className="px-3 py-2 font-medium text-slate-900">{item.name}</td>
-                  <td className="px-3 py-2">{item.code1C || "-"}</td>
-                  <td className="px-3 py-2">{item.category}</td>
-                  <td className="px-3 py-2">{item.subcategory || "-"}</td>
-                  <td className="px-3 py-2">{item.unit}</td>
-                  <td className="px-3 py-2">{formatMoney(item.unitPrice)}</td>
-                  <td className="px-3 py-2">{item.supplier || "-"}</td>
-                  <td className="px-3 py-2">{item.restaurantName || "-"}</td>
-                  <td className="px-3 py-2">
-                    <span className={`rounded-full px-2 py-1 text-xs font-semibold ${item.isActive ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"}`}>
-                      {item.isActive ? "Активний" : "Вимкнений"}
-                    </span>
-                  </td>
-                  {canManageProducts && (
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          className={`rounded-lg border px-2 py-1 text-xs font-semibold ${isEditingCurrentItem ? "border-blue-300 bg-blue-100 text-blue-700" : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"}`}
-                          onClick={() => handleSelectProductForEdit(item)}
-                        >
-                          {isEditingCurrentItem ? "Редагується" : "Редагувати"}
-                        </button>
-                        <button type="button" className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold hover:bg-slate-100" onClick={() => toggleActive(item)}>
-                          {item.isActive ? "Вимкнути" : "Увімкнути"}
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-100"
-                          onClick={() => handleDeleteProduct(item)}
-                        >
-                          Видалити
-                        </button>
+      <div className="space-y-4">
+        {groupedProducts.map((categoryNode) => {
+          const categoryExpanded = isProductCategoryExpanded(categoryNode.categoryName);
+          const categoryTotal = categoryNode.subcategories.reduce((sum, subcategory) => sum + subcategory.items.length, 0);
+
+          return (
+            <div key={categoryNode.categoryName} className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                <button
+                  type="button"
+                  className="flex min-w-0 items-center gap-2 text-left"
+                  onClick={() => toggleProductCategory(categoryNode.categoryName)}
+                >
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-50 text-sm font-bold text-indigo-700">
+                    {categoryExpanded ? "−" : "+"}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold text-slate-900">{categoryNode.categoryName}</p>
+                    <p className="text-xs text-slate-500">{categoryTotal} позицій · {categoryNode.subcategories.length} підкатегорій</p>
+                  </div>
+                </button>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                  Категорія
+                </span>
+              </div>
+
+              {categoryExpanded && (
+                <div className="space-y-3 p-4">
+                  {categoryNode.subcategories.map((subcategoryNode) => {
+                    const subcategoryExpanded = isProductSubcategoryExpanded(categoryNode.categoryName, subcategoryNode.subcategoryName);
+
+                    return (
+                      <div key={`${categoryNode.categoryName}__${subcategoryNode.subcategoryName}`} className="rounded-xl border border-slate-200 bg-slate-50">
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-3 py-2.5 pl-6">
+                          <button
+                            type="button"
+                            className="flex min-w-0 items-center gap-2 text-left"
+                            onClick={() => toggleProductSubcategory(categoryNode.categoryName, subcategoryNode.subcategoryName)}
+                          >
+                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">
+                              {subcategoryExpanded ? "−" : "+"}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="truncate font-semibold text-slate-900">{subcategoryNode.subcategoryName}</p>
+                              <p className="text-xs text-slate-500">{subcategoryNode.items.length} білих карток</p>
+                            </div>
+                          </button>
+                          <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">
+                            Підкатегорія
+                          </span>
+                        </div>
+
+                        {subcategoryExpanded && (
+                          <div className="space-y-2 p-3">
+                            <div className="hidden grid-cols-[28px_2.2fr_0.9fr_0.8fr_0.9fr_1.4fr_1fr_0.9fr] items-center gap-2 rounded-md border border-slate-200 bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600 lg:grid">
+                              {canManageProducts ? <span>Вибір</span> : <span />}
+                              <span>Назва / Код 1С</span>
+                              <span>Одиниця</span>
+                              <span>Ціна</span>
+                              <span>Постачальник</span>
+                              <span>Заклад</span>
+                              <span>Статус</span>
+                            </div>
+                            {subcategoryNode.groupedItems.map((item) => {
+                              const selectedSet = new Set(selectedProductIds.map((id) => String(id)));
+                              const allGroupSelected = item.ids.length > 0 && item.ids.every((id) => selectedSet.has(String(id)));
+
+                              return (
+                              <div key={item.key} className="rounded-md border border-slate-200 bg-white px-2 py-2 shadow-sm">
+                                <div className="grid grid-cols-1 gap-2 lg:grid-cols-[28px_2.2fr_0.9fr_0.8fr_0.9fr_1.4fr_1fr_0.9fr] lg:items-center">
+                                  {canManageProducts && (
+                                    <input
+                                      type="checkbox"
+                                      checked={allGroupSelected}
+                                      onChange={() => toggleSelectedMany(item.ids)}
+                                      className="h-4 w-4 accent-indigo-600"
+                                    />
+                                  )}
+
+                                  {!canManageProducts && <div className="hidden lg:block" />}
+
+                                  <div className="min-w-0">
+                                    <p className="truncate text-sm font-semibold text-slate-900">{item.name}</p>
+                                    <p className="text-[11px] text-slate-500">Код 1С: {item.code1C || "-"}</p>
+                                  </div>
+
+                                  <div className="text-xs text-slate-700">{item.unitText}</div>
+                                  <div className="text-xs text-slate-700">{item.priceText}</div>
+                                  <div className="text-xs leading-4 text-slate-700" title={item.supplierText}>{item.supplierText}</div>
+                                  <div className="truncate text-xs text-slate-700" title={item.restaurantText}>{item.restaurantText}</div>
+                                  <div>
+                                    <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${item.isActive ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"}`}>
+                                      {item.isActive ? "Активний" : "Вимкнений"}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                            })}
+                          </div>
+                        )}
                       </div>
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
-            {filteredProducts.length === 0 && (
-              <tr>
-                <td colSpan={canManageProducts ? 10 : 9} className="px-3 py-6 text-center text-slate-500">
-                  За поточними фільтрами продукти не знайдено.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {groupedProducts.length === 0 && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-slate-500">
+            За поточними фільтрами продукти не знайдено.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1036,7 +1309,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const isGlobalAdmin = isGlobalAdminUser(user);
   const quantityInputRefs = useRef({});
   const pendingRestoreRef = useRef(null);
-  const pendingDeltaActionRef = useRef(null);
   const [activeRowProductId, setActiveRowProductId] = useState(null);
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
   // quantities = accumulated/committed totals per productId (used for saving & green highlight)
@@ -1126,289 +1398,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       .filter(Boolean)
       .filter((name) => name.toLowerCase().includes(term))
       .sort((a, b) => {
-        const aStarts = a.toLowerCase().startsWith(term) ? 0 : 1;
-        const bStarts = b.toLowerCase().startsWith(term) ? 0 : 1;
-        if (aStarts !== bStarts) return aStarts - bStarts;
         return a.localeCompare(b, "uk");
-      })
-      .slice(0, 8);
+      });
   }, [scopedProducts, searchTerm]);
-
-  const openCalcModal = (productId, productName) => {
-    setCalcModal({
-      isOpen: true,
-      productId,
-      productName,
-      display: String(toNumber(quantities[productId]) || "0"),
-      expression: "",
-      memory: 0,
-      lastOp: null,
-      newNumber: false,
-    });
-  };
-
-  const closeCalcModal = () => {
-    setCalcModal((prev) => ({ ...prev, isOpen: false }));
-  };
-
-  const calcInput = (digit) => {
-    setCalcModal((prev) => {
-      if (prev.newNumber) {
-        return { ...prev, display: String(digit), newNumber: false };
-      }
-      const newDisplay = prev.display === "0" ? String(digit) : prev.display + String(digit);
-      return { ...prev, display: newDisplay };
-    });
-  };
-
-  const calcDot = () => {
-    setCalcModal((prev) => {
-      if (prev.newNumber) {
-        return { ...prev, display: "0.", newNumber: false };
-      }
-      if (prev.display.includes(".")) return prev;
-      return { ...prev, display: prev.display + "." };
-    });
-  };
-
-  const calcClear = () => {
-    setCalcModal((prev) => ({
-      ...prev,
-      display: "0",
-      expression: "",
-      memory: 0,
-      lastOp: null,
-      newNumber: true,
-    }));
-  };
-
-  const calcBackspace = () => {
-    setCalcModal((prev) => {
-      if (prev.newNumber) return prev;
-      const nextDisplay = String(prev.display || "").slice(0, -1);
-      return {
-        ...prev,
-        display: nextDisplay || "0",
-      };
-    });
-  };
-
-  const evaluateCalcExpression = (rawExpression) => {
-    const expression = String(rawExpression || "")
-      .replace(/,/g, ".")
-      .replace(/\s+/g, "")
-      .replace(/[+\-*/]+$/, "");
-
-    if (!expression) return 0;
-
-    const tokens = expression.match(/\d*\.?\d+|[+\-*/]/g);
-    if (!tokens || tokens.length === 0) return 0;
-
-    // Pass 1: * and /
-    const folded = [];
-    let current = toNumber(tokens[0]);
-
-    for (let i = 1; i < tokens.length; i += 2) {
-      const op = tokens[i];
-      const next = toNumber(tokens[i + 1]);
-      if (op === "*") {
-        current *= next;
-      } else if (op === "/") {
-        current = next === 0 ? current : current / next;
-      } else {
-        folded.push(current, op);
-        current = next;
-      }
-    }
-    folded.push(current);
-
-    // Pass 2: + and -
-    let result = toNumber(folded[0]);
-    for (let i = 1; i < folded.length; i += 2) {
-      const op = folded[i];
-      const next = toNumber(folded[i + 1]);
-      if (op === "+") result += next;
-      if (op === "-") result -= next;
-    }
-
-    return result;
-  };
-
-  const calcOperation = (op) => {
-    setCalcModal((prev) => {
-      if (prev.newNumber) {
-        const currentExpression = String(prev.expression || "");
-        if (!currentExpression) {
-          // After '=', continue from the shown result (memory-like behavior).
-          return { ...prev, expression: `${prev.display}${op}` };
-        }
-        // If user presses operators in sequence, replace only trailing operator.
-        if (/[+\-*/]$/.test(currentExpression)) {
-          return {
-            ...prev,
-            expression: currentExpression.replace(/[+\-*/]+$/, op),
-          };
-        }
-        return {
-          ...prev,
-          expression: `${currentExpression}${op}`,
-        };
-      }
-
-      const nextExpression = `${prev.expression || ""}${prev.display}${op}`;
-      return {
-        ...prev,
-        expression: nextExpression,
-        newNumber: true,
-      };
-    });
-  };
-
-  const calcEquals = () => {
-    setCalcModal((prev) => {
-      const fullExpression = prev.newNumber
-        ? String(prev.expression || "").replace(/[+\-*/]+$/, "")
-        : `${prev.expression || ""}${prev.display}`;
-
-      const result = fullExpression
-        ? evaluateCalcExpression(fullExpression)
-        : toNumber(prev.display);
-
-      return {
-        ...prev,
-        expression: "",
-        display: String(result),
-        newNumber: true,
-      };
-    });
-  };
-
-  const calcSave = () => {
-    const fullExpression = calcModal.newNumber
-      ? String(calcModal.expression || "").replace(/[+\-*/]+$/, "")
-      : `${calcModal.expression || ""}${calcModal.display}`;
-
-    const finalValue = fullExpression
-      ? evaluateCalcExpression(fullExpression)
-      : toNumber(calcModal.display);
-
-    const safeValue = Math.max(0, finalValue);
-    setQuantities((prev) => ({
-      ...prev,
-      [calcModal.productId]: safeValue === 0 ? "" : String(safeValue),
-    }));
-    closeCalcModal();
-  };
-
-  // Calculator-style: applies the currently-typed delta to the accumulated total.
-  // sign=+1 adds, sign=-1 subtracts. After applying, clears the input field and re-focuses.
-  const applyDelta = (productId, sign) => {
-    const delta = toNumber(inputValues[productId]);
-    if (delta === 0) return;
-    setQuantities((prev) => {
-      const next = Math.max(0, toNumber(prev[productId]) + sign * delta);
-      return { ...prev, [productId]: next === 0 ? "" : String(next) };
-    });
-    setInputValues((prev) => ({ ...prev, [productId]: "" }));
-    // Re-focus so the user can immediately type the next delta.
-    requestAnimationFrame(() => focusQuantityInput(productId));
-  };
-
-  const commitPendingDelta = (productId, sign, shouldRefocus = false) => {
-    const delta = toNumber(inputValues[productId]);
-    if (delta === 0) return;
-    setQuantities((prev) => {
-      const next = Math.max(0, toNumber(prev[productId]) + sign * delta);
-      return { ...prev, [productId]: next === 0 ? "" : String(next) };
-    });
-    setInputValues((prev) => ({ ...prev, [productId]: "" }));
-    if (shouldRefocus) {
-      requestAnimationFrame(() => focusQuantityInput(productId));
-    }
-  };
-
-  const focusQuantityInput = (productId) => {
-    const input = quantityInputRefs.current?.[productId];
-    if (!input) return;
-    setActiveRowProductId(productId);
-    input.focus();
-    input.select?.();
-  };
-
-  const availableRestaurants = useMemo(() => {
-    if (isGlobalAdmin) return restaurants;
-    return restaurants.filter((item) => String(item.id) === String(user?.restaurant));
-  }, [restaurants, user, isGlobalAdmin]);
-
-  const visibleInventories = useMemo(() => {
-    return inventories.filter((item) => isInventoryVisibleForUserRestaurant(item, user, restaurants, isGlobalAdmin));
-  }, [inventories, user, restaurants, isGlobalAdmin]);
-
-  const mergeCandidates = useMemo(() => {
-    return visibleInventories.filter((item) => {
-      const isFinalMerged = getMergedFromIds(item).length > 0;
-      const isSourceMerged = Boolean(getMergedIntoId(item));
-      return !isFinalMerged && !isSourceMerged;
-    });
-  }, [visibleInventories]);
-
-  const currentWorkingInventory = useMemo(() => {
-    if (editingInventoryId) {
-      return visibleInventories.find((item) => String(item?.id || "") === String(editingInventoryId)) || null;
-    }
-    return null;
-  }, [visibleInventories, editingInventoryId]);
-
-  const savedInventoriedProductIds = useMemo(() => {
-    const productIds = new Set();
-
-    (Array.isArray(currentWorkingInventory?.items) ? currentWorkingInventory.items : []).forEach((item) => {
-      const productId = String(item?.productId || "").trim();
-      if (productId && toNumber(item?.qty) > 0) {
-        productIds.add(productId);
-      }
-    });
-
-    return productIds;
-  }, [currentWorkingInventory]);
-
-  const inventoriedProductIds = useMemo(() => {
-    const productIds = new Set(savedInventoriedProductIds);
-
-    scopedProducts.forEach((product) => {
-      const effectiveQty = toNumber(quantities[product.id]) + toNumber(inputValues[product.id]);
-      const normalizedId = String(product.id || "").trim();
-      if (!normalizedId) return;
-      if (effectiveQty > 0) {
-        productIds.add(normalizedId);
-      } else {
-        productIds.delete(normalizedId);
-      }
-    });
-
-    return productIds;
-  }, [savedInventoriedProductIds, quantities, inputValues, scopedProducts]);
-
-  const filteredProducts = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
-    return scopedProducts.filter((item) => {
-      return normalizedSearch
-        ? [item.name, item.code1C, item.category]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase()
-            .includes(normalizedSearch)
-        : true;
-    });
-  }, [scopedProducts, searchTerm]);
-
-  // Auto-focus on the single matching product's quantity input when searching.
-  useEffect(() => {
-    if (filteredProducts.length === 1 && searchTerm.trim()) {
-      requestAnimationFrame(() => focusQuantityInput(filteredProducts[0].id));
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredProducts.length === 1 ? filteredProducts[0]?.id : null, searchTerm]);
 
   const filledLines = useMemo(() => {
     return scopedProducts
@@ -1431,6 +1423,11 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       .filter(Boolean);
   }, [scopedProducts, quantities, inputValues]);
 
+  const mergeCandidates = useMemo(() => {
+    const scoped = inventories.filter((item) => isInventoryVisibleForUserRestaurant(item, user, [], isGlobalAdmin));
+    return scoped.filter((item) => getMergedIntoId(item) === "" && getMergedFromIds(item).length === 0);
+  }, [inventories, user, isGlobalAdmin]);
+
   const buildRestoredQuantities = (inventory, targetRestaurantId) => {
     const normalizedRestaurantId = String(targetRestaurantId || "");
     const scopedRestoreProducts = products.filter(
@@ -1442,8 +1439,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     const byName = new Map();
 
     scopedRestoreProducts.forEach((product) => {
-      const productId = String(product?.id || "").trim();
-      const code1C = String(product?.code1C || "").trim().toLowerCase();
+
       const name = String(product?.name || "").trim().toLowerCase();
 
       if (productId) byId.set(productId, product);
@@ -2760,11 +2756,55 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
   );
 }
 
-function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplier, removeSupplier }) {
+function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSupplier, updateSupplier, removeSupplier }) {
   const [newSupplierName, setNewSupplierName] = useState("");
   const [legalEntityDrafts, setLegalEntityDrafts] = useState({});
   const [minimumOrderDrafts, setMinimumOrderDrafts] = useState({});
+  const [contractDrafts, setContractDrafts] = useState({});
+  const [savingContractSupplierId, setSavingContractSupplierId] = useState("");
+  const [expandedSupplierContracts, setExpandedSupplierContracts] = useState({});
+  const [expandedContractRows, setExpandedContractRows] = useState({});
   const importInputRef = useRef(null);
+
+  const suppliersById = useMemo(() => {
+    return new Map((suppliers || []).map((supplier) => [String(supplier?.id || ""), supplier]));
+  }, [suppliers]);
+
+  const formatContractDays = (days = []) => {
+    const labels = DELIVERY_WEEK_DAYS
+      .filter((day) => (Array.isArray(days) ? days : []).includes(day.id))
+      .map((day) => day.label);
+    return labels.length > 0 ? labels.join(", ") : "Не вказано";
+  };
+
+  const getContractRestaurantLabel = (contract) => {
+    return contract.restaurantName || restaurants.find((restaurant) => String(restaurant.id) === String(contract.restaurantId))?.name || "Без закладу";
+  };
+
+  const isSupplierContractsExpanded = (supplierId) => {
+    return Boolean(expandedSupplierContracts[String(supplierId || "")]);
+  };
+
+  const toggleSupplierContracts = (supplierId) => {
+    const normalizedId = String(supplierId || "");
+    setExpandedSupplierContracts((prev) => ({
+      ...prev,
+      [normalizedId]: !prev[normalizedId],
+    }));
+  };
+
+  const isContractRowExpanded = (supplierId, contractId) => {
+    const key = `${String(supplierId || "")}::${String(contractId || "")}`;
+    return Boolean(expandedContractRows[key]);
+  };
+
+  const toggleContractRow = (supplierId, contractId) => {
+    const key = `${String(supplierId || "")}::${String(contractId || "")}`;
+    setExpandedContractRows((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
 
   const getLegalEntities = (supplier) => {
     const fromArray = Array.isArray(supplier?.legalEntities) ? supplier.legalEntities : [];
@@ -2774,6 +2814,118 @@ function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplie
       ...(fromSingle ? [fromSingle] : []),
     ];
     return Array.from(new Set(combined));
+  };
+
+  const normalizeContracts = (supplier) => {
+    const contractsRaw = Array.isArray(supplier?.contracts) ? supplier.contracts : [];
+    return contractsRaw.map((contract, index) => {
+      const deliveryDays = Array.isArray(contract?.deliveryDays)
+        ? contract.deliveryDays.map((day) => String(day || "").trim()).filter(Boolean)
+        : [];
+      return {
+        id: String(contract?.id || `${supplier?.id || "supplier"}_${index}`).trim(),
+        restaurantId: String(contract?.restaurantId || "").trim(),
+        restaurantName: String(contract?.restaurantName || "").trim(),
+        currency: String(contract?.currency || "UAH").trim(),
+        contractNumber: String(contract?.contractNumber || "").trim(),
+        terms: String(contract?.terms || "").trim(),
+        deliveryLeadDays: Math.max(0, Math.round(toNumber(contract?.deliveryLeadDays || 0))),
+        paymentDelayDays: Math.max(0, Math.round(toNumber(contract?.paymentDelayDays || 0))),
+        deliveryDays: Array.from(new Set(deliveryDays)),
+      };
+    });
+  };
+
+  const getSupplierContracts = (supplier) => {
+    const draftContracts = contractDrafts[supplier.id];
+    if (Array.isArray(draftContracts)) return draftContracts;
+    return normalizeContracts(supplier);
+  };
+
+  const saveSupplierContracts = async (supplier, contracts) => {
+    const supplierId = String(supplier?.id || "").trim();
+    const normalizedContracts = (Array.isArray(contracts) ? contracts : []).map((contract, index) => ({
+      id: String(contract?.id || `${supplier?.id || "supplier"}_${Date.now()}_${index}`).trim(),
+      restaurantId: String(contract?.restaurantId || "").trim(),
+      restaurantName:
+        String(
+          restaurants.find((item) => String(item.id) === String(contract?.restaurantId || ""))?.name ||
+          contract?.restaurantName ||
+          ""
+        ).trim(),
+      currency: String(contract?.currency || "UAH").trim() || "UAH",
+      contractNumber: String(contract?.contractNumber || "").trim(),
+      terms: String(contract?.terms || "").trim(),
+      deliveryLeadDays: Math.max(0, Math.round(toNumber(contract?.deliveryLeadDays || 0))),
+      paymentDelayDays: Math.max(0, Math.round(toNumber(contract?.paymentDelayDays || 0))),
+      deliveryDays: Array.from(new Set((Array.isArray(contract?.deliveryDays) ? contract.deliveryDays : []).map((day) => String(day || "").trim()).filter(Boolean))),
+    }));
+
+    const invalidContract = normalizedContracts.find((contract) => !String(contract.restaurantId || "").trim());
+    if (invalidContract) {
+      alert("Для кожного контракту потрібно обрати заклад перед збереженням.");
+      return false;
+    }
+
+    const { id, ...payload } = supplier;
+    setSavingContractSupplierId(supplierId);
+    const result = await updateSupplier(id, {
+      ...payload,
+      contracts: normalizedContracts,
+    });
+    setSavingContractSupplierId("");
+    if (!result.success) {
+      alert(getErrorMessage(result.error, "Не вдалося зберегти контракти постачальника."));
+      return false;
+    }
+    setContractDrafts((prev) => ({ ...prev, [supplier.id]: normalizedContracts }));
+    alert("Контракти постачальника збережено.");
+    return true;
+  };
+
+  const patchSupplierContract = (supplierId, contractId, patch) => {
+    setContractDrafts((prev) => {
+      const currentSupplier = suppliersById.get(String(supplierId || ""));
+      const current = Array.isArray(prev[supplierId]) ? prev[supplierId] : normalizeContracts(currentSupplier);
+      return {
+        ...prev,
+        [supplierId]: current.map((contract) => (
+          String(contract.id) === String(contractId) ? { ...contract, ...patch } : contract
+        )),
+      };
+    });
+  };
+
+  const addContract = (supplier) => {
+    const nextContract = {
+      id: `${supplier.id}_${Date.now()}`,
+      restaurantId: "",
+      restaurantName: "",
+      currency: "UAH",
+      contractNumber: "",
+      terms: "",
+      deliveryLeadDays: 0,
+      paymentDelayDays: 0,
+      deliveryDays: [],
+    };
+
+    setContractDrafts((prev) => {
+      const current = Array.isArray(prev[supplier.id]) ? prev[supplier.id] : normalizeContracts(supplier);
+      return {
+        ...prev,
+        [supplier.id]: [...current, nextContract],
+      };
+    });
+  };
+
+  const removeContract = (supplier, contractId) => {
+    setContractDrafts((prev) => {
+      const current = Array.isArray(prev[supplier.id]) ? prev[supplier.id] : normalizeContracts(supplier);
+      return {
+        ...prev,
+        [supplier.id]: current.filter((contract) => String(contract.id) !== String(contractId)),
+      };
+    });
   };
 
   const updateSupplierLegalEntities = async (supplier, nextEntities) => {
@@ -2895,6 +3047,18 @@ function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplie
     await updateSupplierLegalEntities(supplier, next);
   };
 
+  useEffect(() => {
+    setContractDrafts((prev) => {
+      const next = { ...prev };
+      suppliers.forEach((supplier) => {
+        if (!Array.isArray(next[supplier.id])) {
+          next[supplier.id] = normalizeContracts(supplier);
+        }
+      });
+      return next;
+    });
+  }, [suppliers]);
+
   const toggleActive = async (item) => {
     const { id, ...payload } = item;
     const result = await updateSupplier(id, { ...payload, isActive: !item.isActive });
@@ -2950,109 +3114,342 @@ function SuppliersAdminTab({ suppliers, canManage, createSupplier, updateSupplie
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-lg border border-slate-200">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-50 text-slate-700">
-            <tr>
-              <th className="px-3 py-2 text-left">Назва</th>
-              <th className="px-3 py-2 text-left">Мін. сума замовлення</th>
-              <th className="px-3 py-2 text-left">Юридичні особи</th>
-              <th className="px-3 py-2 text-left">Статус</th>
-              {canManage && <th className="px-3 py-2 text-left">Дії</th>}
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr className="border-b-2 border-slate-300 bg-slate-100">
+              <th className="px-3 py-2 text-left font-semibold text-slate-700 w-40">Назва</th>
+              <th className="px-3 py-2 text-center font-semibold text-slate-700 w-24">Контракти</th>
+              <th className="px-3 py-2 text-center font-semibold text-slate-700 w-24">Закладів</th>
+              <th className="px-3 py-2 text-left font-semibold text-slate-700 w-32">Мін. сума</th>
+              <th className="px-3 py-2 text-left font-semibold text-slate-700 min-w-48">Юр. особи</th>
+              <th className="px-3 py-2 text-left font-semibold text-slate-700 w-20">Статус</th>
+              {canManage && <th className="px-3 py-2 text-center font-semibold text-slate-700 w-32">Дії</th>}
             </tr>
           </thead>
           <tbody>
-            {suppliers.map((item) => {
+            {suppliers.map((item, supplierIndex) => {
               const legalEntities = getLegalEntities(item);
+              const contracts = getSupplierContracts(item);
+              const isContractsExpanded = isSupplierContractsExpanded(item.id);
+              const sortedContracts = [...contracts].sort((left, right) => getContractRestaurantLabel(left).localeCompare(getContractRestaurantLabel(right), "uk"));
+              const uniqueContractRestaurants = new Set(
+                contracts.map((contract) => String(contract.restaurantName || contract.restaurantId || "").trim()).filter(Boolean)
+              );
+
               return (
-              <tr key={item.id} className="border-t border-slate-200">
-                <td className="px-3 py-2 font-medium text-slate-900">{item.name}</td>
-                <td className="px-3 py-2">
-                  {canManage ? (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        className="w-28 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
-                        value={Object.prototype.hasOwnProperty.call(minimumOrderDrafts, item.id) ? minimumOrderDrafts[item.id] : String(toNumber(item.minimumOrderAmount || 0))}
-                        onChange={(e) => setMinimumOrderDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                        onBlur={() => saveMinimumOrderAmount(item)}
-                      />
-                      <span className="text-xs text-slate-500">грн</span>
-                    </div>
-                  ) : (
-                    <span>{formatMoney(item.minimumOrderAmount || 0)}</span>
-                  )}
-                </td>
-                <td className="px-3 py-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {legalEntities.map((entity) => (
-                      <span key={`${item.id}_${entity}`} className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-xs text-slate-700">
-                        {entity}
-                        {canManage && (
+                <Fragment key={item.id}>
+                  <tr className={`border-b border-slate-200 ${supplierIndex % 2 === 0 ? "bg-white" : "bg-slate-50"} hover:bg-blue-50 cursor-pointer`} onClick={() => toggleSupplierContracts(item.id)}>
+                    <td className="px-3 py-2.5 font-semibold text-slate-900">{item.name}</td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span className="inline-flex items-center justify-center rounded-full bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-700">
+                        {contracts.length}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span className="inline-flex items-center justify-center rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-700">
+                        {uniqueContractRestaurants.size}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-800">
+                      {canManage ? (
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className="w-28 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-900"
+                          value={Object.prototype.hasOwnProperty.call(minimumOrderDrafts, item.id) ? minimumOrderDrafts[item.id] : String(toNumber(item.minimumOrderAmount || 0))}
+                          onChange={(e) => setMinimumOrderDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                          onBlur={() => saveMinimumOrderAmount(item)}
+                        />
+                      ) : (
+                        <span className="font-semibold">{formatMoney(item.minimumOrderAmount || 0)}</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {legalEntities.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {legalEntities.map((entity) => (
+                            <span key={`${item.id}_${entity}`} className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-700">
+                              {entity}
+                              {canManage && (
+                                <button
+                                  type="button"
+                                  className="ml-0.5 font-bold text-rose-600 hover:text-rose-500"
+                                  onClick={() => removeLegalEntity(item, entity)}
+                                >
+                                  ×
+                                </button>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-slate-500">Не додано</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${item.isActive ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                        {item.isActive ? "Активний" : "Вимкнений"}
+                      </span>
+                    </td>
+                    {canManage && (
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex gap-1">
                           <button
                             type="button"
-                            className="font-semibold text-rose-600 hover:text-rose-500"
-                            onClick={() => removeLegalEntity(item, entity)}
+                            className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-100"
+                            onClick={() => toggleActive(item)}
+                          >
+                            {item.isActive ? "Вимк" : "Увім"}
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded border border-rose-300 bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 hover:bg-rose-100"
+                            onClick={() => removeSupplier(item.id)}
                           >
                             ×
                           </button>
-                        )}
-                      </span>
-                    ))}
-                    {legalEntities.length === 0 && <span className="text-xs text-slate-500">Не додано</span>}
-                  </div>
-                  {canManage && (
-                    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                      <input
-                        className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
-                        value={legalEntityDrafts[item.id] || ""}
-                        onChange={(e) => setLegalEntityDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                        placeholder="Додати юрособу: ТОВ/ФОП..."
-                      />
-                      <button
-                        type="button"
-                        className="rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                        onClick={() => addLegalEntity(item)}
-                      >
-                        Додати юрособу
-                      </button>
-                    </div>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+
+                  {isContractsExpanded && (
+                    <tr className="border-b border-slate-200">
+                      <td colSpan={canManage ? 7 : 6} className="bg-slate-50 px-3 py-3">
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              {canManage && (
+                                <div className="mb-2 flex flex-col gap-1.5 sm:flex-row">
+                                  <input
+                                    className="flex-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                                    value={legalEntityDrafts[item.id] || ""}
+                                    onChange={(e) => setLegalEntityDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                                    placeholder="Додати юрособу: ТОВ/ФОП..."
+                                  />
+                                  <button
+                                    type="button"
+                                    className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                                    onClick={() => addLegalEntity(item)}
+                                  >
+                                    Додати
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex gap-1.5">
+                              <button
+                                type="button"
+                                className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                                onClick={() => addContract(item)}
+                              >
+                                + Контракт
+                              </button>
+                              {canManage && (
+                                <button
+                                  type="button"
+                                  className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                                  disabled={savingContractSupplierId === String(item.id || "")}
+                                  onClick={() => {
+                                    void saveSupplierContracts(item, getSupplierContracts(item));
+                                  }}
+                                >
+                                  {savingContractSupplierId === String(item.id || "") ? "Збереження..." : "Зберегти"}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {contracts.length === 0 ? (
+                            <div className="text-xs text-slate-500">Контракти ще не додані.</div>
+                          ) : (
+                            <div className="overflow-x-auto rounded border border-slate-300 bg-white">
+                              <table className="w-full text-[11px]">
+                                <thead className="border-b border-slate-200 bg-slate-100">
+                                  <tr>
+                                    <th className="px-2 py-1.5 text-left font-semibold text-slate-700">Заклад</th>
+                                    <th className="px-2 py-1.5 text-left font-semibold text-slate-700">Контракт №</th>
+                                    <th className="px-2 py-1.5 text-center font-semibold text-slate-700 w-16">Валюта</th>
+                                    <th className="px-2 py-1.5 text-center font-semibold text-slate-700 w-16">Поставка</th>
+                                    <th className="px-2 py-1.5 text-center font-semibold text-slate-700 w-16">Відстрочка</th>
+                                    <th className="px-2 py-1.5 text-left font-semibold text-slate-700 flex-1">Графік / Умови</th>
+                                    <th className="px-2 py-1.5 text-center font-semibold text-slate-700 w-12">Дії</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {sortedContracts.map((contract, contractIndex) => {
+                                    const rowExpanded = isContractRowExpanded(item.id, contract.id);
+                                    return (
+                                      <Fragment key={contract.id}>
+                                        <tr className={`border-b border-slate-200 ${contractIndex % 2 === 0 ? "bg-white" : "bg-slate-50"} hover:bg-blue-50 cursor-pointer`} onClick={() => toggleContractRow(item.id, contract.id)}>
+                                          <td className="px-2 py-1 text-slate-900">
+                                            <span className="font-semibold">{getContractRestaurantLabel(contract)}</span>
+                                          </td>
+                                          <td className="px-2 py-1 text-slate-700">{contract.contractNumber || "-"}</td>
+                                          <td className="px-2 py-1 text-center text-slate-700">{contract.currency || "UAH"}</td>
+                                          <td className="px-2 py-1 text-center text-slate-700">{Math.max(0, Math.round(toNumber(contract.deliveryLeadDays || 0)))} дн.</td>
+                                          <td className="px-2 py-1 text-center text-slate-700">{Math.max(0, Math.round(toNumber(contract.paymentDelayDays || 0)))} дн.</td>
+                                          <td className="px-2 py-1 text-slate-700">
+                                            <div className="flex flex-wrap gap-0.5">
+                                              {contract.deliveryDays && contract.deliveryDays.length > 0 ? (
+                                                <span className="text-[10px] text-slate-600">
+                                                  {formatContractDays(contract.deliveryDays)}
+                                                </span>
+                                              ) : (
+                                                <span className="text-[10px] text-slate-500">Не вказано</span>
+                                              )}
+                                              {contract.terms && (
+                                                <span className="ml-1 text-[10px] text-slate-600 italic">• {contract.terms}</span>
+                                              )}
+                                            </div>
+                                          </td>
+                                          <td className="px-2 py-1 text-center text-slate-400">
+                                            <span className="text-[10px]">{rowExpanded ? "⬆" : "⬇"}</span>
+                                          </td>
+                                        </tr>
+
+                                        {rowExpanded && (
+                                          <tr className="bg-indigo-50">
+                                            <td colSpan={7} className="px-3 py-2.5">
+                                              <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-4">
+                                                <div>
+                                                  <label className="text-[10px] font-semibold text-slate-700">Заклад</label>
+                                                  <select
+                                                    className="mt-0.5 w-full rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px]"
+                                                    value={contract.restaurantId}
+                                                    onChange={(e) => patchSupplierContract(item.id, contract.id, { restaurantId: e.target.value, restaurantName: restaurants.find((restaurant) => String(restaurant.id) === String(e.target.value))?.name || "" })}
+                                                  >
+                                                    <option value="">Оберіть заклад</option>
+                                                    {restaurants.map((restaurant) => (
+                                                      <option key={`${item.id}_${contract.id}_${restaurant.id}`} value={restaurant.id}>{restaurant.name}</option>
+                                                    ))}
+                                                  </select>
+                                                </div>
+                                                <div>
+                                                  <label className="text-[10px] font-semibold text-slate-700">Валюта</label>
+                                                  <select
+                                                    className="mt-0.5 w-full rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px]"
+                                                    value={contract.currency}
+                                                    onChange={(e) => patchSupplierContract(item.id, contract.id, { currency: e.target.value })}
+                                                  >
+                                                    <option value="UAH">UAH</option>
+                                                    <option value="USD">USD</option>
+                                                    <option value="EUR">EUR</option>
+                                                  </select>
+                                                </div>
+                                                <div>
+                                                  <label className="text-[10px] font-semibold text-slate-700">Номер контракту</label>
+                                                  <input
+                                                    className="mt-0.5 w-full rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px]"
+                                                    value={contract.contractNumber}
+                                                    onChange={(e) => patchSupplierContract(item.id, contract.id, { contractNumber: e.target.value })}
+                                                  />
+                                                </div>
+                                                <div>
+                                                  <label className="text-[10px] font-semibold text-slate-700">Термін поставки, днів</label>
+                                                  <input
+                                                    type="number"
+                                                    min="0"
+                                                    className="mt-0.5 w-full rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px]"
+                                                    value={contract.deliveryLeadDays}
+                                                    onChange={(e) => patchSupplierContract(item.id, contract.id, { deliveryLeadDays: e.target.value })}
+                                                  />
+                                                </div>
+                                              </div>
+
+                                              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                                                <div>
+                                                  <label className="text-[10px] font-semibold text-slate-700">Умови поставки</label>
+                                                  <input
+                                                    className="mt-0.5 w-full rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px]"
+                                                    value={contract.terms}
+                                                    onChange={(e) => patchSupplierContract(item.id, contract.id, { terms: e.target.value })}
+                                                    placeholder="Напр. до 11:00"
+                                                  />
+                                                </div>
+                                                <div>
+                                                  <label className="text-[10px] font-semibold text-slate-700">Відстрочка платежу, днів</label>
+                                                  <input
+                                                    type="number"
+                                                    min="0"
+                                                    className="mt-0.5 w-full rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px]"
+                                                    value={contract.paymentDelayDays}
+                                                    onChange={(e) => patchSupplierContract(item.id, contract.id, { paymentDelayDays: e.target.value })}
+                                                  />
+                                                </div>
+                                                <div>
+                                                  <label className="text-[10px] font-semibold text-slate-700">Видалити контракт</label>
+                                                  <button
+                                                    type="button"
+                                                    className="mt-0.5 w-full rounded border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                                                    onClick={() => removeContract(item, contract.id)}
+                                                  >
+                                                    Видалити
+                                                  </button>
+                                                </div>
+                                              </div>
+
+                                              <div className="mt-2">
+                                                <p className="text-[10px] font-semibold text-slate-700 mb-1">Графік поставок</p>
+                                                <div className="flex flex-wrap gap-1">
+                                                  {DELIVERY_WEEK_DAYS.map((day) => {
+                                                    const checked = (contract.deliveryDays || []).includes(day.id);
+                                                    return (
+                                                      <label key={`${contract.id}_${day.id}`} className="inline-flex items-center gap-0.5 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] cursor-pointer hover:bg-indigo-50">
+                                                        <input
+                                                          type="checkbox"
+                                                          checked={checked}
+                                                          onChange={(e) => {
+                                                            const current = new Set(contract.deliveryDays || []);
+                                                            if (e.target.checked) current.add(day.id);
+                                                            else current.delete(day.id);
+                                                            patchSupplierContract(item.id, contract.id, { deliveryDays: Array.from(current) });
+                                                          }}
+                                                        />
+                                                        {day.label}
+                                                      </label>
+                                                    );
+                                                  })}
+                                                </div>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        )}
+                                      </Fragment>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
                   )}
-                </td>
-                <td className="px-3 py-2">{item.isActive ? "Активний" : "Вимкнений"}</td>
-                {canManage && (
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <button type="button" className="rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold hover:bg-slate-100" onClick={() => toggleActive(item)}>
-                        {item.isActive ? "Вимкнути" : "Увімкнути"}
-                      </button>
-                      <button type="button" className="inline-flex items-center gap-1 rounded-lg bg-red-600 px-2 py-1 text-xs font-semibold text-white hover:bg-red-500" onClick={() => removeSupplier(item.id)}>
-                        <Trash2 size={14} /> Видалити
-                      </button>
-                    </div>
-                  </td>
-                )}
-              </tr>
+                </Fragment>
               );
             })}
-            {suppliers.length === 0 && (
-              <tr>
-                <td colSpan={canManage ? 5 : 4} className="px-3 py-6 text-center text-slate-500">Постачальники ще не додані.</td>
-              </tr>
-            )}
           </tbody>
         </table>
+
+        {suppliers.length === 0 && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-6 text-center text-slate-500">
+            Постачальники ще не додані.
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function TypicalFieldsTab({ fields, canManage, createTypicalField, updateTypicalField, removeTypicalField }) {
+function TypicalFieldsTab({ fields, categories = [], accounts = [], canManage, createTypicalField, updateTypicalField, removeTypicalField }) {
   const [type, setType] = useState("category");
   const [name, setName] = useState("");
   const [subcategoryCategory, setSubcategoryCategory] = useState("");
+  const [managerCategory, setManagerCategory] = useState("");
+  const [managerUserId, setManagerUserId] = useState("");
 
   const availableCategories = useMemo(() => {
     return fields
@@ -3108,6 +3505,56 @@ function TypicalFieldsTab({ fields, canManage, createTypicalField, updateTypical
     };
   }, [fields]);
 
+  const categoryManagers = useMemo(
+    () => fields.filter((item) => item.type === "categoryManager" && item.isActive !== false),
+    [fields]
+  );
+
+  const assignManagerToCategory = async () => {
+    if (!managerCategory) {
+      alert("Оберіть групу товарів.");
+      return;
+    }
+    if (!managerUserId) {
+      alert("Оберіть менеджера.");
+      return;
+    }
+
+    const manager = accounts.find((item) => String(item.id || "") === String(managerUserId));
+    if (!manager) {
+      alert("Не знайдено обраного менеджера.");
+      return;
+    }
+
+    const existing = categoryManagers.find((item) => String(item.categoryName || "") === String(managerCategory));
+    const payload = {
+      type: "categoryManager",
+      name: String(manager.displayName || manager.fullName || manager.email || "").trim(),
+      managerUserId: String(manager.id || ""),
+      managerEmail: String(manager.email || "").trim(),
+      categoryName: String(managerCategory || "").trim(),
+      isActive: true,
+    };
+
+    if (existing?.id) {
+      const { id, ...existingPayload } = existing;
+      const result = await updateTypicalField(id, { ...existingPayload, ...payload });
+      if (!result.success) {
+        alert("Не вдалося оновити відповідального менеджера.");
+        return;
+      }
+    } else {
+      const result = await createTypicalField(payload);
+      if (!result.success) {
+        alert("Не вдалося призначити менеджера.");
+        return;
+      }
+    }
+
+    setManagerCategory("");
+    setManagerUserId("");
+  };
+
   const toggleActive = async (item) => {
     const { id, ...payload } = item;
     const result = await updateTypicalField(id, { ...payload, isActive: !item.isActive });
@@ -3145,6 +3592,63 @@ function TypicalFieldsTab({ fields, canManage, createTypicalField, updateTypical
         </div>
       )}
 
+      {canManage && (
+        <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+          <p className="mb-2 text-sm font-semibold text-indigo-900">Відповідальний менеджер за групу товарів</p>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+            <select className={inputClass} value={managerCategory} onChange={(e) => setManagerCategory(e.target.value)}>
+              <option value="">Оберіть групу товарів</option>
+              {categories.map((category) => (
+                <option key={`manager_category_${category}`} value={category}>{category}</option>
+              ))}
+            </select>
+            <select className={inputClass} value={managerUserId} onChange={(e) => setManagerUserId(e.target.value)}>
+              <option value="">Оберіть акаунт менеджера</option>
+              {accounts.map((account) => (
+                <option key={`manager_account_${account.id}`} value={account.id}>
+                  {account.displayName || account.fullName || account.email || account.id}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={assignManagerToCategory} className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">
+              Призначити
+            </button>
+          </div>
+
+          <div className="mt-3 overflow-x-auto rounded-lg border border-indigo-200 bg-white">
+            <table className="min-w-full text-sm">
+              <thead className="bg-indigo-50 text-indigo-900">
+                <tr>
+                  <th className="px-2 py-1 text-left">Група товарів</th>
+                  <th className="px-2 py-1 text-left">Менеджер</th>
+                  <th className="px-2 py-1 text-left">Email</th>
+                  <th className="px-2 py-1 text-left">Дія</th>
+                </tr>
+              </thead>
+              <tbody>
+                {categoryManagers.map((item) => (
+                  <tr key={item.id} className="border-t border-indigo-100">
+                    <td className="px-2 py-1">{item.categoryName || "-"}</td>
+                    <td className="px-2 py-1">{item.name || "-"}</td>
+                    <td className="px-2 py-1">{item.managerEmail || "-"}</td>
+                    <td className="px-2 py-1">
+                      <button type="button" className="rounded border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700" onClick={() => removeTypicalField(item.id)}>
+                        Видалити
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {categoryManagers.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-2 py-3 text-center text-slate-500">Призначень ще немає.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {[{ key: "category", label: "Категорії" }, { key: "subcategory", label: "Підкатегорії" }, { key: "unit", label: "Одиниці вимірювання" }].map((group) => (
           <div key={group.key} className="rounded-lg border border-slate-200 p-3">
@@ -3177,7 +3681,446 @@ function TypicalFieldsTab({ fields, canManage, createTypicalField, updateTypical
   );
 }
 
-function BookingTab({ products, orders, createOrder, restaurants, user, suppliersDirectory = [] }) {
+function OrderAplTab({ products, restaurants, typicalFields, user, canManage, createTypicalField, updateTypicalField }) {
+  const [selectedRestaurantIds, setSelectedRestaurantIds] = useState([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [supplierFilter, setSupplierFilter] = useState("");
+  const [groupFilter, setGroupFilter] = useState("");
+  const [expandedAplGroups, setExpandedAplGroups] = useState({});
+  const [expandedAplGreenCards, setExpandedAplGreenCards] = useState({});
+  const [aplCellOverrides, setAplCellOverrides] = useState({});
+
+  const canManageApl = canManage || hasProcurementAccess(user) || isGlobalAdminUser(user);
+
+  const assignmentRecords = useMemo(
+    () => (typicalFields || []).filter((item) => String(item?.type || "") === "aplAssignment"),
+    [typicalFields]
+  );
+
+  const allRestaurantIds = useMemo(
+    () => restaurants.map((item) => String(item.id || "")).filter(Boolean),
+    [restaurants]
+  );
+
+  useEffect(() => {
+    if (selectedRestaurantIds.length > 0) return;
+    setSelectedRestaurantIds(allRestaurantIds);
+  }, [allRestaurantIds, selectedRestaurantIds.length]);
+
+  const makeAssignmentCoreKey = (entry) => [
+    String(entry?.restaurantId || "").trim().toLowerCase(),
+    String(entry?.greenCardName || "").trim().toLowerCase(),
+    String(entry?.whiteCardName || "").trim().toLowerCase(),
+    String(entry?.code1C || "").trim().toLowerCase(),
+  ].join("::");
+
+  const assignmentsByCoreKey = useMemo(() => {
+    const map = new Map();
+    assignmentRecords.forEach((item) => {
+      const key = makeAssignmentCoreKey(item);
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      map.get(key).push(item);
+    });
+    return map;
+  }, [assignmentRecords]);
+
+  const matrixRows = useMemo(() => {
+    const byKey = new Map();
+    (products || []).forEach((product) => {
+      const whiteCardName = String(product?.whiteCardName || product?.name || "").trim();
+      const greenCardName = String(product?.greenCardName || product?.subcategory || "").trim();
+      const productGroup = String(product?.category || "").trim();
+      const code1C = String(product?.code1C || "").trim();
+      if (!whiteCardName || !greenCardName) return;
+
+      const rowKey = [
+        productGroup.toLowerCase(),
+        greenCardName.toLowerCase(),
+        whiteCardName.toLowerCase(),
+        code1C.toLowerCase(),
+      ].join("::");
+
+      if (!byKey.has(rowKey)) {
+        byKey.set(rowKey, {
+          key: rowKey,
+          greenCardName,
+          whiteCardName,
+          productGroup,
+          code1C,
+          unit: String(product?.unit || "").trim(),
+          suppliers: new Set(),
+        });
+      }
+
+      const row = byKey.get(rowKey);
+      const supplier = String(product?.supplier || "").trim();
+      if (supplier) {
+        row.suppliers.add(supplier);
+      }
+    });
+
+    return Array.from(byKey.values())
+      .map((row) => ({
+        ...row,
+        supplierList: Array.from(row.suppliers.values()).sort((a, b) => a.localeCompare(b, "uk")),
+      }))
+      .map((row) => ({
+        ...row,
+        supplier: row.supplierList.join(", "),
+      }))
+      .sort((a, b) => {
+        const byGroup = String(a.productGroup || "").localeCompare(String(b.productGroup || ""), "uk");
+        if (byGroup !== 0) return byGroup;
+        const byGreen = String(a.greenCardName || "").localeCompare(String(b.greenCardName || ""), "uk");
+        if (byGreen !== 0) return byGreen;
+        return String(a.whiteCardName || "").localeCompare(String(b.whiteCardName || ""), "uk");
+      });
+  }, [products]);
+
+  const suppliers = useMemo(
+    () => Array.from(new Set(matrixRows.flatMap((item) => item.supplierList || []).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk")),
+    [matrixRows]
+  );
+
+  const groups = useMemo(
+    () => Array.from(new Set(matrixRows.map((item) => item.productGroup).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk")),
+    [matrixRows]
+  );
+
+  const filteredRows = useMemo(() => {
+    const normalizedSearch = String(searchTerm || "").trim().toLowerCase();
+    return matrixRows.filter((row) => {
+      const bySearch = normalizedSearch
+        ? [row.greenCardName, row.whiteCardName, row.code1C, row.supplier, row.productGroup]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase()
+            .includes(normalizedSearch)
+        : true;
+      const bySupplier = supplierFilter ? (row.supplierList || []).includes(supplierFilter) : true;
+      const byGroup = groupFilter ? String(row.productGroup || "") === groupFilter : true;
+      return bySearch && bySupplier && byGroup;
+    });
+  }, [matrixRows, searchTerm, supplierFilter, groupFilter]);
+
+  const groupedRows = useMemo(() => {
+    const byGroup = new Map();
+    filteredRows.forEach((row) => {
+      const groupName = String(row.productGroup || "Без групи").trim() || "Без групи";
+      if (!byGroup.has(groupName)) {
+        byGroup.set(groupName, new Map());
+      }
+
+      const byGreen = byGroup.get(groupName);
+      const greenName = String(row.greenCardName || "Без зеленої картки").trim() || "Без зеленої картки";
+      if (!byGreen.has(greenName)) {
+        byGreen.set(greenName, []);
+      }
+      byGreen.get(greenName).push(row);
+    });
+
+    return Array.from(byGroup.entries())
+      .sort(([left], [right]) => left.localeCompare(right, "uk"))
+      .map(([groupName, byGreen]) => ({
+        groupName,
+        greenCards: Array.from(byGreen.entries())
+          .sort(([left], [right]) => left.localeCompare(right, "uk"))
+          .map(([greenCardName, rows]) => ({
+            greenCardName,
+            rows: [...rows].sort((left, right) => String(left.whiteCardName || "").localeCompare(String(right.whiteCardName || ""), "uk")),
+          })),
+      }));
+  }, [filteredRows]);
+
+  const activeRestaurantIds = selectedRestaurantIds.length > 0 ? selectedRestaurantIds : allRestaurantIds;
+  const visibleRestaurants = restaurants.filter((item) => activeRestaurantIds.includes(String(item.id || "")));
+
+  const toggleRestaurantFilter = (restaurantId) => {
+    const normalized = String(restaurantId || "");
+    setSelectedRestaurantIds((prev) => {
+      const current = new Set(prev);
+      if (current.has(normalized)) current.delete(normalized);
+      else current.add(normalized);
+      return Array.from(current);
+    });
+  };
+
+  const isAplGroupExpanded = (groupName) => Boolean(
+    Object.prototype.hasOwnProperty.call(expandedAplGroups, groupName)
+      ? expandedAplGroups[groupName]
+      : false
+  );
+
+  const isAplGreenExpanded = (groupName, greenCardName) => {
+    const key = `${groupName}::${greenCardName}`;
+    return Boolean(
+      Object.prototype.hasOwnProperty.call(expandedAplGreenCards, key)
+        ? expandedAplGreenCards[key]
+        : false
+    );
+  };
+
+  const toggleAplGroup = (groupName) => {
+    setExpandedAplGroups((prev) => ({
+      ...prev,
+      [groupName]: !(Object.prototype.hasOwnProperty.call(prev, groupName) ? prev[groupName] : true),
+    }));
+  };
+
+  const toggleAplGreenCard = (groupName, greenCardName) => {
+    const key = `${groupName}::${greenCardName}`;
+    setExpandedAplGreenCards((prev) => ({
+      ...prev,
+      [key]: !(Object.prototype.hasOwnProperty.call(prev, key) ? prev[key] : true),
+    }));
+  };
+
+  const getCellState = (row, restaurant) => {
+    const key = makeAssignmentCoreKey({
+      restaurantId: restaurant.id,
+      greenCardName: row.greenCardName,
+      whiteCardName: row.whiteCardName,
+      code1C: row.code1C,
+    });
+    const records = assignmentsByCoreKey.get(key) || [];
+    const assignedFromDb = records.some((record) => record?.isActive !== false);
+    const hasOverride = Object.prototype.hasOwnProperty.call(aplCellOverrides, key);
+    return {
+      key,
+      records,
+      assigned: hasOverride ? Boolean(aplCellOverrides[key]) : assignedFromDb,
+    };
+  };
+
+  const toggleAssignment = async (row, restaurant) => {
+    if (!canManageApl) return;
+
+    const payload = {
+      type: "aplAssignment",
+      name: `${row.greenCardName} / ${row.whiteCardName}`,
+      categoryName: String(row.productGroup || "").trim(),
+      productGroup: String(row.productGroup || "").trim(),
+      supplier: String(row.supplier || "").trim(),
+      code1C: String(row.code1C || "").trim(),
+      whiteCardName: String(row.whiteCardName || "").trim(),
+      greenCardName: String(row.greenCardName || "").trim(),
+      unit: String(row.unit || "").trim(),
+      restaurantId: String(restaurant?.id || "").trim(),
+      restaurantName: String(restaurant?.name || "").trim(),
+      restaurantRegNumber: String(restaurant?.regNumber || "").trim(),
+      restaurantLookupKey: buildRestaurantLookupKey(restaurant || {}),
+      isActive: true,
+    };
+
+    const cellState = getCellState(row, restaurant);
+    const nextActive = !cellState.assigned;
+    setAplCellOverrides((prev) => ({
+      ...prev,
+      [cellState.key]: nextActive,
+    }));
+
+    if (cellState.records.length > 0) {
+      const results = await Promise.all(
+        cellState.records
+          .filter((record) => record?.id)
+          .map((record) => {
+            const { id, ...existingPayload } = record;
+            return updateTypicalField(id, {
+              ...existingPayload,
+              ...payload,
+              isActive: nextActive,
+            });
+          })
+      );
+
+      if (results.some((result) => !result?.success)) {
+        setAplCellOverrides((prev) => ({
+          ...prev,
+          [cellState.key]: cellState.assigned,
+        }));
+        alert("Не вдалося оновити призначення APL.");
+      }
+      return;
+    }
+
+    const result = await createTypicalField(payload);
+    if (!result.success) {
+      setAplCellOverrides((prev) => ({
+        ...prev,
+        [cellState.key]: cellState.assigned,
+      }));
+      alert("Не вдалося створити призначення APL.");
+    }
+  };
+
+  return (
+    <div className={cardClass}>
+      <div className="mb-4 flex items-center gap-2">
+        <Package size={18} className="text-indigo-600" />
+        <h2 className="text-lg font-semibold">APL (OrderAPL): призначення білих карток по ресторанах</h2>
+      </div>
+
+      <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+        У верхньому рівні використовується зелена картка, всередині неї білі картки. Відмітка в матриці визначає, яка біла картка доступна для конкретного закладу.
+      </div>
+
+      <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-4">
+        <div className="lg:col-span-2">
+          <label className="text-sm font-semibold text-slate-800">Пошук</label>
+          <input className={inputClass} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Зелена/біла картка, код 1С, постачальник" />
+        </div>
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Постачальник</label>
+          <select className={inputClass} value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)}>
+            <option value="">Всі постачальники</option>
+            {suppliers.map((supplier) => (
+              <option key={`apl_supplier_${supplier}`} value={supplier}>{supplier}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-sm font-semibold text-slate-800">Група товарів</label>
+          <select className={inputClass} value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
+            <option value="">Всі групи</option>
+            {groups.map((group) => (
+              <option key={`apl_group_${group}`} value={group}>{group}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="mb-4">
+        <p className="mb-2 text-sm font-semibold text-slate-800">Фільтр закладів</p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            onClick={() => setSelectedRestaurantIds(allRestaurantIds)}
+          >
+            Всі
+          </button>
+          <button
+            type="button"
+            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            onClick={() => setSelectedRestaurantIds([])}
+          >
+            Очистити
+          </button>
+          {restaurants.map((restaurant) => {
+            const active = activeRestaurantIds.includes(String(restaurant.id || ""));
+            return (
+              <button
+                key={`apl_restaurant_filter_${restaurant.id}`}
+                type="button"
+                onClick={() => toggleRestaurantFilter(restaurant.id)}
+                className={`rounded border px-2 py-1 text-xs font-semibold ${active ? "border-indigo-400 bg-indigo-100 text-indigo-800" : "border-slate-300 bg-white text-slate-700"}`}
+              >
+                {restaurant.name}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border border-slate-200">
+        <table className="min-w-full table-fixed text-sm">
+          <thead className="bg-slate-50 text-slate-700">
+            <tr>
+              <th className="w-28 px-2 py-2 text-left">Зелена картка</th>
+              <th className="w-44 px-2 py-2 text-left">Біла картка</th>
+              <th className="w-28 px-2 py-2 text-left">Група товарів</th>
+              <th className="w-40 px-2 py-2 text-left">Постачальник</th>
+              <th className="w-24 px-2 py-2 text-left">Код 1С</th>
+              {visibleRestaurants.map((restaurant) => (
+                <th key={`apl_header_${restaurant.id}`} className="h-14 w-16 border-l border-slate-200 px-1 py-1 text-center align-middle">
+                  <div className="break-words text-[11px] font-semibold leading-3 text-slate-700">
+                    {restaurant.name}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {groupedRows.map((groupNode) => {
+              const groupExpanded = isAplGroupExpanded(groupNode.groupName);
+              return (
+                <Fragment key={`apl_group_${groupNode.groupName}`}>
+                  <tr className="border-t border-slate-300 bg-slate-100">
+                    <td colSpan={5 + visibleRestaurants.length} className="px-2 py-1.5 text-sm font-semibold text-slate-900">
+                      <button type="button" className="inline-flex items-center gap-2" onClick={() => toggleAplGroup(groupNode.groupName)}>
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">
+                          {groupExpanded ? "−" : "+"}
+                        </span>
+                        {groupNode.groupName}
+                      </button>
+                    </td>
+                  </tr>
+
+                  {groupExpanded && groupNode.greenCards.map((greenNode) => {
+                    const greenExpanded = isAplGreenExpanded(groupNode.groupName, greenNode.greenCardName);
+                    return (
+                      <Fragment key={`apl_green_${groupNode.groupName}_${greenNode.greenCardName}`}>
+                        <tr className="border-t border-dashed border-slate-300 bg-slate-50">
+                          <td colSpan={5 + visibleRestaurants.length} className="px-2 py-1.5 text-sm text-slate-800">
+                            <button type="button" className="inline-flex items-center gap-2" onClick={() => toggleAplGreenCard(groupNode.groupName, greenNode.greenCardName)}>
+                              <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-700">
+                                {greenExpanded ? "−" : "+"}
+                              </span>
+                              <span className="font-semibold">{greenNode.greenCardName}</span>
+                              <span className="text-xs text-slate-500">{greenNode.rows.length} білих карток</span>
+                            </button>
+                          </td>
+                        </tr>
+
+                        {greenExpanded && greenNode.rows.map((row) => (
+                          <tr key={`apl_row_${row.key}`} className="border-t border-dashed border-slate-200">
+                            <td className="px-2 py-1.5 text-xs text-slate-500">{row.greenCardName}</td>
+                            <td className="px-2 py-1.5 font-medium text-slate-900">{row.whiteCardName}</td>
+                            <td className="px-2 py-1.5">{row.productGroup || "-"}</td>
+                            <td className="px-2 py-1.5 text-xs leading-4" title={row.supplier || "-"}>{row.supplier || "-"}</td>
+                            <td className="px-2 py-1.5">{row.code1C || "-"}</td>
+                            {visibleRestaurants.map((restaurant) => {
+                              const cellState = getCellState(row, restaurant);
+                              return (
+                                <td key={`apl_cell_${row.key}_${restaurant.id}`} className="w-16 border-l border-slate-200 px-2 py-1.5 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={cellState.assigned}
+                                    onChange={() => {
+                                      void toggleAssignment(row, restaurant);
+                                    }}
+                                    disabled={!canManageApl}
+                                    className="h-4 w-4 accent-indigo-600"
+                                  />
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </Fragment>
+                    );
+                  })}
+                </Fragment>
+              );
+            })}
+
+            {groupedRows.length === 0 && (
+              <tr>
+                <td colSpan={5 + Math.max(1, visibleRestaurants.length)} className="px-3 py-6 text-center text-slate-500">
+                  Немає даних для матриці APL. Спочатку імпортуйте шаблон 1С з білими/зеленими картками.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function BookingTab({ products, orders, aplAssignments = [], createOrder, restaurants, user, suppliersDirectory = [] }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const pageSizeOptions = [12, 25, 50];
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
@@ -3209,16 +4152,158 @@ function BookingTab({ products, orders, createOrder, restaurants, user, supplier
   const activeProducts = useMemo(() => {
     const selectedRestaurantId = String(restaurantId || "");
     if (!selectedRestaurantId) return [];
-    return products.filter((p) => p.isActive && sameRestaurant(p.restaurantId, selectedRestaurantId));
-  }, [products, restaurantId]);
+
+    const selectedRestaurant = restaurants.find((r) => String(r.id) === selectedRestaurantId) || null;
+    const selectedRestaurantTokens = collectRestaurantTokens(selectedRestaurant || { id: selectedRestaurantId });
+    const selectedRestaurantLookupKey = buildRestaurantLookupKey(selectedRestaurant || { id: selectedRestaurantId });
+
+    const normalizeSupplierKey = (value) => String(value || "").trim().toLowerCase();
+    const suppliersWithContracts = new Set();
+    const suppliersMatchingRestaurantContract = new Set();
+
+    (Array.isArray(suppliersDirectory) ? suppliersDirectory : []).forEach((supplierRecord) => {
+      const supplierName = String(supplierRecord?.name || "").trim();
+      const supplierKey = normalizeSupplierKey(supplierName);
+      if (!supplierKey) return;
+
+      const contracts = Array.isArray(supplierRecord?.contracts) ? supplierRecord.contracts : [];
+      if (contracts.length === 0) return;
+
+      suppliersWithContracts.add(supplierKey);
+      const hasContractForRestaurant = contracts.some((contract) => {
+        const contractLookupKey = String(contract?.restaurantLookupKey || "");
+        if (contractLookupKey && contractLookupKey === selectedRestaurantLookupKey) return true;
+        return hasRestaurantTokenOverlap(collectRestaurantTokens(contract || {}), selectedRestaurantTokens);
+      });
+
+      if (hasContractForRestaurant) {
+        suppliersMatchingRestaurantContract.add(supplierKey);
+      }
+    });
+
+    const shouldRestrictByContracts = suppliersWithContracts.size > 0;
+    const isSupplierAllowedForRestaurant = (supplierName) => {
+      const supplierKey = normalizeSupplierKey(supplierName);
+      if (!supplierKey) return false;
+      if (!shouldRestrictByContracts) return true;
+      if (suppliersMatchingRestaurantContract.has(supplierKey)) return true;
+      return !suppliersWithContracts.has(supplierKey);
+    };
+
+    const scopedProducts = products.filter((product) => {
+      if (!product?.isActive) return false;
+      return hasRestaurantTokenOverlap(collectRestaurantTokens(product || {}), selectedRestaurantTokens);
+    });
+    const scopedAssignments = (aplAssignments || []).filter(
+      (entry) =>
+        String(entry?.type || "") === "aplAssignment" &&
+        entry?.isActive !== false &&
+        (String(entry?.restaurantLookupKey || "") === selectedRestaurantLookupKey || hasRestaurantTokenOverlap(collectRestaurantTokens(entry || {}), selectedRestaurantTokens))
+    );
+
+    if (scopedAssignments.length === 0) {
+      return scopedProducts;
+    }
+
+    const byGreenCard = new Map();
+    scopedAssignments.forEach((assignment) => {
+      const greenCardName = String(assignment?.greenCardName || "").trim();
+      const whiteCardName = String(assignment?.whiteCardName || "").trim();
+      const code1C = String(assignment?.code1C || "").trim();
+      if (!greenCardName) return;
+
+      const key = [greenCardName.toLowerCase()].join("::");
+      if (!byGreenCard.has(key)) {
+        byGreenCard.set(key, {
+          id: `apl::${selectedRestaurantId}::${key}`,
+          name: greenCardName,
+          category: String(assignment?.productGroup || assignment?.categoryName || "").trim(),
+          supplier: "",
+          suppliers: new Set(),
+          unit: String(assignment?.unit || "").trim(),
+          unitPrice: 0,
+          restaurantId: selectedRestaurantId,
+          isActive: true,
+          whiteCards: [],
+        });
+      }
+
+      const row = byGreenCard.get(key);
+      const assignmentSupplier = String(assignment?.supplier || "").trim();
+      if (assignmentSupplier && isSupplierAllowedForRestaurant(assignmentSupplier)) {
+        row.suppliers.add(assignmentSupplier);
+      }
+      const matchedProduct = scopedProducts.find((product) => {
+        const productCode = String(product?.code1C || "").trim().toLowerCase();
+        const assignmentCode = code1C.toLowerCase();
+        const productName = String(product?.name || product?.whiteCardName || "").trim().toLowerCase();
+        const assignmentWhiteName = whiteCardName.toLowerCase();
+        if (assignmentCode && productCode) return assignmentCode === productCode;
+        return assignmentWhiteName && productName && assignmentWhiteName === productName;
+      });
+
+      if (matchedProduct) {
+        const matchedSupplier = String(matchedProduct.supplier || assignmentSupplier).trim();
+        if (matchedSupplier && isSupplierAllowedForRestaurant(matchedSupplier)) {
+          row.suppliers.add(matchedSupplier);
+          row.whiteCards.push({
+            id: matchedProduct.id,
+            name: matchedProduct.name,
+            code1C: matchedProduct.code1C || code1C,
+            unitPrice: toNumber(matchedProduct.unitPrice),
+            unit: matchedProduct.unit || row.unit,
+            supplier: matchedSupplier,
+          });
+        }
+      } else {
+        if (assignmentSupplier && isSupplierAllowedForRestaurant(assignmentSupplier)) {
+          row.whiteCards.push({
+            id: `aplwhite::${selectedRestaurantId}::${code1C || whiteCardName}`,
+            name: whiteCardName,
+            code1C,
+            unitPrice: toNumber(assignment?.unitPrice || 0),
+            unit: String(assignment?.unit || "").trim(),
+            supplier: assignmentSupplier,
+          });
+        }
+      }
+    });
+
+    return Array.from(byGreenCard.values()).map((item) => {
+      const prices = item.whiteCards.map((card) => toNumber(card.unitPrice)).filter((price) => price > 0);
+      const avgPrice = prices.length > 0 ? prices.reduce((sum, price) => sum + price, 0) / prices.length : 0;
+      const supplierList = Array.from(item.suppliers.values()).sort((a, b) => a.localeCompare(b, "uk"));
+      return {
+        ...item,
+        supplier: supplierList[0] || "",
+        supplierList,
+        unitPrice: avgPrice,
+        unit: item.unit || item.whiteCards.find((card) => card.unit)?.unit || "",
+      };
+    }).filter((item) => item.whiteCards.length > 0 || (item.supplierList || []).length > 0);
+  }, [products, aplAssignments, restaurantId, suppliersDirectory, restaurants]);
 
   const availableCategories = useMemo(() => {
     return Array.from(new Set(activeProducts.map((product) => product.category).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
   }, [activeProducts]);
 
   const availableSuppliers = useMemo(() => {
-    return Array.from(new Set(activeProducts.map((product) => product.supplier).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
+    return Array.from(
+      new Set(
+        activeProducts.flatMap((product) => {
+          if (Array.isArray(product.supplierList) && product.supplierList.length > 0) {
+            return product.supplierList;
+          }
+          return product.supplier ? [product.supplier] : [];
+        }).filter(Boolean)
+      )
+    ).sort((a, b) => a.localeCompare(b, "uk"));
   }, [activeProducts]);
+
+  const isAplOrderingMode = useMemo(
+    () => activeProducts.some((product) => String(product.id || "").startsWith("apl::")),
+    [activeProducts]
+  );
 
   const filteredProducts = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -3231,7 +4316,11 @@ function BookingTab({ products, orders, createOrder, restaurants, user, supplier
             .includes(normalizedSearch)
         : true;
       const byCategory = categoryFilter ? product.category === categoryFilter : true;
-      const bySupplier = supplierFilter ? product.supplier === supplierFilter : true;
+      const bySupplier = supplierFilter
+        ? (Array.isArray(product.supplierList) && product.supplierList.length > 0
+            ? product.supplierList.includes(supplierFilter)
+            : product.supplier === supplierFilter)
+        : true;
       const bySelected = showOnlySelected ? toNumber(quantities[product.id]) > 0 : true;
       return bySearch && byCategory && bySupplier && bySelected;
     });
@@ -3302,6 +4391,7 @@ function BookingTab({ products, orders, createOrder, restaurants, user, supplier
           qty,
           unitPrice,
           amount: qty * unitPrice,
+          whiteCards: Array.isArray(product.whiteCards) ? product.whiteCards : [],
         };
       })
       .filter(Boolean);
@@ -3361,6 +4451,8 @@ function BookingTab({ products, orders, createOrder, restaurants, user, supplier
           unitPrice: toNumber(product.unitPrice),
           amount: qty * toNumber(product.unitPrice),
           supplier: product.supplier || "",
+          aplWhiteCards: Array.isArray(product.whiteCards) ? product.whiteCards : [],
+          isAplLine: String(product.id || "").startsWith("apl::"),
         };
       })
       .filter(Boolean);
@@ -3444,6 +4536,12 @@ function BookingTab({ products, orders, createOrder, restaurants, user, supplier
           </div>
         </div>
 
+        {isAplOrderingMode && (
+          <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-900">
+            Режим APL активний: для замовлення доступні зелені картки, сформовані з призначень білих карток по ресторану.
+          </div>
+        )}
+
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
           <div className="lg:col-span-2">
             <label className="text-sm font-semibold text-slate-800">Пошук</label>
@@ -3512,9 +4610,8 @@ function BookingTab({ products, orders, createOrder, restaurants, user, supplier
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-700">
               <tr>
-                <th className="px-3 py-2 text-left">Продукт</th>
                 <th className="px-3 py-2 text-left">Категорія</th>
-                <th className="px-3 py-2 text-left">Постачальник</th>
+                <th className="px-3 py-2 text-left">Зелена картка</th>
                 <th className="px-3 py-2 text-left">Од. вим.</th>
                 <th className="px-3 py-2 text-left">Ціна за од.</th>
                 <th className="px-3 py-2 text-left">Кількість</th>
@@ -3524,9 +4621,8 @@ function BookingTab({ products, orders, createOrder, restaurants, user, supplier
             <tbody>
               {paginatedProducts.map((product) => (
                 <tr key={product.id} className="border-t border-slate-200">
-                  <td className="px-3 py-2 font-medium text-slate-900">{product.name}</td>
                   <td className="px-3 py-2">{product.category}</td>
-                  <td className="px-3 py-2">{product.supplier || "-"}</td>
+                  <td className="px-3 py-2 font-medium text-slate-900">{product.name}</td>
                   <td className="px-3 py-2">{product.unit || "-"}</td>
                   <td className="px-3 py-2">{formatMoney(product.unitPrice)}</td>
                   <td className="px-3 py-2">
@@ -3549,7 +4645,7 @@ function BookingTab({ products, orders, createOrder, restaurants, user, supplier
               ))}
               {filteredProducts.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
+                  <td colSpan={6} className="px-3 py-6 text-center text-slate-500">
                     {restaurantId ? "За поточними фільтрами продукти не знайдено." : "Спочатку оберіть заклад."}
                   </td>
                 </tr>
@@ -3698,7 +4794,7 @@ function BookingTab({ products, orders, createOrder, restaurants, user, supplier
             <tbody>
               {myOrders.map((order) => (
                 <tr key={order.id} className="border-t border-slate-200">
-                  <td className="px-3 py-2">{new Date(order.createdAt).toLocaleString("uk-UA")}</td>
+                  <td className="px-3 py-2">{formatDateTimeSafe(order.createdAt)}</td>
                   <td className="px-3 py-2">{order.restaurantName}</td>
                   <td className="px-3 py-2">{order.items.length}</td>
                   <td className="px-3 py-2">{order.requiredDate}</td>
@@ -3727,7 +4823,8 @@ const statusLabel = (status) => {
   return status;
 };
 
-function OrdersManagementTab({ orders, updateOrder, createSupplierDispatch, canManageOrders, user }) {
+function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierDispatch, canManageOrders, user }) {
+  const isGlobalAdmin = isGlobalAdminUser(user);
   const [statusFilter, setStatusFilter] = useState("");
   const [orderDateFrom, setOrderDateFrom] = useState("");
   const [orderDateTo, setOrderDateTo] = useState("");
@@ -3738,6 +4835,7 @@ function OrdersManagementTab({ orders, updateOrder, createSupplierDispatch, canM
   const [expandedSuppliers, setExpandedSuppliers] = useState({});
   const [expandedSummarySuppliers, setExpandedSummarySuppliers] = useState({});
   const [expandedRestaurants, setExpandedRestaurants] = useState({});
+  const [editingOrder, setEditingOrder] = useState(null);
 
   const visibleOrders = useMemo(() => {
     const filteredByRole = canManageOrders
@@ -3944,6 +5042,126 @@ function OrdersManagementTab({ orders, updateOrder, createSupplierDispatch, canM
     if (!result.success) {
       alert("Не вдалося оновити статус заявки.");
     }
+  };
+
+  const openEditOrder = (order) => {
+    const items = Array.isArray(order?.items)
+      ? order.items.map((item, index) => ({
+          id: `${order?.id || "order"}_${item?.productId || item?.productName || index}`,
+          productId: item?.productId || "",
+          productName: item?.productName || "",
+          supplier: item?.supplier || "",
+          unit: item?.unit || "",
+          code1C: item?.code1C || "",
+          qty: String(toNumber(item?.qty) || ""),
+          unitPrice: String(toNumber(item?.unitPrice) || ""),
+        }))
+      : [];
+
+    setEditingOrder({
+      id: order?.id,
+      restaurantName: order?.restaurantName || "",
+      requiredDate: String(order?.requiredDate || ""),
+      comment: String(order?.comment || ""),
+      status: String(order?.status || "new"),
+      items,
+    });
+  };
+
+  const updateEditingOrderItem = (itemId, patch) => {
+    setEditingOrder((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        items: prev.items.map((item) => (String(item.id) === String(itemId) ? { ...item, ...patch } : item)),
+      };
+    });
+  };
+
+  const removeEditingOrderItem = (itemId) => {
+    setEditingOrder((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        items: prev.items.filter((item) => String(item.id) !== String(itemId)),
+      };
+    });
+  };
+
+  const saveEditingOrder = async () => {
+    if (!editingOrder?.id) return;
+
+    const normalizedItems = (editingOrder.items || [])
+      .map((item) => {
+        const qty = toNumber(item.qty);
+        const unitPrice = toNumber(item.unitPrice);
+        if (qty <= 0) return null;
+        return {
+          productId: item.productId,
+          productName: item.productName,
+          supplier: item.supplier,
+          unit: item.unit,
+          code1C: item.code1C,
+          qty,
+          unitPrice,
+          amount: qty * unitPrice,
+        };
+      })
+      .filter(Boolean);
+
+    if (normalizedItems.length === 0) {
+      alert("У заявці має залишитись хоча б одна позиція з кількістю > 0.");
+      return;
+    }
+
+    const originalOrder = orders.find((order) => String(order.id) === String(editingOrder.id));
+    if (!originalOrder) {
+      alert("Не вдалося знайти заявку для редагування.");
+      return;
+    }
+
+    const totalItems = normalizedItems.reduce((sum, item) => sum + toNumber(item.qty), 0);
+    const totalAmount = normalizedItems.reduce((sum, item) => sum + toNumber(item.amount), 0);
+
+    const { id, ...payload } = originalOrder;
+    const result = await updateOrder(id, {
+      ...payload,
+      requiredDate: String(editingOrder.requiredDate || "").trim(),
+      comment: String(editingOrder.comment || "").trim(),
+      status: String(editingOrder.status || "new"),
+      items: normalizedItems,
+      totalItems,
+      totalAmount,
+      updatedBy: user?.displayName || user?.fullName || user?.email || "Адміністратор",
+      updatedById: user?.uid || "",
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (!result.success) {
+      alert("Не вдалося зберегти зміни заявки.");
+      return;
+    }
+
+    setEditingOrder(null);
+    alert("Зміни заявки збережено.");
+  };
+
+  const handleDeleteOrder = async (order) => {
+    if (!isGlobalAdmin) {
+      alert("Видалення заявки доступне лише адміністратору.");
+      return;
+    }
+
+    const confirmed = window.confirm(`Видалити заявку ${order?.restaurantName || ""} від ${formatDateTimeSafe(order?.createdAt)}?`);
+    if (!confirmed) return;
+
+    const result = await deleteOrder(String(order?.id || ""));
+    if (!result.success) {
+      alert("Не вдалося видалити заявку.");
+      return;
+    }
+
+    alert("Заявку видалено.");
   };
 
   const applyLineCorrection = async (entry) => {
@@ -4187,13 +5405,13 @@ function OrdersManagementTab({ orders, updateOrder, createSupplierDispatch, canM
                 <th className="px-3 py-2 text-left">Одиниці</th>
                 <th className="px-3 py-2 text-left">Сума</th>
                 <th className="px-3 py-2 text-left">Статус</th>
-                {canManageOrders && <th className="px-3 py-2 text-left">Дія</th>}
+                {canManageOrders && <th className="px-3 py-2 text-left">Дії</th>}
               </tr>
             </thead>
             <tbody>
               {visibleOrders.map((order) => (
                 <tr key={order.id} className="border-t border-slate-200 align-top">
-                  <td className="px-3 py-2">{new Date(order.createdAt).toLocaleString("uk-UA")}</td>
+                  <td className="px-3 py-2">{formatDateTimeSafe(order.createdAt)}</td>
                   <td className="px-3 py-2">{order.restaurantName}</td>
                   <td className="px-3 py-2">{order.requiredDate}</td>
                   <td className="px-3 py-2">{order.items.length}</td>
@@ -4202,16 +5420,36 @@ function OrdersManagementTab({ orders, updateOrder, createSupplierDispatch, canM
                   <td className="px-3 py-2">{statusLabel(order.status)}</td>
                   {canManageOrders && (
                     <td className="px-3 py-2">
-                      <select
-                        className="rounded-lg border border-slate-300 px-2 py-1 text-sm"
-                        value={order.status}
-                        onChange={(e) => updateStatus(order, e.target.value)}
-                      >
-                        <option value="new">Нова</option>
-                        <option value="processing">В обробці</option>
-                        <option value="sent">Надіслано постачальнику</option>
-                        <option value="completed">Закрито</option>
-                      </select>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <select
+                          className="rounded-lg border border-slate-300 px-2 py-1 text-sm"
+                          value={order.status}
+                          onChange={(e) => updateStatus(order, e.target.value)}
+                        >
+                          <option value="new">Нова</option>
+                          <option value="processing">В обробці</option>
+                          <option value="sent">Надіслано постачальнику</option>
+                          <option value="completed">Закрито</option>
+                        </select>
+                        {isGlobalAdmin && (
+                          <>
+                            <button
+                              type="button"
+                              className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                              onClick={() => openEditOrder(order)}
+                            >
+                              Редагувати
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                              onClick={() => { void handleDeleteOrder(order); }}
+                            >
+                              Видалити
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   )}
                 </tr>
@@ -4472,6 +5710,108 @@ function OrdersManagementTab({ orders, updateOrder, createSupplierDispatch, canM
           )}
         </div>
       </div>
+
+      {editingOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3" onClick={() => setEditingOrder(null)}>
+          <div className="w-full max-w-4xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h3 className="text-base font-semibold text-slate-900">Редагування заявки: {editingOrder.restaurantName}</h3>
+              <button type="button" className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700" onClick={() => setEditingOrder(null)}>
+                Закрити
+              </button>
+            </div>
+
+            <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+              <div>
+                <label className="text-xs font-semibold text-slate-700">Дата поставки</label>
+                <input
+                  type="date"
+                  className={inputClass}
+                  value={editingOrder.requiredDate}
+                  onChange={(e) => setEditingOrder((prev) => ({ ...prev, requiredDate: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-700">Статус</label>
+                <select
+                  className={inputClass}
+                  value={editingOrder.status}
+                  onChange={(e) => setEditingOrder((prev) => ({ ...prev, status: e.target.value }))}
+                >
+                  <option value="new">Нова</option>
+                  <option value="processing">В обробці</option>
+                  <option value="sent">Надіслано постачальнику</option>
+                  <option value="completed">Закрито</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-700">Коментар</label>
+                <input
+                  className={inputClass}
+                  value={editingOrder.comment}
+                  onChange={(e) => setEditingOrder((prev) => ({ ...prev, comment: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="max-h-[48vh] overflow-auto rounded-lg border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-slate-700">
+                  <tr>
+                    <th className="px-2 py-1 text-left">Продукт</th>
+                    <th className="px-2 py-1 text-left">Постачальник</th>
+                    <th className="px-2 py-1 text-left">Кількість</th>
+                    <th className="px-2 py-1 text-left">Ціна</th>
+                    <th className="px-2 py-1 text-left">Дія</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(editingOrder.items || []).map((item) => (
+                    <tr key={item.id} className="border-t border-slate-200">
+                      <td className="px-2 py-1">{item.productName}</td>
+                      <td className="px-2 py-1">{item.supplier || "-"}</td>
+                      <td className="px-2 py-1">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          className="w-24 rounded border border-slate-300 px-2 py-1 text-xs"
+                          value={item.qty}
+                          onChange={(e) => updateEditingOrderItem(item.id, { qty: e.target.value })}
+                        />
+                      </td>
+                      <td className="px-2 py-1">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className="w-24 rounded border border-slate-300 px-2 py-1 text-xs"
+                          value={item.unitPrice}
+                          onChange={(e) => updateEditingOrderItem(item.id, { unitPrice: e.target.value })}
+                        />
+                      </td>
+                      <td className="px-2 py-1">
+                        <button type="button" className="rounded border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-semibold text-rose-700" onClick={() => removeEditingOrderItem(item.id)}>
+                          Видалити рядок
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-3 flex justify-end gap-2">
+              <button type="button" className="rounded border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700" onClick={() => setEditingOrder(null)}>
+                Скасувати
+              </button>
+              <button type="button" className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500" onClick={() => { void saveEditingOrder(); }}>
+                Зберегти зміни
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4491,6 +5831,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     deleteProduct,
     createOrder,
     updateOrder,
+    deleteOrder,
     createSupplierDispatch,
     createSupplier,
     updateSupplier,
@@ -4504,9 +5845,37 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     deleteInventory,
   } = useProductBooking(true);
 
+  const [accounts, setAccounts] = useState([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    getUsers()
+      .then((items) => {
+        if (!isMounted) return;
+        const normalized = (Array.isArray(items) ? items : []).map((item) => ({
+          id: String(item?.id || item?.uid || "").trim(),
+          displayName: String(item?.displayName || item?.fullName || item?.name || "").trim(),
+          fullName: String(item?.fullName || item?.displayName || item?.name || "").trim(),
+          email: String(item?.email || "").trim(),
+        })).filter((item) => item.id);
+        setAccounts(normalized);
+      })
+      .catch(() => {
+        if (isMounted) setAccounts([]);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const tabKind = normalizeTabKind(topTab);
   const canManageProducts = hasProcurementAccess(user);
   const canManageOrders = hasProcurementAccess(user);
+  const aplAssignments = useMemo(
+    () => typicalFields.filter((item) => String(item?.type || "") === "aplAssignment"),
+    [typicalFields]
+  );
   const normalizedProducts = useMemo(() => {
     return products.map((item) => normalizeRestaurantScopedRecord(item, restaurants));
   }, [products, restaurants]);
@@ -4582,19 +5951,6 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     return map;
   }, [typicalFields, normalizedProducts]);
 
-  const availableUnits = useMemo(() => {
-    const fromDirectory = typicalFields
-      .filter((item) => item.type === "unit" && item.isActive !== false)
-      .map((item) => String(item.name || "").trim())
-      .filter(Boolean);
-
-    const fromProducts = normalizedProducts
-      .map((item) => String(item.unit || "").trim())
-      .filter(Boolean);
-
-    return Array.from(new Set([...fromDirectory, ...fromProducts])).sort((a, b) => a.localeCompare(b, "uk"));
-  }, [typicalFields, normalizedProducts]);
-
   if (loading) {
     return <div className={`${cardClass} text-sm text-slate-600`}>Завантаження даних з бази...</div>;
   }
@@ -4613,9 +5969,9 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
       <ProductAdminTab
         products={normalizedProducts}
         suppliers={availableSuppliers}
+        suppliersDirectory={suppliers}
         categories={availableCategories}
         subcategoriesByCategory={availableSubcategoriesByCategory}
-        units={availableUnits}
         inventories={normalizedInventories}
         restaurants={effectiveRestaurants}
         user={user}
@@ -4623,6 +5979,11 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
         addProduct={addProduct}
         updateProduct={updateProduct}
         deleteProduct={deleteProduct}
+        createSupplier={createSupplier}
+        updateSupplier={updateSupplier}
+        typicalFields={typicalFields}
+        createTypicalField={createTypicalField}
+        updateTypicalField={updateTypicalField}
       />
     );
   }
@@ -4667,6 +6028,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     return (
       <SuppliersAdminTab
         suppliers={suppliers}
+        restaurants={effectiveRestaurants}
         canManage={canManageProducts}
         createSupplier={createSupplier}
         updateSupplier={updateSupplier}
@@ -4679,10 +6041,26 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     return (
       <TypicalFieldsTab
         fields={typicalFields}
+        categories={availableCategories}
+        accounts={accounts}
         canManage={canManageProducts}
         createTypicalField={createTypicalField}
         updateTypicalField={updateTypicalField}
         removeTypicalField={removeTypicalField}
+      />
+    );
+  }
+
+  if (tabKind === "orderApl") {
+    return (
+      <OrderAplTab
+        products={normalizedProducts}
+        restaurants={effectiveRestaurants}
+        typicalFields={typicalFields}
+        user={user}
+        canManage={canManageProducts}
+        createTypicalField={createTypicalField}
+        updateTypicalField={updateTypicalField}
       />
     );
   }
@@ -4692,6 +6070,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
       <OrdersManagementTab
         orders={normalizedOrders}
         updateOrder={updateOrder}
+        deleteOrder={deleteOrder}
         createSupplierDispatch={createSupplierDispatch}
         canManageOrders={canManageOrders}
         user={user}
@@ -4699,5 +6078,5 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     );
   }
 
-  return <BookingTab products={normalizedProducts} orders={normalizedOrders} createOrder={createOrder} restaurants={effectiveRestaurants} user={user} suppliersDirectory={suppliers} />;
+  return <BookingTab products={normalizedProducts} orders={normalizedOrders} aplAssignments={aplAssignments} createOrder={createOrder} restaurants={effectiveRestaurants} user={user} suppliersDirectory={suppliers} />;
 }

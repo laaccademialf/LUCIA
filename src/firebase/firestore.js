@@ -708,6 +708,15 @@ export const updateProductOrder = async (id, data) => {
   }
 };
 
+export const deleteProductOrder = async (id) => {
+  try {
+    await deleteDoc(doc(db, "productOrders", id));
+  } catch (error) {
+    console.error("Помилка видалення заявки:", error);
+    throw error;
+  }
+};
+
 export const subscribeToProductOrders = (callback) => {
   const ordersRef = collection(db, "productOrders");
   const q = query(ordersRef, orderBy("createdAt", "desc"));

@@ -24,14 +24,23 @@ export const importProductsFromExcel = (file, defaultRestaurant = null) => {
     for (let i = 0; i < rows.length; i += 1) {
       const row = Array.isArray(rows[i]) ? rows[i] : [];
       const text = row.map((cell) => normalize(cell)).join("|");
-      const hasName = text.includes("номенклатура") || text.includes("назва") || text.includes("name");
-      const hasCode = text.includes("код") || text.includes("1c");
+      const hasName = text.includes("номенклатура") || text.includes("назва") || text.includes("name") || text.includes("товар цб");
+      const hasCode = text.includes("код") || text.includes("1c") || text.includes("справочника");
       const hasUnit = text.includes("одиниц") || text.includes("единиц") || text.includes("unit");
       if (hasName && hasCode && hasUnit) {
         return i;
       }
     }
     return 0;
+  };
+
+  const extractRegFromOrganization = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const directMatch = raw.match(/(\d{2,6}[A-Za-zА-Яа-яІіЇїЄєҐґ]{0,6})$/);
+    if (directMatch) return String(directMatch[1] || "").trim();
+    const anyNumber = raw.match(/(\d{2,6})/);
+    return anyNumber ? String(anyNumber[1] || "").trim() : "";
   };
 
   const resolveRestaurant = (row) => {
@@ -44,25 +53,38 @@ export const importProductsFromExcel = (file, defaultRestaurant = null) => {
     }
 
     const rowId = String(row["ID закладу"] || row["Restaurant ID"] || "").trim();
-    const rowName = String(row["Заклад"] || row["Ресторан"] || row["Restaurant"] || "").trim();
-    const rowRegNumber = String(
-      row["Код закладу"] || row["Обліковий номер"] || row["RegNumber"] || row["Restaurant Code"] || ""
+    const rowName = String(
+      row["Заклад"] ||
+      row["Ресторан"] ||
+      row["Restaurant"] ||
+      row["Организация"] ||
+      row["Організація"] ||
+      ""
     ).trim();
+    const rowRegNumber = String(
+      row["Код закладу"] ||
+      row["Обліковий номер"] ||
+      row["RegNumber"] ||
+      row["Restaurant Code"] ||
+      row["Обліковий №"] ||
+      ""
+    ).trim();
+    const organizationRegToken = extractRegFromOrganization(rowName);
 
     if (!restaurants.length) {
       if (defaultRestaurant?.id) {
         return {
           id: String(defaultRestaurant.id),
           name: String(defaultRestaurant.name || rowName || ""),
-          regNumber: String(defaultRestaurant.regNumber || rowRegNumber || ""),
+          regNumber: String(defaultRestaurant.regNumber || rowRegNumber || organizationRegToken || ""),
         };
       }
 
-      if (rowId || rowName || rowRegNumber) {
+      if (rowId || rowName || rowRegNumber || organizationRegToken) {
         return {
-          id: rowId,
+          id: rowId || organizationRegToken || rowName,
           name: rowName,
-          regNumber: rowRegNumber,
+          regNumber: rowRegNumber || organizationRegToken,
         };
       }
 
@@ -74,14 +96,28 @@ export const importProductsFromExcel = (file, defaultRestaurant = null) => {
       if (byId) return { id: String(byId.id), name: String(byId.name || ""), regNumber: String(byId.regNumber || "") };
     }
 
-    if (rowRegNumber) {
-      const byRegNumber = restaurants.find((item) => normalize(item.regNumber) === normalize(rowRegNumber));
+    const targetRegToken = normalize(rowRegNumber || organizationRegToken);
+    if (targetRegToken) {
+      const byRegNumber = restaurants.find((item) => normalize(item.regNumber) === targetRegToken);
       if (byRegNumber) return { id: String(byRegNumber.id), name: String(byRegNumber.name || ""), regNumber: String(byRegNumber.regNumber || "") };
+
+      const byRegContains = restaurants.find((item) => normalize(item.regNumber).includes(targetRegToken));
+      if (byRegContains) return { id: String(byRegContains.id), name: String(byRegContains.name || ""), regNumber: String(byRegContains.regNumber || "") };
+
+      const byOrgContainsReg = restaurants.find((item) => normalize(rowName).includes(normalize(item.regNumber)));
+      if (byOrgContainsReg) return { id: String(byOrgContainsReg.id), name: String(byOrgContainsReg.name || ""), regNumber: String(byOrgContainsReg.regNumber || "") };
     }
 
     if (rowName) {
       const byName = restaurants.find((item) => normalize(item.name) === normalize(rowName));
       if (byName) return { id: String(byName.id), name: String(byName.name || ""), regNumber: String(byName.regNumber || "") };
+
+      const byNameContains = restaurants.find((item) => {
+        const left = normalize(item.name);
+        const right = normalize(rowName);
+        return left && right && (left.includes(right) || right.includes(left));
+      });
+      if (byNameContains) return { id: String(byNameContains.id), name: String(byNameContains.name || ""), regNumber: String(byNameContains.regNumber || "") };
     }
 
     if (defaultRestaurant?.id) {
@@ -112,22 +148,70 @@ export const importProductsFromExcel = (file, defaultRestaurant = null) => {
         const rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
         const headerRowIndex = findHeaderRowIndex(rawRows);
         const rows = XLSX.utils.sheet_to_json(worksheet, { defval: "", range: headerRowIndex });
+        const rowsByIndex = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "", range: headerRowIndex + 1 });
+
+        const parseTemplateRowByIndex = (rowByIndex = []) => {
+          const organization = String(rowByIndex[0] || "").trim();
+          const supplier = String(rowByIndex[2] || "").trim();
+          const productGroup = String(rowByIndex[3] || "").trim();
+          const code1C = String(rowByIndex[4] || "").trim();
+          const whiteNamePrimary = String(rowByIndex[5] || "").trim();
+          const whiteNameSecondary = String(rowByIndex[6] || "").trim();
+          const greenCard = String(rowByIndex[7] || "").trim();
+          const unit = String(rowByIndex[9] || "").trim();
+          const unitPrice = toNumber(rowByIndex[11] || rowByIndex[18] || 0);
+          const whiteCardName = whiteNameSecondary || whiteNamePrimary;
+          const name = whiteCardName || whiteNamePrimary || code1C;
+
+          return {
+            organization,
+            supplier,
+            productGroup,
+            code1C,
+            whiteCardName,
+            greenCard,
+            unit,
+            unitPrice,
+            name,
+          };
+        };
 
         const products = rows
-          .map((row) => {
-            const name = String(row["Назва"] || row["Name"] || row["Номенклатура"] || "").trim();
-            const category = String(row["Категорія"] || row["Category"] || row["Категория"] || "").trim() || "Імпорт 1С";
-            const unit = String(row["Одиниця"] || row["Од. вим."] || row["Unit"] || row["Единица измерения"] || "").trim();
-            const supplier = String(row["Постачальник"] || row["Supplier"] || "").trim();
-            const code1C = String(row["Код 1С"] || row["Код1С"] || row["1C Code"] || row["Code 1C"] || row["Код"] || "").trim();
-            const unitPrice = toNumber(row["Ціна за одиницю"] || row["Ціна"] || row["Price"] || row["Учетная цена"] || row["Облікова ціна"] || 0);
-            const restaurant = resolveRestaurant(row);
+          .map((row, rowIndex) => {
+            const byIndex = parseTemplateRowByIndex(rowsByIndex[rowIndex] || []);
+            const templateLooksValid = Boolean(byIndex.code1C || byIndex.name || byIndex.greenCard || byIndex.productGroup || byIndex.organization);
+
+            const name = templateLooksValid
+              ? String(byIndex.name || "").trim()
+              : String(row["Назва"] || row["Name"] || row["Номенклатура"] || "").trim();
+            const category = templateLooksValid
+              ? String(byIndex.productGroup || "").trim() || "Імпорт 1С"
+              : String(row["Категорія"] || row["Category"] || row["Категория"] || "").trim() || "Імпорт 1С";
+            const unit = templateLooksValid
+              ? String(byIndex.unit || "").trim()
+              : String(row["Одиниця"] || row["Од. вим."] || row["Unit"] || row["Единица измерения"] || "").trim();
+            const supplier = templateLooksValid
+              ? String(byIndex.supplier || "").trim()
+              : String(row["Постачальник"] || row["Supplier"] || "").trim();
+            const code1C = templateLooksValid
+              ? String(byIndex.code1C || "").trim()
+              : String(row["Код 1С"] || row["Код1С"] || row["1C Code"] || row["Code 1C"] || row["Код"] || "").trim();
+            const unitPrice = templateLooksValid
+              ? toNumber(byIndex.unitPrice || 0)
+              : toNumber(row["Ціна за одиницю"] || row["Ціна"] || row["Price"] || row["Учетная цена"] || row["Облікова ціна"] || 0);
+            const restaurant = resolveRestaurant({
+              ...row,
+              ...(templateLooksValid ? { "Организация": byIndex.organization, "Заклад": byIndex.organization } : {}),
+            });
             const activeRaw = String(row["Активний"] || row["Active"] || "так").trim().toLowerCase();
             const isActive = !(activeRaw === "ні" || activeRaw === "no" || activeRaw === "false" || activeRaw === "0");
 
             return {
               name,
+              whiteCardName: String(byIndex.whiteCardName || name || "").trim(),
+              greenCardName: String(byIndex.greenCard || "").trim(),
               category,
+              subcategory: String(byIndex.greenCard || row["Товарна група"] || row["Тов.группа"] || row["Підкатегорія"] || "").trim(),
               unit,
               supplier,
               code1C,
