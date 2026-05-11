@@ -19,6 +19,7 @@ import {
   Plus,
   Settings,
   Shield,
+  Truck,
   Upload,
   UserIcon,
   Users,
@@ -103,6 +104,7 @@ const NAV_ICON_MAP = {
   Archive,
   BarChart3,
   Shield,
+  Truck,
   Users,
   Wrench,
   Folder,
@@ -114,6 +116,9 @@ const NAV_SECTION_ICON_BY_ID = {
   inventory: "Archive",
   reports: "BarChart3",
   security: "Shield",
+  supplier: "Truck",
+  suppliers: "Truck",
+  vendor: "Truck",
   team: "Users",
   maintenance: "Wrench",
 };
@@ -3618,11 +3623,28 @@ function App() {
       );
     }
 
+    const activeNavKey = String(activeNav || "").toLowerCase();
+    const topTabKey = String(topTab || "").toLowerCase();
+    const isSupplierPortalNav =
+      activeNavKey.includes("ordersupplier") ||
+      activeNavKey.includes("ordersuplayer") ||
+      activeNavKey.includes("supplierportal") ||
+      activeNavKey.includes("suplayerportal") ||
+      activeNavKey.includes("vendorportal") ||
+      ((activeNavKey.includes("supplier") || activeNavKey.includes("suplayer") || activeNavKey.includes("vendor") || activeNavKey.includes("постач")) &&
+        (topTabKey.includes("order") || topTabKey.includes("замов"))) ||
+      topTabKey.includes("ordersupplier") ||
+      topTabKey.includes("ordersuplayer") ||
+      topTabKey.includes("supplierportal") ||
+      topTabKey.includes("suplayerportal") ||
+      topTabKey.includes("vendorportal");
+
     if (
       activeNav === "inventory-products" ||
       activeNav.includes("inventory-products") ||
       activeNav === "productbooking" ||
-      activeNav.includes("productbooking")
+      activeNav.includes("productbooking") ||
+      isSupplierPortalNav
     ) {
       return (
         <div className="grid grid-cols-1">
@@ -3630,9 +3652,6 @@ function App() {
         </div>
       );
     }
-
-    const activeNavKey = String(activeNav || "").toLowerCase();
-    const topTabKey = String(topTab || "").toLowerCase();
 
     const isAssetManagementNav =
       activeNavKey.includes("capexmang") ||

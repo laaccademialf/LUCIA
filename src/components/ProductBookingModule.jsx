@@ -14,6 +14,13 @@ const loadInventoryListExcel = () => import("../utils/inventoryListExcel");
 
 const normalizeTabKind = (tabId = "") => {
   const value = String(tabId).toLowerCase();
+  if (
+    (value.includes("order") && (value.includes("supplier") || value.includes("suplayer") || value.includes("vendor") || value.includes("постач"))) ||
+    value.includes("supplierportal") ||
+    value.includes("suplayerportal") ||
+    value.includes("vendorportal") ||
+    value.includes("порталпостач")
+  ) return "supplierPortal";
   if (value.includes("orderapl") || value.includes("apl")) return "orderApl";
   if (
     value.includes("inventarizationspisok") ||
@@ -326,6 +333,112 @@ const hasProcurementAccess = (user) => {
     "управля",
   ];
   return terms.some((term) => roleValue.includes(term) || workRoleValue.includes(term));
+};
+
+const hasSupplierPortalAccess = (user) => {
+  const roleValue = String(user?.role || "").toLowerCase();
+  const workRoleValue = String(user?.workRole || "").toLowerCase();
+  const terms = ["supplier", "vendor", "постач"];
+  return terms.some((term) => roleValue.includes(term) || workRoleValue.includes(term));
+};
+
+const normalizeSupplierIdentity = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+
+const getSupplierPortalEmails = (supplier) => {
+  const emails = [
+    ...(Array.isArray(supplier?.portalEmails) ? supplier.portalEmails : []),
+    supplier?.portalEmail,
+    supplier?.contactEmail,
+    supplier?.email,
+  ];
+  return Array.from(
+    new Set(
+      emails
+        .map((item) => String(item || "").trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+};
+
+const resolveSupplierForUser = (user, suppliers = []) => {
+  const normalizedSuppliers = Array.isArray(suppliers) ? suppliers : [];
+  const email = String(user?.email || "").trim().toLowerCase();
+  if (email) {
+    const matchedByEmail = normalizedSuppliers.find((supplier) => getSupplierPortalEmails(supplier).includes(email));
+    if (matchedByEmail) return matchedByEmail;
+  }
+
+  const identityCandidates = [user?.displayName, user?.fullName, user?.name]
+    .map((item) => normalizeSupplierIdentity(item))
+    .filter(Boolean);
+
+  if (identityCandidates.length > 0) {
+    const matchedByName = normalizedSuppliers.find((supplier) =>
+      identityCandidates.includes(normalizeSupplierIdentity(supplier?.name))
+    );
+    if (matchedByName) return matchedByName;
+  }
+
+  return null;
+};
+
+const deriveOrderStatus = (items, currentStatus) => {
+  if (currentStatus === "completed") return "completed";
+  const normalizedItems = Array.isArray(items) ? items : [];
+  const hasItems = normalizedItems.length > 0;
+  const hasUnsent = normalizedItems.some((item) => !item.sentToSupplier);
+  const hasSent = normalizedItems.some((item) => item.sentToSupplier);
+  const hasPendingSupplierResponses = normalizedItems.some((item) => item.sentToSupplier && getSupplierResponseStatus(item) === "pending");
+  const hasSupplierIssues = normalizedItems.some((item) => {
+    if (!item.sentToSupplier) return false;
+    const responseStatus = getSupplierResponseStatus(item);
+    return responseStatus === "partial" || responseStatus === "unavailable";
+  });
+
+  if (!hasItems) return "new";
+  if (hasSupplierIssues || hasPendingSupplierResponses) return "processing";
+  if (!hasUnsent) return "sent";
+  if (hasSent && hasUnsent) return "processing";
+  return "new";
+};
+
+const getSupplierResponseStatus = (item) => {
+  const status = String(item?.supplierResponseStatus || item?.vendorResponseStatus || "").trim().toLowerCase();
+  if (status) return status;
+  return item?.sentToSupplier ? "pending" : "draft";
+};
+
+const getSupplierResponseLabel = (status) => {
+  if (status === "accepted") return "Підтверджено";
+  if (status === "partial") return "Частково";
+  if (status === "unavailable") return "Немає в наявності";
+  if (status === "pending") return "Очікує відповіді";
+  return "Чернетка";
+};
+
+const getSupplierResponseBadgeClass = (status) => {
+  if (status === "accepted") return "bg-emerald-100 text-emerald-700";
+  if (status === "partial") return "bg-amber-100 text-amber-700";
+  if (status === "unavailable") return "bg-rose-100 text-rose-700";
+  if (status === "pending") return "bg-indigo-100 text-indigo-700";
+  return "bg-slate-100 text-slate-600";
+};
+
+const summarizeSupplierResponses = (order, supplierName) => {
+  const normalizedSupplier = normalizeSupplierIdentity(supplierName);
+  const items = (Array.isArray(order?.items) ? order.items : []).filter((item) => {
+    if (!item?.sentToSupplier) return false;
+    return normalizeSupplierIdentity(item?.supplier) === normalizedSupplier;
+  });
+
+  const summary = { pending: 0, accepted: 0, partial: 0, unavailable: 0, total: items.length };
+  items.forEach((item) => {
+    const status = getSupplierResponseStatus(item);
+    if (Object.prototype.hasOwnProperty.call(summary, status)) {
+      summary[status] += 1;
+    }
+  });
+  return summary;
 };
 
 const DELIVERY_WEEK_DAYS = [
@@ -2760,6 +2873,7 @@ function InventoryJournalTab({ inventories, user, deleteInventory }) {
 function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSupplier, updateSupplier, removeSupplier }) {
   const [newSupplierName, setNewSupplierName] = useState("");
   const [legalEntityDrafts, setLegalEntityDrafts] = useState({});
+  const [portalEmailDrafts, setPortalEmailDrafts] = useState({});
   const [minimumOrderDrafts, setMinimumOrderDrafts] = useState({});
   const [contractDrafts, setContractDrafts] = useState({});
   const [savingContractSupplierId, setSavingContractSupplierId] = useState("");
@@ -2816,6 +2930,8 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
     ];
     return Array.from(new Set(combined));
   };
+
+  const getPortalEmails = (supplier) => getSupplierPortalEmails(supplier);
 
   const normalizeContracts = (supplier) => {
     const contractsRaw = Array.isArray(supplier?.contracts) ? supplier.contracts : [];
@@ -2944,6 +3060,21 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
     return true;
   };
 
+  const updateSupplierPortalEmails = async (supplier, nextEmails) => {
+    const normalized = Array.from(new Set((nextEmails || []).map((item) => String(item || "").trim().toLowerCase()).filter(Boolean)));
+    const { id, ...payload } = supplier;
+    const result = await updateSupplier(id, {
+      ...payload,
+      portalEmails: normalized,
+      portalEmail: normalized[0] || "",
+    });
+    if (!result.success) {
+      alert("Не вдалося оновити email-доступ постачальника.");
+      return false;
+    }
+    return true;
+  };
+
   const addSupplier = async () => {
     const name = newSupplierName.trim();
     if (!name) return;
@@ -3046,6 +3177,27 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
     const current = getLegalEntities(supplier);
     const next = current.filter((item) => item !== legalEntity);
     await updateSupplierLegalEntities(supplier, next);
+  };
+
+  const addPortalEmail = async (supplier) => {
+    const draftValue = String(portalEmailDrafts[supplier.id] || "").trim().toLowerCase();
+    if (!draftValue) return;
+    const current = getPortalEmails(supplier);
+    const exists = current.includes(draftValue);
+    if (exists) {
+      alert("Такий email уже додано.");
+      return;
+    }
+    const updated = await updateSupplierPortalEmails(supplier, [...current, draftValue]);
+    if (updated) {
+      setPortalEmailDrafts((prev) => ({ ...prev, [supplier.id]: "" }));
+    }
+  };
+
+  const removePortalEmail = async (supplier, email) => {
+    const current = getPortalEmails(supplier);
+    const next = current.filter((item) => item !== email);
+    await updateSupplierPortalEmails(supplier, next);
   };
 
   useEffect(() => {
@@ -3223,20 +3375,53 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
                           <div className="flex items-center justify-between">
                             <div>
                               {canManage && (
-                                <div className="mb-2 flex flex-col gap-1.5 sm:flex-row">
-                                  <input
-                                    className="flex-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
-                                    value={legalEntityDrafts[item.id] || ""}
-                                    onChange={(e) => setLegalEntityDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                                    placeholder="Додати юрособу: ТОВ/ФОП..."
-                                  />
-                                  <button
-                                    type="button"
-                                    className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                                    onClick={() => addLegalEntity(item)}
-                                  >
-                                    Додати
-                                  </button>
+                                <div className="mb-2 space-y-2">
+                                  <div className="flex flex-col gap-1.5 sm:flex-row">
+                                    <input
+                                      className="flex-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                                      value={legalEntityDrafts[item.id] || ""}
+                                      onChange={(e) => setLegalEntityDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                                      placeholder="Додати юрособу: ТОВ/ФОП..."
+                                    />
+                                    <button
+                                      type="button"
+                                      className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                                      onClick={() => addLegalEntity(item)}
+                                    >
+                                      Додати
+                                    </button>
+                                  </div>
+                                  <div className="flex flex-col gap-1.5 sm:flex-row">
+                                    <input
+                                      className="flex-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                                      value={portalEmailDrafts[item.id] || ""}
+                                      onChange={(e) => setPortalEmailDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                                      placeholder="Email доступу до порталу постачальника"
+                                    />
+                                    <button
+                                      type="button"
+                                      className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                                      onClick={() => addPortalEmail(item)}
+                                    >
+                                      Додати email
+                                    </button>
+                                  </div>
+                                  <div className="flex flex-wrap gap-1">
+                                    {getPortalEmails(item).length > 0 ? getPortalEmails(item).map((email) => (
+                                      <span key={`${item.id}_${email}`} className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] text-indigo-700">
+                                        {email}
+                                        <button
+                                          type="button"
+                                          className="font-bold text-rose-600 hover:text-rose-500"
+                                          onClick={() => removePortalEmail(item, email)}
+                                        >
+                                          ×
+                                        </button>
+                                      </span>
+                                    )) : (
+                                      <span className="text-[11px] text-slate-500">Email доступу до порталу ще не додано.</span>
+                                    )}
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -4977,6 +5162,36 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
       .reduce((sum, item) => sum + toNumber(item.amount), 0);
   }, [groupedBySupplier]);
 
+  const supplierResponseIssues = useMemo(() => {
+    const rows = [];
+    for (const order of visibleOrders) {
+      for (const item of order.items || []) {
+        if (!item?.sentToSupplier) continue;
+        const responseStatus = getSupplierResponseStatus(item);
+        if (!["pending", "partial", "unavailable"].includes(responseStatus)) continue;
+        rows.push({
+          orderId: order.id,
+          restaurantName: order.restaurantName || "Без закладу",
+          requiredDate: order.requiredDate || "",
+          supplier: item.supplier || "Без постачальника",
+          productName: item.productName || "Без назви",
+          requestedQty: toNumber(item.qty),
+          responseQty: toNumber(item.supplierResponseQty),
+          unit: item.unit || "",
+          status: responseStatus,
+          comment: String(item.supplierResponseComment || "").trim(),
+          respondedAt: item.supplierRespondedAt || "",
+        });
+      }
+    }
+    return rows.sort((left, right) => {
+      const priority = { unavailable: 0, partial: 1, pending: 2 };
+      const statusDiff = (priority[left.status] ?? 9) - (priority[right.status] ?? 9);
+      if (statusDiff !== 0) return statusDiff;
+      return String(left.requiredDate || "").localeCompare(String(right.requiredDate || ""));
+    });
+  }, [visibleOrders]);
+
   const groupedByRestaurant = useMemo(() => {
     const map = {};
 
@@ -5023,18 +5238,6 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
       ...prev,
       [supplier]: !(prev[supplier] === undefined ? false : prev[supplier]),
     }));
-  };
-
-  const deriveOrderStatus = (items, currentStatus) => {
-    if (currentStatus === "completed") return "completed";
-    const hasItems = items.length > 0;
-    const hasUnsent = items.some((item) => !item.sentToSupplier);
-    const hasSent = items.some((item) => item.sentToSupplier);
-
-    if (!hasItems) return "new";
-    if (!hasUnsent) return "sent";
-    if (hasSent && hasUnsent) return "processing";
-    return "new";
   };
 
   const updateStatus = async (order, status) => {
@@ -5395,6 +5598,55 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
           </div>
         )}
 
+        {canManageOrders && supplierResponseIssues.length > 0 && (
+          <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-rose-900">Контроль проблемних відповідей постачальників</p>
+                <p className="text-xs text-rose-700">Тут зібрані позиції, які ще очікують відповіді, підтверджені частково або відхилені постачальником.</p>
+              </div>
+              <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-rose-700">
+                {supplierResponseIssues.length} проблемних позицій
+              </span>
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border border-rose-200 bg-white">
+              <table className="min-w-full text-xs">
+                <thead className="bg-rose-50 text-rose-900">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Поставка</th>
+                    <th className="px-3 py-2 text-left">Заклад</th>
+                    <th className="px-3 py-2 text-left">Постачальник</th>
+                    <th className="px-3 py-2 text-left">Позиція</th>
+                    <th className="px-3 py-2 text-right">Замовлено</th>
+                    <th className="px-3 py-2 text-right">Підтверджено</th>
+                    <th className="px-3 py-2 text-left">Статус</th>
+                    <th className="px-3 py-2 text-left">Коментар</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {supplierResponseIssues.map((row, index) => (
+                    <tr key={`${row.orderId}_${row.productName}_${index}`} className="border-t border-rose-100 align-top">
+                      <td className="px-3 py-2">{formatDateUk(row.requiredDate)}</td>
+                      <td className="px-3 py-2">{row.restaurantName}</td>
+                      <td className="px-3 py-2 font-medium text-slate-900">{row.supplier}</td>
+                      <td className="px-3 py-2">{row.productName}</td>
+                      <td className="px-3 py-2 text-right">{row.requestedQty} {row.unit}</td>
+                      <td className="px-3 py-2 text-right">{row.status === "pending" ? "—" : `${row.responseQty} ${row.unit}`}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 font-semibold ${getSupplierResponseBadgeClass(row.status)}`}>
+                          {getSupplierResponseLabel(row.status)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">{row.comment || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         <div className="overflow-x-auto rounded-lg border border-slate-200">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-700">
@@ -5406,6 +5658,7 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
                 <th className="px-3 py-2 text-left">Одиниці</th>
                 <th className="px-3 py-2 text-left">Сума</th>
                 <th className="px-3 py-2 text-left">Статус</th>
+                <th className="px-3 py-2 text-left">Відповідь постачальника</th>
                 {canManageOrders && <th className="px-3 py-2 text-left">Дії</th>}
               </tr>
             </thead>
@@ -5419,6 +5672,17 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
                   <td className="px-3 py-2 text-xs text-slate-600">{Array.from(new Set((order.items || []).map((item) => item.unit).filter(Boolean))).join(", ") || "-"}</td>
                   <td className="px-3 py-2 font-medium">{formatMoney(order.totalAmount)}</td>
                   <td className="px-3 py-2">{statusLabel(order.status)}</td>
+                  <td className="px-3 py-2 text-xs text-slate-600">
+                    {(() => {
+                      const sentItems = (order.items || []).filter((item) => item.sentToSupplier);
+                      if (sentItems.length === 0) return "Ще не відправлено";
+                      const accepted = sentItems.filter((item) => getSupplierResponseStatus(item) === "accepted").length;
+                      const partial = sentItems.filter((item) => getSupplierResponseStatus(item) === "partial").length;
+                      const unavailable = sentItems.filter((item) => getSupplierResponseStatus(item) === "unavailable").length;
+                      const pending = sentItems.filter((item) => getSupplierResponseStatus(item) === "pending").length;
+                      return `${accepted} підтвердж., ${partial} частк., ${unavailable} немає, ${pending} очікує`;
+                    })()}
+                  </td>
                   {canManageOrders && (
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap items-center gap-2">
@@ -5457,7 +5721,7 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
               ))}
               {visibleOrders.length === 0 && (
                 <tr>
-                  <td colSpan={canManageOrders ? 8 : 7} className="px-3 py-6 text-center text-slate-500">Заявок не знайдено.</td>
+                  <td colSpan={canManageOrders ? 9 : 8} className="px-3 py-6 text-center text-slate-500">Заявок не знайдено.</td>
                 </tr>
               )}
             </tbody>
@@ -5812,6 +6076,413 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
+  const canPreviewAll = isGlobalAdminUser(user) || (hasProcurementAccess(user) && !hasSupplierPortalAccess(user));
+  const [previewSupplierId, setPreviewSupplierId] = useState("");
+  const [deliveryDateFrom, setDeliveryDateFrom] = useState("");
+  const [deliveryDateTo, setDeliveryDateTo] = useState("");
+  const [responseFilter, setResponseFilter] = useState("");
+  const [responseDrafts, setResponseDrafts] = useState({});
+  const [savingKey, setSavingKey] = useState("");
+
+  const resolvedSupplier = useMemo(() => {
+    if (previewSupplierId) {
+      return (Array.isArray(suppliers) ? suppliers : []).find((supplier) => String(supplier?.id || "") === String(previewSupplierId)) || null;
+    }
+    return resolveSupplierForUser(user, suppliers);
+  }, [previewSupplierId, suppliers, user]);
+
+  const currentSupplierName = String(resolvedSupplier?.name || "").trim();
+
+  const portalOrders = useMemo(() => {
+    if (!currentSupplierName) return [];
+    const normalizedSupplier = normalizeSupplierIdentity(currentSupplierName);
+
+    return (Array.isArray(orders) ? orders : [])
+      .map((order) => {
+        const items = (Array.isArray(order?.items) ? order.items : [])
+          .map((item, itemIndex) => ({
+            ...item,
+            itemIndex,
+            lineKey: `${String(order?.id || "order")}::${itemIndex}`,
+          }))
+          .filter((item) => item.sentToSupplier && normalizeSupplierIdentity(item?.supplier) === normalizedSupplier)
+          .filter((item) => {
+            const status = getSupplierResponseStatus(item);
+            return responseFilter ? status === responseFilter : true;
+          });
+
+        if (items.length === 0) return null;
+
+        const deliveryDate = String(order?.requiredDate || "");
+        const byDeliveryFrom = deliveryDateFrom ? deliveryDate && deliveryDate >= deliveryDateFrom : true;
+        const byDeliveryTo = deliveryDateTo ? deliveryDate && deliveryDate <= deliveryDateTo : true;
+        if (!byDeliveryFrom || !byDeliveryTo) return null;
+
+        const summary = summarizeSupplierResponses(order, currentSupplierName);
+        return {
+          ...order,
+          supplierItems: items,
+          supplierSummary: summary,
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => String(left?.requiredDate || "").localeCompare(String(right?.requiredDate || "")));
+  }, [orders, currentSupplierName, deliveryDateFrom, deliveryDateTo, responseFilter]);
+
+  const portalStats = useMemo(() => {
+    const restaurants = new Set();
+    const summary = { orders: portalOrders.length, items: 0, pending: 0, accepted: 0, partial: 0, unavailable: 0, restaurants: 0 };
+    portalOrders.forEach((order) => {
+      summary.items += order.supplierItems.length;
+      summary.pending += order.supplierSummary.pending;
+      summary.accepted += order.supplierSummary.accepted;
+      summary.partial += order.supplierSummary.partial;
+      summary.unavailable += order.supplierSummary.unavailable;
+      restaurants.add(String(order.restaurantName || order.restaurantId || "Без закладу"));
+    });
+    summary.restaurants = restaurants.size;
+    return summary;
+  }, [portalOrders]);
+
+  const getDraft = (item) => {
+    const saved = responseDrafts[item.lineKey];
+    if (saved) return saved;
+    const status = getSupplierResponseStatus(item);
+    const requestedQty = Math.max(0, toNumber(item.qty));
+    return {
+      status,
+      responseQty: String(toNumber(item?.supplierResponseQty ?? (status === "unavailable" ? 0 : requestedQty))),
+      comment: String(item?.supplierResponseComment || ""),
+    };
+  };
+
+  const patchDraft = (lineKey, patch) => {
+    setResponseDrafts((prev) => ({
+      ...prev,
+      [lineKey]: {
+        ...(prev[lineKey] || {}),
+        ...patch,
+      },
+    }));
+  };
+
+  const saveLineResponse = async (order, entry) => {
+    const draft = getDraft(entry);
+    const requestedQty = Math.max(0, toNumber(entry.qty));
+    const normalizedStatus = String(draft.status || "pending").trim().toLowerCase();
+    let responseQty = toNumber(draft.responseQty);
+
+    if (normalizedStatus === "accepted") {
+      responseQty = requestedQty;
+    } else if (normalizedStatus === "unavailable") {
+      responseQty = 0;
+    } else if (normalizedStatus === "partial") {
+      if (responseQty <= 0 || responseQty >= requestedQty) {
+        alert("Для часткового підтвердження кількість має бути більше 0 і менше замовленої.");
+        return;
+      }
+    }
+
+    const { id, ...payload } = order;
+    const now = new Date().toISOString();
+    const nextItems = (order.items || []).map((item, itemIndex) => {
+      if (itemIndex !== entry.itemIndex) return item;
+      return {
+        ...item,
+        supplierResponseStatus: normalizedStatus,
+        supplierResponseQty: responseQty,
+        supplierResponseAmount: responseQty * toNumber(item.unitPrice),
+        supplierResponseComment: String(draft.comment || "").trim(),
+        supplierRespondedAt: now,
+        supplierRespondedBy: user?.displayName || user?.fullName || user?.email || currentSupplierName,
+        supplierRespondedById: user?.uid || user?.email || "",
+      };
+    });
+
+    setSavingKey(entry.lineKey);
+    const result = await updateOrder(id, {
+      ...payload,
+      items: nextItems,
+      status: deriveOrderStatus(nextItems, order.status),
+      supplierResponseUpdatedAt: now,
+    });
+    setSavingKey("");
+
+    if (!result.success) {
+      alert(getErrorMessage(result.error, "Не вдалося зберегти відповідь постачальника."));
+      return;
+    }
+
+    setResponseDrafts((prev) => {
+      const next = { ...prev };
+      delete next[entry.lineKey];
+      return next;
+    });
+  };
+
+  const acceptAllOrderItems = async (order) => {
+    const targets = order.supplierItems.filter((item) => getSupplierResponseStatus(item) !== "accepted");
+    if (targets.length === 0) return;
+
+    const { id, ...payload } = order;
+    const now = new Date().toISOString();
+    const nextItems = (order.items || []).map((item, itemIndex) => {
+      const target = targets.find((entry) => entry.itemIndex === itemIndex);
+      if (!target) return item;
+      const qty = Math.max(0, toNumber(item.qty));
+      return {
+        ...item,
+        supplierResponseStatus: "accepted",
+        supplierResponseQty: qty,
+        supplierResponseAmount: qty * toNumber(item.unitPrice),
+        supplierResponseComment: String(item?.supplierResponseComment || "").trim(),
+        supplierRespondedAt: now,
+        supplierRespondedBy: user?.displayName || user?.fullName || user?.email || currentSupplierName,
+        supplierRespondedById: user?.uid || user?.email || "",
+      };
+    });
+
+    setSavingKey(`order::${order.id}`);
+    const result = await updateOrder(id, {
+      ...payload,
+      items: nextItems,
+      status: deriveOrderStatus(nextItems, order.status),
+      supplierResponseUpdatedAt: now,
+    });
+    setSavingKey("");
+
+    if (!result.success) {
+      alert(getErrorMessage(result.error, "Не вдалося підтвердити всі позиції."));
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className={cardClass}>
+        <div className="flex flex-wrap items-center gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Портал постачальника</h2>
+            <p className="mt-1 text-sm text-slate-500">Постачальник бачить тільки свої відправлені позиції та може підтвердити, частково підтвердити або відхилити їх.</p>
+          </div>
+          {canPreviewAll && (
+            <div className="ml-auto min-w-72">
+              <label className="text-xs font-semibold text-slate-700">Режим перегляду постачальника</label>
+              <select className={inputClass} value={previewSupplierId} onChange={(e) => setPreviewSupplierId(e.target.value)}>
+                <option value="">Автовизначення по акаунту</option>
+                {(Array.isArray(suppliers) ? suppliers : []).map((supplier) => (
+                  <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+
+        {!resolvedSupplier && (
+          <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Не вдалося прив'язати ваш акаунт до постачальника. Для доступу потрібно додати email користувача в довідник постачальників у полі email доступу до порталу.
+          </div>
+        )}
+
+        {resolvedSupplier && (
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-slate-700">
+            <span className="font-semibold text-slate-900">Поточний постачальник:</span>
+            <span className="rounded-full bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-700">{resolvedSupplier.name}</span>
+            {getSupplierPortalEmails(resolvedSupplier).length > 0 && (
+              <span className="text-xs text-slate-500">Email доступу: {getSupplierPortalEmails(resolvedSupplier).join(", ")}</span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {resolvedSupplier && (
+        <>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+            {[
+              { label: "Заявок", value: portalStats.orders, style: "bg-slate-50 text-slate-700" },
+              { label: "Закладів", value: portalStats.restaurants, style: "bg-blue-50 text-blue-700" },
+              { label: "Позицій", value: portalStats.items, style: "bg-indigo-50 text-indigo-700" },
+              { label: "Очікує", value: portalStats.pending, style: "bg-amber-50 text-amber-700" },
+              { label: "Підтверджено", value: portalStats.accepted, style: "bg-emerald-50 text-emerald-700" },
+              { label: "Проблемні", value: portalStats.partial + portalStats.unavailable, style: "bg-rose-50 text-rose-700" },
+            ].map((card) => (
+              <div key={card.label} className={`rounded-xl border border-slate-200 p-4 text-center ${card.style}`}>
+                <div className="text-2xl font-bold">{card.value}</div>
+                <div className="mt-1 text-xs font-semibold opacity-80">{card.label}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className={cardClass}>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-4">
+              <div>
+                <label className="text-xs font-semibold text-slate-700">Поставка від</label>
+                <input type="date" className={inputClass} value={deliveryDateFrom} onChange={(e) => setDeliveryDateFrom(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-700">Поставка до</label>
+                <input type="date" className={inputClass} value={deliveryDateTo} onChange={(e) => setDeliveryDateTo(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-700">Статус відповіді</label>
+                <select className={inputClass} value={responseFilter} onChange={(e) => setResponseFilter(e.target.value)}>
+                  <option value="">Усі</option>
+                  <option value="pending">Очікує відповіді</option>
+                  <option value="accepted">Підтверджено</option>
+                  <option value="partial">Частково</option>
+                  <option value="unavailable">Немає в наявності</option>
+                </select>
+              </div>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                  onClick={() => {
+                    setDeliveryDateFrom("");
+                    setDeliveryDateTo("");
+                    setResponseFilter("");
+                  }}
+                >
+                  Скинути
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {portalOrders.map((order) => (
+              <div key={order.id} className={cardClass}>
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-base font-semibold text-slate-900">{order.restaurantName || "Без закладу"}</div>
+                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                        Заклад призначення
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">Заявка: {String(order.id || "—")} • Поставка: {formatDateUk(order.requiredDate)} • Створено: {formatDateTimeSafe(order.createdAt)}</div>
+                    <div className="mt-1 text-xs text-slate-500">Коментар: {String(order.comment || "—")}</div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{statusLabel(order.status)}</span>
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">Очікує: {order.supplierSummary.pending}</span>
+                    <button
+                      type="button"
+                      className="rounded border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                      disabled={savingKey === `order::${order.id}`}
+                      onClick={() => { void acceptAllOrderItems(order); }}
+                    >
+                      {savingKey === `order::${order.id}` ? "Збереження..." : "Підтвердити все"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto rounded-lg border border-slate-200">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-slate-700">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Заклад</th>
+                        <th className="px-3 py-2 text-left">Позиція</th>
+                        <th className="px-3 py-2 text-left">Поставка</th>
+                        <th className="px-3 py-2 text-left">К-сть</th>
+                        <th className="px-3 py-2 text-left">Ціна</th>
+                        <th className="px-3 py-2 text-left">Сума</th>
+                        <th className="px-3 py-2 text-left">Статус</th>
+                        <th className="px-3 py-2 text-left">Підтверджено</th>
+                        <th className="px-3 py-2 text-left">Коментар</th>
+                        <th className="px-3 py-2 text-left">Дія</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {order.supplierItems.map((item) => {
+                        const draft = getDraft(item);
+                        const status = String(draft.status || getSupplierResponseStatus(item));
+                        return (
+                          <tr key={item.lineKey} className="border-t border-slate-200 align-top">
+                            <td className="px-3 py-2">
+                              <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                                {order.restaurantName || "Без закладу"}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="font-semibold text-slate-900">{item.productName || "Без назви"}</div>
+                              <div className="text-xs text-slate-500">Код позиції: {item.productId || "—"}</div>
+                            </td>
+                            <td className="px-3 py-2 text-slate-700">{formatDateUk(order.requiredDate)}</td>
+                            <td className="px-3 py-2">{toNumber(item.qty)} {item.unit || ""}</td>
+                            <td className="px-3 py-2">{toNumber(item.unitPrice).toFixed(2)}</td>
+                            <td className="px-3 py-2 font-medium">{formatMoney(item.amount)}</td>
+                            <td className="px-3 py-2">
+                              <div className="space-y-1">
+                                <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${getSupplierResponseBadgeClass(status)}`}>
+                                  {getSupplierResponseLabel(status)}
+                                </span>
+                                <select
+                                  className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                                  value={status}
+                                  onChange={(e) => patchDraft(item.lineKey, { status: e.target.value })}
+                                >
+                                  <option value="pending">Очікує відповіді</option>
+                                  <option value="accepted">Підтвердити</option>
+                                  <option value="partial">Частково</option>
+                                  <option value="unavailable">Немає в наявності</option>
+                                </select>
+                              </div>
+                            </td>
+                            <td className="px-3 py-2">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                className="w-28 rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                                value={status === "accepted" ? String(toNumber(item.qty)) : draft.responseQty}
+                                disabled={status === "accepted" || status === "unavailable"}
+                                onChange={(e) => patchDraft(item.lineKey, { responseQty: e.target.value })}
+                              />
+                              <div className="mt-1 text-[11px] text-slate-500">Замовлено: {toNumber(item.qty)} {item.unit || ""}</div>
+                            </td>
+                            <td className="px-3 py-2">
+                              <textarea
+                                className="min-h-16 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                                value={draft.comment}
+                                onChange={(e) => patchDraft(item.lineKey, { comment: e.target.value })}
+                                placeholder="Коментар постачальника: заміна, причина відсутності, термін поставки..."
+                              />
+                              {item.supplierRespondedAt && (
+                                <div className="mt-1 text-[11px] text-slate-500">Оновлено: {formatDateTimeSafe(item.supplierRespondedAt)}</div>
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              <button
+                                type="button"
+                                className="rounded border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                                disabled={savingKey === item.lineKey}
+                                onClick={() => { void saveLineResponse(order, item); }}
+                              >
+                                {savingKey === item.lineKey ? "Збереження..." : "Зберегти"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+
+            {portalOrders.length === 0 && (
+              <div className={`${cardClass} text-sm text-slate-500`}>
+                Для цього постачальника поки немає відправлених замовлень за вибраними фільтрами.
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -6559,6 +7230,17 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
         deleteOrder={deleteOrder}
         createSupplierDispatch={createSupplierDispatch}
         canManageOrders={canManageOrders}
+        user={user}
+      />
+    );
+  }
+
+  if (tabKind === "supplierPortal") {
+    return (
+      <SupplierPortalTab
+        orders={normalizedOrders}
+        suppliers={suppliers}
+        updateOrder={updateOrder}
         user={user}
       />
     );
