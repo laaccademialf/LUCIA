@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   addSupplierDispatch,
   addBookingSupplier,
@@ -301,6 +301,7 @@ export const useProductBooking = (enableRealtime = true) => {
   const [inventories, setInventories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const hasLoadedApiDataRef = useRef(false);
 
   const reloadAllApi = async () => {
     const [productsData, inventoryListProductsData, ordersData, suppliersData, typicalFieldsData, inventoriesData] =
@@ -347,9 +348,15 @@ export const useProductBooking = (enableRealtime = true) => {
       const fetchData = async () => {
         try {
           await reloadAllApi();
+          hasLoadedApiDataRef.current = true;
+          setError(null);
         } catch (err) {
           console.error("Помилка завантаження модуля замовлень через API:", err);
-          setError(err);
+          // Do not switch to fatal state after initial successful load;
+          // transient network issues should not blank the module.
+          if (!hasLoadedApiDataRef.current) {
+            setError(err);
+          }
         } finally {
           setLoading(false);
         }
