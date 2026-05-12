@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Package, ShoppingCart, ClipboardCheck, Trash2, Download, Upload, FileDown, X, Printer, Calculator, BarChart2 } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
 import {
@@ -79,6 +79,15 @@ const toNumber = (value) => {
 
 const formatMoney = (value) => `${toNumber(value).toFixed(2)} грн`;
 
+const normalizeProductIdentity = (value) => {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+};
+
 const formatDateUk = (value) => {
   const raw = String(value || "").trim();
   if (!raw) return "-";
@@ -101,6 +110,24 @@ const formatDateTimeSafe = (value) => {
     return date.toLocaleString("uk-UA");
   }
   return raw;
+};
+
+const resolveOrderCreatedAt = (order) => {
+  if (!order || typeof order !== "object") return "";
+  return String(
+    order.createdAt ||
+    order.created_at ||
+    order.submittedAt ||
+    order.updatedAt ||
+    order.updated_at ||
+    ""
+  ).trim();
+};
+
+const openNativeDatePicker = (event) => {
+  if (typeof event?.currentTarget?.showPicker === "function") {
+    event.currentTarget.showPicker();
+  }
 };
 
 const getInventoryEndedByLabel = (inventory) => {
@@ -382,10 +409,58 @@ const resolveSupplierForUser = (user, suppliers = []) => {
   return null;
 };
 
+const splitSupplierCandidates = (value) => {
+  return Array.from(
+    new Set(
+      String(value || "")
+        .split(/[,;\n|/]+/)
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+    )
+  );
+};
+
+const supplierHasContractForRestaurant = (supplierRecord, restaurantRef = {}) => {
+  const contracts = Array.isArray(supplierRecord?.contracts) ? supplierRecord.contracts : [];
+  if (contracts.length === 0) return false;
+
+  const restaurantLookupKey = buildRestaurantLookupKey(restaurantRef || {});
+  const restaurantTokens = collectRestaurantTokens(restaurantRef || {});
+
+  return contracts.some((contract) => {
+    const contractLookupKey = String(contract?.restaurantLookupKey || "").trim();
+    if (restaurantLookupKey && contractLookupKey && contractLookupKey === restaurantLookupKey) return true;
+    return hasRestaurantTokenOverlap(collectRestaurantTokens(contract || {}), restaurantTokens);
+  });
+};
+
+const resolveSupplierForRestaurantContext = (rawSupplier, restaurantRef = {}, suppliersDirectory = []) => {
+  const candidates = splitSupplierCandidates(rawSupplier);
+  if (candidates.length === 0) return "";
+  if (candidates.length === 1) return candidates[0];
+
+  const directoryByName = new Map(
+    (Array.isArray(suppliersDirectory) ? suppliersDirectory : [])
+      .map((supplier) => [normalizeSupplierIdentity(supplier?.name), supplier])
+      .filter(([key]) => Boolean(key))
+  );
+
+  for (const candidate of candidates) {
+    const supplierRecord = directoryByName.get(normalizeSupplierIdentity(candidate));
+    if (!supplierRecord) continue;
+    if (supplierHasContractForRestaurant(supplierRecord, restaurantRef)) {
+      return String(supplierRecord?.name || candidate).trim();
+    }
+  }
+
+  return candidates[0];
+};
+
 const deriveOrderStatus = (items, currentStatus) => {
   if (currentStatus === "completed") return "completed";
   const normalizedItems = Array.isArray(items) ? items : [];
   const hasItems = normalizedItems.length > 0;
+  const allZeroQty = hasItems && normalizedItems.every((item) => toNumber(item?.qty) <= 0);
   const hasUnsent = normalizedItems.some((item) => !item.sentToSupplier);
   const hasSent = normalizedItems.some((item) => item.sentToSupplier);
   const hasPendingSupplierResponses = normalizedItems.some((item) => item.sentToSupplier && getSupplierResponseStatus(item) === "pending");
@@ -396,8 +471,10 @@ const deriveOrderStatus = (items, currentStatus) => {
   });
 
   if (!hasItems) return "new";
-  if (hasSupplierIssues || hasPendingSupplierResponses) return "processing";
-  if (!hasUnsent) return "sent";
+  if (allZeroQty) return "completed";
+  if (hasSupplierIssues) return "processing";
+  if (hasPendingSupplierResponses) return "sent";
+  if (!hasUnsent) return "confirmed";
   if (hasSent && hasUnsent) return "processing";
   return "new";
 };
@@ -413,6 +490,7 @@ const getSupplierResponseLabel = (status) => {
   if (status === "partial") return "Частково";
   if (status === "unavailable") return "Немає в наявності";
   if (status === "pending") return "Очікує відповіді";
+  if (status === "cancelled_by_supplier") return "Скасовано постачальником";
   return "Чернетка";
 };
 
@@ -421,6 +499,7 @@ const getSupplierResponseBadgeClass = (status) => {
   if (status === "partial") return "bg-amber-100 text-amber-700";
   if (status === "unavailable") return "bg-rose-100 text-rose-700";
   if (status === "pending") return "bg-indigo-100 text-indigo-700";
+  if (status === "cancelled_by_supplier") return "bg-slate-200 text-slate-500 line-through";
   return "bg-slate-100 text-slate-600";
 };
 
@@ -2034,6 +2113,8 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               className="h-8 shrink-0 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none"
               value={inventoryDate}
               onChange={(e) => setInventoryDate(e.target.value)}
+              onFocus={openNativeDatePicker}
+              onClick={openNativeDatePicker}
               title="Дата інвентаризації"
             />
           </div>
@@ -4306,7 +4387,7 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
   );
 }
 
-function BookingTab({ products, orders, aplAssignments = [], createOrder, restaurants, user, suppliersDirectory = [] }) {
+function BookingTab({ products, orders, aplAssignments = [], createOrder, updateOrder, restaurants, user, suppliersDirectory = [] }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const pageSizeOptions = [12, 25, 50];
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
@@ -4319,6 +4400,9 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
   const [showOnlySelected, setShowOnlySelected] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(12);
+  const [receivingOrder, setReceivingOrder] = useState(null);
+  const [receivingDraft, setReceivingDraft] = useState({});
+  const [savingReceiving, setSavingReceiving] = useState(false);
 
   useEffect(() => {
     if (isGlobalAdmin) return;
@@ -4334,6 +4418,12 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
     if (isGlobalAdmin) return orders;
     return orders.filter((order) => String(order.restaurantId) === String(user?.restaurant));
   }, [orders, user, isGlobalAdmin]);
+
+  const selectedRestaurantContext = useMemo(() => {
+    const selected = restaurants.find((item) => String(item.id) === String(restaurantId));
+    if (selected) return selected;
+    return { id: String(restaurantId || "") };
+  }, [restaurants, restaurantId]);
 
   const activeProducts = useMemo(() => {
     const selectedRestaurantId = String(restaurantId || "");
@@ -4392,6 +4482,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
     }
 
     const byGreenCard = new Map();
+
     scopedAssignments.forEach((assignment) => {
       const greenCardName = String(assignment?.greenCardName || "").trim();
       const whiteCardName = String(assignment?.whiteCardName || "").trim();
@@ -4416,39 +4507,58 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
 
       const row = byGreenCard.get(key);
       const assignmentSupplier = String(assignment?.supplier || "").trim();
-      if (assignmentSupplier && isSupplierAllowedForRestaurant(assignmentSupplier)) {
-        row.suppliers.add(assignmentSupplier);
-      }
       const matchedProduct = scopedProducts.find((product) => {
         const productCode = String(product?.code1C || "").trim().toLowerCase();
         const assignmentCode = code1C.toLowerCase();
-        const productName = String(product?.name || product?.whiteCardName || "").trim().toLowerCase();
-        const assignmentWhiteName = whiteCardName.toLowerCase();
+        const productName = normalizeProductIdentity(product?.name || product?.whiteCardName || "");
+        const assignmentWhiteName = normalizeProductIdentity(whiteCardName);
         if (assignmentCode && productCode) return assignmentCode === productCode;
-        return assignmentWhiteName && productName && assignmentWhiteName === productName;
+        if (!assignmentWhiteName || !productName) return false;
+        return assignmentWhiteName === productName || assignmentWhiteName.includes(productName) || productName.includes(assignmentWhiteName);
       });
 
       if (matchedProduct) {
-        const matchedSupplier = String(matchedProduct.supplier || assignmentSupplier).trim();
-        if (matchedSupplier && isSupplierAllowedForRestaurant(matchedSupplier)) {
-          row.suppliers.add(matchedSupplier);
+        const supplierCandidates = Array.from(
+          new Set([
+            ...(Array.isArray(matchedProduct.supplierList) ? matchedProduct.supplierList : []),
+            ...splitSupplierCandidates(matchedProduct.supplier || ""),
+            ...splitSupplierCandidates(assignmentSupplier),
+          ].map((item) => String(item || "").trim()).filter(Boolean))
+        );
+        const allowedSuppliers = supplierCandidates.filter((supplierName) => isSupplierAllowedForRestaurant(supplierName));
+
+        if (allowedSuppliers.length > 0) {
+          allowedSuppliers.forEach((supplierName) => row.suppliers.add(supplierName));
           row.whiteCards.push({
             id: matchedProduct.id,
             name: matchedProduct.name,
             code1C: matchedProduct.code1C || code1C,
             unitPrice: toNumber(matchedProduct.unitPrice),
             unit: matchedProduct.unit || row.unit,
-            supplier: matchedSupplier,
+            supplier: allowedSuppliers[0],
           });
         }
       } else {
-        if (assignmentSupplier && isSupplierAllowedForRestaurant(assignmentSupplier)) {
+        // Product not in this restaurant's scope — check if it exists globally (any restaurant)
+        const globalProduct = products.find((product) => {
+          const productCode = String(product?.code1C || "").trim().toLowerCase();
+          const assignmentCode = code1C.toLowerCase();
+          const productName = normalizeProductIdentity(product?.name || product?.whiteCardName || "");
+          const assignmentWhiteName = normalizeProductIdentity(whiteCardName);
+          if (assignmentCode && productCode) return assignmentCode === productCode;
+          if (!assignmentWhiteName || !productName) return false;
+          return assignmentWhiteName === productName || assignmentWhiteName.includes(productName) || productName.includes(assignmentWhiteName);
+        });
+
+        // Only add synthetic white card if product truly exists somewhere (not a ghost assignment)
+        if (globalProduct && assignmentSupplier && isSupplierAllowedForRestaurant(assignmentSupplier)) {
+          row.suppliers.add(assignmentSupplier);
           row.whiteCards.push({
             id: `aplwhite::${selectedRestaurantId}::${code1C || whiteCardName}`,
             name: whiteCardName,
-            code1C,
-            unitPrice: toNumber(assignment?.unitPrice || 0),
-            unit: String(assignment?.unit || "").trim(),
+            code1C: code1C || globalProduct.code1C || "",
+            unitPrice: toNumber(assignment?.unitPrice || globalProduct.unitPrice || 0),
+            unit: String(assignment?.unit || globalProduct.unit || "").trim(),
             supplier: assignmentSupplier,
           });
         }
@@ -4466,7 +4576,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
         unitPrice: avgPrice,
         unit: item.unit || item.whiteCards.find((card) => card.unit)?.unit || "",
       };
-    }).filter((item) => item.whiteCards.length > 0 || (item.supplierList || []).length > 0);
+    }).filter((item) => item.whiteCards.length > 0);
   }, [products, aplAssignments, restaurantId, suppliersDirectory, restaurants]);
 
   const availableCategories = useMemo(() => {
@@ -4567,12 +4677,15 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
         const qty = toNumber(quantities[product.id]);
         if (qty <= 0) return null;
         const unitPrice = toNumber(product.unitPrice);
+        const supplierRaw = Array.isArray(product.supplierList) && product.supplierList.length > 0
+          ? product.supplierList.join(", ")
+          : product.supplier;
         return {
           id: product.id,
           name: product.name,
           code1C: product.code1C || "",
           category: product.category,
-          supplier: product.supplier,
+          supplier: resolveSupplierForRestaurantContext(supplierRaw, selectedRestaurantContext, suppliersDirectory),
           unit: product.unit,
           qty,
           unitPrice,
@@ -4581,7 +4694,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
         };
       })
       .filter(Boolean);
-  }, [activeProducts, quantities]);
+  }, [activeProducts, quantities, selectedRestaurantContext, suppliersDirectory]);
 
   const supplierMinimumMap = useMemo(() => {
     const map = new Map();
@@ -4627,6 +4740,9 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
         const raw = quantities[product.id];
         const qty = Number(raw);
         if (!raw || Number.isNaN(qty) || qty <= 0) return null;
+        const supplierRaw = Array.isArray(product.supplierList) && product.supplierList.length > 0
+          ? product.supplierList.join(", ")
+          : product.supplier;
         return {
           productId: product.id,
           productName: product.name,
@@ -4636,7 +4752,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
           qty,
           unitPrice: toNumber(product.unitPrice),
           amount: qty * toNumber(product.unitPrice),
-          supplier: product.supplier || "",
+          supplier: resolveSupplierForRestaurantContext(supplierRaw, selectedRestaurantContext, suppliersDirectory) || "",
           aplWhiteCards: Array.isArray(product.whiteCards) ? product.whiteCards : [],
           isAplLine: String(product.id || "").startsWith("apl::"),
         };
@@ -4674,6 +4790,8 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
       items: orderItems,
       totalItems,
       totalAmount,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
 
     const result = await createOrder(newOrder);
@@ -4684,6 +4802,76 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
     setQuantities({});
     setComment("");
     alert("Замовлення сформовано та передано у відділ закупівель.");
+  };
+
+  const openReceiveOrder = (order) => {
+    const nextDraft = {};
+    (Array.isArray(order?.items) ? order.items : []).forEach((item, index) => {
+      const itemKey = `${String(order?.id || "order")}::${index}`;
+      const responseStatus = getSupplierResponseStatus(item);
+      const supplierConfirmedQty = responseStatus === "accepted"
+        ? toNumber(item?.supplierResponseQty || item?.qty)
+        : toNumber(item?.supplierResponseQty);
+      const defaultQty = item?.actualReceivedQty !== undefined
+        ? toNumber(item.actualReceivedQty)
+        : (supplierConfirmedQty > 0 ? supplierConfirmedQty : toNumber(item?.qty));
+      nextDraft[itemKey] = String(defaultQty || 0);
+    });
+    setReceivingDraft(nextDraft);
+    setReceivingOrder(order);
+  };
+
+  const saveReceivingOrder = async () => {
+    if (!receivingOrder?.id || !updateOrder) return;
+
+    const sourceOrder = orders.find((order) => String(order.id) === String(receivingOrder.id));
+    if (!sourceOrder) {
+      alert("Не вдалося знайти заявку для приймання.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const nextItems = (Array.isArray(sourceOrder.items) ? sourceOrder.items : []).map((item, index) => {
+      const itemKey = `${String(sourceOrder.id)}::${index}`;
+      const actualReceivedQty = toNumber(receivingDraft[itemKey]);
+      return {
+        ...item,
+        actualReceivedQty,
+        actualReceivedAmount: actualReceivedQty * toNumber(item.unitPrice),
+        receivedVarianceQty: actualReceivedQty - toNumber(item.qty),
+        receivedAt: now,
+        receivedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+        receivedById: user?.uid || user?.email || "",
+      };
+    });
+
+    if (nextItems.some((item) => item.actualReceivedQty < 0)) {
+      alert("Фактична кількість не може бути меншою за 0.");
+      return;
+    }
+
+    const { id, ...payload } = sourceOrder;
+    setSavingReceiving(true);
+    const result = await updateOrder(id, {
+      ...payload,
+      items: nextItems,
+      status: "completed",
+      completedAt: now,
+      completedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+      completedById: user?.uid || user?.email || "",
+      receivedAt: now,
+      updatedAt: now,
+    });
+    setSavingReceiving(false);
+
+    if (!result.success) {
+      alert("Не вдалося підтвердити приймання замовлення.");
+      return;
+    }
+
+    setReceivingOrder(null);
+    setReceivingDraft({});
+    alert("Приймання замовлення підтверджено.");
   };
 
   return (
@@ -4713,7 +4901,14 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
             </div>
             <div>
               <label className="text-sm font-semibold text-slate-800">Потрібна дата поставки</label>
-              <input type="date" className={inputClass} value={requiredDate} onChange={(e) => setRequiredDate(e.target.value)} />
+              <input
+                type="date"
+                className={inputClass}
+                value={requiredDate}
+                onChange={(e) => setRequiredDate(e.target.value)}
+                onFocus={openNativeDatePicker}
+                onClick={openNativeDatePicker}
+              />
             </div>
             <div>
               <label className="text-sm font-semibold text-slate-800">Коментар</label>
@@ -4975,28 +5170,141 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, restau
                 <th className="px-3 py-2 text-left">Поставка</th>
                 <th className="px-3 py-2 text-left">Сума</th>
                 <th className="px-3 py-2 text-left">Статус</th>
+                <th className="px-3 py-2 text-left">Дія</th>
               </tr>
             </thead>
             <tbody>
               {myOrders.map((order) => (
                 <tr key={order.id} className="border-t border-slate-200">
-                  <td className="px-3 py-2">{formatDateTimeSafe(order.createdAt)}</td>
+                  <td className="px-3 py-2">{formatDateTimeSafe(resolveOrderCreatedAt(order))}</td>
                   <td className="px-3 py-2">{order.restaurantName}</td>
                   <td className="px-3 py-2">{order.items.length}</td>
-                  <td className="px-3 py-2">{order.requiredDate}</td>
+                  <td className="px-3 py-2">{formatDateUk(order.requiredDate) || "—"}</td>
                   <td className="px-3 py-2 font-medium">{formatMoney(order.totalAmount)}</td>
                   <td className="px-3 py-2">{statusLabel(order.status)}</td>
+                  <td className="px-3 py-2">
+                    {String(order.status || "") === "confirmed" ? (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                        onClick={() => openReceiveOrder(order)}
+                      >
+                        Прийняти замовлення
+                      </button>
+                    ) : String(order.status || "") === "completed" ? (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                        onClick={() => openReceiveOrder(order)}
+                      >
+                        Переглянути приймання
+                      </button>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )}
+                  </td>
                 </tr>
               ))}
               {myOrders.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-slate-500">Заявок поки немає.</td>
+                  <td colSpan={7} className="px-3 py-6 text-center text-slate-500">Заявок поки немає.</td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {receivingOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3" onClick={() => !savingReceiving && setReceivingOrder(null)}>
+          <div className="w-full max-w-5xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">Приймання замовлення: {receivingOrder.restaurantName}</h3>
+                <p className="text-xs text-slate-500">Поставка: {receivingOrder.requiredDate || "—"} • {statusLabel(receivingOrder.status)}</p>
+              </div>
+              <button
+                type="button"
+                className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700"
+                onClick={() => setReceivingOrder(null)}
+                disabled={savingReceiving}
+              >
+                Закрити
+              </button>
+            </div>
+
+            <div className="max-h-[60vh] overflow-auto rounded-lg border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-slate-700">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Товар</th>
+                    <th className="px-3 py-2 text-left">Постачальник</th>
+                    <th className="px-3 py-2 text-right">Замовлено</th>
+                    <th className="px-3 py-2 text-right">Підтв. постачальником</th>
+                    <th className="px-3 py-2 text-right">Фактично прийнято</th>
+                    <th className="px-3 py-2 text-right">Різниця</th>
+                    <th className="px-3 py-2 text-left">Статус постачальника</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(Array.isArray(receivingOrder.items) ? receivingOrder.items : []).map((item, index) => {
+                    const itemKey = `${String(receivingOrder.id)}::${index}`;
+                    const orderedQty = toNumber(item.qty);
+                    const confirmedQty = getSupplierResponseStatus(item) === "accepted"
+                      ? toNumber(item.supplierResponseQty || item.qty)
+                      : toNumber(item.supplierResponseQty);
+                    const actualQty = toNumber(receivingDraft[itemKey]);
+                    const diffQty = actualQty - orderedQty;
+                    const diffRounded = Math.round((diffQty + Number.EPSILON) * 100) / 100;
+                    const diffDisplay = diffRounded.toFixed(2);
+                    return (
+                      <tr key={itemKey} className="border-t border-slate-200">
+                        <td className="px-3 py-2 font-medium text-slate-900">{item.productName || "Без назви"}</td>
+                        <td className="px-3 py-2">{item.supplier || "—"}</td>
+                        <td className="px-3 py-2 text-right">{orderedQty} {item.unit || ""}</td>
+                        <td className="px-3 py-2 text-right">{confirmedQty} {item.unit || ""}</td>
+                        <td className="px-3 py-2 text-right">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            disabled={String(receivingOrder.status || "") === "completed"}
+                            className="w-28 rounded border border-slate-300 px-2 py-1 text-right"
+                            value={receivingDraft[itemKey] ?? ""}
+                            onChange={(e) => setReceivingDraft((prev) => ({ ...prev, [itemKey]: e.target.value }))}
+                          />
+                        </td>
+                        <td className={`px-3 py-2 text-right font-semibold ${diffRounded < 0 ? "text-rose-600" : diffRounded > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+                          {diffRounded > 0 ? "+" : ""}{diffDisplay} {item.unit || ""}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${getSupplierResponseBadgeClass(getSupplierResponseStatus(item))}`}>
+                            {getSupplierResponseLabel(getSupplierResponseStatus(item))}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
+              <span>Різниця рахується від замовленої кількості.</span>
+              {String(receivingOrder.status || "") !== "completed" && (
+                <button
+                  type="button"
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-300"
+                  onClick={() => { void saveReceivingOrder(); }}
+                  disabled={savingReceiving}
+                >
+                  {savingReceiving ? "Збереження..." : "Підтвердити приймання"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -5005,11 +5313,12 @@ const statusLabel = (status) => {
   if (status === "new") return "Нова";
   if (status === "processing") return "В обробці";
   if (status === "sent") return "Надіслано постачальнику";
+  if (status === "confirmed") return "Підтверджено постачальником";
   if (status === "completed") return "Закрито";
   return status;
 };
 
-function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierDispatch, canManageOrders, user }) {
+function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, deleteOrder, canManageOrders, user, suppliersDirectory = [] }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const [statusFilter, setStatusFilter] = useState("");
   const [orderDateFrom, setOrderDateFrom] = useState("");
@@ -5017,18 +5326,45 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
   const [deliveryDateFrom, setDeliveryDateFrom] = useState("");
   const [deliveryDateTo, setDeliveryDateTo] = useState("");
   const [lineEdits, setLineEdits] = useState({});
-  const [sendingSupplier, setSendingSupplier] = useState("");
   const [expandedSuppliers, setExpandedSuppliers] = useState({});
   const [expandedSummarySuppliers, setExpandedSummarySuppliers] = useState({});
   const [expandedRestaurants, setExpandedRestaurants] = useState({});
   const [editingOrder, setEditingOrder] = useState(null);
+  const [editingSupplierBoard, setEditingSupplierBoard] = useState(null);
+  const [draggedSupplierBoardId, setDraggedSupplierBoardId] = useState("");
+  const draggedBoardIdRef = useRef("");
+  const [dragOverStatus, setDragOverStatus] = useState("");
+  const [dragOverArchive, setDragOverArchive] = useState(false);
+  const [optimisticBoardStatuses, setOptimisticBoardStatuses] = useState({});
+  const [reassignSupplierDrafts, setReassignSupplierDrafts] = useState({});
+  const [reassigningIssueKey, setReassigningIssueKey] = useState("");
+  const [ordersViewMode, setOrdersViewMode] = useState("board");
 
-  const visibleOrders = useMemo(() => {
+  const resolveLineSupplierName = useCallback((order, item) => {
+    return resolveSupplierForRestaurantContext(
+      item?.supplier,
+      {
+        id: String(order?.restaurantId || ""),
+        restaurantId: String(order?.restaurantId || ""),
+        restaurantName: String(order?.restaurantName || ""),
+        restaurantRegNumber: String(order?.restaurantRegNumber || ""),
+      },
+      suppliersDirectory
+    ) || "Без постачальника";
+  }, [suppliersDirectory]);
+
+  const roleScopedOrders = useMemo(() => {
     const filteredByRole = canManageOrders
       ? orders
       : orders.filter((order) => String(order.restaurantId) === String(user?.restaurant || ""));
 
-    return filteredByRole.filter((order) => {
+    return filteredByRole;
+  }, [orders, canManageOrders, user]);
+
+  const visibleOrders = useMemo(() => {
+    return roleScopedOrders.filter((order) => {
+      if (order?.isArchived) return false;
+
       const byStatus = statusFilter ? order.status === statusFilter : true;
 
       const orderDate = String(order.createdAt || "").slice(0, 10);
@@ -5042,21 +5378,29 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
       return byStatus && byOrderDateFrom && byOrderDateTo && byDeliveryFrom && byDeliveryTo;
     });
   }, [
-    orders,
+    roleScopedOrders,
     statusFilter,
-    canManageOrders,
-    user,
     orderDateFrom,
     orderDateTo,
     deliveryDateFrom,
     deliveryDateTo,
   ]);
 
+  const archivedOrders = useMemo(() => {
+    return roleScopedOrders
+      .filter((order) => order?.isArchived)
+      .sort((left, right) => {
+        const leftDate = String(left?.archivedAt || left?.updatedAt || left?.createdAt || "");
+        const rightDate = String(right?.archivedAt || right?.updatedAt || right?.createdAt || "");
+        return rightDate.localeCompare(leftDate);
+      });
+  }, [roleScopedOrders]);
+
   const groupedBySupplier = useMemo(() => {
     const map = {};
     for (const order of visibleOrders) {
       for (const item of order.items || []) {
-        const supplier = item.supplier || "Без постачальника";
+        const supplier = resolveLineSupplierName(order, item);
         if (!map[supplier]) map[supplier] = [];
         map[supplier].push({
           orderId: order.id,
@@ -5071,7 +5415,7 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
       }
     }
     return map;
-  }, [visibleOrders]);
+  }, [visibleOrders, resolveLineSupplierName]);
 
   const consolidatedBySupplier = useMemo(() => {
     const supplierMap = {};
@@ -5080,7 +5424,7 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
       for (const item of order.items || []) {
         if (item.sentToSupplier || order.status === "completed") continue;
 
-        const supplier = item.supplier || "Без постачальника";
+        const supplier = resolveLineSupplierName(order, item);
         if (!supplierMap[supplier]) supplierMap[supplier] = {};
 
         const productKey = item.productId || item.productName || "Без назви";
@@ -5132,7 +5476,143 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
         })),
       ])
     );
-  }, [visibleOrders, lineEdits]);
+  }, [visibleOrders, lineEdits, resolveLineSupplierName]);
+
+  // Хелпер: додає один item до supplierMap під ключем supplierName
+  const addSupplierEntry = (supplierMap, order, item, supplierName, lineEdits, isCancelled) => {
+    if (!supplierMap[supplierName]) {
+      supplierMap[supplierName] = {
+        supplier: supplierName,
+        rows: {},
+        orderIds: new Set(),
+        restaurants: new Set(),
+        dates: new Set(),
+        lineSnapshots: [],
+      };
+    }
+    const productKey = item.productId || item.productName || "Без назви";
+    const key = [productKey, item.unit || "", order.requiredDate || ""].join("|");
+    if (!supplierMap[supplierName].rows[key]) {
+      supplierMap[supplierName].rows[key] = {
+        supplier: supplierName,
+        productId: item.productId || "",
+        productName: item.productName || "Без назви",
+        unit: item.unit || "",
+        requiredDate: order.requiredDate || "",
+        totalQty: 0,
+        totalAmount: 0,
+        restaurants: [],
+        orderIds: new Set(),
+      };
+    }
+    const lineKey = `${order.id}::${item.productId || item.productName || "line"}${isCancelled ? "::cancelled" : ""}`;
+    const effectiveQty = isCancelled ? toNumber(item.qty) : (lineEdits[lineKey] === undefined ? toNumber(item.qty) : toNumber(lineEdits[lineKey]));
+    const effectiveAmount = isCancelled ? 0 : effectiveQty * toNumber(item.unitPrice);
+
+    if (!isCancelled) {
+      supplierMap[supplierName].rows[key].totalQty += effectiveQty;
+      supplierMap[supplierName].rows[key].totalAmount += effectiveAmount;
+    }
+
+    const responseStatus = isCancelled ? "cancelled_by_supplier" : getSupplierResponseStatus(item);
+    supplierMap[supplierName].rows[key].restaurants.push({
+      lineKey,
+      restaurantId: order.restaurantId,
+      restaurantName: order.restaurantName,
+      qty: effectiveQty,
+      actualReceivedQty: item?.actualReceivedQty !== undefined ? toNumber(item.actualReceivedQty) : null,
+      receivedVarianceQty: item?.receivedVarianceQty !== undefined ? toNumber(item.receivedVarianceQty) : null,
+      requiredDate: order.requiredDate,
+      orderId: order.id,
+      productId: item.productId || "",
+      productName: item.productName || "Без назви",
+      unit: item.unit || "",
+      unitPrice: toNumber(item.unitPrice),
+      orderStatus: String(order.status || "new"),
+      responseStatus,
+      responseQty: toNumber(item.supplierResponseQty),
+      responseComment: String(item.supplierResponseComment || item.supplierResponseComment || "").trim(),
+      sentToSupplier: Boolean(item?.sentToSupplier),
+      isCancelled: Boolean(isCancelled),
+    });
+    supplierMap[supplierName].rows[key].orderIds.add(order.id);
+    supplierMap[supplierName].orderIds.add(order.id);
+    supplierMap[supplierName].restaurants.add(order.restaurantName || order.restaurantId || "Без закладу");
+    if (order.requiredDate) supplierMap[supplierName].dates.add(order.requiredDate);
+    if (!isCancelled) {
+      supplierMap[supplierName].lineSnapshots.push({
+        sentToSupplier: Boolean(item?.sentToSupplier),
+        responseStatus,
+        orderStatus: String(order.status || "new"),
+      });
+    }
+  };
+
+  const supplierBoardOrders = useMemo(() => {
+    const supplierMap = {};
+
+    for (const order of visibleOrders) {
+      for (const item of order.items || []) {
+        const supplier = resolveLineSupplierName(order, item);
+        if (!supplier) continue;
+
+        // Якщо позиція була перепризначена — додаємо "тінь" до старого постачальника зі статусом cancelled
+        const prevSupplier = String(item.previousSupplierName || "").trim();
+        if (prevSupplier && prevSupplier !== supplier && !item?.reassignedFromOrderId) {
+          const cancelledEntry = {
+            ...item,
+            supplier: prevSupplier,
+            sentToSupplier: true,
+            supplierResponseStatus: "cancelled_by_supplier",
+            supplierResponseQty: 0,
+            supplierResponseComment: `Перепризначено на: ${supplier}`,
+          };
+          addSupplierEntry(supplierMap, order, cancelledEntry, prevSupplier, lineEdits, true);
+        }
+
+        addSupplierEntry(supplierMap, order, item, supplier, lineEdits, false);
+      }
+    }
+
+    return Object.values(supplierMap)
+      .map((entry) => {
+        const rows = Object.values(entry.rows).map((row) => ({
+          ...row,
+          orderIds: Array.from(row.orderIds),
+        }));
+        const totalAmount = rows.reduce((sum, row) => sum + toNumber(row.totalAmount), 0);
+        const totalQty = rows.reduce((sum, row) => sum + toNumber(row.totalQty), 0);
+        const hasItems = entry.lineSnapshots.length > 0;
+        const allCompleted = hasItems && entry.lineSnapshots.every((item) => item.orderStatus === "completed");
+        const hasUnsent = entry.lineSnapshots.some((item) => !item.sentToSupplier);
+        const hasSent = entry.lineSnapshots.some((item) => item.sentToSupplier);
+        const hasPending = entry.lineSnapshots.some((item) => item.sentToSupplier && item.responseStatus === "pending");
+        const hasIncident = entry.lineSnapshots.some((item) => item.sentToSupplier && ["partial", "unavailable"].includes(item.responseStatus));
+        const hasManualProcessing = entry.lineSnapshots.some((item) => item.orderStatus === "processing");
+
+        let status = "new";
+        if (allCompleted) status = "completed";
+        else if (hasSent && hasUnsent) status = "processing";
+        else if (hasPending || hasIncident) status = "sent";
+        else if (hasSent) status = "confirmed";
+        else if (hasManualProcessing) status = "processing";
+
+        return {
+          id: `supplier-board::${entry.supplier}`,
+          supplier: entry.supplier,
+          status,
+          rows,
+          orderIds: Array.from(entry.orderIds),
+          restaurantCount: entry.restaurants.size,
+          restaurants: Array.from(entry.restaurants),
+          totalAmount,
+          totalQty,
+          positionsCount: rows.length,
+          deliveryDates: Array.from(entry.dates).sort(),
+        };
+      })
+      .sort((left, right) => String(left.supplier || "").localeCompare(String(right.supplier || "")));
+  }, [visibleOrders, resolveLineSupplierName, lineEdits]);
 
   const dispatchableSuppliers = useMemo(() => Object.keys(consolidatedBySupplier), [consolidatedBySupplier]);
 
@@ -5165,32 +5645,105 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
   const supplierResponseIssues = useMemo(() => {
     const rows = [];
     for (const order of visibleOrders) {
-      for (const item of order.items || []) {
+      for (const [itemIndex, item] of (order.items || []).entries()) {
         if (!item?.sentToSupplier) continue;
         const responseStatus = getSupplierResponseStatus(item);
-        if (!["pending", "partial", "unavailable"].includes(responseStatus)) continue;
+        if (!["partial", "unavailable"].includes(responseStatus)) continue;
         rows.push({
           orderId: order.id,
+          itemIndex,
+          issueKey: `${String(order.id)}::${itemIndex}`,
+          restaurantId: order.restaurantId || "",
+          restaurantRegNumber: order.restaurantRegNumber || "",
           restaurantName: order.restaurantName || "Без закладу",
           requiredDate: order.requiredDate || "",
           supplier: item.supplier || "Без постачальника",
+          rawSupplier: item.supplier || "",
           productName: item.productName || "Без назви",
+          productId: item.productId || "",
+          code1C: item.code1C || "",
           requestedQty: toNumber(item.qty),
           responseQty: toNumber(item.supplierResponseQty),
           unit: item.unit || "",
           status: responseStatus,
+          orderStatus: order.status || "",
           comment: String(item.supplierResponseComment || "").trim(),
           respondedAt: item.supplierRespondedAt || "",
         });
       }
     }
     return rows.sort((left, right) => {
-      const priority = { unavailable: 0, partial: 1, pending: 2 };
+      const priority = { unavailable: 0, partial: 1 };
       const statusDiff = (priority[left.status] ?? 9) - (priority[right.status] ?? 9);
       if (statusDiff !== 0) return statusDiff;
       return String(left.requiredDate || "").localeCompare(String(right.requiredDate || ""));
     });
   }, [visibleOrders]);
+
+  const statusBoardColumns = useMemo(() => ([
+    { key: "new", label: "Нові", tone: "text-sky-700 bg-sky-50 border-sky-200" },
+    { key: "processing", label: "В обробці", tone: "text-amber-700 bg-amber-50 border-amber-200" },
+    { key: "sent", label: "Надіслані", tone: "text-indigo-700 bg-indigo-50 border-indigo-200" },
+    { key: "confirmed", label: "Підтверджені", tone: "text-emerald-700 bg-emerald-50 border-emerald-200" },
+    { key: "completed", label: "Закриті", tone: "text-emerald-700 bg-emerald-50 border-emerald-200" },
+  ]), []);
+
+  const canOpenBoardDetails = useCallback((status) => {
+    return ["processing", "sent", "confirmed", "completed"].includes(String(status || ""));
+  }, []);
+
+  const isBoardStatusDropAllowed = useCallback((fromStatus, toStatus) => {
+    const from = String(fromStatus || "");
+    const to = String(toStatus || "");
+    if (!from || !to || from === to) return false;
+    if (from === "new" && to === "processing") return true;
+    if (from === "processing" && to === "sent") return true;
+    return false;
+  }, []);
+
+  const isBoardOrderDraggable = useCallback((status) => {
+    const normalized = String(status || "");
+    return normalized === "new" || normalized === "processing" || normalized === "completed";
+  }, []);
+
+  const ordersByStatus = useMemo(() => {
+    const buckets = { new: [], processing: [], sent: [], confirmed: [], completed: [] };
+    for (const order of supplierBoardOrders) {
+      const effectiveStatus = optimisticBoardStatuses[order.id] || order.status;
+      const key = ["new", "processing", "sent", "confirmed", "completed"].includes(effectiveStatus) ? effectiveStatus : "new";
+      buckets[key].push({ ...order, status: effectiveStatus });
+    }
+    return buckets;
+  }, [supplierBoardOrders, optimisticBoardStatuses]);
+
+  const totalOrderLines = useMemo(() => {
+    return visibleOrders.reduce((sum, order) => sum + (order.items || []).length, 0);
+  }, [visibleOrders]);
+
+  const uniqueRestaurantsCount = useMemo(() => {
+    return new Set(visibleOrders.map((order) => order.restaurantName).filter(Boolean)).size;
+  }, [visibleOrders]);
+
+  const pendingSupplierLines = useMemo(() => {
+    let total = 0;
+    for (const order of visibleOrders) {
+      for (const item of order.items || []) {
+        if (!item?.sentToSupplier) continue;
+        if (getSupplierResponseStatus(item) === "pending") total += 1;
+      }
+    }
+    return total;
+  }, [visibleOrders]);
+
+  const getOrderSupplierResponseSummary = useCallback((order) => {
+    const sentItems = (order.items || []).filter((item) => item.sentToSupplier);
+    if (sentItems.length === 0) return "Ще не відправлено";
+    const accepted = sentItems.filter((item) => getSupplierResponseStatus(item) === "accepted").length;
+    const partial = sentItems.filter((item) => getSupplierResponseStatus(item) === "partial").length;
+    const unavailable = sentItems.filter((item) => getSupplierResponseStatus(item) === "unavailable").length;
+    const pending = sentItems.filter((item) => getSupplierResponseStatus(item) === "pending").length;
+    return `${accepted} підтвердж., ${partial} частк., ${unavailable} немає, ${pending} очікує`;
+  }, []);
 
   const groupedByRestaurant = useMemo(() => {
     const map = {};
@@ -5202,7 +5755,7 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
       for (const item of order.items || []) {
         map[restaurant].push({
           orderId: order.id,
-          supplier: item.supplier || "Без постачальника",
+          supplier: resolveLineSupplierName(order, item),
           productName: item.productName || "Без назви",
           qty: toNumber(item.qty),
           unit: item.unit || "",
@@ -5214,7 +5767,7 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
     }
 
     return map;
-  }, [visibleOrders]);
+  }, [visibleOrders, resolveLineSupplierName]);
 
   const isRestaurantExpanded = (restaurant) => {
     if (expandedRestaurants[restaurant] === undefined) return false;
@@ -5241,10 +5794,500 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
   };
 
   const updateStatus = async (order, status) => {
+    const now = new Date().toISOString();
+    const nextItems = (order.items || []).map((item) => {
+      if (status !== "sent") return item;
+      if (item?.sentToSupplier) return item;
+      return {
+        ...item,
+        sentToSupplier: true,
+        sentAt: now,
+      };
+    });
+
+    const totalItems = nextItems.reduce((sum, item) => sum + toNumber(item.qty), 0);
+    const totalAmount = nextItems.reduce((sum, item) => sum + toNumber(item.amount), 0);
+
     const { id, ...payload } = order;
-    const result = await updateOrder(id, { ...payload, status });
+    const result = await updateOrder(id, {
+      ...payload,
+      status,
+      items: nextItems,
+      totalItems,
+      totalAmount,
+      updatedAt: now,
+    });
     if (!result.success) {
       alert("Не вдалося оновити статус заявки.");
+      return false;
+    }
+    return true;
+  };
+
+  const updateSupplierBoardStatus = useCallback(async (boardOrder, nextStatus) => {
+    if (!canManageOrders || !boardOrder) return;
+
+    const targets = (boardOrder.orderIds || [])
+      .map((orderId) => roleScopedOrders.find((entry) => String(entry.id) === String(orderId)))
+      .filter(Boolean);
+
+    if (targets.length === 0) return;
+
+    setOptimisticBoardStatuses((prev) => ({ ...prev, [boardOrder.id]: nextStatus }));
+    const results = await Promise.all(targets.map((target) => updateStatus(target, nextStatus)));
+    if (results.some((item) => item === false)) {
+      setOptimisticBoardStatuses((prev) => {
+        const next = { ...prev };
+        delete next[boardOrder.id];
+        return next;
+      });
+      return;
+    }
+    window.setTimeout(() => {
+      setOptimisticBoardStatuses((prev) => {
+        const next = { ...prev };
+        delete next[boardOrder.id];
+        return next;
+      });
+    }, 1200);
+  }, [canManageOrders, roleScopedOrders]);
+
+  const getIssueAlternativeSuppliers = useCallback((issue) => {
+    const restaurantRef = {
+      id: String(issue?.restaurantId || ""),
+      restaurantId: String(issue?.restaurantId || ""),
+      restaurantName: String(issue?.restaurantName || ""),
+      restaurantRegNumber: String(issue?.restaurantRegNumber || ""),
+    };
+    const normalizedCurrent = normalizeSupplierIdentity(issue?.supplier);
+    const directory = (Array.isArray(suppliersDirectory) ? suppliersDirectory : []);
+    const toDirectoryItem = (normalizedName) => {
+      return directory.find((supplier) => normalizeSupplierIdentity(supplier?.name) === normalizedName) || null;
+    };
+
+    const candidateDisplayByNormalized = new Map();
+    const normalizeProductIdentity = (value) => {
+      return String(value || "")
+        .toLowerCase()
+        .replace(/\([^)]*\)/g, " ")
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    };
+    // Не беремо issue.rawSupplier як джерело альтернатив, бо інколи поле містить
+    // злитий список багатьох постачальників і роздуває dropdown нерелевантними значеннями.
+
+    const productSupplierCandidatesSameRestaurant = new Map();
+    const productSupplierCandidatesCrossRestaurant = new Map();
+    for (const product of Array.isArray(products) ? products : []) {
+      const issueCode = String(issue?.code1C || "").trim().toLowerCase();
+      const productCode = String(product?.code1C || "").trim().toLowerCase();
+      const byProductId = String(issue?.productId || "") && String(product?.id || "")
+        ? String(issue.productId) === String(product.id)
+        : false;
+      const issueName = normalizeProductIdentity(issue?.productName);
+      const productName = normalizeProductIdentity(product?.name || product?.whiteCardName || "");
+      const byCode = Boolean(issueCode && productCode && issueCode === productCode);
+      const byProductName = Boolean(issueName && productName && (issueName === productName || issueName.includes(productName) || productName.includes(issueName)));
+      if (!byProductId && !byCode && !byProductName) continue;
+
+      const sameRestaurantById =
+        String(issue?.restaurantId || "") && String(product?.restaurantId || "")
+          ? String(issue.restaurantId) === String(product.restaurantId)
+          : false;
+      const sameRestaurantByName =
+        normalizeComparableToken(issue?.restaurantName) && normalizeComparableToken(product?.restaurantName)
+          ? normalizeComparableToken(issue.restaurantName) === normalizeComparableToken(product.restaurantName)
+          : false;
+      const restaurantMatches = sameRestaurantById || sameRestaurantByName;
+
+      const productSuppliersRaw = [
+        ...(Array.isArray(product?.supplierList) ? product.supplierList : []),
+        ...splitSupplierCandidates(product?.supplier),
+      ];
+
+      productSuppliersRaw.forEach((name) => {
+          const normalized = normalizeSupplierIdentity(name);
+          if (!normalized || normalized === normalizedCurrent) return;
+        const displayName = String(name || "").trim();
+
+        if (restaurantMatches) {
+          if (!productSupplierCandidatesSameRestaurant.has(normalized)) {
+            productSupplierCandidatesSameRestaurant.set(normalized, displayName);
+          }
+        } else {
+          if (!productSupplierCandidatesCrossRestaurant.has(normalized)) {
+            productSupplierCandidatesCrossRestaurant.set(normalized, displayName);
+          }
+        }
+
+        if (!candidateDisplayByNormalized.has(normalized)) {
+          candidateDisplayByNormalized.set(normalized, displayName);
+        }
+      });
+    }
+
+    const orderedProductCandidates = [
+      ...Array.from(productSupplierCandidatesSameRestaurant.entries()),
+      ...Array.from(productSupplierCandidatesCrossRestaurant.entries()),
+    ];
+
+    orderedProductCandidates.forEach(([normalized, displayName]) => {
+      if (!candidateDisplayByNormalized.has(normalized)) {
+        candidateDisplayByNormalized.set(normalized, displayName || normalized);
+      }
+    });
+
+    const fromIssueCandidates = directory
+      .filter((supplier) => {
+        const supplierName = String(supplier?.name || "").trim();
+        const normalized = normalizeSupplierIdentity(supplierName);
+        if (!supplierName || !normalized) return false;
+        if (!candidateDisplayByNormalized.has(normalized)) return false;
+        return supplierHasContractForRestaurant(supplier, restaurantRef);
+      })
+      .sort((left, right) => String(left?.name || "").localeCompare(String(right?.name || ""), "uk"));
+
+    if (fromIssueCandidates.length > 0) return fromIssueCandidates;
+
+    if (candidateDisplayByNormalized.size > 0) {
+      const synthetic = Array.from(candidateDisplayByNormalized.entries())
+        .map((normalized) => {
+          const directorySupplier = toDirectoryItem(normalized[0]);
+          if (directorySupplier) return directorySupplier;
+          return {
+            id: `synthetic_${normalized[0]}`,
+            name: normalized[1] || normalized[0],
+          };
+        })
+        .filter(Boolean)
+        .sort((left, right) => String(left?.name || "").localeCompare(String(right?.name || ""), "uk"));
+      if (synthetic.length > 0) return synthetic;
+    }
+
+    const productLinkedCandidates = new Set();
+    for (const order of roleScopedOrders) {
+      for (const item of order.items || []) {
+        const sameProduct =
+          String(item?.productId || "") && String(issue?.productId || "")
+            ? String(item?.productId || "") === String(issue?.productId || "")
+            : String(item?.productName || "").trim().toLowerCase() === String(issue?.productName || "").trim().toLowerCase();
+        if (!sameProduct) continue;
+        splitSupplierCandidates(item?.supplier)
+          .map((name) => normalizeSupplierIdentity(name))
+          .filter((name) => Boolean(name) && name !== normalizedCurrent)
+          .forEach((name) => productLinkedCandidates.add(name));
+      }
+    }
+
+    const fromProductCandidates = Array.from(productLinkedCandidates)
+      .map((name) => toDirectoryItem(name))
+      .filter(Boolean)
+      .filter((supplier) => supplierHasContractForRestaurant(supplier, restaurantRef))
+      .sort((left, right) => String(left?.name || "").localeCompare(String(right?.name || ""), "uk"));
+
+    if (fromProductCandidates.length > 0) return fromProductCandidates;
+
+    // Fallback: all product-linked suppliers regardless of contracts (synthetic already checked)
+    const anyProductLinked = Array.from(productLinkedCandidates)
+      .map((name) => toDirectoryItem(name) || { id: `synthetic_${name}`, name })
+      .filter(Boolean)
+      .sort((left, right) => String(left?.name || "").localeCompare(String(right?.name || ""), "uk"));
+
+    if (anyProductLinked.length > 0) return anyProductLinked;
+
+    // Last resort: all active suppliers from directory except current
+    return directory
+      .filter((supplier) => {
+        const norm = normalizeSupplierIdentity(supplier?.name);
+        return Boolean(norm) && norm !== normalizedCurrent && supplier?.isActive !== false;
+      })
+      .sort((left, right) => String(left?.name || "").localeCompare(String(right?.name || ""), "uk"));
+  }, [suppliersDirectory, roleScopedOrders, products]);
+
+  const reassignIssueSupplier = async (issue) => {
+    if (!canManageOrders) return;
+    if (!createOrder) {
+      alert("Недоступне створення нової заявки для перепризначення.");
+      return;
+    }
+    const nextSupplier = String(reassignSupplierDrafts[issue.issueKey] || "").trim();
+    if (!nextSupplier) {
+      alert("Оберіть нового постачальника.");
+      return;
+    }
+
+    const order = roleScopedOrders.find((entry) => String(entry.id) === String(issue.orderId));
+    if (!order) {
+      alert("Не вдалося знайти замовлення для перепризначення.");
+      return;
+    }
+
+    const originalItem = (order.items || [])[issue.itemIndex];
+    if (!originalItem) {
+      alert("Не вдалося знайти позицію для перепризначення.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const responseStatus = getSupplierResponseStatus(originalItem);
+    const historyEntry = {
+      supplier: String(issue.supplier || originalItem.supplier || "").trim(),
+      status: responseStatus,
+      responseQty: toNumber(originalItem.supplierResponseQty),
+      comment: String(originalItem.supplierResponseComment || "").trim(),
+      cancelledAt: now,
+      cancelledReason: "reassigned_by_procurement",
+      reassignedTo: nextSupplier,
+      restaurantId: String(order.restaurantId || ""),
+      restaurantName: String(order.restaurantName || ""),
+    };
+
+    const previousHistory = Array.isArray(originalItem?.supplierReassignmentHistory) ? originalItem.supplierReassignmentHistory : [];
+    const orderedQty = toNumber(originalItem.qty);
+    const orderedAmount = orderedQty * toNumber(originalItem.unitPrice);
+    const reassignedItem = {
+      ...originalItem,
+      supplier: nextSupplier,
+      sentToSupplier: true,
+      sentAt: now,
+      supplierResponseStatus: "pending",
+      supplierResponseQty: 0,
+      supplierResponseAmount: 0,
+      supplierResponseComment: "",
+      supplierRespondedAt: "",
+      supplierRespondedBy: "",
+      supplierRespondedById: "",
+      previousSupplierName: historyEntry.supplier,
+      previousSupplierStatus: "cancelled_by_supplier",
+      previousSupplierCancelledAt: now,
+      supplierReassignmentHistory: [...previousHistory, historyEntry],
+      reassignedFromOrderId: String(order.id || ""),
+      reassignedFromSupplier: historyEntry.supplier,
+      qty: orderedQty,
+      amount: orderedAmount,
+      originalOrderedQty: toNumber(originalItem.originalOrderedQty || originalItem.qty),
+      originalOrderedAmount: toNumber(originalItem.originalOrderedAmount || originalItem.amount || orderedAmount),
+    };
+
+    const nextItems = (order.items || []).map((item, itemIndex) => {
+      if (itemIndex !== issue.itemIndex) return item;
+      return {
+        ...item,
+        supplier: historyEntry.supplier,
+        sentToSupplier: true,
+        sentAt: item?.sentAt || now,
+        supplierResponseStatus: "cancelled_by_supplier",
+        supplierResponseQty: 0,
+        supplierResponseAmount: 0,
+        supplierResponseComment: `Перепризначено на: ${nextSupplier}`,
+        supplierRespondedAt: now,
+        supplierRespondedBy: user?.displayName || user?.fullName || user?.email || "Закупівлі",
+        supplierRespondedById: user?.uid || user?.email || "",
+        originalOrderedQty: toNumber(item.originalOrderedQty || item.qty),
+        originalOrderedAmount: toNumber(item.originalOrderedAmount || item.amount || orderedAmount),
+        qty: 0,
+        amount: 0,
+        reassignedToSupplier: nextSupplier,
+        previousSupplierCancelledAt: now,
+        supplierReassignmentHistory: [...previousHistory, historyEntry],
+      };
+    });
+
+    const allPositionsRemoved = nextItems.length > 0 && nextItems.every((item) => toNumber(item.qty) <= 0);
+    const totalItems = nextItems.reduce((sum, item) => sum + toNumber(item.qty), 0);
+    const totalAmount = nextItems.reduce((sum, item) => sum + toNumber(item.amount), 0);
+    const { id, ...payload } = order;
+
+    const reassignedOrder = {
+      createdBy: user?.displayName || user?.fullName || user?.email || "Закупівлі",
+      createdById: user?.uid || user?.email || "",
+      restaurantId: String(order.restaurantId || ""),
+      restaurantName: String(order.restaurantName || ""),
+      restaurantRegNumber: String(order.restaurantRegNumber || ""),
+      requiredDate: String(order.requiredDate || ""),
+      comment: [String(order.comment || "").trim(), `Перепризначено від ${historyEntry.supplier}`].filter(Boolean).join(" | "),
+      status: "sent",
+      items: [reassignedItem],
+      totalItems: orderedQty,
+      totalAmount: orderedAmount,
+      createdAt: now,
+      reassignedFromOrderId: String(order.id || ""),
+      reassignedFromSupplier: historyEntry.supplier,
+    };
+
+    setReassigningIssueKey(issue.issueKey);
+    const createResult = await createOrder(reassignedOrder);
+    if (!createResult.success) {
+      setReassigningIssueKey("");
+      alert("Не вдалося створити нову заявку для альтернативного постачальника.");
+      return;
+    }
+
+    const result = await updateOrder(id, {
+      ...payload,
+      items: nextItems,
+      totalItems,
+      totalAmount,
+      status: allPositionsRemoved ? "completed" : deriveOrderStatus(nextItems, order.status),
+      allPositionsCancelled: allPositionsRemoved,
+      allPositionsCancelledAt: allPositionsRemoved ? now : "",
+      supplierResponseUpdatedAt: now,
+      updatedAt: now,
+    });
+    setReassigningIssueKey("");
+
+    if (!result.success) {
+      alert("Не вдалося оновити початкову заявку після створення нової для альтернативного постачальника.");
+      return;
+    }
+
+    setReassignSupplierDrafts((prev) => {
+      const next = { ...prev };
+      delete next[issue.issueKey];
+      return next;
+    });
+  };
+
+  const acceptConfirmedQty = async (issue) => {
+    if (!canManageOrders) return;
+    const order = orders.find((item) => String(item.id) === String(issue.orderId));
+    if (!order) { alert("Заявку не знайдено."); return; }
+
+    const updatedItems = (order.items || []).map((item, idx) => {
+      if (idx !== issue.itemIndex) return item;
+      const confirmedQty = toNumber(item.supplierResponseQty);
+      return {
+        ...item,
+        qty: confirmedQty,
+        amount: confirmedQty * toNumber(item.unitPrice),
+        supplierResponseStatus: "accepted",
+        supplierRespondedAt: item.supplierRespondedAt || new Date().toISOString(),
+      };
+    });
+
+    const totalItems = updatedItems.reduce((sum, item) => sum + toNumber(item.qty), 0);
+    const totalAmount = updatedItems.reduce((sum, item) => sum + toNumber(item.amount), 0);
+    const { id, ...payload } = order;
+
+    const result = await updateOrder(id, {
+      ...payload,
+      items: updatedItems,
+      totalItems,
+      totalAmount,
+      status: deriveOrderStatus(updatedItems, order.status),
+      correctedAt: new Date().toISOString(),
+    });
+
+    if (!result.success) { alert("Не вдалося прийняти підтверджену кількість."); }
+  };
+
+  const handleBoardDragStart = useCallback((event, boardOrder) => {
+    if (!canManageOrders) return;
+    if (!isBoardOrderDraggable(boardOrder?.status)) return;
+    const boardId = String(boardOrder?.id || "");
+    if (event?.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", boardId);
+    }
+    draggedBoardIdRef.current = boardId;
+    setDraggedSupplierBoardId(boardId);
+    setDragOverArchive(false);
+  }, [canManageOrders, isBoardOrderDraggable]);
+
+  const handleBoardDrop = useCallback(async (nextStatus, event) => {
+    if (!canManageOrders) return;
+    const droppedId = String(draggedBoardIdRef.current || draggedSupplierBoardId || event?.dataTransfer?.getData("text/plain") || "");
+    if (!droppedId) return;
+    const boardOrder = supplierBoardOrders.find((entry) => String(entry.id) === droppedId);
+    setDragOverStatus("");
+    setDragOverArchive(false);
+    setDraggedSupplierBoardId("");
+    draggedBoardIdRef.current = "";
+    if (!boardOrder) return;
+    const effectiveStatus = optimisticBoardStatuses[boardOrder.id] || boardOrder.status;
+    if (!isBoardStatusDropAllowed(effectiveStatus, nextStatus)) {
+      if (String(nextStatus || "") === "confirmed" || String(nextStatus || "") === "completed") {
+        alert("У статуси 'Підтверджені' та 'Закриті' перетягувати не можна. Їх змінює постачальник або приймання.");
+      } else if (String(effectiveStatus || "") === "new") {
+        alert("Після 'Нові' можна перетягнути лише у статус 'В обробці'.");
+      } else if (String(effectiveStatus || "") === "processing") {
+        alert("Після 'В обробці' можна перетягнути лише у статус 'Надіслані'.");
+      }
+      return;
+    }
+    await updateSupplierBoardStatus(boardOrder, nextStatus);
+  }, [canManageOrders, draggedSupplierBoardId, supplierBoardOrders, updateSupplierBoardStatus, optimisticBoardStatuses, isBoardStatusDropAllowed]);
+
+  const moveOrderToArchive = async (order) => {
+    if (!canManageOrders) return false;
+    if (String(order?.status || "") !== "completed") {
+      alert("В архів можна перенести лише закриту заявку.");
+      return false;
+    }
+
+    const now = new Date().toISOString();
+    const { id, ...payload } = order;
+    const result = await updateOrder(id, {
+      ...payload,
+      isArchived: true,
+      archivedAt: now,
+      archivedBy: user?.displayName || user?.fullName || user?.email || "Закупівлі",
+      updatedAt: now,
+    });
+    if (!result.success) {
+      alert("Не вдалося перенести заявку в архів.");
+      return false;
+    }
+    return true;
+  };
+
+  const handleArchiveDrop = async (event) => {
+    if (!canManageOrders) return;
+    // Read dataTransfer synchronously before any async/state operations
+    const dataTransferValue = event?.dataTransfer?.getData("text/plain") || "";
+    const droppedId = String(draggedBoardIdRef.current || dataTransferValue || draggedSupplierBoardId || "");
+    if (!droppedId) return;
+    
+    const boardOrder = supplierBoardOrders.find((entry) => String(entry.id) === droppedId);
+    
+    setDragOverStatus("");
+    setDragOverArchive(false);
+    setDraggedSupplierBoardId("");
+    draggedBoardIdRef.current = "";
+
+    if (!boardOrder) return;
+    
+    const effectiveStatus = optimisticBoardStatuses[boardOrder.id] || boardOrder.status;
+    
+    if (effectiveStatus !== "completed") {
+      alert("В архів можна перетягувати лише закриті заявки.");
+      return;
+    }
+
+    const targets = (boardOrder.orderIds || [])
+      .map((orderId) => roleScopedOrders.find((entry) => String(entry.id) === String(orderId)))
+      .filter(Boolean);
+
+    if (targets.length === 0) return;
+    
+    await Promise.all(targets.map((target) => moveOrderToArchive(target)));
+  };
+
+  const restoreOrderFromArchive = async (order) => {
+    if (!canManageOrders) return;
+
+    const now = new Date().toISOString();
+    const { id, ...payload } = order;
+    const result = await updateOrder(id, {
+      ...payload,
+      isArchived: false,
+      archivedAt: "",
+      archivedBy: "",
+      updatedAt: now,
+    });
+    if (!result.success) {
+      alert("Не вдалося повернути заявку з архіву.");
     }
   };
 
@@ -5422,534 +6465,584 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
     });
   };
 
-  const sendToSpecificSuppliers = async (suppliersToSend) => {
-    if (!canManageOrders) return;
-
-    const normalizedSuppliers = suppliersToSend.filter((supplier) => consolidatedBySupplier[supplier]?.length > 0);
-    if (normalizedSuppliers.length === 0) {
-      alert("Немає нових даних для відправки.");
-      return;
-    }
-
-    const dispatchBatchId = `dispatch_${Date.now()}`;
-    const managerName = user?.displayName || user?.fullName || user?.email || "Закупівлі";
-    const managerId = user?.uid || "";
-    const now = new Date().toISOString();
-
-    try {
-      const ordersMap = new Map(orders.map((order) => [order.id, { ...order, items: [...(order.items || [])] }]));
-      const patchedOrders = new Map();
-
-      for (const supplier of normalizedSuppliers) {
-        const rows = consolidatedBySupplier[supplier] || [];
-        const dispatchPayload = {
-          supplier,
-          dispatchBatchId,
-          status: "sent",
-          sentBy: managerName,
-          sentById: managerId,
-          orderIds: Array.from(new Set(rows.flatMap((row) => row.orderIds))),
-          lines: rows.map((row) => ({
-            productName: row.productName,
-            unit: row.unit,
-            requiredDate: row.requiredDate,
-            totalQty: row.totalQty,
-            totalAmount: row.totalAmount,
-            restaurants: row.restaurants,
-          })),
-        };
-
-        const dispatchResult = await createSupplierDispatch(dispatchPayload);
-        if (!dispatchResult.success) {
-          throw dispatchResult.error || new Error("Не вдалося створити відправку постачальнику");
-        }
-
-        const affectedOrderIds = dispatchPayload.orderIds;
-        for (const orderId of affectedOrderIds) {
-          const workingOrder = patchedOrders.get(orderId) || ordersMap.get(orderId);
-          if (!workingOrder) continue;
-
-          const nextItems = (workingOrder.items || []).map((item) => {
-            const itemSupplier = item.supplier || "Без постачальника";
-            if (itemSupplier !== supplier || item.sentToSupplier) return item;
-            return {
-              ...item,
-              sentToSupplier: true,
-              sentAt: now,
-            };
-          });
-
-          const totalItems = nextItems.reduce((sum, item) => sum + toNumber(item.qty), 0);
-          const totalAmount = nextItems.reduce((sum, item) => sum + toNumber(item.amount), 0);
-
-          patchedOrders.set(orderId, {
-            ...workingOrder,
-            items: nextItems,
-            totalItems,
-            totalAmount,
-            status: deriveOrderStatus(nextItems, workingOrder.status),
-            dispatchBatchId,
-            sentBy: managerName,
-            sentById: managerId,
-            sentAt: now,
-          });
-        }
-      }
-
-      for (const [orderId, payload] of patchedOrders.entries()) {
-        const { id, ...orderData } = payload;
-        const updateResult = await updateOrder(orderId, orderData);
-        if (!updateResult.success) {
-          throw updateResult.error || new Error(`Не вдалося оновити заявку ${orderId}`);
-        }
-      }
-
-      alert(`Відправлено постачальникам: ${normalizedSuppliers.length}. Оновлено заявок: ${patchedOrders.size}.`);
-    } catch (error) {
-      console.error("Помилка відправки постачальникам:", error);
-      alert(`Не вдалося відправити постачальникам: ${error?.message || "невідома помилка"}`);
-    } finally {
-      setSendingSupplier("");
-    }
-  };
-
-  const sendAllSuppliers = async () => {
-    setSendingSupplier("ALL");
-    await sendToSpecificSuppliers(dispatchableSuppliers);
-  };
-
-  const sendOneSupplier = async (supplier) => {
-    setSendingSupplier(supplier);
-    await sendToSpecificSuppliers([supplier]);
-  };
-
   return (
     <div className="space-y-5">
       <div className={cardClass}>
-        <div className="flex items-center justify-between gap-3 mb-4">
-          <div className="flex items-center gap-2">
-            <ClipboardCheck size={18} className="text-indigo-600" />
-            <h2 className="text-lg font-semibold">Управління замовленнями</h2>
-          </div>
-          <select className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="">Всі статуси</option>
-            <option value="new">Нові</option>
-            <option value="processing">В обробці</option>
-            <option value="sent">Надіслані постачальнику</option>
-            <option value="completed">Закриті</option>
-          </select>
-        </div>
-
-        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <p className="mb-2 text-sm font-semibold text-slate-900">Фільтр по датах</p>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
-            <div>
-              <label className="text-xs font-semibold text-slate-700">Замовлення від</label>
-              <input type="date" className={inputClass} value={orderDateFrom} onChange={(e) => setOrderDateFrom(e.target.value)} />
+        <div className="rounded-xl border border-slate-200 bg-[radial-gradient(circle_at_top_right,_rgba(99,102,241,0.16),_rgba(15,23,42,0)_56%),linear-gradient(160deg,_#f8fbff_0%,_#eef2ff_100%)] p-4">
+          <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl border border-indigo-200 bg-white p-2 text-indigo-700 shadow-sm">
+                <ClipboardCheck size={20} />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Центр керування замовленнями</h2>
+                <p className="text-xs text-slate-600">Оперативний контроль статусів, постачальників та проблемних позицій в одному просторі.</p>
+              </div>
             </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-700">Замовлення до</label>
-              <input type="date" className={inputClass} value={orderDateTo} onChange={(e) => setOrderDateTo(e.target.value)} />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-700">Поставка від</label>
-              <input type="date" className={inputClass} value={deliveryDateFrom} onChange={(e) => setDeliveryDateFrom(e.target.value)} />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-700">Поставка до</label>
-              <input type="date" className={inputClass} value={deliveryDateTo} onChange={(e) => setDeliveryDateTo(e.target.value)} />
-            </div>
-            <div className="flex items-end">
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
               <button
                 type="button"
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold ${ordersViewMode === "board" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                onClick={() => setOrdersViewMode("board")}
+              >
+                Борд
+              </button>
+              <button
+                type="button"
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold ${ordersViewMode === "table" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                onClick={() => setOrdersViewMode("table")}
+              >
+                Таблиця
+              </button>
+            </div>
+          </div>
+
+          <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Зведених заявок</p>
+              <p className="mt-1 text-2xl font-semibold text-slate-900">{supplierBoardOrders.length}</p>
+              <p className="mt-1 text-xs text-slate-600">По {uniqueRestaurantsCount} закладах</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Позицій</p>
+              <p className="mt-1 text-2xl font-semibold text-slate-900">{totalOrderLines}</p>
+              <p className="mt-1 text-xs text-slate-600">Активні лінії замовлень</p>
+            </div>
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Очікують відповіді</p>
+              <p className="mt-1 text-2xl font-semibold text-amber-900">{pendingSupplierLines}</p>
+              <p className="mt-1 text-xs text-amber-700">Ліній відправлено без відповіді</p>
+            </div>
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Чернетки до відправки</p>
+              <p className="mt-1 text-2xl font-semibold text-indigo-900">{dispatchableOrdersCount}</p>
+              <p className="mt-1 text-xs text-indigo-700">{dispatchableSuppliers.length} постачальників ще не відправлено</p>
+            </div>
+          </div>
+
+          <div className="mb-4 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-slate-900">Фільтри</p>
+              <button
+                type="button"
+                className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                 onClick={() => {
+                  setStatusFilter("");
                   setOrderDateFrom("");
                   setOrderDateTo("");
                   setDeliveryDateFrom("");
                   setDeliveryDateTo("");
                 }}
               >
-                Скинути дати
+                Скинути
               </button>
             </div>
-          </div>
-        </div>
-
-        {canManageOrders && (
-          <div className="mb-4 flex items-center justify-between rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3">
-            <p className="text-sm font-semibold text-indigo-900">
-              Готово до відправки: {dispatchableOrdersCount} заявок / {dispatchableSuppliers.length} постачальників
-            </p>
-            <button
-              type="button"
-              onClick={sendAllSuppliers}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={dispatchableSuppliers.length === 0 || sendingSupplier === "ALL"}
-            >
-              {sendingSupplier === "ALL" ? "Відправлення..." : "Відправити всім постачальникам"}
-            </button>
-          </div>
-        )}
-
-        {!canManageOrders && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            Для повного управління заявками потрібна роль адміністратора/закупівель.
-          </div>
-        )}
-
-        {canManageOrders && supplierResponseIssues.length > 0 && (
-          <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-rose-900">Контроль проблемних відповідей постачальників</p>
-                <p className="text-xs text-rose-700">Тут зібрані позиції, які ще очікують відповіді, підтверджені частково або відхилені постачальником.</p>
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-700">Статус</label>
+                <select
+                  className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                >
+                  <option value="">Всі статуси</option>
+                  <option value="new">Нові</option>
+                  <option value="processing">В обробці</option>
+                  <option value="sent">Надіслані постачальнику</option>
+                  <option value="confirmed">Підтверджені постачальником</option>
+                  <option value="completed">Закриті</option>
+                </select>
               </div>
-              <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-rose-700">
-                {supplierResponseIssues.length} проблемних позицій
-              </span>
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-700">Замовлення від</label>
+                <input type="date" className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800" value={orderDateFrom} onChange={(e) => setOrderDateFrom(e.target.value)} onFocus={openNativeDatePicker} onClick={openNativeDatePicker} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-700">Замовлення до</label>
+                <input type="date" className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800" value={orderDateTo} onChange={(e) => setOrderDateTo(e.target.value)} onFocus={openNativeDatePicker} onClick={openNativeDatePicker} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-700">Поставка від</label>
+                <input type="date" className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800" value={deliveryDateFrom} onChange={(e) => setDeliveryDateFrom(e.target.value)} onFocus={openNativeDatePicker} onClick={openNativeDatePicker} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] font-semibold text-slate-700">Поставка до</label>
+                <input type="date" className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-800" value={deliveryDateTo} onChange={(e) => setDeliveryDateTo(e.target.value)} onFocus={openNativeDatePicker} onClick={openNativeDatePicker} />
+              </div>
             </div>
+          </div>
 
-            <div className="overflow-x-auto rounded-lg border border-rose-200 bg-white">
-              <table className="min-w-full text-xs">
-                <thead className="bg-rose-50 text-rose-900">
+          {!canManageOrders && (
+            <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Для повного управління заявками потрібна роль адміністратора/закупівель.
+            </div>
+          )}
+
+          {canManageOrders && supplierResponseIssues.length > 0 && (
+            <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-rose-900">Інцидент-центр постачальників</p>
+                  <p className="text-xs text-rose-700">Проблемні позиції, що потребують рішення закупівельника.</p>
+                </div>
+                <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-rose-700">
+                  {supplierResponseIssues.length} інцидентів
+                </span>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border border-rose-200 bg-white">
+                <table className="min-w-full text-xs">
+                  <thead className="bg-rose-50 text-rose-900">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Позиція / Заклад</th>
+                      <th className="px-3 py-2 text-left">Постачальник · Дата</th>
+                      <th className="px-3 py-2 text-left">К-сть / Статус</th>
+                      <th className="px-3 py-2 text-left">Коментар</th>
+                      <th className="px-3 py-2 text-left">Дія</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {supplierResponseIssues.slice(0, 12).map((row, index) => {
+                      const alternatives = getIssueAlternativeSuppliers(row);
+                      return (
+                        <tr key={`${row.orderId}_${row.productName}_${index}`} className="border-t border-rose-100 align-middle">
+                          <td className="px-3 py-2">
+                            <div className="font-medium text-slate-900">{row.productName}</div>
+                            <div className="text-slate-500">{row.restaurantName}</div>
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="text-slate-800">{row.supplier}</div>
+                            <div className="text-slate-500">{formatDateUk(row.requiredDate)}</div>
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="text-slate-700">{row.requestedQty} {row.unit}{row.status !== "pending" && row.responseQty > 0 ? ` → ${row.responseQty}` : ""}</div>
+                            <span className={`inline-flex rounded-full px-2 py-0.5 font-semibold ${getSupplierResponseBadgeClass(row.status)}`}>
+                              {getSupplierResponseLabel(row.status)}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-slate-500">{row.comment || "—"}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {row.status === "partial" && row.responseQty > 0 && (
+                                <button
+                                  type="button"
+                                  className="whitespace-nowrap rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
+                                  onClick={() => { void acceptConfirmedQty(row); }}
+                                >
+                                  ✓ {row.responseQty} {row.unit}
+                                </button>
+                              )}
+                              {alternatives.length > 0 && (
+                                <>
+                                  <select
+                                    className="rounded border border-rose-200 bg-white px-2 py-1 text-[11px] text-slate-700"
+                                    value={reassignSupplierDrafts[row.issueKey] || ""}
+                                    onChange={(e) => setReassignSupplierDrafts((prev) => ({ ...prev, [row.issueKey]: e.target.value }))}
+                                  >
+                                    <option value="">Альтернатива</option>
+                                    {alternatives.map((supplier) => (
+                                      <option key={`${row.issueKey}_${supplier.id || supplier.name}`} value={supplier.name}>{supplier.name}</option>
+                                    ))}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                    disabled={!reassignSupplierDrafts[row.issueKey] || reassigningIssueKey === row.issueKey}
+                                    onClick={() => { void reassignIssueSupplier(row); }}
+                                  >
+                                    {reassigningIssueKey === row.issueKey ? "..." : "→"}
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {supplierResponseIssues.length > 12 && (
+                <p className="mt-2 text-xs text-rose-700">Показано перші 12 інцидентів із {supplierResponseIssues.length}.</p>
+              )}
+            </div>
+          )}
+
+          {ordersViewMode === "board" ? (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+              {statusBoardColumns.map((column) => (
+                <div
+                  key={column.key}
+                  className={`min-w-0 rounded-xl border bg-white p-2 shadow-sm transition ${dragOverStatus === column.key ? "border-indigo-400 ring-2 ring-indigo-100" : "border-slate-200"}`}
+                  onDragOver={(event) => {
+                    if (!canManageOrders) return;
+                    const draggedId = String(draggedBoardIdRef.current || draggedSupplierBoardId || event?.dataTransfer?.getData("text/plain") || "");
+                    const draggedBoardOrder = supplierBoardOrders.find((entry) => String(entry.id) === draggedId);
+                    const draggedStatus = draggedBoardOrder
+                      ? (optimisticBoardStatuses[draggedBoardOrder.id] || draggedBoardOrder.status)
+                      : "";
+                    if (!isBoardStatusDropAllowed(draggedStatus, column.key)) return;
+                    event.preventDefault();
+                    if (dragOverArchive) setDragOverArchive(false);
+                    if (dragOverStatus !== column.key) setDragOverStatus(column.key);
+                  }}
+                  onDragLeave={() => {
+                    if (dragOverStatus === column.key) setDragOverStatus("");
+                  }}
+                  onDrop={(event) => {
+                    const draggedId = String(draggedBoardIdRef.current || draggedSupplierBoardId || event?.dataTransfer?.getData("text/plain") || "");
+                    const draggedBoardOrder = supplierBoardOrders.find((entry) => String(entry.id) === draggedId);
+                    const draggedStatus = draggedBoardOrder
+                      ? (optimisticBoardStatuses[draggedBoardOrder.id] || draggedBoardOrder.status)
+                      : "";
+                    if (!isBoardStatusDropAllowed(draggedStatus, column.key)) return;
+                    event.preventDefault();
+                    void handleBoardDrop(column.key, event);
+                  }}
+                >
+                  <div className={`mb-2 rounded-lg border px-2 py-1 text-xs font-semibold ${column.tone}`}>
+                    {column.label}: {ordersByStatus[column.key]?.length || 0}
+                  </div>
+                  <div className="max-h-[58vh] space-y-1.5 overflow-y-auto pr-1">
+                    {(ordersByStatus[column.key] || []).map((order) => (
+                      <button
+                        key={order.id}
+                        type="button"
+                        draggable={canManageOrders && isBoardOrderDraggable(order.status)}
+                        onDragStart={(event) => handleBoardDragStart(event, order)}
+                        onDragEnd={() => {
+                          draggedBoardIdRef.current = "";
+                          setDraggedSupplierBoardId("");
+                          setDragOverStatus("");
+                          setDragOverArchive(false);
+                        }}
+                        className={`w-full rounded-md border px-1.5 py-1 text-left transition hover:border-indigo-300 hover:bg-indigo-50 ${draggedSupplierBoardId === order.id ? "border-indigo-300 bg-indigo-50 opacity-60" : "border-slate-200 bg-slate-50"}`}
+                        onClick={() => {
+                          if (!canOpenBoardDetails(order.status)) {
+                            alert("Спочатку візьміть заявку в роботу: перетягніть у статус 'В обробці'.");
+                            return;
+                          }
+                          setEditingSupplierBoard(order);
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <p className="truncate text-[11px] font-semibold leading-4 text-slate-900">{order.supplier || "Без постачальника"}</p>
+                          <span className="text-[10px] text-slate-500">{order.deliveryDates[0] || "-"}</span>
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10px] leading-4 text-slate-600">
+                          <span>{order.positionsCount} поз.</span>
+                          <span>{order.restaurantCount} закл.</span>
+                          <span>{formatMoney(order.totalAmount)}</span>
+                          <span className="truncate">{order.totalQty.toFixed(2)}</span>
+                        </div>
+
+                        {(order.orderIds || []).length > 0 && (order.orderIds || []).every((orderId) => {
+                          const sourceOrder = visibleOrders.find((entry) => String(entry.id) === String(orderId));
+                          return Boolean(sourceOrder?.allPositionsCancelled);
+                        }) && (
+                          <div className="mt-1 inline-flex rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
+                            Усі позиції видалені
+                          </div>
+                        )}
+
+                        <div className="mt-1 text-[10px] font-medium text-indigo-600">
+                          {String(order.status || "") === "new"
+                            ? "Спершу перетягніть у 'В обробці', тоді буде доступно редагування"
+                            : "Натисніть для редагування або перетягніть у наступний статус"}
+                        </div>
+                      </button>
+                    ))}
+                    {(ordersByStatus[column.key] || []).length === 0 && (
+                      <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-2 py-3 text-center text-xs text-slate-500">
+                        Немає заявок у цьому статусі
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-slate-700">
                   <tr>
+                    <th className="px-3 py-2 text-left">Створено</th>
+                    <th className="px-3 py-2 text-left">Ресторан</th>
                     <th className="px-3 py-2 text-left">Поставка</th>
-                    <th className="px-3 py-2 text-left">Заклад</th>
-                    <th className="px-3 py-2 text-left">Постачальник</th>
-                    <th className="px-3 py-2 text-left">Позиція</th>
-                    <th className="px-3 py-2 text-right">Замовлено</th>
-                    <th className="px-3 py-2 text-right">Підтверджено</th>
+                    <th className="px-3 py-2 text-left">Позицій</th>
+                    <th className="px-3 py-2 text-left">Одиниці</th>
+                    <th className="px-3 py-2 text-left">Сума</th>
                     <th className="px-3 py-2 text-left">Статус</th>
-                    <th className="px-3 py-2 text-left">Коментар</th>
+                    <th className="px-3 py-2 text-left">Відповідь постачальника</th>
+                    {canManageOrders && <th className="px-3 py-2 text-left">Дії</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {supplierResponseIssues.map((row, index) => (
-                    <tr key={`${row.orderId}_${row.productName}_${index}`} className="border-t border-rose-100 align-top">
-                      <td className="px-3 py-2">{formatDateUk(row.requiredDate)}</td>
-                      <td className="px-3 py-2">{row.restaurantName}</td>
-                      <td className="px-3 py-2 font-medium text-slate-900">{row.supplier}</td>
-                      <td className="px-3 py-2">{row.productName}</td>
-                      <td className="px-3 py-2 text-right">{row.requestedQty} {row.unit}</td>
-                      <td className="px-3 py-2 text-right">{row.status === "pending" ? "—" : `${row.responseQty} ${row.unit}`}</td>
+                  {visibleOrders.map((order) => (
+                    <tr key={order.id} className="border-t border-slate-200 align-top">
+                      <td className="px-3 py-2">{formatDateTimeSafe(order.createdAt)}</td>
+                      <td className="px-3 py-2">{order.restaurantName}</td>
+                      <td className="px-3 py-2">{formatDateUk(order.requiredDate) || "—"}</td>
+                      <td className="px-3 py-2">{order.items.length}</td>
+                      <td className="px-3 py-2 text-xs text-slate-600">{Array.from(new Set((order.items || []).map((item) => item.unit).filter(Boolean))).join(", ") || "-"}</td>
+                      <td className="px-3 py-2 font-medium">{formatMoney(order.totalAmount)}</td>
                       <td className="px-3 py-2">
-                        <span className={`inline-flex rounded-full px-2 py-0.5 font-semibold ${getSupplierResponseBadgeClass(row.status)}`}>
-                          {getSupplierResponseLabel(row.status)}
-                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span>{statusLabel(order.status)}</span>
+                          {order.allPositionsCancelled && (
+                            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700">Усі позиції видалені</span>
+                          )}
+                        </div>
                       </td>
-                      <td className="px-3 py-2 text-slate-600">{row.comment || "—"}</td>
+                      <td className="px-3 py-2 text-xs text-slate-600">{getOrderSupplierResponseSummary(order)}</td>
+                      {canManageOrders && (
+                        <td className="px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <select
+                              className="rounded-lg border border-slate-300 px-2 py-1 text-sm"
+                              value={order.status}
+                              onChange={(e) => updateStatus(order, e.target.value)}
+                            >
+                              <option value="new">Нова</option>
+                              <option value="processing">В обробці</option>
+                              <option value="sent">Надіслано постачальнику</option>
+                              <option value="confirmed">Підтверджено постачальником</option>
+                              <option value="completed">Закрито</option>
+                            </select>
+                            {isGlobalAdmin && (
+                              <>
+                                <button
+                                  type="button"
+                                  className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                                  onClick={() => openEditOrder(order)}
+                                >
+                                  Редагувати
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rounded border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                                  onClick={() => { void handleDeleteOrder(order); }}
+                                >
+                                  Видалити
+                                </button>
+                              </>
+                            )}
+                            {order.status === "completed" && (
+                              <button
+                                type="button"
+                                className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                                onClick={() => { void moveOrderToArchive(order); }}
+                              >
+                                В архів
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   ))}
+                  {visibleOrders.length === 0 && (
+                    <tr>
+                      <td colSpan={canManageOrders ? 9 : 8} className="px-3 py-6 text-center text-slate-500">Заявок не знайдено.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
+          )}
+        </div>
+      </div>
+
+      <div
+        className={`${cardClass} transition ${dragOverArchive ? "ring-2 ring-emerald-300" : ""}`}
+        onDragEnter={(event) => {
+          if (!canManageOrders || ordersViewMode !== "board") return;
+          event.preventDefault();
+          if (!dragOverArchive) setDragOverArchive(true);
+        }}
+        onDragOver={(event) => {
+          if (!canManageOrders || ordersViewMode !== "board") return;
+          event.preventDefault();
+          if (!dragOverArchive) setDragOverArchive(true);
+          if (dragOverStatus) setDragOverStatus("");
+        }}
+        onDragLeave={() => {
+          if (dragOverArchive) setDragOverArchive(false);
+        }}
+        onDrop={(event) => {
+          if (!canManageOrders || ordersViewMode !== "board") return;
+          event.preventDefault();
+          void handleArchiveDrop(event);
+        }}
+      >
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3 className="text-base font-semibold text-slate-900">Архівні замовлення</h3>
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-600">
+            {archivedOrders.length} в архіві
+          </span>
+        </div>
+
+        {ordersViewMode === "board" && canManageOrders && (
+          <div className={`mb-3 rounded-lg border border-dashed px-3 py-2 text-xs font-semibold ${dragOverArchive ? "border-emerald-400 bg-emerald-50 text-emerald-700" : "border-slate-300 bg-slate-50 text-slate-500"}`}>
+            Перетягніть сюди закриту заявку, щоб архівувати
           </div>
         )}
 
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-slate-700">
-              <tr>
-                <th className="px-3 py-2 text-left">Створено</th>
-                <th className="px-3 py-2 text-left">Ресторан</th>
-                <th className="px-3 py-2 text-left">Поставка</th>
-                <th className="px-3 py-2 text-left">Позицій</th>
-                <th className="px-3 py-2 text-left">Одиниці</th>
-                <th className="px-3 py-2 text-left">Сума</th>
-                <th className="px-3 py-2 text-left">Статус</th>
-                <th className="px-3 py-2 text-left">Відповідь постачальника</th>
-                {canManageOrders && <th className="px-3 py-2 text-left">Дії</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {visibleOrders.map((order) => (
-                <tr key={order.id} className="border-t border-slate-200 align-top">
-                  <td className="px-3 py-2">{formatDateTimeSafe(order.createdAt)}</td>
-                  <td className="px-3 py-2">{order.restaurantName}</td>
-                  <td className="px-3 py-2">{order.requiredDate}</td>
-                  <td className="px-3 py-2">{order.items.length}</td>
-                  <td className="px-3 py-2 text-xs text-slate-600">{Array.from(new Set((order.items || []).map((item) => item.unit).filter(Boolean))).join(", ") || "-"}</td>
-                  <td className="px-3 py-2 font-medium">{formatMoney(order.totalAmount)}</td>
-                  <td className="px-3 py-2">{statusLabel(order.status)}</td>
-                  <td className="px-3 py-2 text-xs text-slate-600">
-                    {(() => {
-                      const sentItems = (order.items || []).filter((item) => item.sentToSupplier);
-                      if (sentItems.length === 0) return "Ще не відправлено";
-                      const accepted = sentItems.filter((item) => getSupplierResponseStatus(item) === "accepted").length;
-                      const partial = sentItems.filter((item) => getSupplierResponseStatus(item) === "partial").length;
-                      const unavailable = sentItems.filter((item) => getSupplierResponseStatus(item) === "unavailable").length;
-                      const pending = sentItems.filter((item) => getSupplierResponseStatus(item) === "pending").length;
-                      return `${accepted} підтвердж., ${partial} частк., ${unavailable} немає, ${pending} очікує`;
-                    })()}
-                  </td>
-                  {canManageOrders && (
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <select
-                          className="rounded-lg border border-slate-300 px-2 py-1 text-sm"
-                          value={order.status}
-                          onChange={(e) => updateStatus(order, e.target.value)}
-                        >
-                          <option value="new">Нова</option>
-                          <option value="processing">В обробці</option>
-                          <option value="sent">Надіслано постачальнику</option>
-                          <option value="completed">Закрито</option>
-                        </select>
-                        {isGlobalAdmin && (
-                          <>
-                            <button
-                              type="button"
-                              className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
-                              onClick={() => openEditOrder(order)}
-                            >
-                              Редагувати
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded border border-rose-300 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
-                              onClick={() => { void handleDeleteOrder(order); }}
-                            >
-                              Видалити
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))}
-              {visibleOrders.length === 0 && (
+        {archivedOrders.length > 0 ? (
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-700">
                 <tr>
-                  <td colSpan={canManageOrders ? 9 : 8} className="px-3 py-6 text-center text-slate-500">Заявок не знайдено.</td>
+                  <th className="px-3 py-2 text-left">Заклад</th>
+                  <th className="px-3 py-2 text-left">Поставка</th>
+                  <th className="px-3 py-2 text-left">Позицій</th>
+                  <th className="px-3 py-2 text-left">Сума</th>
+                  <th className="px-3 py-2 text-left">Архівовано</th>
+                  <th className="px-3 py-2 text-left">Хто архівував</th>
+                  {canManageOrders && <th className="px-3 py-2 text-left">Дії</th>}
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {archivedOrders.map((order) => (
+                  <tr key={`archived_${order.id}`} className="border-t border-slate-200 align-top">
+                    <td className="px-3 py-2">{order.restaurantName || "-"}</td>
+                    <td className="px-3 py-2">{order.requiredDate || "-"}</td>
+                    <td className="px-3 py-2">{(order.items || []).length}</td>
+                    <td className="px-3 py-2 font-medium">{formatMoney(order.totalAmount)}</td>
+                    <td className="px-3 py-2 text-xs text-slate-600">{formatDateTimeSafe(order.archivedAt || order.updatedAt)}</td>
+                    <td className="px-3 py-2 text-xs text-slate-600">{order.archivedBy || "-"}</td>
+                    {canManageOrders && (
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                          onClick={() => { void restoreOrderFromArchive(order); }}
+                        >
+                          Повернути в роботу
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-600">
+            Архів порожній.
+          </div>
+        )}
       </div>
 
-      <div className={cardClass}>
-        <h3 className="text-base font-semibold text-slate-900 mb-3">Зведення по ресторанах</h3>
-        <div className="space-y-3">
-          {Object.entries(groupedByRestaurant).map(([restaurant, items]) => (
-            <div key={`restaurant_${restaurant}`} className="rounded-lg border border-slate-200 p-3">
-              <div className="mb-2 flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <button
-                  type="button"
-                  onClick={() => toggleRestaurantExpanded(restaurant)}
-                  className="flex flex-1 items-start gap-3 text-left"
-                >
-                  <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-xs font-bold text-slate-700">
-                    {isRestaurantExpanded(restaurant) ? "−" : "+"}
-                  </span>
-                  <div className="space-y-1">
-                    <p className="text-sm font-semibold text-slate-900">{restaurant}</p>
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">Рядків: {items.length}</span>
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
-                        Постачальників: {new Set(items.map((item) => item.supplier)).size}
-                      </span>
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
-                        Разом: {items.reduce((sum, item) => sum + toNumber(item.qty), 0).toFixed(2)}
-                      </span>
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
-                        Сума: {formatMoney(items.reduce((sum, item) => sum + toNumber(item.amount), 0))}
-                      </span>
-                    </div>
-                  </div>
-                </button>
+      {editingSupplierBoard && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3" onClick={() => setEditingSupplierBoard(null)}>
+          <div className="w-full max-w-6xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">Зведене замовлення постачальника: {editingSupplierBoard.supplier}</h3>
+                <p className="text-xs text-slate-500">{editingSupplierBoard.restaurantCount} закладів • {editingSupplierBoard.positionsCount} позицій • {formatMoney(editingSupplierBoard.totalAmount)}</p>
               </div>
-              {isRestaurantExpanded(restaurant) && (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead className="text-slate-600">
-                      <tr>
-                        <th className="px-2 py-1 text-left">Постачальник</th>
-                        <th className="px-2 py-1 text-left">Продукт</th>
-                        <th className="px-2 py-1 text-left">Ціна</th>
-                        <th className="px-2 py-1 text-left">К-сть</th>
-                        <th className="px-2 py-1 text-left">Сума</th>
-                        <th className="px-2 py-1 text-left">Поставка</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {items.map((item, index) => (
-                        <tr key={`${restaurant}_${item.orderId}_${index}`} className="border-t border-slate-100">
-                          <td className="px-2 py-1">{item.supplier}</td>
-                          <td className="px-2 py-1">{item.productName}</td>
-                          <td className="px-2 py-1">{formatMoney(item.unitPrice)}</td>
-                          <td className="px-2 py-1">{item.qty} {item.unit}</td>
-                          <td className="px-2 py-1 font-medium">{formatMoney(item.amount)}</td>
-                          <td className="px-2 py-1">{item.requiredDate || "-"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <button type="button" className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700" onClick={() => setEditingSupplierBoard(null)}>
+                Закрити
+              </button>
             </div>
-          ))}
-          {Object.keys(groupedByRestaurant).length === 0 && (
-            <div className="text-sm text-slate-500">Немає даних для зведення по ресторанах.</div>
-          )}
-        </div>
-      </div>
 
-      <div className={cardClass}>
-        <h3 className="text-base font-semibold text-slate-900 mb-3">Зведення для постачальників</h3>
-        <div className="space-y-3">
-          {Object.entries(groupedBySupplier).map(([supplier, items]) => (
-            <div key={supplier} className="rounded-lg border border-slate-200 p-3">
-              <div className="mb-2 flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <button
-                  type="button"
-                  onClick={() => toggleSummarySupplierExpanded(supplier)}
-                  className="flex flex-1 items-start gap-3 text-left"
-                >
-                  <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-xs font-bold text-slate-700">
-                    {isSummarySupplierExpanded(supplier) ? "−" : "+"}
-                  </span>
-                  <div className="space-y-1">
-                    <p className="text-sm font-semibold text-slate-900">{supplier}</p>
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">Рядків: {items.length}</span>
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
-                        Ресторанів: {new Set(items.map((item) => item.restaurantName)).size}
-                      </span>
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
-                        Разом: {items.reduce((sum, item) => sum + toNumber(item.qty), 0).toFixed(2)}
-                      </span>
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
-                        Сума: {formatMoney(items.reduce((sum, item) => sum + toNumber(item.amount), 0))}
-                      </span>
-                    </div>
-                  </div>
-                </button>
+            <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                <span className="rounded-full bg-white px-2 py-0.5 font-semibold text-slate-700">Статус: {statusLabel(editingSupplierBoard.status)}</span>
+                <span className="rounded-full bg-white px-2 py-0.5">Дати поставки: {editingSupplierBoard.deliveryDates.join(", ") || "—"}</span>
+                {(() => {
+                  const linkedOrders = editingSupplierBoard.orderIds
+                    .map((id) => roleScopedOrders.find((o) => String(o.id) === String(id)))
+                    .filter(Boolean);
+                  const orderDates = [...new Set(linkedOrders.map((o) => String(o.createdAt || "").slice(0, 10)).filter(Boolean))].sort();
+                  const receivedTimes = linkedOrders
+                    .map((o) => o.receivedAt || o.completedAt)
+                    .filter(Boolean)
+                    .sort();
+                  return (
+                    <>
+                      {orderDates.length > 0 && (
+                        <span className="rounded-full bg-white px-2 py-0.5">
+                          Дата заявки: {orderDates.map((d) => formatDateUk(d)).join(", ")}
+                        </span>
+                      )}
+                      {receivedTimes.length > 0 && editingSupplierBoard.status === "completed" && (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-800">
+                          Прийнято: {formatDateTimeSafe(receivedTimes[0])}
+                        </span>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
-              {isSummarySupplierExpanded(supplier) && (
-                <>
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full text-sm">
-                      <thead className="text-slate-600">
-                        <tr>
-                          <th className="px-2 py-1 text-left">Ресторан</th>
-                          <th className="px-2 py-1 text-left">Продукт</th>
-                          <th className="px-2 py-1 text-left">Ціна</th>
-                          <th className="px-2 py-1 text-left">К-сть</th>
-                          <th className="px-2 py-1 text-left">Сума</th>
-                          <th className="px-2 py-1 text-left">Поставка</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {items.map((item, index) => (
-                          <tr key={`${item.orderId}_${index}`} className="border-t border-slate-100">
-                            <td className="px-2 py-1">{item.restaurantName}</td>
-                            <td className="px-2 py-1">{item.productName}</td>
-                            <td className="px-2 py-1">{formatMoney(item.unitPrice)}</td>
-                            <td className="px-2 py-1">{item.qty} {item.unit}</td>
-                            <td className="px-2 py-1 font-medium">{formatMoney(item.amount)}</td>
-                            <td className="px-2 py-1">{item.requiredDate}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <p className="mt-2 text-right text-sm font-semibold text-slate-800">
-                    Разом по постачальнику: {formatMoney(items.reduce((sum, item) => sum + toNumber(item.amount), 0))}
-                  </p>
-                </>
-              )}
-            </div>
-          ))}
-          {Object.keys(groupedBySupplier).length === 0 && (
-            <div className="text-sm text-slate-500">Немає даних для формування замовлення постачальникам.</div>
-          )}
-          {Object.keys(groupedBySupplier).length > 0 && (
-            <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-right text-base font-semibold text-indigo-900">
-              Разом по всіх постачальниках: {formatMoney(overallSuppliersAmount)}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className={cardClass}>
-        <h3 className="text-base font-semibold text-slate-900 mb-3">Консолідоване замовлення (по ресторанах)</h3>
-        <div className="space-y-3">
-          {Object.entries(consolidatedBySupplier).map(([supplier, rows]) => (
-            <div key={`consolidated_${supplier}`} className="rounded-lg border border-slate-200 p-3">
-              <div className="mb-2 flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <button
-                  type="button"
-                  onClick={() => toggleSupplierExpanded(supplier)}
-                  className="flex flex-1 items-start gap-3 text-left"
-                >
-                  <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-xs font-bold text-slate-700">
-                    {isSupplierExpanded(supplier) ? "−" : "+"}
-                  </span>
-                  <div className="space-y-1">
-                    <p className="text-sm font-semibold text-slate-900">{supplier}</p>
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">Позицій: {rows.length}</span>
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
-                        Ресторанів: {new Set(rows.flatMap((row) => row.restaurants.map((r) => r.restaurantName))).size}
-                      </span>
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
-                        Разом: {rows.reduce((sum, row) => sum + toNumber(row.totalQty), 0).toFixed(2)}
-                      </span>
-                      <span className="rounded-md bg-white px-2 py-0.5 border border-slate-200">
-                        Сума: {formatMoney(rows.reduce((sum, row) => sum + toNumber(row.totalAmount), 0))}
-                      </span>
-                    </div>
-                  </div>
-                </button>
-                <div className="flex items-center gap-2 pt-0.5">
-                  {canManageOrders && (
+              <div className="flex flex-wrap gap-2 text-xs text-slate-600">
+                {editingSupplierBoard.orderIds.map((orderId) => {
+                  const sourceOrder = visibleOrders.find((order) => String(order.id) === String(orderId));
+                  if (!sourceOrder) return null;
+                  return (
                     <button
+                      key={`linked_${orderId}`}
                       type="button"
-                      onClick={() => sendOneSupplier(supplier)}
-                      className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={rows.length === 0 || sendingSupplier === supplier || sendingSupplier === "ALL"}
+                      className="rounded-md border border-slate-200 bg-white px-2 py-1 text-left hover:border-indigo-300 hover:bg-indigo-50"
+                      onClick={() => {
+                        setEditingSupplierBoard(null);
+                        openEditOrder(sourceOrder);
+                      }}
                     >
-                      {sendingSupplier === supplier ? "Відправлення..." : "Відправити цьому постачальнику"}
+                      {sourceOrder.restaurantName || "Без закладу"} • {statusLabel(sourceOrder.status)}
                     </button>
-                  )}
-                </div>
+                  );
+                })}
               </div>
-              {isSupplierExpanded(supplier) && (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-slate-50 text-slate-700">
-                      <tr>
-                        <th className="px-2 py-1 text-left">Продукт</th>
-                        <th className="px-2 py-1 text-left">Дата</th>
-                        <th className="px-2 py-1 text-left">Разом</th>
-                        <th className="px-2 py-1 text-left">Сума</th>
-                        <th className="px-2 py-1 text-left">Коригування по ресторанах</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((row, index) => (
-                        <tr key={`${supplier}_${row.productName}_${row.requiredDate}_${index}`} className="border-t border-slate-100 align-top">
-                          <td className="px-2 py-1 font-medium text-slate-900">{row.productName}</td>
-                          <td className="px-2 py-1">{row.requiredDate || "-"}</td>
-                          <td className="px-2 py-1">{row.totalQty} {row.unit}</td>
-                          <td className="px-2 py-1 font-semibold">{formatMoney(row.totalAmount)}</td>
-                          <td className="px-2 py-1">
-                            <div className="space-y-2">
-                              {row.restaurants.map((entry, entryIndex) => (
-                                <div key={`${entry.orderId}_${entry.restaurantId}_${entryIndex}`} className="flex flex-wrap items-center gap-2 text-xs text-slate-700">
-                                  <span className="min-w-[200px]">{entry.restaurantName} ({entry.requiredDate || "без дати"})</span>
-                                  <input
-                                    type="number"
-                                    min="0.1"
-                                    step="0.1"
-                                    className="w-24 rounded border border-slate-300 px-2 py-1"
-                                    value={lineEdits[entry.lineKey] ?? entry.qty}
-                                    onChange={(e) => setLineEdits((prev) => ({ ...prev, [entry.lineKey]: e.target.value }))}
-                                  />
-                                  <span>{row.unit}</span>
-                                  {canManageOrders && (
+            </div>
+
+            <div className="max-h-[65vh] overflow-auto rounded-lg border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-slate-700">
+                  <tr>
+                    <th className="px-2 py-1 text-left">Продукт</th>
+                    <th className="px-2 py-1 text-left">Дата</th>
+                    <th className="px-2 py-1 text-left">Разом</th>
+                    <th className="px-2 py-1 text-left">Сума</th>
+                    <th className="px-2 py-1 text-left">Заклади та кількості</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {editingSupplierBoard.rows.map((row, index) => (
+                    <tr key={`supplier_modal_${row.productName}_${index}`} className="border-t border-slate-200 align-top">
+                      <td className="px-2 py-1 font-medium text-slate-900">{row.productName}</td>
+                      <td className="px-2 py-1">{row.requiredDate || "-"}</td>
+                      <td className="px-2 py-1">{row.totalQty} {row.unit}</td>
+                      <td className="px-2 py-1 font-semibold">{formatMoney(row.totalAmount)}</td>
+                      <td className="px-2 py-1">
+                        <div className="space-y-2">
+                          {row.restaurants.map((entry, entryIndex) => {
+                            const isIssue = entry.sentToSupplier && ["partial", "unavailable", "cancelled_by_supplier"].includes(entry.responseStatus);
+                            const canEditQty = String(entry.orderStatus || "") === "processing";
+                            const hasReceivingData = entry.actualReceivedQty !== null && entry.actualReceivedQty !== undefined;
+                            const receivingDiff = entry.receivedVarianceQty !== null && entry.receivedVarianceQty !== undefined
+                              ? toNumber(entry.receivedVarianceQty)
+                              : (hasReceivingData ? toNumber(entry.actualReceivedQty) - toNumber(entry.qty) : 0);
+                            const showReceivingStats = String(entry.orderStatus || "") === "completed";
+                            return (
+                              <div key={`modal_entry_${entry.orderId}_${entryIndex}`} className={`flex flex-wrap items-center gap-2 text-xs ${isIssue ? "text-rose-700" : "text-slate-700"}`}>
+                                <span className="min-w-[220px]">{entry.restaurantName} ({entry.requiredDate || "без дати"})</span>
+                                {isIssue ? (
+                                  <span className={`inline-flex rounded-full px-2 py-0.5 font-semibold ${getSupplierResponseBadgeClass(entry.responseStatus)}`}>
+                                    {getSupplierResponseLabel(entry.responseStatus)}{entry.responseQty > 0 ? ` (підтв. ${entry.responseQty} ${row.unit})` : ""}
+                                  </span>
+                                ) : canEditQty ? (
+                                  <>
+                                    <input
+                                      type="number"
+                                      min="0.1"
+                                      step="0.1"
+                                      className="w-24 rounded border border-slate-300 px-2 py-1"
+                                      value={lineEdits[entry.lineKey] ?? entry.qty}
+                                      onChange={(e) => setLineEdits((prev) => ({ ...prev, [entry.lineKey]: e.target.value }))}
+                                    />
+                                    <span>{row.unit}</span>
                                     <button
                                       type="button"
                                       className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100"
@@ -5957,24 +7050,36 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
                                     >
                                       Зберегти
                                     </button>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                                  </>
+                                ) : (
+                                  <span className="font-semibold text-slate-800">{entry.qty} {row.unit}</span>
+                                )}
+                                {showReceivingStats && (
+                                  <>
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-700">
+                                      Факт: {hasReceivingData ? `${toNumber(entry.actualReceivedQty)} ${row.unit}` : "—"}
+                                    </span>
+                                    <span className={`rounded-full px-2 py-0.5 font-semibold ${
+                                      receivingDiff < 0 ? "bg-rose-100 text-rose-700" : receivingDiff > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+                                    }`}>
+                                      Розбіжність: {hasReceivingData ? `${receivingDiff > 0 ? "+" : ""}${receivingDiff.toFixed(2)} ${row.unit}` : "—"}
+                                    </span>
+                                  </>
+                                )}
+                                {entry.responseComment && <span className="text-slate-400">({entry.responseComment})</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
-          {Object.keys(consolidatedBySupplier).length === 0 && (
-            <div className="text-sm text-slate-500">Немає нових даних для консолідації або все вже відправлено постачальникам.</div>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
       {editingOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3" onClick={() => setEditingOrder(null)}>
@@ -5994,6 +7099,8 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
                   className={inputClass}
                   value={editingOrder.requiredDate}
                   onChange={(e) => setEditingOrder((prev) => ({ ...prev, requiredDate: e.target.value }))}
+                  onFocus={openNativeDatePicker}
+                  onClick={openNativeDatePicker}
                 />
               </div>
               <div>
@@ -6006,6 +7113,7 @@ function OrdersManagementTab({ orders, updateOrder, deleteOrder, createSupplierD
                   <option value="new">Нова</option>
                   <option value="processing">В обробці</option>
                   <option value="sent">Надіслано постачальнику</option>
+                  <option value="confirmed">Підтверджено постачальником</option>
                   <option value="completed">Закрито</option>
                 </select>
               </div>
@@ -6099,6 +7207,51 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
 
   const currentSupplierName = String(resolvedSupplier?.name || "").trim();
 
+  const resolvePortalLineSupplier = useCallback((order, item) => {
+    return resolveSupplierForRestaurantContext(
+      item?.supplier,
+      {
+        id: String(order?.restaurantId || ""),
+        restaurantId: String(order?.restaurantId || ""),
+        restaurantName: String(order?.restaurantName || ""),
+        restaurantRegNumber: String(order?.restaurantRegNumber || ""),
+      },
+      suppliers
+    );
+  }, [suppliers]);
+
+  const doesLineBelongToSupplier = useCallback((order, item, supplierName) => {
+    const normalizedTarget = normalizeSupplierIdentity(supplierName);
+    if (!normalizedTarget) return false;
+
+    const candidates = splitSupplierCandidates(item?.supplier);
+    const normalizedCandidates = candidates.map((candidate) => normalizeSupplierIdentity(candidate));
+
+    // Fast path for already-clean records.
+    if (normalizeSupplierIdentity(item?.supplier) === normalizedTarget) return true;
+
+    const restaurantRef = {
+      id: String(order?.restaurantId || ""),
+      restaurantId: String(order?.restaurantId || ""),
+      restaurantName: String(order?.restaurantName || ""),
+      restaurantRegNumber: String(order?.restaurantRegNumber || ""),
+    };
+
+    // If target supplier is explicitly present in mixed supplier string,
+    // verify contract compatibility for selected restaurant.
+    const targetIndex = normalizedCandidates.findIndex((candidate) => candidate === normalizedTarget);
+    if (targetIndex >= 0) {
+      const supplierRecord = (Array.isArray(suppliers) ? suppliers : []).find(
+        (entry) => normalizeSupplierIdentity(entry?.name) === normalizedTarget
+      );
+      if (!supplierRecord) return true;
+      return supplierHasContractForRestaurant(supplierRecord, restaurantRef);
+    }
+
+    // Fallback to deterministic resolver.
+    return normalizeSupplierIdentity(resolvePortalLineSupplier(order, item)) === normalizedTarget;
+  }, [resolvePortalLineSupplier, suppliers]);
+
   const portalOrders = useMemo(() => {
     if (!currentSupplierName) return [];
     const normalizedSupplier = normalizeSupplierIdentity(currentSupplierName);
@@ -6110,8 +7263,9 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
             ...item,
             itemIndex,
             lineKey: `${String(order?.id || "order")}::${itemIndex}`,
+            resolvedSupplier: resolvePortalLineSupplier(order, item),
           }))
-          .filter((item) => item.sentToSupplier && normalizeSupplierIdentity(item?.supplier) === normalizedSupplier)
+          .filter((item) => item.sentToSupplier && doesLineBelongToSupplier(order, item, currentSupplierName))
           .filter((item) => {
             const status = getSupplierResponseStatus(item);
             return responseFilter ? status === responseFilter : true;
@@ -6124,7 +7278,13 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
         const byDeliveryTo = deliveryDateTo ? deliveryDate && deliveryDate <= deliveryDateTo : true;
         if (!byDeliveryFrom || !byDeliveryTo) return null;
 
-        const summary = summarizeSupplierResponses(order, currentSupplierName);
+        const summary = { pending: 0, accepted: 0, partial: 0, unavailable: 0, total: items.length };
+        items.forEach((item) => {
+          const status = getSupplierResponseStatus(item);
+          if (Object.prototype.hasOwnProperty.call(summary, status)) {
+            summary[status] += 1;
+          }
+        });
         return {
           ...order,
           supplierItems: items,
@@ -6133,7 +7293,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
       })
       .filter(Boolean)
       .sort((left, right) => String(left?.requiredDate || "").localeCompare(String(right?.requiredDate || "")));
-  }, [orders, currentSupplierName, deliveryDateFrom, deliveryDateTo, responseFilter]);
+  }, [orders, currentSupplierName, deliveryDateFrom, deliveryDateTo, responseFilter, resolvePortalLineSupplier, doesLineBelongToSupplier]);
 
   const portalStats = useMemo(() => {
     const restaurants = new Set();
@@ -6322,11 +7482,11 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-4">
               <div>
                 <label className="text-xs font-semibold text-slate-700">Поставка від</label>
-                <input type="date" className={inputClass} value={deliveryDateFrom} onChange={(e) => setDeliveryDateFrom(e.target.value)} />
+                <input type="date" className={inputClass} value={deliveryDateFrom} onChange={(e) => setDeliveryDateFrom(e.target.value)} onFocus={openNativeDatePicker} onClick={openNativeDatePicker} />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-700">Поставка до</label>
-                <input type="date" className={inputClass} value={deliveryDateTo} onChange={(e) => setDeliveryDateTo(e.target.value)} />
+                <input type="date" className={inputClass} value={deliveryDateTo} onChange={(e) => setDeliveryDateTo(e.target.value)} onFocus={openNativeDatePicker} onClick={openNativeDatePicker} />
               </div>
               <div>
                 <label className="text-xs font-semibold text-slate-700">Статус відповіді</label>
@@ -6497,12 +7657,65 @@ function OrderPurchaseReportTab({ orders, suppliers, restaurants }) {
   const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [activeSection, setActiveSection] = useState("suppliers");
 
+  const toDateYmd = useCallback((value) => {
+    if (!value) return "";
+
+    if (typeof value === "string") {
+      const raw = value.trim();
+      if (!raw) return "";
+      const isoMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+      if (isoMatch) return isoMatch[1];
+      const parsed = new Date(raw);
+      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+      return "";
+    }
+
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? "" : value.toISOString().slice(0, 10);
+    }
+
+    if (typeof value === "number") {
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
+    }
+
+    if (typeof value === "object") {
+      if (typeof value.toDate === "function") {
+        const parsed = value.toDate();
+        return parsed instanceof Date && !Number.isNaN(parsed.getTime()) ? parsed.toISOString().slice(0, 10) : "";
+      }
+      const seconds = Number(value.seconds ?? value._seconds);
+      if (!Number.isNaN(seconds) && seconds > 0) {
+        const parsed = new Date(seconds * 1000);
+        return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
+      }
+    }
+
+    return "";
+  }, []);
+
+  const resolveOrderDateKey = useCallback((order) => {
+    const candidates = [
+      order?.createdAt,
+      order?.updatedAt,
+      order?.completedAt,
+      order?.requiredDate,
+    ];
+    for (const candidate of candidates) {
+      const ymd = toDateYmd(candidate);
+      if (ymd) return ymd;
+    }
+    return "";
+  }, [toDateYmd]);
+
   const filteredOrders = useMemo(() => {
     return orders.filter((order) => {
-      const d = String(order.createdAt || "").slice(0, 10);
-      return (!dateFrom || d >= dateFrom) && (!dateTo || d <= dateTo);
+      const d = resolveOrderDateKey(order);
+      const fromOk = !dateFrom || !d || d >= dateFrom;
+      const toOk = !dateTo || !d || d <= dateTo;
+      return fromOk && toOk;
     });
-  }, [orders, dateFrom, dateTo]);
+  }, [orders, dateFrom, dateTo, resolveOrderDateKey]);
 
   // ── KPI ─────────────────────────────────────────────────────────────────────
   const kpi = useMemo(() => {
@@ -6511,7 +7724,19 @@ function OrderPurchaseReportTab({ orders, suppliers, restaurants }) {
     const completed = filteredOrders.filter((o) => o.status === "completed").length;
     const allItems = filteredOrders.flatMap((o) => Array.isArray(o.items) ? o.items : []);
     const totalQty = allItems.reduce((s, i) => s + toNumber(i.qty), 0);
-    return { total, totalAmount, completed, totalQty, avgAmount: total ? totalAmount / total : 0 };
+    const acceptedLines = allItems.filter((item) => getSupplierResponseStatus(item) === "accepted").length;
+    const partialLines = allItems.filter((item) => getSupplierResponseStatus(item) === "partial").length;
+    const cancelledLines = allItems.filter((item) => ["unavailable", "cancelled_by_supplier"].includes(getSupplierResponseStatus(item))).length;
+    return {
+      total,
+      totalAmount,
+      completed,
+      totalQty,
+      avgAmount: total ? totalAmount / total : 0,
+      acceptedLines,
+      partialLines,
+      cancelledLines,
+    };
   }, [filteredOrders]);
 
   // ── Supplier Analytics ────────────────────────────────────────────────────
@@ -6526,28 +7751,31 @@ function OrderPurchaseReportTab({ orders, suppliers, restaurants }) {
             ordersCount: new Set(),
             totalAmount: 0,
             totalQty: 0,
-            completedOrders: new Set(),
-            cancelledOrders: new Set(),
+            acceptedLines: 0,
+            partialLines: 0,
+            cancelledLines: 0,
             products: new Set(),
           });
         }
         const s = map.get(supplierName);
+        const responseStatus = getSupplierResponseStatus(item);
         s.ordersCount.add(order.id);
         s.totalAmount += toNumber(item.amount);
         s.totalQty += toNumber(item.qty);
         s.products.add(String(item.productName || item.productId || "").trim());
-        if (order.status === "completed") s.completedOrders.add(order.id);
-        if (order.status === "cancelled") s.cancelledOrders.add(order.id);
+        if (responseStatus === "accepted") s.acceptedLines += 1;
+        if (responseStatus === "partial") s.partialLines += 1;
+        if (["unavailable", "cancelled_by_supplier"].includes(responseStatus)) s.cancelledLines += 1;
       }
     }
     return Array.from(map.values())
       .map((s) => ({
         ...s,
         ordersCount: s.ordersCount.size,
-        completedOrders: s.completedOrders.size,
-        cancelledOrders: s.cancelledOrders.size,
         products: s.products.size,
-        fulfillmentRate: s.ordersCount.size > 0 ? Math.round((s.completedOrders.size / s.ordersCount.size) * 100) : 0,
+        fulfillmentRate: (s.acceptedLines + s.partialLines + s.cancelledLines) > 0
+          ? Math.round(((s.acceptedLines + s.partialLines) / (s.acceptedLines + s.partialLines + s.cancelledLines)) * 100)
+          : 0,
       }))
       .sort((a, b) => b.totalAmount - a.totalAmount);
   }, [filteredOrders]);
@@ -6625,7 +7853,7 @@ function OrderPurchaseReportTab({ orders, suppliers, restaurants }) {
   const monthlyDynamics = useMemo(() => {
     const map = new Map();
     for (const order of filteredOrders) {
-      const month = String(order.createdAt || "").slice(0, 7);
+      const month = resolveOrderDateKey(order).slice(0, 7);
       if (!month) continue;
       if (!map.has(month)) map.set(month, { month, orders: 0, totalAmount: 0 });
       const m = map.get(month);
@@ -6633,7 +7861,7 @@ function OrderPurchaseReportTab({ orders, suppliers, restaurants }) {
       m.totalAmount += toNumber(order.totalAmount);
     }
     return Array.from(map.values()).sort((a, b) => a.month.localeCompare(b.month));
-  }, [filteredOrders]);
+  }, [filteredOrders, resolveOrderDateKey]);
 
   const maxMonthAmount = useMemo(() => Math.max(...monthlyDynamics.map((m) => m.totalAmount), 1), [monthlyDynamics]);
 
@@ -6656,21 +7884,22 @@ function OrderPurchaseReportTab({ orders, suppliers, restaurants }) {
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <label className="text-sm text-slate-700">Від:</label>
-            <input type="date" className="rounded border border-slate-300 px-2 py-1 text-sm" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="rounded border border-slate-300 px-2 py-1 text-sm" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} onFocus={openNativeDatePicker} onClick={openNativeDatePicker} />
             <label className="text-sm text-slate-700">До:</label>
-            <input type="date" className="rounded border border-slate-300 px-2 py-1 text-sm" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <input type="date" className="rounded border border-slate-300 px-2 py-1 text-sm" value={dateTo} onChange={(e) => setDateTo(e.target.value)} onFocus={openNativeDatePicker} onClick={openNativeDatePicker} />
           </div>
         </div>
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
         {[
           { label: "Заявок", value: kpi.total, color: "bg-indigo-50 text-indigo-700" },
           { label: "Виконано", value: kpi.completed, color: "bg-emerald-50 text-emerald-700" },
+          { label: "Підтв. позицій", value: kpi.acceptedLines, color: "bg-teal-50 text-teal-700" },
+          { label: "Скас. позицій", value: kpi.cancelledLines, color: "bg-rose-50 text-rose-700" },
           { label: "Сума закупівель", value: `${(kpi.totalAmount / 1000).toFixed(1)}к грн`, color: "bg-amber-50 text-amber-700" },
-          { label: "Ср. сума заявки", value: `${(kpi.avgAmount / 1000).toFixed(1)}к грн`, color: "bg-blue-50 text-blue-700" },
-          { label: "% виконання", value: kpi.total ? `${Math.round((kpi.completed / kpi.total) * 100)}%` : "—", color: "bg-rose-50 text-rose-700" },
+          { label: "% виконання", value: kpi.total ? `${Math.round((kpi.completed / kpi.total) * 100)}%` : "—", color: "bg-blue-50 text-blue-700" },
         ].map((card) => (
           <div key={card.label} className={`rounded-xl border border-slate-200 p-4 text-center ${card.color}`}>
             <div className="text-2xl font-bold">{card.value}</div>
@@ -6707,8 +7936,9 @@ function OrderPurchaseReportTab({ orders, suppliers, restaurants }) {
                     <tr className="border-b-2 border-slate-300 bg-slate-100 text-left">
                       <th className="px-3 py-2 font-semibold text-slate-700">Постачальник</th>
                       <th className="px-3 py-2 text-right font-semibold text-slate-700">Заявок</th>
-                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Виконано</th>
-                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Скасовано</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Підтв. поз.</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Частк. поз.</th>
+                      <th className="px-3 py-2 text-right font-semibold text-slate-700">Скас. поз.</th>
                       <th className="px-3 py-2 text-center font-semibold text-slate-700">Рівень сервісу</th>
                       <th className="px-3 py-2 text-right font-semibold text-slate-700">Сума, грн</th>
                       <th className="px-3 py-2 text-right font-semibold text-slate-700">Кількість SKU</th>
@@ -6719,8 +7949,9 @@ function OrderPurchaseReportTab({ orders, suppliers, restaurants }) {
                       <tr key={s.name} className={`border-b border-slate-200 ${i % 2 === 0 ? "bg-white" : "bg-slate-50"} hover:bg-blue-50`}>
                         <td className="px-3 py-2 font-semibold text-slate-900">{s.name}</td>
                         <td className="px-3 py-2 text-right text-slate-700">{s.ordersCount}</td>
-                        <td className="px-3 py-2 text-right text-emerald-700">{s.completedOrders}</td>
-                        <td className="px-3 py-2 text-right text-rose-600">{s.cancelledOrders}</td>
+                        <td className="px-3 py-2 text-right text-emerald-700">{s.acceptedLines}</td>
+                        <td className="px-3 py-2 text-right text-amber-700">{s.partialLines}</td>
+                        <td className="px-3 py-2 text-right text-rose-600">{s.cancelledLines}</td>
                         <td className="px-3 py-2">
                           <div className="flex items-center gap-2">
                             <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
@@ -6743,8 +7974,9 @@ function OrderPurchaseReportTab({ orders, suppliers, restaurants }) {
                     <tr className="border-t-2 border-slate-300 bg-slate-100 font-bold">
                       <td className="px-3 py-2 text-slate-800">Разом</td>
                       <td className="px-3 py-2 text-right">{supplierStats.reduce((s, r) => s + r.ordersCount, 0)}</td>
-                      <td className="px-3 py-2 text-right text-emerald-700">{supplierStats.reduce((s, r) => s + r.completedOrders, 0)}</td>
-                      <td className="px-3 py-2 text-right text-rose-600">{supplierStats.reduce((s, r) => s + r.cancelledOrders, 0)}</td>
+                      <td className="px-3 py-2 text-right text-emerald-700">{supplierStats.reduce((s, r) => s + r.acceptedLines, 0)}</td>
+                      <td className="px-3 py-2 text-right text-amber-700">{supplierStats.reduce((s, r) => s + r.partialLines, 0)}</td>
+                      <td className="px-3 py-2 text-right text-rose-600">{supplierStats.reduce((s, r) => s + r.cancelledLines, 0)}</td>
                       <td className="px-3 py-2" />
                       <td className="px-3 py-2 text-right">{supplierStats.reduce((s, r) => s + r.totalAmount, 0).toLocaleString("uk-UA", { maximumFractionDigits: 0 })}</td>
                       <td className="px-3 py-2" />
@@ -7226,11 +8458,14 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     return (
       <OrdersManagementTab
         orders={normalizedOrders}
+        products={normalizedProducts}
+        createOrder={createOrder}
         updateOrder={updateOrder}
         deleteOrder={deleteOrder}
         createSupplierDispatch={createSupplierDispatch}
         canManageOrders={canManageOrders}
         user={user}
+        suppliersDirectory={suppliers}
       />
     );
   }
@@ -7256,5 +8491,5 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     );
   }
 
-  return <BookingTab products={normalizedProducts} orders={normalizedOrders} aplAssignments={aplAssignments} createOrder={createOrder} restaurants={effectiveRestaurants} user={user} suppliersDirectory={suppliers} />;
+  return <BookingTab products={normalizedProducts} orders={normalizedOrders} aplAssignments={aplAssignments} createOrder={createOrder} updateOrder={updateOrder} restaurants={effectiveRestaurants} user={user} suppliersDirectory={suppliers} />;
 }

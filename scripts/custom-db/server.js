@@ -733,10 +733,13 @@ const mapMySqlRowToDocument = (row) => {
 
       // Keep source-of-truth from scalar columns, but avoid degrading arrays/objects
       // from payload when scalar value is an empty string.
+      // Keep source-of-truth from scalar columns, but avoid degrading arrays/objects
+      // or non-empty strings from payload when scalar value is an empty string.
       if (
-        normalizedValue === "" &&
+        (normalizedValue === "" || normalizedValue === null) &&
         parsedValue !== null &&
-        typeof parsedValue === "object"
+        parsedValue !== undefined &&
+        parsedValue !== ""
       ) {
         acc[key] = parsedValue;
         return acc;

@@ -126,6 +126,12 @@ const normalizeInventoryListProductRecord = (item) => {
 
 const normalizeOrderRecord = (item) => {
   if (!item || typeof item !== "object") return item;
+  const archivedAtValue = firstNonEmptyString(item.archivedAt, item.archived_at);
+  const archivedByValue = firstNonEmptyString(item.archivedBy, item.archived_by);
+  const normalizedArchived = toBooleanWithFallback(
+    item.isArchived ?? item.is_archived ?? item.archived ?? item.inArchive ?? item.in_archive,
+    Boolean(archivedAtValue || archivedByValue)
+  );
   return {
     ...item,
     restaurantId: firstNonEmptyString(
@@ -140,8 +146,14 @@ const normalizeOrderRecord = (item) => {
     restaurantName: firstNonEmptyString(item.restaurantName, item.restaurant_name, item.restaurantTitle, item.restaurant_title),
     restaurantRegNumber: firstNonEmptyString(item.restaurantRegNumber, item.restaurant_reg_number, item.regNumber, item.reg_number),
     status: firstNonEmptyString(item.status, item.order_status) || "new",
+    isArchived: normalizedArchived,
+    archivedAt: archivedAtValue,
+    archivedBy: archivedByValue,
     totalAmount: toNumberWithFallback(item.totalAmount ?? item.total_amount, 0),
     totalItems: toNumberWithFallback(item.totalItems ?? item.total_items, 0),
+    createdAt: firstNonEmptyString(item.createdAt, item.created_at),
+    updatedAt: firstNonEmptyString(item.updatedAt, item.updated_at),
+    requiredDate: firstNonEmptyString(item.requiredDate, item.required_date, item.deliveryDate, item.delivery_date),
   };
 };
 
@@ -314,7 +326,7 @@ export const useProductBooking = (enableRealtime = true) => {
         listCollectionItemsApi("productInventories"),
       ]);
 
-    setProducts(normalizeCollectionRecords(productsData, normalizeProductRecord));
+  setProducts(normalizeCollectionRecords(productsData, normalizeProductRecord));
     setInventoryListProducts(normalizeCollectionRecords(inventoryListProductsData, normalizeInventoryListProductRecord));
     setOrders(normalizeCollectionRecords(ordersData, normalizeOrderRecord));
     setSuppliers(normalizeCollectionRecords(suppliersData, normalizeSupplierRecord));
