@@ -584,7 +584,7 @@ function ProductAdminTab({
     setCreateDraft((prev) => ({ ...prev, restaurantId: scopedRestaurant }));
   }, [user, isGlobalAdmin]);
 
-  const availableRestaurants = useMemo(() => {
+  const productAdminRestaurants = useMemo(() => {
     if (isGlobalAdmin) return restaurants;
     return restaurants.filter((item) => String(item.id) === String(user?.restaurant || ""));
   }, [restaurants, user, isGlobalAdmin]);
@@ -1308,7 +1308,7 @@ function ProductAdminTab({
             disabled={!isGlobalAdmin}
           >
             <option value="">{isGlobalAdmin ? "Всі заклади" : "Оберіть заклад"}</option>
-            {availableRestaurants.map((restaurant) => (
+            {productAdminRestaurants.map((restaurant) => (
               <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
             ))}
           </select>
@@ -1530,6 +1530,11 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     setRestaurantId(String(user?.restaurant || ""));
   }, [user, isGlobalAdmin]);
 
+  const inventoryAvailableRestaurants = useMemo(() => {
+    if (isGlobalAdmin) return restaurants;
+    return restaurants.filter((item) => String(item.id) === String(user?.restaurant || ""));
+  }, [restaurants, user, isGlobalAdmin]);
+
   useEffect(() => {
     if (!restaurantId) {
       setActiveSession(null);
@@ -1593,6 +1598,18 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       .sort((a, b) => {
         return a.localeCompare(b, "uk");
       });
+  }, [scopedProducts, searchTerm]);
+
+  const filteredProducts = useMemo(() => {
+    const term = String(searchTerm || "").trim().toLowerCase();
+    if (!term) return scopedProducts;
+    return scopedProducts.filter((item) => {
+      const haystack = [item?.name, item?.code1C, item?.category, item?.unit]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(term);
+    });
   }, [scopedProducts, searchTerm]);
 
   const filledLines = useMemo(() => {
@@ -2074,7 +2091,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               onChange={(e) => setRestaurantId(e.target.value)}
             >
               <option value="">Оберіть ресторан</option>
-              {availableRestaurants.map((restaurant) => (
+              {inventoryAvailableRestaurants.map((restaurant) => (
                 <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
               ))}
             </select>
