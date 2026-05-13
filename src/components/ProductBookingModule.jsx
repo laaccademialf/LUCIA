@@ -8011,48 +8011,63 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                   </div>
                 </div>
 
-                <div className="overflow-x-auto rounded-lg border border-slate-200">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-slate-50 text-slate-700">
-                      <tr>
-                        <th className="px-3 py-2 text-left">Заклад</th>
-                        <th className="px-3 py-2 text-left">Позиція</th>
-                        <th className="px-3 py-2 text-left">Поставка</th>
-                        <th className="px-3 py-2 text-left">К-сть</th>
-                        <th className="px-3 py-2 text-left">Ціна</th>
-                        <th className="px-3 py-2 text-left">Сума</th>
-                        <th className="px-3 py-2 text-left">Статус</th>
-                        <th className="px-3 py-2 text-left">Підтверджено</th>
-                        <th className="px-3 py-2 text-left">Коментар</th>
-                        <th className="px-3 py-2 text-left">Дія</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {order.supplierItems.map((item) => {
-                        const draft = getDraft(item);
-                        const status = String(draft.status || getSupplierResponseStatus(item));
-                        return (
-                          <tr key={item.lineKey} className="border-t border-slate-200 align-top">
-                            <td className="px-3 py-2">
-                              <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                <div className="space-y-3">
+                  {order.supplierItems.map((item) => {
+                    const draft = getDraft(item);
+                    const status = String(draft.status || getSupplierResponseStatus(item));
+                    const requestedQty = `${toNumber(item.qty)} ${item.unit || ""}`.trim();
+                    const confirmedQty = status === "accepted" ? String(toNumber(item.qty)) : draft.responseQty;
+
+                    return (
+                      <div key={item.lineKey} className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-sm">
+                        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                          <div className="min-w-0 flex-1 space-y-4">
+                            <div className="flex flex-wrap items-start gap-2">
+                              <div className="min-w-0 flex-1">
+                                <div className="text-base font-semibold text-slate-900">{item.productName || "Без назви"}</div>
+                                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                                  <span>Код позиції: {item.productId || "—"}</span>
+                                  <span>Поставка: {formatDateUk(order.requiredDate)}</span>
+                                </div>
+                              </div>
+                              <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
                                 {order.restaurantName || "Без закладу"}
                               </span>
-                            </td>
-                            <td className="px-3 py-2">
-                              <div className="font-semibold text-slate-900">{item.productName || "Без назви"}</div>
-                              <div className="text-xs text-slate-500">Код позиції: {item.productId || "—"}</div>
-                            </td>
-                            <td className="px-3 py-2 text-slate-700">{formatDateUk(order.requiredDate)}</td>
-                            <td className="px-3 py-2">{toNumber(item.qty)} {item.unit || ""}</td>
-                            <td className="px-3 py-2">{toNumber(item.unitPrice).toFixed(2)}</td>
-                            <td className="px-3 py-2 font-medium">{formatMoney(item.amount)}</td>
-                            <td className="px-3 py-2">
-                              <div className="space-y-1">
-                                <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${getSupplierResponseBadgeClass(status)}`}>
-                                  {getSupplierResponseLabel(status)}
-                                </span>
+                              <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getSupplierResponseBadgeClass(status)}`}>
+                                {getSupplierResponseLabel(status)}
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5">
+                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Замовлено</div>
+                                <div className="mt-1 text-sm font-semibold text-slate-900">{requestedQty || "—"}</div>
+                              </div>
+                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Ціна</div>
+                                <div className="mt-1 text-sm font-semibold text-slate-900">{toNumber(item.unitPrice).toFixed(2)}</div>
+                              </div>
+                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Сума</div>
+                                <div className="mt-1 text-sm font-semibold text-slate-900">{formatMoney(item.amount)}</div>
+                              </div>
+                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Підтверджено</div>
+                                <div className="mt-1 text-sm font-semibold text-slate-900">{confirmedQty || "—"}</div>
+                              </div>
+                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 md:col-span-2 xl:col-span-1">
+                                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Оновлено</div>
+                                <div className="mt-1 text-sm font-semibold text-slate-900">{item.supplierRespondedAt ? formatDateTimeSafe(item.supplierRespondedAt) : "Ще не відповіли"}</div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white/90 p-4 xl:w-[420px]">
+                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
+                              <div>
+                                <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Статус відповіді</label>
                                 <select
-                                  className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
                                   value={status}
                                   disabled={order.isArchived}
                                   onChange={(e) => patchDraft(item.lineKey, { status: e.target.value })}
@@ -8063,46 +8078,49 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                                   <option value="unavailable">Немає в наявності</option>
                                 </select>
                               </div>
-                            </td>
-                            <td className="px-3 py-2">
-                              <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                className="w-28 rounded border border-slate-300 bg-white px-2 py-1 text-xs"
-                                value={status === "accepted" ? String(toNumber(item.qty)) : draft.responseQty}
-                                disabled={order.isArchived || status === "accepted" || status === "unavailable"}
-                                onChange={(e) => patchDraft(item.lineKey, { responseQty: e.target.value })}
-                              />
-                              <div className="mt-1 text-[11px] text-slate-500">Замовлено: {toNumber(item.qty)} {item.unit || ""}</div>
-                            </td>
-                            <td className="px-3 py-2">
+                              <div>
+                                <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Підтверджена кількість</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                                  value={confirmedQty}
+                                  disabled={order.isArchived || status === "accepted" || status === "unavailable"}
+                                  onChange={(e) => patchDraft(item.lineKey, { responseQty: e.target.value })}
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Коментар постачальника</label>
                               <textarea
-                                className="min-h-16 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                                className="mt-1 min-h-24 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
                                 value={draft.comment}
                                 disabled={order.isArchived}
                                 onChange={(e) => patchDraft(item.lineKey, { comment: e.target.value })}
-                                placeholder="Коментар постачальника: заміна, причина відсутності, термін поставки..."
+                                placeholder="Вкажіть заміну, причину відсутності або уточнення по поставці"
                               />
-                              {item.supplierRespondedAt && (
-                                <div className="mt-1 text-[11px] text-slate-500">Оновлено: {formatDateTimeSafe(item.supplierRespondedAt)}</div>
-                              )}
-                            </td>
-                            <td className="px-3 py-2">
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+                              <div className="text-xs text-slate-500">
+                                Замовлено: <span className="font-semibold text-slate-700">{requestedQty || "—"}</span>
+                              </div>
                               <button
                                 type="button"
-                                className="rounded border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                                className="rounded-xl border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
                                 disabled={order.isArchived || savingKey === item.lineKey}
                                 onClick={() => { void saveLineResponse(order, item); }}
                               >
-                                {savingKey === item.lineKey ? "Збереження..." : (savedLineKeys[item.lineKey] ? "Збережено" : (status === "accepted" ? "Підтвердити" : "Зберегти"))}
+                                {savingKey === item.lineKey ? "Збереження..." : (savedLineKeys[item.lineKey] ? "Збережено" : (status === "accepted" ? "Підтвердити" : "Зберегти зміни"))}
                               </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ))}
