@@ -296,6 +296,20 @@ const normalizeLowerText = (value) => String(value || "").trim().toLowerCase();
 const NAVIGATION_QUERY_NAV_KEY = "nav";
 const NAVIGATION_QUERY_TAB_KEY = "tab";
 
+const NAV_ID_ALIASES = {
+  technologicalcard: "inventory-technolog",
+  "technological-card": "inventory-technolog",
+  technologicalcards: "inventory-technolog",
+  "technological-cards": "inventory-technolog",
+  technologcard: "inventory-technolog",
+};
+
+const normalizeNavigationId = (value) => {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  return NAV_ID_ALIASES[normalized.toLowerCase()] || normalized;
+};
+
 const getNavigationStateFromLocation = () => {
   if (typeof window === "undefined") {
     return { activeNav: "", topTab: "" };
@@ -304,7 +318,7 @@ const getNavigationStateFromLocation = () => {
   const url = new URL(window.location.href);
 
   return {
-    activeNav: String(url.searchParams.get(NAVIGATION_QUERY_NAV_KEY) || "").trim(),
+    activeNav: normalizeNavigationId(url.searchParams.get(NAVIGATION_QUERY_NAV_KEY)),
     topTab: String(url.searchParams.get(NAVIGATION_QUERY_TAB_KEY) || "").trim(),
   };
 };
@@ -313,7 +327,7 @@ const buildNavigationUrl = (activeNav, topTab) => {
   if (typeof window === "undefined") return "";
 
   const url = new URL(window.location.href);
-  const normalizedActiveNav = String(activeNav || "").trim();
+  const normalizedActiveNav = normalizeNavigationId(activeNav);
   const normalizedTopTab = String(topTab || "").trim();
 
   if (normalizedActiveNav) {
@@ -577,9 +591,9 @@ function App() {
       const [assetInventorySessionsHistory, setAssetInventorySessionsHistory] = useState([]);
     // Головна навігація
     const [activeNav, setActiveNav] = useState(() => {
-      const urlActiveNav = String(initialNavigationRef.current?.activeNav || "").trim();
+      const urlActiveNav = normalizeNavigationId(initialNavigationRef.current?.activeNav);
       if (urlActiveNav) return urlActiveNav;
-      return localStorage.getItem('lucia_activeNav') || "reports-assets";
+      return normalizeNavigationId(localStorage.getItem('lucia_activeNav')) || "reports-assets";
     });
   // --- Notification Center state ---
   const [notifications, setNotifications] = useState([]);
@@ -632,7 +646,7 @@ function App() {
   const persistNavigationState = useCallback((nextActiveNav, nextTopTab, historyMode = "push") => {
     if (typeof window === "undefined") return;
 
-    const normalizedActiveNav = String(nextActiveNav || "").trim();
+    const normalizedActiveNav = normalizeNavigationId(nextActiveNav);
     const normalizedTopTab = String(nextTopTab || "").trim();
 
     if (normalizedActiveNav) {
@@ -662,7 +676,7 @@ function App() {
   }, []);
 
   const handleActiveNavChange = useCallback((nextActiveNav) => {
-    setActiveNav(nextActiveNav);
+    setActiveNav(normalizeNavigationId(nextActiveNav));
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
 
@@ -1329,7 +1343,7 @@ function App() {
     const handlePopState = (event) => {
       const historyState = event.state && typeof event.state === "object" ? event.state : null;
       const locationState = getNavigationStateFromLocation();
-      const nextActiveNav = String(historyState?.activeNav || locationState.activeNav || "").trim();
+      const nextActiveNav = normalizeNavigationId(historyState?.activeNav || locationState.activeNav);
       const nextTopTab = String(historyState?.topTab || locationState.topTab || "").trim();
 
       if (!nextActiveNav) return;
@@ -3661,7 +3675,14 @@ function App() {
       );
     }
 
-    if (activeNav === "inventory-technolog" || activeNav.includes("inventory-technolog")) {
+    const isTechnologicalCardNav =
+      activeNavKey.includes("inventory-technolog") ||
+      activeNavKey.includes("technologicalcard") ||
+      (activeNavKey.includes("technolog") && !activeNavKey.includes("inventory-products")) ||
+      topTabKey.includes("newtechnologicalcard") ||
+      topTabKey.includes("technologicalcard");
+
+    if (isTechnologicalCardNav) {
       return (
         <div className="grid grid-cols-1">
           <TechnologicalCardModule />
