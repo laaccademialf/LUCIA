@@ -464,6 +464,8 @@ const resolveSupplierForRestaurantContext = (rawSupplier, restaurantRef = {}, su
   return candidates[0];
 };
 
+
+
 const deriveOrderStatus = (items, currentStatus) => {
   if (currentStatus === "completed") return "completed";
   const normalizedItems = Array.isArray(items) ? items : [];
@@ -584,6 +586,8 @@ function ProductAdminTab({
   const [bulkCategory, setBulkCategory] = useState("");
   const [expandedProductCategories, setExpandedProductCategories] = useState({});
   const [expandedProductSubcategories, setExpandedProductSubcategories] = useState({});
+  const [expandedGroupedRows, setExpandedGroupedRows] = useState({});
+  const [pendingStatusIds, setPendingStatusIds] = useState({});
 
   useEffect(() => {
     if (isGlobalAdmin) return;
@@ -715,15 +719,26 @@ function ProductAdminTab({
         grouped.get(safeKey).push(item);
       });
 
-      return Array.from(grouped.values()).map((groupItems) => {
-        const sample = groupItems[0] || {};
-        const uniqueSuppliers = Array.from(new Set(groupItems.map((entry) => String(entry.supplier || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
-        const uniqueRestaurants = Array.from(new Set(groupItems.map((entry) => String(entry.restaurantName || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
-        const uniqueUnits = Array.from(new Set(groupItems.map((entry) => String(entry.unit || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
+      return Array.from(grouped.entries()).map(([groupKey, groupItems]) => {
+        const sortedGroupItems = [...groupItems].sort((left, right) => {
+          const bySupplier = String(left?.supplier || "").localeCompare(String(right?.supplier || ""), "uk");
+          if (bySupplier !== 0) return bySupplier;
+          const byRestaurant = String(left?.restaurantName || "").localeCompare(String(right?.restaurantName || ""), "uk");
+          if (byRestaurant !== 0) return byRestaurant;
+          const leftPrice = toNumber(left?.unitPrice);
+          const rightPrice = toNumber(right?.unitPrice);
+          if (leftPrice !== rightPrice) return leftPrice - rightPrice;
+          return String(left?.id || "").localeCompare(String(right?.id || ""), "uk");
+        });
+
+        const sample = sortedGroupItems[0] || {};
+        const uniqueSuppliers = Array.from(new Set(sortedGroupItems.map((entry) => String(entry.supplier || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
+        const uniqueRestaurants = Array.from(new Set(sortedGroupItems.map((entry) => String(entry.restaurantName || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
+        const uniqueUnits = Array.from(new Set(sortedGroupItems.map((entry) => String(entry.unit || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "uk"));
 
         const prices = Array.from(
           new Set(
-            groupItems
+            sortedGroupItems
               .map((entry) => toNumber(entry.unitPrice))
               .filter((price) => Number.isFinite(price) && price >= 0)
               .map((price) => Number(price.toFixed(2)))
@@ -742,16 +757,17 @@ function ProductAdminTab({
         }
 
         return {
-          key: String(sample.id || ""),
+          key: String(groupKey || sample.id || ""),
           name: String(sample.name || "").trim() || "Без назви",
           code1C: String(sample.code1C || "").trim(),
           supplierText: aggregatedSuppliers,
           restaurantText: aggregatedRestaurants,
           unitText: aggregatedUnits,
           priceText: aggregatedPrice,
-          ids: groupItems.map((entry) => String(entry.id || "")).filter(Boolean),
-          isActive: groupItems.some((entry) => entry.isActive !== false),
+          ids: sortedGroupItems.map((entry) => String(entry.id || "")).filter(Boolean),
+          isActive: sortedGroupItems.some((entry) => entry.isActive !== false),
           totalSuppliers: uniqueSuppliers.length,
+          subItems: sortedGroupItems,
         };
       });
     };
@@ -794,6 +810,26 @@ function ProductAdminTab({
       ...prev,
       [key]: !(Object.prototype.hasOwnProperty.call(prev, key) ? prev[key] : true),
     }));
+  };
+
+  const toggleGroupedRow = (groupKey) => {
+    setExpandedGroupedRows((prev) => ({
+      ...prev,
+      [groupKey]: !prev[groupKey],
+    }));
+  };
+
+  const handleToggleProductStatus = async (productId, nextIsActive) => {
+    const normalizedId = String(productId || "");
+    if (!normalizedId) return;
+
+    setPendingStatusIds((prev) => ({ ...prev, [normalizedId]: true }));
+    const result = await updateProduct(normalizedId, { isActive: nextIsActive }, { skipReload: true });
+    setPendingStatusIds((prev) => ({ ...prev, [normalizedId]: false }));
+
+    if (!result?.success) {
+      alert("Не вдалося оновити статус картки.");
+    }
   };
 
   const applyBulkStatus = async (isActive) => {
@@ -981,6 +1017,7 @@ function ProductAdminTab({
             currency: String(contract?.currency || "UAH").trim() || "UAH",
             contractNumber: String(contract?.contractNumber || "").trim(),
             terms: String(contract?.terms || "").trim(),
+            minimumOrderAmount: Math.max(0, toNumber(contract?.minimumOrderAmount || 0)),
             deliveryLeadDays: Math.max(0, Math.round(toNumber(contract?.deliveryLeadDays || 0))),
             paymentDelayDays: Math.max(0, Math.round(toNumber(contract?.paymentDelayDays || 0))),
             deliveryDays: Array.from(new Set((Array.isArray(contract?.deliveryDays) ? contract.deliveryDays : []).map((day) => String(day || "").trim()).filter(Boolean))),
@@ -1024,6 +1061,7 @@ function ProductAdminTab({
             currency: "UAH",
             contractNumber: "",
             terms: "",
+            minimumOrderAmount: 0,
             deliveryLeadDays: 0,
             paymentDelayDays: 0,
             deliveryDays: [],
@@ -1476,12 +1514,55 @@ function ProductAdminTab({
                                   <div className="text-xs text-slate-700">{item.priceText}</div>
                                   <div className="text-xs leading-4 text-slate-700" title={item.supplierText}>{item.supplierText}</div>
                                   <div className="truncate text-xs text-slate-700" title={item.restaurantText}>{item.restaurantText}</div>
-                                  <div>
-                                    <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${item.isActive ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"}`}>
-                                      {item.isActive ? "Активний" : "Вимкнений"}
-                                    </span>
+                                  <div className="flex items-center justify-start">
+                                    {item.ids.length <= 1 ? (
+                                      <button
+                                        type="button"
+                                        disabled={Boolean(pendingStatusIds[item.ids[0]])}
+                                        onClick={() => handleToggleProductStatus(item.ids[0], !item.isActive)}
+                                        className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors ${item.isActive ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-slate-200 text-slate-700 hover:bg-slate-300"} ${pendingStatusIds[item.ids[0]] ? "cursor-wait opacity-60" : "cursor-pointer"}`}
+                                      >
+                                        {pendingStatusIds[item.ids[0]] ? "Оновлення..." : (item.isActive ? "Активний" : "Вимкнений")}
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleGroupedRow(item.key)}
+                                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors ${item.isActive ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-slate-200 text-slate-700 hover:bg-slate-300"}`}
+                                      >
+                                        {item.isActive ? "Активний" : "Вимкнений"}
+                                        <span>{expandedGroupedRows[item.key] ? "▲" : "▼"}</span>
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
+
+                                {item.ids.length > 1 && expandedGroupedRows[item.key] && (
+                                  <div className="mt-2 ml-8 space-y-1">
+                                    {item.subItems.map((subItem) => {
+                                      const subId = String(subItem.id || "");
+                                      const subActive = subItem.isActive !== false;
+                                      const isPending = Boolean(pendingStatusIds[subId]);
+                                      return (
+                                        <div key={subId} className="flex items-center justify-between gap-3 rounded border border-slate-100 bg-slate-50 px-2 py-1 text-xs">
+                                          <div className="min-w-0 text-slate-700">
+                                            <span className="font-medium text-slate-900">{subItem.supplier || "—"}</span>
+                                            <span className="ml-2 text-slate-500">{subItem.restaurantName || "—"}</span>
+                                            <span className="ml-2 text-slate-400">{formatMoney(toNumber(subItem.unitPrice))} грн/{subItem.unit || "шт"}</span>
+                                          </div>
+                                          <button
+                                            type="button"
+                                            disabled={isPending}
+                                            onClick={() => handleToggleProductStatus(subId, !subActive)}
+                                            className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors ${subActive ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-slate-200 text-slate-700 hover:bg-slate-300"} ${isPending ? "cursor-wait opacity-60" : "cursor-pointer"}`}
+                                          >
+                                            {isPending ? "Оновлення..." : (subActive ? "Активний" : "Вимкнений")}
+                                          </button>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </div>
                             );
                             })}
@@ -1631,6 +1712,14 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       return haystack.includes(term);
     });
   }, [scopedProducts, searchTerm]);
+
+  const inventoriedProductIds = useMemo(() => {
+    return new Set(
+      Object.entries(quantities)
+        .filter(([, v]) => toNumber(v) > 0)
+        .map(([k]) => String(k))
+    );
+  }, [quantities]);
 
   const filledLines = useMemo(() => {
     return scopedProducts
@@ -3006,7 +3095,6 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
   const [newSupplierName, setNewSupplierName] = useState("");
   const [legalEntityDrafts, setLegalEntityDrafts] = useState({});
   const [portalEmailDrafts, setPortalEmailDrafts] = useState({});
-  const [minimumOrderDrafts, setMinimumOrderDrafts] = useState({});
   const [contractDrafts, setContractDrafts] = useState({});
   const [savingContractSupplierId, setSavingContractSupplierId] = useState("");
   const [expandedSupplierContracts, setExpandedSupplierContracts] = useState({});
@@ -3078,6 +3166,7 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
         currency: String(contract?.currency || "UAH").trim(),
         contractNumber: String(contract?.contractNumber || "").trim(),
         terms: String(contract?.terms || "").trim(),
+        minimumOrderAmount: Math.max(0, toNumber(contract?.minimumOrderAmount || 0)),
         deliveryLeadDays: Math.max(0, Math.round(toNumber(contract?.deliveryLeadDays || 0))),
         paymentDelayDays: Math.max(0, Math.round(toNumber(contract?.paymentDelayDays || 0))),
         deliveryDays: Array.from(new Set(deliveryDays)),
@@ -3105,6 +3194,7 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
       currency: String(contract?.currency || "UAH").trim() || "UAH",
       contractNumber: String(contract?.contractNumber || "").trim(),
       terms: String(contract?.terms || "").trim(),
+      minimumOrderAmount: Math.max(0, toNumber(contract?.minimumOrderAmount || 0)),
       deliveryLeadDays: Math.max(0, Math.round(toNumber(contract?.deliveryLeadDays || 0))),
       paymentDelayDays: Math.max(0, Math.round(toNumber(contract?.paymentDelayDays || 0))),
       deliveryDays: Array.from(new Set((Array.isArray(contract?.deliveryDays) ? contract.deliveryDays : []).map((day) => String(day || "").trim()).filter(Boolean))),
@@ -3153,6 +3243,7 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
       currency: "UAH",
       contractNumber: "",
       terms: "",
+      minimumOrderAmount: 0,
       deliveryLeadDays: 0,
       paymentDelayDays: 0,
       deliveryDays: [],
@@ -3215,7 +3306,7 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
       alert("Такий постачальник вже існує.");
       return;
     }
-    const result = await createSupplier({ name, isActive: true, legalEntities: [], minimumOrderAmount: 0 });
+    const result = await createSupplier({ name, isActive: true, legalEntities: [] });
     if (!result.success) {
       alert(`Не вдалося додати постачальника: ${result?.error?.message || "невідома помилка"}`);
       return;
@@ -3259,7 +3350,6 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
             const result = await updateSupplier(id, {
               ...payload,
               isActive: candidate.isActive,
-              minimumOrderAmount: toNumber(candidate.minimumOrderAmount || 0),
               legalEntities: mergedLegalEntities,
               legalEntity: "",
             });
@@ -3269,7 +3359,6 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
             const result = await createSupplier({
               name: candidate.name,
               isActive: candidate.isActive,
-              minimumOrderAmount: toNumber(candidate.minimumOrderAmount || 0),
               legalEntities: candidate.legalEntities,
             });
             if (result.success) created += 1;
@@ -3352,20 +3441,6 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
     }
   };
 
-  const saveMinimumOrderAmount = async (supplier) => {
-    const raw = Object.prototype.hasOwnProperty.call(minimumOrderDrafts, supplier.id)
-      ? minimumOrderDrafts[supplier.id]
-      : supplier.minimumOrderAmount;
-    const nextValue = Math.max(0, toNumber(raw));
-    const { id, ...payload } = supplier;
-    const result = await updateSupplier(id, { ...payload, minimumOrderAmount: nextValue });
-    if (!result.success) {
-      alert("Не вдалося зберегти мінімальну суму замовлення.");
-      return;
-    }
-    setMinimumOrderDrafts((prev) => ({ ...prev, [supplier.id]: String(nextValue) }));
-  };
-
   return (
     <div className={cardClass}>
       <div className="flex items-center gap-2 mb-4">
@@ -3406,7 +3481,6 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
               <th className="px-3 py-2 text-left font-semibold text-slate-700 w-40">Назва</th>
               <th className="px-3 py-2 text-center font-semibold text-slate-700 w-24">Контракти</th>
               <th className="px-3 py-2 text-center font-semibold text-slate-700 w-24">Закладів</th>
-              <th className="px-3 py-2 text-left font-semibold text-slate-700 w-32">Мін. сума</th>
               <th className="px-3 py-2 text-left font-semibold text-slate-700 min-w-48">Юр. особи</th>
               <th className="px-3 py-2 text-left font-semibold text-slate-700 w-20">Статус</th>
               {canManage && <th className="px-3 py-2 text-center font-semibold text-slate-700 w-32">Дії</th>}
@@ -3435,21 +3509,6 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
                       <span className="inline-flex items-center justify-center rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-700">
                         {uniqueContractRestaurants.size}
                       </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-slate-800">
-                      {canManage ? (
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          className="w-28 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs text-slate-900"
-                          value={Object.prototype.hasOwnProperty.call(minimumOrderDrafts, item.id) ? minimumOrderDrafts[item.id] : String(toNumber(item.minimumOrderAmount || 0))}
-                          onChange={(e) => setMinimumOrderDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                          onBlur={() => saveMinimumOrderAmount(item)}
-                        />
-                      ) : (
-                        <span className="font-semibold">{formatMoney(item.minimumOrderAmount || 0)}</span>
-                      )}
                     </td>
                     <td className="px-3 py-2.5">
                       {legalEntities.length > 0 ? (
@@ -3502,7 +3561,7 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
 
                   {isContractsExpanded && (
                     <tr className="border-b border-slate-200">
-                      <td colSpan={canManage ? 7 : 6} className="bg-slate-50 px-3 py-3">
+                      <td colSpan={canManage ? 6 : 5} className="bg-slate-50 px-3 py-3">
                         <div className="space-y-3">
                           <div className="flex items-center justify-between">
                             <div>
@@ -3590,6 +3649,7 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
                                     <th className="px-2 py-1.5 text-left font-semibold text-slate-700">Заклад</th>
                                     <th className="px-2 py-1.5 text-left font-semibold text-slate-700">Контракт №</th>
                                     <th className="px-2 py-1.5 text-center font-semibold text-slate-700 w-16">Валюта</th>
+                                    <th className="px-2 py-1.5 text-left font-semibold text-slate-700 w-24">Мін. сума</th>
                                     <th className="px-2 py-1.5 text-center font-semibold text-slate-700 w-16">Поставка</th>
                                     <th className="px-2 py-1.5 text-center font-semibold text-slate-700 w-16">Відстрочка</th>
                                     <th className="px-2 py-1.5 text-left font-semibold text-slate-700 flex-1">Графік / Умови</th>
@@ -3607,6 +3667,7 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
                                           </td>
                                           <td className="px-2 py-1 text-slate-700">{contract.contractNumber || "-"}</td>
                                           <td className="px-2 py-1 text-center text-slate-700">{contract.currency || "UAH"}</td>
+                                          <td className="px-2 py-1 text-slate-700">{formatMoney(contract.minimumOrderAmount || 0)}</td>
                                           <td className="px-2 py-1 text-center text-slate-700">{Math.max(0, Math.round(toNumber(contract.deliveryLeadDays || 0)))} дн.</td>
                                           <td className="px-2 py-1 text-center text-slate-700">{Math.max(0, Math.round(toNumber(contract.paymentDelayDays || 0)))} дн.</td>
                                           <td className="px-2 py-1 text-slate-700">
@@ -3631,7 +3692,7 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
                                         {rowExpanded && (
                                           <tr className="bg-indigo-50">
                                             <td colSpan={7} className="px-3 py-2.5">
-                                              <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-4">
+                                              <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-5">
                                                 <div>
                                                   <label className="text-[10px] font-semibold text-slate-700">Заклад</label>
                                                   <select
@@ -3663,6 +3724,17 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
                                                     className="mt-0.5 w-full rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px]"
                                                     value={contract.contractNumber}
                                                     onChange={(e) => patchSupplierContract(item.id, contract.id, { contractNumber: e.target.value })}
+                                                  />
+                                                </div>
+                                                <div>
+                                                  <label className="text-[10px] font-semibold text-slate-700">Мін. сума замовлення</label>
+                                                  <input
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.01"
+                                                    className="mt-0.5 w-full rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[11px]"
+                                                    value={contract.minimumOrderAmount}
+                                                    onChange={(e) => patchSupplierContract(item.id, contract.id, { minimumOrderAmount: e.target.value })}
                                                   />
                                                 </div>
                                                 <div>
@@ -4747,12 +4819,12 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
       .filter(Boolean);
   }, [activeProducts, quantities, selectedRestaurantContext, suppliersDirectory]);
 
-  const supplierMinimumMap = useMemo(() => {
+  const suppliersDirectoryByName = useMemo(() => {
     const map = new Map();
-    (suppliersDirectory || []).forEach((supplier) => {
-      const key = String(supplier?.name || "").trim().toLowerCase();
-      if (!key) return;
-      map.set(key, Math.max(0, toNumber(supplier?.minimumOrderAmount || 0)));
+    (Array.isArray(suppliersDirectory) ? suppliersDirectory : []).forEach((supplier) => {
+      const normalizedName = normalizeSupplierIdentity(supplier?.name);
+      if (!normalizedName) return;
+      map.set(normalizedName, supplier);
     });
     return map;
   }, [suppliersDirectory]);
@@ -4768,9 +4840,12 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
     return Array.from(totals.entries()).map(([supplier, amount]) => ({
       supplier,
       amount,
-      minimum: supplierMinimumMap.get(String(supplier).toLowerCase()) || 0,
+      minimum: getSupplierMinimumForRestaurant(
+        suppliersDirectoryByName.get(normalizeSupplierIdentity(supplier)) || {},
+        selectedRestaurantContext
+      ),
     }));
-  }, [selectedItems, supplierMinimumMap]);
+  }, [selectedItems, suppliersDirectoryByName, selectedRestaurantContext]);
 
   const minimumOrderWarnings = useMemo(() => {
     return supplierTotals.filter((item) => item.minimum > 0 && item.amount < item.minimum);
@@ -5600,14 +5675,137 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
   };
 
   const supplierBoardOrders = useMemo(() => {
-    const supplierMap = {};
+    const supplierOrderMap = {};
+
+    const buildOrderRestaurantTokens = (orderRecord = {}) => {
+      const tokens = collectRestaurantTokens({
+        restaurantId: orderRecord?.restaurantId,
+        restaurantName: orderRecord?.restaurantName,
+        restaurantRegNumber: orderRecord?.restaurantRegNumber,
+      });
+
+      if (tokens.size === 0) {
+        const fallbackOrderId = String(orderRecord?.id || "").trim();
+        if (fallbackOrderId) {
+          tokens.add(`order:${fallbackOrderId}`);
+        }
+      }
+
+      return tokens;
+    };
+
+    const ensureOrderEntry = (supplierName, order) => {
+      const supplierKey = String(supplierName || "");
+      if (!supplierOrderMap[supplierKey]) supplierOrderMap[supplierKey] = {};
+
+      const orderKey = String(order?.id || "");
+      if (!supplierOrderMap[supplierKey][orderKey]) {
+        const restaurantTokens = buildOrderRestaurantTokens(order);
+        supplierOrderMap[supplierKey][orderKey] = {
+          supplier: supplierKey,
+          rows: {},
+          orderIds: new Set([orderKey]),
+          restaurants: new Set([order?.restaurantName || order?.restaurantId || "Без закладу"]),
+          restaurantTokens: new Set(Array.from(restaurantTokens)),
+          dates: new Set(order?.requiredDate ? [order.requiredDate] : []),
+          lineSnapshots: [],
+          createdAt: String(order?.createdAt || ""),
+        };
+      }
+
+      return supplierOrderMap[supplierKey][orderKey];
+    };
+
+    const addItemToOrderEntry = (entry, order, item, isCancelled = false) => {
+      const productKey = item.productId || item.productName || "Без назви";
+      const rowKey = [productKey, item.unit || "", order.requiredDate || ""].join("|");
+
+      if (!entry.rows[rowKey]) {
+        entry.rows[rowKey] = {
+          supplier: entry.supplier,
+          productId: item.productId || "",
+          productName: item.productName || "Без назви",
+          unit: item.unit || "",
+          requiredDate: order.requiredDate || "",
+          totalQty: 0,
+          totalAmount: 0,
+          restaurants: [],
+          orderIds: new Set(),
+        };
+      }
+
+      const lineKey = `${order.id}::${item.productId || item.productName || "line"}${isCancelled ? "::cancelled" : ""}`;
+      const effectiveQty = isCancelled
+        ? toNumber(item.qty)
+        : (lineEdits[lineKey] === undefined ? toNumber(item.qty) : toNumber(lineEdits[lineKey]));
+      const effectiveAmount = isCancelled ? 0 : effectiveQty * toNumber(item.unitPrice);
+
+      if (!isCancelled) {
+        entry.rows[rowKey].totalQty += effectiveQty;
+        entry.rows[rowKey].totalAmount += effectiveAmount;
+      }
+
+      const responseStatus = isCancelled ? "cancelled_by_supplier" : getSupplierResponseStatus(item);
+      entry.rows[rowKey].restaurants.push({
+        lineKey,
+        restaurantId: order.restaurantId,
+        restaurantName: order.restaurantName,
+        qty: effectiveQty,
+        actualReceivedQty: item?.actualReceivedQty !== undefined ? toNumber(item.actualReceivedQty) : null,
+        receivedVarianceQty: item?.receivedVarianceQty !== undefined ? toNumber(item.receivedVarianceQty) : null,
+        requiredDate: order.requiredDate,
+        orderId: order.id,
+        productId: item.productId || "",
+        productName: item.productName || "Без назви",
+        unit: item.unit || "",
+        unitPrice: toNumber(item.unitPrice),
+        orderStatus: String(order.status || "new"),
+        responseStatus,
+        responseQty: toNumber(item.supplierResponseQty),
+        responseComment: String(item.supplierResponseComment || "").trim(),
+        sentToSupplier: Boolean(item?.sentToSupplier),
+        isCancelled: Boolean(isCancelled),
+      });
+
+      entry.rows[rowKey].orderIds.add(order.id);
+      entry.orderIds.add(order.id);
+      entry.restaurants.add(order.restaurantName || order.restaurantId || "Без закладу");
+      buildOrderRestaurantTokens(order).forEach((token) => entry.restaurantTokens.add(token));
+      if (order.requiredDate) entry.dates.add(order.requiredDate);
+
+      if (!isCancelled) {
+        entry.lineSnapshots.push({
+          sentToSupplier: Boolean(item?.sentToSupplier),
+          responseStatus,
+          orderStatus: String(order.status || "new"),
+        });
+      }
+    };
+
+    const calculateBoardStatus = (lineSnapshots = []) => {
+      const hasItems = lineSnapshots.length > 0;
+      const allCompleted = hasItems && lineSnapshots.every((item) => item.orderStatus === "completed");
+      const hasUnsent = lineSnapshots.some((item) => !item.sentToSupplier);
+      const hasSent = lineSnapshots.some((item) => item.sentToSupplier);
+      const hasPending = lineSnapshots.some((item) => item.sentToSupplier && item.responseStatus === "pending");
+      const hasIncident = lineSnapshots.some((item) => item.sentToSupplier && ["partial", "unavailable"].includes(item.responseStatus));
+      const hasManualProcessing = lineSnapshots.some((item) => item.orderStatus === "processing");
+
+      if (allCompleted) return "completed";
+      if (hasSent && hasUnsent) return "processing";
+      if (hasPending || hasIncident) return "sent";
+      if (hasSent) return "confirmed";
+      if (hasManualProcessing) return "processing";
+      return "new";
+    };
 
     for (const order of visibleOrders) {
       for (const item of order.items || []) {
         const supplier = resolveLineSupplierName(order, item);
         if (!supplier) continue;
 
-        // Якщо позиція була перепризначена — додаємо "тінь" до старого постачальника зі статусом cancelled
+        const entry = ensureOrderEntry(supplier, order);
+
         const prevSupplier = String(item.previousSupplierName || "").trim();
         if (prevSupplier && prevSupplier !== supplier && !item?.reassignedFromOrderId) {
           const cancelledEntry = {
@@ -5618,51 +5816,103 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
             supplierResponseQty: 0,
             supplierResponseComment: `Перепризначено на: ${supplier}`,
           };
-          addSupplierEntry(supplierMap, order, cancelledEntry, prevSupplier, lineEdits, true);
+          const previousSupplierEntry = ensureOrderEntry(prevSupplier, order);
+          addItemToOrderEntry(previousSupplierEntry, order, cancelledEntry, true);
         }
 
-        addSupplierEntry(supplierMap, order, item, supplier, lineEdits, false);
+        addItemToOrderEntry(entry, order, item, false);
       }
     }
 
-    return Object.values(supplierMap)
-      .map((entry) => {
-        const rows = Object.values(entry.rows).map((row) => ({
+    const boardOrders = [];
+
+    Object.entries(supplierOrderMap).forEach(([supplier, orderEntriesMap]) => {
+      const orderEntries = Object.values(orderEntriesMap).sort((left, right) => String(left.createdAt || "").localeCompare(String(right.createdAt || "")));
+      const batches = [];
+
+      orderEntries.forEach((entry) => {
+        let placed = false;
+        for (const batch of batches) {
+          const hasRestaurantConflict = Array.from(entry.restaurantTokens).some((token) => batch.restaurantTokens.has(token));
+          if (hasRestaurantConflict) continue;
+
+          Object.entries(entry.rows).forEach(([rowKey, rowValue]) => {
+            if (!batch.rows[rowKey]) {
+              batch.rows[rowKey] = {
+                ...rowValue,
+                restaurants: [...rowValue.restaurants],
+                orderIds: new Set(Array.from(rowValue.orderIds)),
+              };
+            } else {
+              batch.rows[rowKey].totalQty += toNumber(rowValue.totalQty);
+              batch.rows[rowKey].totalAmount += toNumber(rowValue.totalAmount);
+              batch.rows[rowKey].restaurants.push(...rowValue.restaurants);
+              rowValue.orderIds.forEach((orderId) => batch.rows[rowKey].orderIds.add(orderId));
+            }
+          });
+
+          entry.orderIds.forEach((orderId) => batch.orderIds.add(orderId));
+          entry.restaurants.forEach((restaurantName) => batch.restaurants.add(restaurantName));
+          entry.restaurantTokens.forEach((token) => batch.restaurantTokens.add(token));
+          entry.dates.forEach((date) => batch.dates.add(date));
+          batch.lineSnapshots.push(...entry.lineSnapshots);
+          placed = true;
+          break;
+        }
+
+        if (!placed) {
+          const nextBatchRows = {};
+          Object.entries(entry.rows).forEach(([rowKey, rowValue]) => {
+            nextBatchRows[rowKey] = {
+              ...rowValue,
+              restaurants: [...rowValue.restaurants],
+              orderIds: new Set(Array.from(rowValue.orderIds)),
+            };
+          });
+
+          batches.push({
+            supplier,
+            rows: nextBatchRows,
+            orderIds: new Set(Array.from(entry.orderIds)),
+            restaurants: new Set(Array.from(entry.restaurants)),
+            restaurantTokens: new Set(Array.from(entry.restaurantTokens)),
+            dates: new Set(Array.from(entry.dates)),
+            lineSnapshots: [...entry.lineSnapshots],
+          });
+        }
+      });
+
+      batches.forEach((batch, index) => {
+        const rows = Object.values(batch.rows).map((row) => ({
           ...row,
           orderIds: Array.from(row.orderIds),
         }));
         const totalAmount = rows.reduce((sum, row) => sum + toNumber(row.totalAmount), 0);
         const totalQty = rows.reduce((sum, row) => sum + toNumber(row.totalQty), 0);
-        const hasItems = entry.lineSnapshots.length > 0;
-        const allCompleted = hasItems && entry.lineSnapshots.every((item) => item.orderStatus === "completed");
-        const hasUnsent = entry.lineSnapshots.some((item) => !item.sentToSupplier);
-        const hasSent = entry.lineSnapshots.some((item) => item.sentToSupplier);
-        const hasPending = entry.lineSnapshots.some((item) => item.sentToSupplier && item.responseStatus === "pending");
-        const hasIncident = entry.lineSnapshots.some((item) => item.sentToSupplier && ["partial", "unavailable"].includes(item.responseStatus));
-        const hasManualProcessing = entry.lineSnapshots.some((item) => item.orderStatus === "processing");
 
-        let status = "new";
-        if (allCompleted) status = "completed";
-        else if (hasSent && hasUnsent) status = "processing";
-        else if (hasPending || hasIncident) status = "sent";
-        else if (hasSent) status = "confirmed";
-        else if (hasManualProcessing) status = "processing";
-
-        return {
-          id: `supplier-board::${entry.supplier}`,
-          supplier: entry.supplier,
-          status,
+        boardOrders.push({
+          id: `supplier-board::${supplier}::${index + 1}`,
+          supplier,
+          status: calculateBoardStatus(batch.lineSnapshots),
           rows,
-          orderIds: Array.from(entry.orderIds),
-          restaurantCount: entry.restaurants.size,
-          restaurants: Array.from(entry.restaurants),
+          orderIds: Array.from(batch.orderIds),
+          restaurantCount: batch.restaurants.size,
+          restaurants: Array.from(batch.restaurants),
           totalAmount,
           totalQty,
           positionsCount: rows.length,
-          deliveryDates: Array.from(entry.dates).sort(),
-        };
-      })
-      .sort((left, right) => String(left.supplier || "").localeCompare(String(right.supplier || "")));
+          deliveryDates: Array.from(batch.dates).sort(),
+        });
+      });
+    });
+
+    return boardOrders.sort((left, right) => {
+      const supplierSort = String(left.supplier || "").localeCompare(String(right.supplier || ""), "uk");
+      if (supplierSort !== 0) return supplierSort;
+      const leftDate = String(left.deliveryDates?.[0] || "");
+      const rightDate = String(right.deliveryDates?.[0] || "");
+      return leftDate.localeCompare(rightDate, "uk");
+    });
   }, [visibleOrders, resolveLineSupplierName, lineEdits]);
 
   const dispatchableSuppliers = useMemo(() => Object.keys(consolidatedBySupplier), [consolidatedBySupplier]);
@@ -7246,8 +7496,12 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
   const [deliveryDateFrom, setDeliveryDateFrom] = useState("");
   const [deliveryDateTo, setDeliveryDateTo] = useState("");
   const [responseFilter, setResponseFilter] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [portalViewMode, setPortalViewMode] = useState("new");
   const [responseDrafts, setResponseDrafts] = useState({});
   const [savingKey, setSavingKey] = useState("");
+  const [savedLineKeys, setSavedLineKeys] = useState({});
+  const [optimisticOrderPatches, setOptimisticOrderPatches] = useState({});
 
   const resolvedSupplier = useMemo(() => {
     if (previewSupplierId) {
@@ -7257,6 +7511,18 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
   }, [previewSupplierId, suppliers, user]);
 
   const currentSupplierName = String(resolvedSupplier?.name || "").trim();
+
+  const effectiveOrders = useMemo(() => {
+    return (Array.isArray(orders) ? orders : []).map((order) => {
+      const patch = optimisticOrderPatches[String(order?.id || "")];
+      if (!patch) return order;
+      return {
+        ...order,
+        ...patch,
+        items: Array.isArray(patch.items) ? patch.items : order.items,
+      };
+    });
+  }, [orders, optimisticOrderPatches]);
 
   const resolvePortalLineSupplier = useCallback((order, item) => {
     return resolveSupplierForRestaurantContext(
@@ -7305,22 +7571,19 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
 
   const portalOrders = useMemo(() => {
     if (!currentSupplierName) return [];
-    const normalizedSupplier = normalizeSupplierIdentity(currentSupplierName);
+    const normalizedSearch = String(searchTerm || "").trim().toLowerCase();
 
-    return (Array.isArray(orders) ? orders : [])
+    return (Array.isArray(effectiveOrders) ? effectiveOrders : [])
       .map((order) => {
-        const items = (Array.isArray(order?.items) ? order.items : [])
+        const sourceItems = (Array.isArray(order?.items) ? order.items : []);
+        const items = sourceItems
           .map((item, itemIndex) => ({
             ...item,
             itemIndex,
             lineKey: `${String(order?.id || "order")}::${itemIndex}`,
             resolvedSupplier: resolvePortalLineSupplier(order, item),
           }))
-          .filter((item) => item.sentToSupplier && doesLineBelongToSupplier(order, item, currentSupplierName))
-          .filter((item) => {
-            const status = getSupplierResponseStatus(item);
-            return responseFilter ? status === responseFilter : true;
-          });
+          .filter((item) => item.sentToSupplier && doesLineBelongToSupplier(order, item, currentSupplierName));
 
         if (items.length === 0) return null;
 
@@ -7329,6 +7592,19 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
         const byDeliveryTo = deliveryDateTo ? deliveryDate && deliveryDate <= deliveryDateTo : true;
         if (!byDeliveryFrom || !byDeliveryTo) return null;
 
+        if (normalizedSearch) {
+          const haystack = [
+            order?.restaurantName,
+            order?.comment,
+            ...items.map((item) => item?.productName),
+            ...items.map((item) => item?.code1C),
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          if (!haystack.includes(normalizedSearch)) return null;
+        }
+
         const summary = { pending: 0, accepted: 0, partial: 0, unavailable: 0, total: items.length };
         items.forEach((item) => {
           const status = getSupplierResponseStatus(item);
@@ -7336,15 +7612,59 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
             summary[status] += 1;
           }
         });
+
+        const isArchived = String(order?.status || "") === "completed";
+        const bucket = isArchived ? "archive" : (summary.pending === summary.total ? "new" : "active");
+
         return {
           ...order,
           supplierItems: items,
           supplierSummary: summary,
+          supplierBucket: bucket,
+          isArchived,
         };
       })
       .filter(Boolean)
-      .sort((left, right) => String(left?.requiredDate || "").localeCompare(String(right?.requiredDate || "")));
-  }, [orders, currentSupplierName, deliveryDateFrom, deliveryDateTo, responseFilter, resolvePortalLineSupplier, doesLineBelongToSupplier]);
+      .sort((left, right) => String(right?.requiredDate || "").localeCompare(String(left?.requiredDate || "")));
+  }, [effectiveOrders, currentSupplierName, deliveryDateFrom, deliveryDateTo, searchTerm, resolvePortalLineSupplier, doesLineBelongToSupplier]);
+
+  const portalOrderCounts = useMemo(() => {
+    return portalOrders.reduce((acc, order) => {
+      if (order.supplierBucket === "new") acc.new += 1;
+      else if (order.supplierBucket === "active") acc.active += 1;
+      else if (order.supplierBucket === "archive") acc.archive += 1;
+      return acc;
+    }, { new: 0, active: 0, archive: 0 });
+  }, [portalOrders]);
+
+  const filteredPortalOrders = useMemo(() => {
+    return portalOrders
+      .filter((order) => {
+        if (portalViewMode === "archive") return order.supplierBucket === "archive";
+        if (portalViewMode === "active") return order.supplierBucket === "active";
+        return order.supplierBucket === "new";
+      })
+      .map((order) => {
+        const filteredItems = responseFilter
+          ? order.supplierItems.filter((item) => getSupplierResponseStatus(item) === responseFilter)
+          : order.supplierItems;
+
+        if (filteredItems.length === 0) return null;
+
+        const summary = { pending: 0, accepted: 0, partial: 0, unavailable: 0, total: filteredItems.length };
+        filteredItems.forEach((item) => {
+          const status = getSupplierResponseStatus(item);
+          if (Object.prototype.hasOwnProperty.call(summary, status)) summary[status] += 1;
+        });
+
+        return {
+          ...order,
+          supplierItems: filteredItems,
+          supplierSummary: summary,
+        };
+      })
+      .filter(Boolean);
+  }, [portalOrders, portalViewMode, responseFilter]);
 
   const portalStats = useMemo(() => {
     const restaurants = new Set();
@@ -7361,6 +7681,13 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
     return summary;
   }, [portalOrders]);
 
+  const sanitizeSupplierComment = (value) => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    if (/^перепризначено\s+на\s*:/i.test(text)) return "";
+    return text;
+  };
+
   const getDraft = (item) => {
     const saved = responseDrafts[item.lineKey];
     if (saved) return saved;
@@ -7369,7 +7696,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
     return {
       status,
       responseQty: String(toNumber(item?.supplierResponseQty ?? (status === "unavailable" ? 0 : requestedQty))),
-      comment: String(item?.supplierResponseComment || ""),
+      comment: sanitizeSupplierComment(item?.supplierResponseComment || ""),
     };
   };
 
@@ -7416,6 +7743,15 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
       };
     });
 
+    setOptimisticOrderPatches((prev) => ({
+      ...prev,
+      [String(order?.id || "")]: {
+        items: nextItems,
+        status: deriveOrderStatus(nextItems, order.status),
+        supplierResponseUpdatedAt: now,
+      },
+    }));
+
     setSavingKey(entry.lineKey);
     const result = await updateOrder(id, {
       ...payload,
@@ -7426,9 +7762,31 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
     setSavingKey("");
 
     if (!result.success) {
+      setOptimisticOrderPatches((prev) => {
+        const next = { ...prev };
+        delete next[String(order?.id || "")];
+        return next;
+      });
       alert(getErrorMessage(result.error, "Не вдалося зберегти відповідь постачальника."));
       return;
     }
+
+    setSavedLineKeys((prev) => ({ ...prev, [entry.lineKey]: true }));
+    window.setTimeout(() => {
+      setSavedLineKeys((prev) => {
+        const next = { ...prev };
+        delete next[entry.lineKey];
+        return next;
+      });
+    }, 1400);
+
+    window.setTimeout(() => {
+      setOptimisticOrderPatches((prev) => {
+        const next = { ...prev };
+        delete next[String(order?.id || "")];
+        return next;
+      });
+    }, 1800);
 
     setResponseDrafts((prev) => {
       const next = { ...prev };
@@ -7459,6 +7817,15 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
       };
     });
 
+    setOptimisticOrderPatches((prev) => ({
+      ...prev,
+      [String(order?.id || "")]: {
+        items: nextItems,
+        status: deriveOrderStatus(nextItems, order.status),
+        supplierResponseUpdatedAt: now,
+      },
+    }));
+
     setSavingKey(`order::${order.id}`);
     const result = await updateOrder(id, {
       ...payload,
@@ -7469,8 +7836,22 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
     setSavingKey("");
 
     if (!result.success) {
+      setOptimisticOrderPatches((prev) => {
+        const next = { ...prev };
+        delete next[String(order?.id || "")];
+        return next;
+      });
       alert(getErrorMessage(result.error, "Не вдалося підтвердити всі позиції."));
+      return;
     }
+
+    window.setTimeout(() => {
+      setOptimisticOrderPatches((prev) => {
+        const next = { ...prev };
+        delete next[String(order?.id || "")];
+        return next;
+      });
+    }, 1800);
   };
 
   return (
@@ -7530,7 +7911,40 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
           </div>
 
           <div className={cardClass}>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-4">
+            <div className="mb-3 flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+              <button
+                type="button"
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold ${portalViewMode === "new" ? "bg-amber-100 text-amber-800" : "bg-white text-slate-600 hover:bg-slate-100"}`}
+                onClick={() => setPortalViewMode("new")}
+              >
+                Нові: {portalOrderCounts.new}
+              </button>
+              <button
+                type="button"
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold ${portalViewMode === "active" ? "bg-indigo-100 text-indigo-800" : "bg-white text-slate-600 hover:bg-slate-100"}`}
+                onClick={() => setPortalViewMode("active")}
+              >
+                В роботі: {portalOrderCounts.active}
+              </button>
+              <button
+                type="button"
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold ${portalViewMode === "archive" ? "bg-emerald-100 text-emerald-800" : "bg-white text-slate-600 hover:bg-slate-100"}`}
+                onClick={() => setPortalViewMode("archive")}
+              >
+                Архів: {portalOrderCounts.archive}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
+              <div>
+                <label className="text-xs font-semibold text-slate-700">Пошук</label>
+                <input
+                  className={inputClass}
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Заклад, товар, код, коментар"
+                />
+              </div>
               <div>
                 <label className="text-xs font-semibold text-slate-700">Поставка від</label>
                 <input type="date" className={inputClass} value={deliveryDateFrom} onChange={(e) => setDeliveryDateFrom(e.target.value)} onFocus={openNativeDatePicker} onClick={openNativeDatePicker} />
@@ -7557,6 +7971,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                     setDeliveryDateFrom("");
                     setDeliveryDateTo("");
                     setResponseFilter("");
+                    setSearchTerm("");
                   }}
                 >
                   Скинути
@@ -7566,7 +7981,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
           </div>
 
           <div className="space-y-4">
-            {portalOrders.map((order) => (
+            {filteredPortalOrders.map((order) => (
               <div key={order.id} className={cardClass}>
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
                   <div>
@@ -7575,6 +7990,9 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                       <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">
                         Заклад призначення
                       </span>
+                      {order.isArchived && (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Архів (приймання завершено)</span>
+                      )}
                     </div>
                     <div className="mt-1 text-xs text-slate-500">Заявка: {String(order.id || "—")} • Поставка: {formatDateUk(order.requiredDate)} • Створено: {formatDateTimeSafe(order.createdAt)}</div>
                     <div className="mt-1 text-xs text-slate-500">Коментар: {String(order.comment || "—")}</div>
@@ -7585,7 +8003,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                     <button
                       type="button"
                       className="rounded border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
-                      disabled={savingKey === `order::${order.id}`}
+                      disabled={order.isArchived || savingKey === `order::${order.id}`}
                       onClick={() => { void acceptAllOrderItems(order); }}
                     >
                       {savingKey === `order::${order.id}` ? "Збереження..." : "Підтвердити все"}
@@ -7636,6 +8054,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                                 <select
                                   className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs"
                                   value={status}
+                                  disabled={order.isArchived}
                                   onChange={(e) => patchDraft(item.lineKey, { status: e.target.value })}
                                 >
                                   <option value="pending">Очікує відповіді</option>
@@ -7652,7 +8071,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                                 step="0.01"
                                 className="w-28 rounded border border-slate-300 bg-white px-2 py-1 text-xs"
                                 value={status === "accepted" ? String(toNumber(item.qty)) : draft.responseQty}
-                                disabled={status === "accepted" || status === "unavailable"}
+                                disabled={order.isArchived || status === "accepted" || status === "unavailable"}
                                 onChange={(e) => patchDraft(item.lineKey, { responseQty: e.target.value })}
                               />
                               <div className="mt-1 text-[11px] text-slate-500">Замовлено: {toNumber(item.qty)} {item.unit || ""}</div>
@@ -7661,6 +8080,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                               <textarea
                                 className="min-h-16 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs"
                                 value={draft.comment}
+                                disabled={order.isArchived}
                                 onChange={(e) => patchDraft(item.lineKey, { comment: e.target.value })}
                                 placeholder="Коментар постачальника: заміна, причина відсутності, термін поставки..."
                               />
@@ -7672,10 +8092,10 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                               <button
                                 type="button"
                                 className="rounded border border-indigo-300 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
-                                disabled={savingKey === item.lineKey}
+                                disabled={order.isArchived || savingKey === item.lineKey}
                                 onClick={() => { void saveLineResponse(order, item); }}
                               >
-                                {savingKey === item.lineKey ? "Збереження..." : "Зберегти"}
+                                {savingKey === item.lineKey ? "Збереження..." : (savedLineKeys[item.lineKey] ? "Збережено" : (status === "accepted" ? "Підтвердити" : "Зберегти"))}
                               </button>
                             </td>
                           </tr>
@@ -7687,9 +8107,9 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
               </div>
             ))}
 
-            {portalOrders.length === 0 && (
+            {filteredPortalOrders.length === 0 && (
               <div className={`${cardClass} text-sm text-slate-500`}>
-                Для цього постачальника поки немає відправлених замовлень за вибраними фільтрами.
+                Для цього постачальника немає замовлень у вибраному розділі/фільтрах.
               </div>
             )}
           </div>
