@@ -181,7 +181,13 @@ const DEFAULT_FALLBACK_MENU_STRUCTURE = [
     icon: "Archive",
     children: [
       { id: "inventory-products", label: "Продукти" },
-      { id: "inventory-technolog", label: "Технологічні карти" },
+      {
+        id: "inventory-technolog",
+        label: "Технологічні карти",
+        children: [
+          { id: "newtechnologicalcard", label: "Нова карта" },
+        ],
+      },
       { id: "inventory-utilities", label: "Утиліти" },
       { id: "inventory-assets", label: "Основні засоби" },
     ],
