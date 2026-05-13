@@ -1165,10 +1165,12 @@ function App() {
   // Допоміжна функція для отримання вкладок для конкретного підрозділу з menuStructure
   const getTabsForSection = (navId) => {
     if (!navId || !Array.isArray(menuStructure)) return [];
+    const normalizedNavId = normalizeNavigationId(navId);
     for (const section of menuStructure) {
       if (!Array.isArray(section.children)) continue;
       for (const child of section.children) {
-        if (child.id === navId) {
+        const childId = normalizeNavigationId(child.id);
+        if (child.id === navId || childId === normalizedNavId) {
           if (Array.isArray(child.tabLabels) && child.tabLabels.length > 0) {
             return child.tabLabels;
           } else if (Array.isArray(child.tabs) && child.tabs.length > 0) {
@@ -2787,12 +2789,13 @@ function App() {
         const assetsForReports = visibleAssetsForCurrentUser;
 
         // ...existing code...
-        if (
+        const isDashboardNav =
           activeNav === "dashboard" ||
           activeNav === "dashboard-ops" ||
-          topTab === "maindashboard" ||
-          topTab === "dashboard-ops"
-        ) {
+          String(activeNav || "").includes("dashboard");
+        const isDashboardTopTab = topTab === "maindashboard" || topTab === "dashboard-ops";
+
+        if (isDashboardNav || (!String(activeNav || "").trim() && isDashboardTopTab)) {
           const statCards = [
             { label: "Ресторани", value: dashboardData.totalRestaurants, hint: `Відкрито зараз: ${dashboardData.currentlyOpenRestaurants}` },
             { label: "Активи", value: dashboardData.totalAssets, hint: `В експлуатації: ${dashboardData.activeAssets}` },
@@ -4366,9 +4369,10 @@ function App() {
   // якщо активна вкладка недоступна, переключаємо на першу дозволену
   useEffect(() => {
     if (!user) return;
-    const allowedIds = navItems.flatMap(g => g.children.map(c => c.id));
+    const allowedIds = navItems.flatMap((group) => group.children.map((child) => normalizeNavigationId(child.id)));
     if (allowedIds.length === 0) return;
-    if (!allowedIds.includes(activeNav)) {
+    const normalizedActiveNav = normalizeNavigationId(activeNav);
+    if (!allowedIds.includes(normalizedActiveNav)) {
       const defaultNav = allowedIds[0];
       setActiveNav(defaultNav);
       localStorage.setItem('lucia_activeNav', defaultNav);
