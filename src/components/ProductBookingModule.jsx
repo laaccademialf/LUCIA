@@ -5185,6 +5185,140 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
     alert("Замовлення сформовано та передано у відділ закупівель.");
   };
 
+  const printOrderInvoice = (order) => {
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html lang="uk">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Накладна замовлення</title>
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: white; }
+          @page { size: A4; margin: 10mm; }
+          @media print {
+            body { margin: 0; padding: 0; }
+            .print-container { page-break-after: avoid; }
+          }
+          .print-container { max-width: 800px; margin: 0 auto; padding: 20px; background: white; }
+          .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1f2937; padding-bottom: 20px; margin-bottom: 30px; }
+          .logo-section { flex: 1; }
+          .logo-section h1 { font-size: 24px; font-weight: 700; color: #1f2937; margin-bottom: 5px; }
+          .document-title { text-align: right; flex: 1; }
+          .document-title h2 { font-size: 20px; font-weight: 700; color: #1f2937; margin-bottom: 5px; }
+          .document-title p { font-size: 12px; color: #6b7280; }
+          .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
+          .info-block { border: 1px solid #e5e7eb; padding: 15px; border-radius: 6px; }
+          .info-block-label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #6b7280; letter-spacing: 0.5px; margin-bottom: 5px; }
+          .info-block-value { font-size: 14px; font-weight: 500; color: #1f2937; }
+          .table-container { margin-bottom: 30px; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+          table { width: 100%; border-collapse: collapse; }
+          th { background-color: #f3f4f6; padding: 12px; text-align: left; font-size: 12px; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #e5e7eb; }
+          td { padding: 12px; border-bottom: 1px solid #e5e7eb; font-size: 13px; color: #374151; }
+          tr:last-child td { border-bottom: none; }
+          .number-cell { text-align: right; }
+          .total-row { background-color: #f9fafb; font-weight: 600; }
+          .total-row td { border-top: 2px solid #e5e7eb; border-bottom: 2px solid #e5e7eb; }
+          .footer { text-align: center; font-size: 11px; color: #6b7280; margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
+          .status-badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+          .status-confirmed { background-color: #d1fae5; color: #065f46; }
+          .status-processing { background-color: #fef3c7; color: #92400e; }
+          .status-completed { background-color: #dbeafe; color: #0c2d6b; }
+          .no-print { display: none; }
+          @media print {
+            .no-print { display: none !important; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="print-container">
+          <div class="header">
+            <div class="logo-section">
+              <h1>LUCIA</h1>
+              <p style="font-size: 12px; color: #6b7280;">LA FAMIGLIA UNIFIED CONTROL & INTELLIGENCE</p>
+            </div>
+            <div class="document-title">
+              <h2>НАКЛАДНА</h2>
+              <p>Замовлення № ${String(order.id || "—").substring(0, 8)}</p>
+            </div>
+          </div>
+
+          <div class="info-grid">
+            <div class="info-block">
+              <div class="info-block-label">Ресторан</div>
+              <div class="info-block-value">${order.restaurantName || "Без закладу"}</div>
+            </div>
+            <div class="info-block">
+              <div class="info-block-label">Дата замовлення</div>
+              <div class="info-block-value">${formatDateTimeSafe(resolveOrderCreatedAt(order))}</div>
+            </div>
+            <div class="info-block">
+              <div class="info-block-label">Дата поставки</div>
+              <div class="info-block-value">${formatDateUk(order.requiredDate) || "—"}</div>
+            </div>
+            <div class="info-block">
+              <div class="info-block-label">Статус</div>
+              <div class="info-block-value"><span class="status-badge status-${String(order.status || "").toLowerCase()}">${statusLabel(order.status)}</span></div>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 5%;">№</th>
+                  <th style="width: 40%;">Товар</th>
+                  <th style="width: 15%;">Постачальник</th>
+                  <th class="number-cell" style="width: 10%;">К-сть</th>
+                  <th class="number-cell" style="width: 12%;">Ціна</th>
+                  <th class="number-cell" style="width: 18%;">Сума</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${(Array.isArray(order.items) ? order.items : []).map((item, index) => `
+                  <tr>
+                    <td>${index + 1}</td>
+                    <td>
+                      <div style="font-weight: 500;">${item.productName || "Без назви"}</div>
+                      <div style="font-size: 12px; color: #6b7280;">Код: ${item.productId || "—"}</div>
+                    </td>
+                    <td>${item.supplier || "—"}</td>
+                    <td class="number-cell">${toNumber(item.qty).toFixed(2)} ${item.unit || ""}</td>
+                    <td class="number-cell">${toNumber(item.unitPrice).toFixed(2)} грн</td>
+                    <td class="number-cell"><strong>${formatMoney(item.amount)}</strong></td>
+                  </tr>
+                `).join("")}
+                <tr class="total-row">
+                  <td colspan="5" style="text-align: right;">РАЗОМ:</td>
+                  <td class="number-cell">${formatMoney(order.totalAmount)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="footer">
+            <p>Накладна створена ${new Date().toLocaleString("uk-UA")}</p>
+            <p style="margin-top: 10px; color: #9ca3af;">© 2024 LUCIA • LA FAMIGLIA UNIFIED CONTROL & INTELLIGENCE</p>
+          </div>
+        </div>
+
+        <script>
+          window.addEventListener("load", function() {
+            setTimeout(() => window.print(), 500);
+          });
+        </script>
+      </body>
+      </html>
+    `;
+
+    const printWindow = window.open("", "_blank");
+    if (printWindow) {
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+    }
+  };
+
   const openReceiveOrder = (order) => {
     const nextDraft = {};
     (Array.isArray(order?.items) ? order.items : []).forEach((item, index) => {
@@ -5563,26 +5697,36 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                   <td className="px-3 py-2">{formatDateUk(order.requiredDate) || "—"}</td>
                   <td className="px-3 py-2 font-medium">{formatMoney(order.totalAmount)}</td>
                   <td className="px-3 py-2">{statusLabel(order.status)}</td>
-                  <td className="px-3 py-2">
-                    {String(order.status || "") === "confirmed" ? (
+                  <td className="px-3 py-2 space-y-1">
+                    <div className="flex flex-wrap items-center gap-1">
+                      {String(order.status || "") === "confirmed" ? (
+                        <button
+                          type="button"
+                          className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                          onClick={() => openReceiveOrder(order)}
+                        >
+                          Прийняти замовлення
+                        </button>
+                      ) : String(order.status || "") === "completed" ? (
+                        <button
+                          type="button"
+                          className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                          onClick={() => openReceiveOrder(order)}
+                        >
+                          Переглянути приймання
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
                       <button
                         type="button"
-                        className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                        onClick={() => openReceiveOrder(order)}
+                        className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"
+                        onClick={() => printOrderInvoice(order)}
+                        title="Друкувати накладну"
                       >
-                        Прийняти замовлення
+                        <Printer size={12} /> Друк
                       </button>
-                    ) : String(order.status || "") === "completed" ? (
-                      <button
-                        type="button"
-                        className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                        onClick={() => openReceiveOrder(order)}
-                      >
-                        Переглянути приймання
-                      </button>
-                    ) : (
-                      <span className="text-xs text-slate-400">—</span>
-                    )}
+                    </div>
                   </td>
                 </tr>
               ))}
