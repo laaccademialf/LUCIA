@@ -84,6 +84,7 @@ const FinancialAssetsReport = lazy(() => import("./components/FinancialAssetsRep
 const AssetDetailedReport = lazy(() => import("./components/AssetDetailedReport"));
 const MenuStructureEditor = lazy(() => import("./components/MenuStructureEditor"));
 const ProductBookingModule = lazy(() => import("./components/ProductBookingModule"));
+const TechnologicalCardModule = lazy(() => import("./components/TechnologicalCardModule"));
 const ServiceRequestsModule = lazy(() => import("./components/ServiceRequestsModule"));
 const ChecklistModule = lazy(() => import("./components/ChecklistModule"));
 const TeamHiringModule = lazy(() => import("./components/TeamHiringModule"));
@@ -180,6 +181,7 @@ const DEFAULT_FALLBACK_MENU_STRUCTURE = [
     icon: "Archive",
     children: [
       { id: "inventory-products", label: "Продукти" },
+      { id: "inventory-technolog", label: "Технологічні карти" },
       { id: "inventory-utilities", label: "Утиліти" },
       { id: "inventory-assets", label: "Основні засоби" },
     ],
@@ -3649,6 +3651,14 @@ function App() {
       return (
         <div className="grid grid-cols-1">
           <ProductBookingModule topTab={topTab} restaurants={restaurants} user={user} />
+        </div>
+      );
+    }
+
+    if (activeNav === "inventory-technolog" || activeNav.includes("inventory-technolog")) {
+      return (
+        <div className="grid grid-cols-1">
+          <TechnologicalCardModule />
         </div>
       );
     }
