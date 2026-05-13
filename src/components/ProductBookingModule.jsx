@@ -1782,6 +1782,239 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }, {});
   };
 
+  const formatCalculatorValue = (value) => {
+    const numericValue = toNumber(value, 0);
+    if (!Number.isFinite(numericValue)) return "0";
+    if (Number.isInteger(numericValue)) return String(numericValue);
+    return String(Number(numericValue.toFixed(6))).replace(/\.0+$/, "");
+  };
+
+  const evaluateCalculatorExpression = (expression) => {
+    const source = String(expression || "").trim();
+    if (!source) return 0;
+
+    const normalized = source.replace(/,/g, ".").replace(/\s+/g, "");
+    const tokens = normalized.match(/\d+(?:\.\d+)?|[+\-*/]/g) || [];
+    if (tokens.length === 0) return 0;
+
+    const collapsed = [];
+    for (const token of tokens) {
+      if (token === "*" || token === "/") {
+        const previousValue = toNumber(collapsed.pop(), 0);
+        const nextToken = tokens[tokens.indexOf(token) + 1];
+        const nextValue = toNumber(nextToken, 0);
+        const result = token === "*"
+          ? previousValue * nextValue
+          : (nextValue === 0 ? 0 : previousValue / nextValue);
+        collapsed.push(String(result));
+        continue;
+      }
+
+      const prevToken = collapsed[collapsed.length - 1];
+      if ((token === "+" || token === "-") && (prevToken === "+" || prevToken === "-")) {
+        collapsed[collapsed.length - 1] = token;
+        continue;
+      }
+
+      if (token !== "*" && token !== "/") {
+        collapsed.push(token);
+      }
+    }
+
+    let result = toNumber(collapsed[0], 0);
+    for (let index = 1; index < collapsed.length; index += 2) {
+      const operator = collapsed[index];
+      const nextValue = toNumber(collapsed[index + 1], 0);
+      if (operator === "+") result += nextValue;
+      if (operator === "-") result -= nextValue;
+    }
+
+    return result;
+  };
+
+  const focusQuantityInput = (productId) => {
+    const product = scopedProducts.find((item) => String(item?.id || "") === String(productId || ""));
+    if (!product?.id) return;
+
+    setActiveRowProductId(product.id);
+    setCalcModal({
+      isOpen: true,
+      productId: product.id,
+      productName: String(product.name || ""),
+      display: formatCalculatorValue(quantities[product.id]),
+      expression: "",
+      memory: toNumber(quantities[product.id], 0),
+      lastOp: null,
+      newNumber: true,
+    });
+  };
+
+  const openCalcModal = (productId, productName = "") => {
+    setActiveRowProductId(productId);
+    setCalcModal({
+      isOpen: true,
+      productId,
+      productName: String(productName || ""),
+      display: formatCalculatorValue(quantities[productId]),
+      expression: "",
+      memory: toNumber(quantities[productId], 0),
+      lastOp: null,
+      newNumber: true,
+    });
+  };
+
+  const handleCalcButtonPress = (event, productId, productName = "") => {
+    event.preventDefault();
+    event.stopPropagation();
+    openCalcModal(productId, productName);
+  };
+
+  const closeCalcModal = () => {
+    setActiveRowProductId(null);
+    setCalcModal((prev) => ({
+      ...prev,
+      isOpen: false,
+      productId: null,
+      productName: "",
+      display: "0",
+      expression: "",
+      memory: 0,
+      lastOp: null,
+      newNumber: true,
+    }));
+  };
+
+  const calcInput = (digit) => {
+    setCalcModal((prev) => {
+      const digitText = String(digit);
+      if (prev.newNumber) {
+        return {
+          ...prev,
+          display: digitText,
+          newNumber: false,
+        };
+      }
+
+      return {
+        ...prev,
+        display: prev.display === "0" ? digitText : `${prev.display}${digitText}`,
+      };
+    });
+  };
+
+  const calcDot = () => {
+    setCalcModal((prev) => {
+      if (prev.newNumber) {
+        return {
+          ...prev,
+          display: "0.",
+          newNumber: false,
+        };
+      }
+
+      if (String(prev.display || "").includes(".")) return prev;
+      return {
+        ...prev,
+        display: `${prev.display || "0"}.`,
+      };
+    });
+  };
+
+  const calcClear = () => {
+    setCalcModal((prev) => ({
+      ...prev,
+      display: "0",
+      expression: "",
+      memory: 0,
+      lastOp: null,
+      newNumber: true,
+    }));
+  };
+
+  const calcBackspace = () => {
+    setCalcModal((prev) => {
+      const nextDisplay = String(prev.display || "0").slice(0, -1);
+      return {
+        ...prev,
+        display: nextDisplay || "0",
+        newNumber: false,
+      };
+    });
+  };
+
+  const calcOperation = (operator) => {
+    setCalcModal((prev) => {
+      const currentDisplay = String(prev.display || "0").replace(/,/g, ".");
+      const hasExpression = Boolean(String(prev.expression || "").trim());
+
+      if (!hasExpression) {
+        return {
+          ...prev,
+          expression: `${currentDisplay} ${operator} `,
+          lastOp: operator,
+          newNumber: true,
+        };
+      }
+
+      if (prev.newNumber) {
+        return {
+          ...prev,
+          expression: String(prev.expression || "").replace(/[+\-*/]\s*$/, `${operator} `),
+          lastOp: operator,
+        };
+      }
+
+      const result = evaluateCalculatorExpression(`${prev.expression}${currentDisplay}`);
+      return {
+        ...prev,
+        display: formatCalculatorValue(result),
+        expression: `${formatCalculatorValue(result)} ${operator} `,
+        memory: result,
+        lastOp: operator,
+        newNumber: true,
+      };
+    });
+  };
+
+  const calcEquals = () => {
+    setCalcModal((prev) => {
+      const currentDisplay = String(prev.display || "0").replace(/,/g, ".");
+      const fullExpression = String(prev.expression || "").trim()
+        ? `${prev.expression}${currentDisplay}`
+        : currentDisplay;
+      const result = evaluateCalculatorExpression(fullExpression);
+
+      return {
+        ...prev,
+        display: formatCalculatorValue(result),
+        expression: "",
+        memory: result,
+        lastOp: null,
+        newNumber: true,
+      };
+    });
+  };
+
+  const calcSave = () => {
+    const productId = String(calcModal.productId || "");
+    if (!productId) {
+      closeCalcModal();
+      return;
+    }
+
+    setQuantities((prev) => ({
+      ...prev,
+      [productId]: String(toNumber(calcModal.display, 0)),
+    }));
+    setInputValues((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, productId)) return prev;
+      const next = { ...prev };
+      delete next[productId];
+      return next;
+    });
+    closeCalcModal();
+  };
+
   // Per-user inventory: each user saves their own record independently.
   // No shared session needed — inventoryDate + userId serve as the grouping key.
   const handleSaveInventory = async () => {
@@ -2333,7 +2566,8 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                       </div>
                       <button
                         type="button"
-                        onClick={() => openCalcModal(product.id, product.name)}
+                        onPointerDown={(event) => handleCalcButtonPress(event, product.id, product.name)}
+                        onClick={(event) => handleCalcButtonPress(event, product.id, product.name)}
                         className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 shadow-sm transition hover:bg-indigo-100 hover:text-indigo-800"
                         title="Відкрити калькулятор"
                       >
