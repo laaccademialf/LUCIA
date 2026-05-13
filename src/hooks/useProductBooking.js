@@ -251,6 +251,28 @@ const normalizeCollectionRecords = (items, normalizeOne) => {
   return items.map((item) => normalizeOne(item));
 };
 
+const getCollectionRecordSignature = (item) => {
+  if (!item || typeof item !== "object") return "";
+  return [
+    toTrimmedString(item.id),
+    toTrimmedString(item.updatedAt || item.updated_at),
+    toTrimmedString(item.createdAt || item.created_at),
+    toTrimmedString(item.status || item.order_status),
+    toTrimmedString(item.isActive ?? item.is_active ?? item.active),
+    toTrimmedString(item.totalAmount ?? item.total_amount),
+    toTrimmedString(item.totalItems ?? item.total_items),
+    toTrimmedString(item.requiredDate || item.required_date || item.deliveryDate || item.delivery_date),
+  ].join("|");
+};
+
+const getCollectionSignature = (items) => {
+  if (!Array.isArray(items) || items.length === 0) return "";
+  return items
+    .map((item) => getCollectionRecordSignature(item))
+    .sort()
+    .join(";;");
+};
+
 // Compute merged items from a per-user contributions map.
 // Each key in contributionsMap is a userId, value is an array of item objects.
 // Items with the same productId across different users have their qty/amount SUMMED.
@@ -315,6 +337,15 @@ export const useProductBooking = (enableRealtime = true) => {
   const [error, setError] = useState(null);
   const hasLoadedApiDataRef = useRef(false);
 
+  const setCollectionStateIfChanged = (key, nextItems, setter, normalizer) => {
+    const normalized = normalizeCollectionRecords(nextItems, normalizer);
+    const signature = getCollectionSignature(normalized);
+    if (collectionSignaturesRef.current[key] === signature) return false;
+    collectionSignaturesRef.current[key] = signature;
+    setter(normalized);
+    return true;
+  };
+
   const reloadAllApi = async () => {
     const [productsData, inventoryListProductsData, ordersData, suppliersData, typicalFieldsData, inventoriesData] =
       await Promise.all([
@@ -326,12 +357,12 @@ export const useProductBooking = (enableRealtime = true) => {
         listCollectionItemsApi("productInventories"),
       ]);
 
-  setProducts(normalizeCollectionRecords(productsData, normalizeProductRecord));
-    setInventoryListProducts(normalizeCollectionRecords(inventoryListProductsData, normalizeInventoryListProductRecord));
-    setOrders(normalizeCollectionRecords(ordersData, normalizeOrderRecord));
-    setSuppliers(normalizeCollectionRecords(suppliersData, normalizeSupplierRecord));
-    setTypicalFields(normalizeCollectionRecords(typicalFieldsData, normalizeTypicalFieldRecord));
-    setInventories(normalizeCollectionRecords(inventoriesData, normalizeInventoryRecord));
+    setCollectionStateIfChanged("products", productsData, setProducts, normalizeProductRecord);
+    setCollectionStateIfChanged("inventoryListProducts", inventoryListProductsData, setInventoryListProducts, normalizeInventoryListProductRecord);
+    setCollectionStateIfChanged("orders", ordersData, setOrders, normalizeOrderRecord);
+    setCollectionStateIfChanged("suppliers", suppliersData, setSuppliers, normalizeSupplierRecord);
+    setCollectionStateIfChanged("typicalFields", typicalFieldsData, setTypicalFields, normalizeTypicalFieldRecord);
+    setCollectionStateIfChanged("inventories", inventoriesData, setInventories, normalizeInventoryRecord);
   };
 
   const updateProductsState = (updater) => {
@@ -357,7 +388,11 @@ export const useProductBooking = (enableRealtime = true) => {
     const apiMode = isCollectionsApiEnabled();
 
     if (apiMode) {
-      const fetchData = async () => {
+      const fetchData = async ({ background = false } = {}) => {
+        if (apiRefreshInFlightRef.current) return;
+        if (background && typeof document !== "undefined" && document.visibilityState !== "visible") return;
+
+        apiRefreshInFlightRef.current = true;
         try {
           await reloadAllApi();
           hasLoadedApiDataRef.current = true;
@@ -370,6 +405,7 @@ export const useProductBooking = (enableRealtime = true) => {
             setError(err);
           }
         } finally {
+          apiRefreshInFlightRef.current = false;
           setLoading(false);
         }
       };
@@ -378,43 +414,55 @@ export const useProductBooking = (enableRealtime = true) => {
       // API mode has no realtime subscriptions, so refresh periodically
       // to keep inventories synchronized across users without manual reload.
       apiRefreshIntervalId = setInterval(() => {
-        void fetchData();
-      }, 5000);
+        void fetchData({ background: true });
+      }, 10000);
+
+      const handleVisibilityChange = () => {
+        if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+        void fetchData({ background: true });
+      };
+
+      if (typeof document !== "undefined") {
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+      }
 
       return () => {
         if (apiRefreshIntervalId) clearInterval(apiRefreshIntervalId);
+        if (typeof document !== "undefined") {
+          document.removeEventListener("visibilitychange", handleVisibilityChange);
+        }
       };
     }
 
     if (enableRealtime) {
       try {
         unsubscribeProducts = subscribeToBookingProducts((data) => {
-          setProducts(normalizeCollectionRecords(data, normalizeProductRecord));
+          setCollectionStateIfChanged("products", data, setProducts, normalizeProductRecord);
           setLoading(false);
         });
 
         unsubscribeInventoryListProducts = subscribeToInventoryListProducts((data) => {
-          setInventoryListProducts(normalizeCollectionRecords(data, normalizeInventoryListProductRecord));
+          setCollectionStateIfChanged("inventoryListProducts", data, setInventoryListProducts, normalizeInventoryListProductRecord);
           setLoading(false);
         });
 
         unsubscribeOrders = subscribeToProductOrders((data) => {
-          setOrders(normalizeCollectionRecords(data, normalizeOrderRecord));
+          setCollectionStateIfChanged("orders", data, setOrders, normalizeOrderRecord);
           setLoading(false);
         });
 
         unsubscribeSuppliers = subscribeToBookingSuppliers((data) => {
-          setSuppliers(normalizeCollectionRecords(data, normalizeSupplierRecord));
+          setCollectionStateIfChanged("suppliers", data, setSuppliers, normalizeSupplierRecord);
           setLoading(false);
         });
 
         unsubscribeTypicalFields = subscribeToBookingTypicalFields((data) => {
-          setTypicalFields(normalizeCollectionRecords(data, normalizeTypicalFieldRecord));
+          setCollectionStateIfChanged("typicalFields", data, setTypicalFields, normalizeTypicalFieldRecord);
           setLoading(false);
         });
 
         unsubscribeInventories = subscribeToProductInventories((data) => {
-          setInventories(normalizeCollectionRecords(data, normalizeInventoryRecord));
+          setCollectionStateIfChanged("inventories", data, setInventories, normalizeInventoryRecord);
           setLoading(false);
         });
       } catch (err) {
@@ -433,12 +481,12 @@ export const useProductBooking = (enableRealtime = true) => {
             getBookingTypicalFields(),
             getProductInventories(),
           ]);
-          setProducts(normalizeCollectionRecords(productsData, normalizeProductRecord));
-          setInventoryListProducts(normalizeCollectionRecords(inventoryListProductsData, normalizeInventoryListProductRecord));
-          setOrders(normalizeCollectionRecords(ordersData, normalizeOrderRecord));
-          setSuppliers(normalizeCollectionRecords(suppliersData, normalizeSupplierRecord));
-          setTypicalFields(normalizeCollectionRecords(typicalFieldsData, normalizeTypicalFieldRecord));
-          setInventories(normalizeCollectionRecords(inventoriesData, normalizeInventoryRecord));
+          setCollectionStateIfChanged("products", productsData, setProducts, normalizeProductRecord);
+          setCollectionStateIfChanged("inventoryListProducts", inventoryListProductsData, setInventoryListProducts, normalizeInventoryListProductRecord);
+          setCollectionStateIfChanged("orders", ordersData, setOrders, normalizeOrderRecord);
+          setCollectionStateIfChanged("suppliers", suppliersData, setSuppliers, normalizeSupplierRecord);
+          setCollectionStateIfChanged("typicalFields", typicalFieldsData, setTypicalFields, normalizeTypicalFieldRecord);
+          setCollectionStateIfChanged("inventories", inventoriesData, setInventories, normalizeInventoryRecord);
         } catch (err) {
           console.error("Помилка завантаження модуля замовлень:", err);
           setError(err);
@@ -458,6 +506,16 @@ export const useProductBooking = (enableRealtime = true) => {
       if (unsubscribeInventories) unsubscribeInventories();
     };
   }, [enableRealtime]);
+
+  const apiRefreshInFlightRef = useRef(false);
+  const collectionSignaturesRef = useRef({
+    products: "",
+    inventoryListProducts: "",
+    orders: "",
+    suppliers: "",
+    typicalFields: "",
+    inventories: "",
+  });
 
   const addProduct = async (product, options = {}) => {
     try {
