@@ -7757,6 +7757,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
   const [savingKey, setSavingKey] = useState("");
   const [savedLineKeys, setSavedLineKeys] = useState({});
   const [optimisticOrderPatches, setOptimisticOrderPatches] = useState({});
+  const [expandedOrderIds, setExpandedOrderIds] = useState({});
 
   const resolvedSupplier = useMemo(() => {
     if (previewSupplierId) {
@@ -8236,21 +8237,34 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
           </div>
 
           <div className="space-y-4">
-            {filteredPortalOrders.map((order) => (
+            {filteredPortalOrders.map((order) => {
+              const isExpanded = expandedOrderIds[String(order.id || "")];
+              const toggleExpanded = () => {
+                setExpandedOrderIds((prev) => ({
+                  ...prev,
+                  [String(order.id || "")]: !prev[String(order.id || "")],
+                }));
+              };
+
+              return (
               <div key={order.id} className={cardClass}>
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-base font-semibold text-slate-900">{order.restaurantName || "Без закладу"}</div>
-                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">
-                        Заклад призначення
-                      </span>
-                      {order.isArchived && (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Архів (приймання завершено)</span>
-                      )}
+                <div className="mb-0 flex flex-wrap items-center justify-between gap-3 pb-3 cursor-pointer hover:bg-slate-50 rounded-t-xl px-1 py-2 transition-colors" onClick={toggleExpanded} role="button" tabIndex={0}>
+                  <div className="flex flex-1 flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg font-semibold text-slate-700">{isExpanded ? "▼" : "▶"}</span>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-base font-semibold text-slate-900">{order.restaurantName || "Без закладу"}</div>
+                          <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                            {order.supplierItems.length} позицій
+                          </span>
+                          {order.isArchived && (
+                            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Архів</span>
+                          )}
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">Заявка: {String(order.id || "—")} • Поставка: {formatDateUk(order.requiredDate)}</div>
+                      </div>
                     </div>
-                    <div className="mt-1 text-xs text-slate-500">Заявка: {String(order.id || "—")} • Поставка: {formatDateUk(order.requiredDate)} • Створено: {formatDateTimeSafe(order.createdAt)}</div>
-                    <div className="mt-1 text-xs text-slate-500">Коментар: {String(order.comment || "—")}</div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{statusLabel(order.status)}</span>
@@ -8259,12 +8273,22 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                       type="button"
                       className="rounded border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                       disabled={order.isArchived || savingKey === `order::${order.id}`}
-                      onClick={() => { void acceptAllOrderItems(order); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void acceptAllOrderItems(order);
+                      }}
                     >
                       {savingKey === `order::${order.id}` ? "Збереження..." : "Підтвердити все"}
                     </button>
                   </div>
                 </div>
+
+                {isExpanded && (
+                  <>
+                    <div className="border-t border-slate-200 mb-4 pt-4">
+                      <div className="text-xs text-slate-500 mb-2">Створено: {formatDateTimeSafe(order.createdAt)}</div>
+                      {order.comment && <div className="text-xs text-slate-600 bg-slate-50 p-2 rounded">Коментар: {String(order.comment || "—")}</div>}
+                    </div>
 
                 <div className="space-y-3">
                   {order.supplierItems.map((item) => {
@@ -8377,8 +8401,11 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                     );
                   })}
                 </div>
+                    </>
+                )}
               </div>
-            ))}
+            );
+            })}
 
             {filteredPortalOrders.length === 0 && (
               <div className={`${cardClass} text-sm text-slate-500`}>
