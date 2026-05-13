@@ -232,7 +232,15 @@ const buildUserRestaurantTokens = (user, restaurants = []) => {
 
 const isInventoryVisibleForUserRestaurant = (inventory, user, restaurants = [], isGlobalAdmin = false) => {
   if (isGlobalAdmin) return true;
-  const userRestaurantTokens = buildUserRestaurantTokens(user, restaurants);
+  const scopedRestaurantTokens = new Set();
+  for (const restaurant of Array.isArray(restaurants) ? restaurants : []) {
+    for (const token of collectRestaurantTokens(restaurant || {})) {
+      scopedRestaurantTokens.add(token);
+    }
+  }
+  const userRestaurantTokens = scopedRestaurantTokens.size
+    ? scopedRestaurantTokens
+    : buildUserRestaurantTokens(user, restaurants);
   const inventoryTokens = collectRestaurantTokens(inventory || {});
   return hasRestaurantTokenOverlap(userRestaurantTokens, inventoryTokens);
 };
@@ -1525,15 +1533,27 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     newNumber: true,
   });
 
+  const inventoryAvailableRestaurants = useMemo(() => {
+    return (Array.isArray(restaurants) ? restaurants : []).filter((item) => String(item?.id || "").trim());
+  }, [restaurants]);
+
   useEffect(() => {
     if (isGlobalAdmin) return;
-    setRestaurantId(String(user?.restaurant || ""));
-  }, [user, isGlobalAdmin]);
 
-  const inventoryAvailableRestaurants = useMemo(() => {
-    if (isGlobalAdmin) return restaurants;
-    return restaurants.filter((item) => String(item.id) === String(user?.restaurant || ""));
-  }, [restaurants, user, isGlobalAdmin]);
+    const allowedIds = inventoryAvailableRestaurants
+      .map((item) => String(item?.id || "").trim())
+      .filter(Boolean);
+    const allowedSet = new Set(allowedIds);
+    const preferredRestaurantId = String(user?.restaurant || "").trim();
+
+    setRestaurantId((prev) => {
+      const current = String(prev || "").trim();
+      if (current && allowedSet.has(current)) return current;
+      if (preferredRestaurantId && allowedSet.has(preferredRestaurantId)) return preferredRestaurantId;
+      if (allowedIds.length === 1) return allowedIds[0];
+      return "";
+    });
+  }, [user, isGlobalAdmin, inventoryAvailableRestaurants]);
 
   useEffect(() => {
     if (!restaurantId) {
@@ -1634,9 +1654,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   }, [scopedProducts, quantities, inputValues]);
 
   const mergeCandidates = useMemo(() => {
-    const scoped = inventories.filter((item) => isInventoryVisibleForUserRestaurant(item, user, [], isGlobalAdmin));
+    const scoped = inventories.filter((item) => isInventoryVisibleForUserRestaurant(item, user, inventoryAvailableRestaurants, isGlobalAdmin));
     return scoped.filter((item) => getMergedIntoId(item) === "" && getMergedFromIds(item).length === 0);
-  }, [inventories, user, isGlobalAdmin]);
+  }, [inventories, user, isGlobalAdmin, inventoryAvailableRestaurants]);
 
   const buildRestoredQuantities = (inventory, targetRestaurantId) => {
     const normalizedRestaurantId = String(targetRestaurantId || "");
@@ -2084,7 +2104,18 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       <div className={`${cardClass} pt-2 sm:pt-3 px-2 sm:px-5 pb-2 sm:pb-3`}>
         {/* ── Sticky top controls ── */}
         <div className="sticky top-0 z-10 bg-white/95 backdrop-blur pb-1 space-y-1.5">
-          {isGlobalAdmin && (
+          <div className="flex items-center gap-2">
+            <label className="shrink-0 text-[11px] font-semibold text-slate-600">Місце зняття залишків</label>
+            <input
+              type="text"
+              className="h-8 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none"
+              value={stockTakingPlace}
+              onChange={(e) => setStockTakingPlace(e.target.value)}
+              placeholder="Напр. Холодний процес"
+            />
+          </div>
+
+          {(isGlobalAdmin || inventoryAvailableRestaurants.length > 1) && (
             <select
               className="h-8 w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none"
               value={restaurantId}
@@ -2104,6 +2135,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                 className="h-8 w-full rounded-lg border border-slate-300 bg-white px-2 pr-7 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
+                onClick={() => {
+                  if (searchTerm) setSearchTerm("");
+                }}
                 placeholder="Пошук продукту…"
                 list="inventory-product-suggestions"
                 autoComplete="off"
@@ -2133,17 +2167,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               onFocus={openNativeDatePicker}
               onClick={openNativeDatePicker}
               title="Дата інвентаризації"
-            />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <label className="shrink-0 text-[11px] font-semibold text-slate-600">Місце зняття залишків</label>
-            <input
-              type="text"
-              className="h-8 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none"
-              value={stockTakingPlace}
-              onChange={(e) => setStockTakingPlace(e.target.value)}
-              placeholder="Напр. Холодний процес"
             />
           </div>
 
@@ -2389,15 +2412,27 @@ function InventoryListTab({ listProducts, restaurants, user, canManage, replaceI
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
   const [searchTerm, setSearchTerm] = useState("");
 
+  const availableRestaurants = useMemo(() => {
+    return (Array.isArray(restaurants) ? restaurants : []).filter((item) => String(item?.id || "").trim());
+  }, [restaurants]);
+
   useEffect(() => {
     if (isGlobalAdmin) return;
-    setRestaurantId(String(user?.restaurant || ""));
-  }, [user, isGlobalAdmin]);
 
-  const availableRestaurants = useMemo(() => {
-    if (isGlobalAdmin) return restaurants;
-    return restaurants.filter((item) => String(item.id) === String(user?.restaurant));
-  }, [restaurants, user, isGlobalAdmin]);
+    const allowedIds = availableRestaurants
+      .map((item) => String(item?.id || "").trim())
+      .filter(Boolean);
+    const allowedSet = new Set(allowedIds);
+    const preferredRestaurantId = String(user?.restaurant || "").trim();
+
+    setRestaurantId((prev) => {
+      const current = String(prev || "").trim();
+      if (current && allowedSet.has(current)) return current;
+      if (preferredRestaurantId && allowedSet.has(preferredRestaurantId)) return preferredRestaurantId;
+      if (allowedIds.length === 1) return allowedIds[0];
+      return "";
+    });
+  }, [user, isGlobalAdmin, availableRestaurants]);
 
   const scopedList = useMemo(() => {
     const selectedRestaurantId = String(restaurantId || "");
@@ -2503,7 +2538,6 @@ function InventoryListTab({ listProducts, restaurants, user, canManage, replaceI
             className={inputClass}
             value={restaurantId}
             onChange={(event) => setRestaurantId(event.target.value)}
-            disabled={!isGlobalAdmin}
           >
             <option value="">Оберіть заклад</option>
             {availableRestaurants.map((restaurant) => (
@@ -2616,16 +2650,16 @@ function InventoryListTab({ listProducts, restaurants, user, canManage, replaceI
   );
 }
 
-function InventoryJournalTab({ inventories, user, deleteInventory }) {
+function InventoryJournalTab({ inventories, restaurants, user, deleteInventory }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const [expandedMergedIds, setExpandedMergedIds] = useState(new Set());
   const [expandedSourceKeys, setExpandedSourceKeys] = useState(new Set());
   const visibleInventories = useMemo(() => {
-    const scoped = inventories.filter((item) => isInventoryVisibleForUserRestaurant(item, user, [], isGlobalAdmin));
+    const scoped = inventories.filter((item) => isInventoryVisibleForUserRestaurant(item, user, restaurants, isGlobalAdmin));
 
     // Journal should contain only final merged inventory documents.
     return scoped.filter((item) => getMergedFromIds(item).length > 0);
-  }, [inventories, user, isGlobalAdmin]);
+  }, [inventories, user, isGlobalAdmin, restaurants]);
 
   const toggleMergedExpanded = (id) => {
     setExpandedMergedIds((prev) => {
@@ -8424,6 +8458,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     return (
       <InventoryJournalTab
         inventories={normalizedInventories}
+        restaurants={effectiveRestaurants}
         user={user}
         deleteInventory={deleteInventory}
       />
