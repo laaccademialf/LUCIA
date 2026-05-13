@@ -391,33 +391,87 @@ export const exportInventoryTo1CExcel = (inventory, filename = "inventory_1c.xls
   const restaurantLabel = String(inventory?.restaurantName || inventory?.restaurantRegNumber || "складу").trim();
   const title = `Инвентаризация товаров от ${dateForTitle} по складу ${restaurantLabel}`;
 
-  const header = ["№", "Код", "Номенклатура", "Единица измерения", "Учетная цена", "Количество (факт)"];
+  const headerTop = [
+    "№",
+    "Код",
+    "",
+    "Номенклатура",
+    "",
+    "Единица измерения",
+    "Учетная цена",
+    "Количество (факт)",
+    "Комментарий технолога",
+    "Комментарий шеф-повара",
+    "Комментарий директора",
+  ];
+  const headerBottom = ["", "", "", "", "", "", "", "", "", "", ""];
   const lines = Array.isArray(inventory?.items) ? inventory.items : [];
 
   const rows = lines.map((line, index) => ([
     index + 1,
     String(line?.code1C || ""),
+    "",
     String(line?.productName || ""),
+    "",
     String(line?.unit || ""),
     toNumber(line?.unitPrice),
     toNumber(line?.qty),
+    "",
+    "",
+    "",
   ]));
 
   const ws = XLSX.utils.aoa_to_sheet([
     [title],
     [],
-    header,
+    [],
+    [],
+    headerTop,
+    headerBottom,
     ...rows,
   ]);
 
   ws["!cols"] = [
     { wch: 6 },
     { wch: 14 },
+    { wch: 4 },
     { wch: 34 },
+    { wch: 4 },
     { wch: 20 },
     { wch: 14 },
     { wch: 18 },
+    { wch: 26 },
+    { wch: 24 },
+    { wch: 22 },
   ];
+
+  const headerTopRowIndex = 4;
+  const headerBottomRowIndex = 5;
+  const dataStartRowIndex = 6;
+  const merges = [
+    // Title across A:K.
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 10 } },
+    // Header spans rows 5-6 and has grouped columns B:C and D:E.
+    { s: { r: headerTopRowIndex, c: 0 }, e: { r: headerBottomRowIndex, c: 0 } },
+    { s: { r: headerTopRowIndex, c: 1 }, e: { r: headerBottomRowIndex, c: 2 } },
+    { s: { r: headerTopRowIndex, c: 3 }, e: { r: headerBottomRowIndex, c: 4 } },
+    { s: { r: headerTopRowIndex, c: 5 }, e: { r: headerBottomRowIndex, c: 5 } },
+    { s: { r: headerTopRowIndex, c: 6 }, e: { r: headerBottomRowIndex, c: 6 } },
+    { s: { r: headerTopRowIndex, c: 7 }, e: { r: headerBottomRowIndex, c: 7 } },
+    { s: { r: headerTopRowIndex, c: 8 }, e: { r: headerBottomRowIndex, c: 8 } },
+    { s: { r: headerTopRowIndex, c: 9 }, e: { r: headerBottomRowIndex, c: 9 } },
+    { s: { r: headerTopRowIndex, c: 10 }, e: { r: headerBottomRowIndex, c: 10 } },
+  ];
+
+  for (let i = 0; i < rows.length; i += 1) {
+    const rowIndex = dataStartRowIndex + i;
+    merges.push(
+      { s: { r: rowIndex, c: 1 }, e: { r: rowIndex, c: 2 } },
+      { s: { r: rowIndex, c: 3 }, e: { r: rowIndex, c: 4 } }
+    );
+  }
+
+  ws["!merges"] = merges;
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Инвентаризация");
