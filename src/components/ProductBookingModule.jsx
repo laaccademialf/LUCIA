@@ -442,6 +442,27 @@ const supplierHasContractForRestaurant = (supplierRecord, restaurantRef = {}) =>
   });
 };
 
+const resolveSupplierContractForRestaurant = (supplierRecord, restaurantRef = {}) => {
+  const contracts = Array.isArray(supplierRecord?.contracts) ? supplierRecord.contracts : [];
+  if (contracts.length === 0) return null;
+
+  const restaurantLookupKey = buildRestaurantLookupKey(restaurantRef || {});
+  const restaurantTokens = collectRestaurantTokens(restaurantRef || {});
+
+  for (const contract of contracts) {
+    const contractLookupKey = String(contract?.restaurantLookupKey || "").trim();
+    if (restaurantLookupKey && contractLookupKey && contractLookupKey === restaurantLookupKey) return contract;
+    if (hasRestaurantTokenOverlap(collectRestaurantTokens(contract || {}), restaurantTokens)) return contract;
+  }
+  return null;
+};
+
+const getSupplierMinimumForRestaurant = (supplierRecord, restaurantRef = {}) => {
+  const matchedContract = resolveSupplierContractForRestaurant(supplierRecord, restaurantRef);
+  if (matchedContract) return Math.max(0, toNumber(matchedContract?.minimumOrderAmount || 0));
+  return 0;
+};
+
 const resolveSupplierForRestaurantContext = (rawSupplier, restaurantRef = {}, suppliersDirectory = []) => {
   const candidates = splitSupplierCandidates(rawSupplier);
   if (candidates.length === 0) return "";
