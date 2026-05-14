@@ -5923,6 +5923,9 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
   }, []);
 
   const resolveSupplierLineBoardStatus = useCallback((order, item, supplierHint = "") => {
+    const orderStatus = String(order?.status || "").trim();
+    if (orderStatus === "completed") return "completed";
+
     const supplierName = String(supplierHint || resolveLineSupplierName(order, item) || "").trim();
     const supplierToken = normalizeSupplierIdentity(supplierName);
     const itemLevelOwner = normalizeSupplierIdentity(item?.supplierBoardOwner || item?.supplier_board_owner || "");
@@ -5930,9 +5933,6 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
     if (itemLevelStatus && supplierToken && itemLevelOwner && itemLevelOwner === supplierToken) {
       return itemLevelStatus;
     }
-
-    const orderStatus = String(order?.status || "").trim();
-    if (orderStatus === "completed") return "completed";
 
     return item?.sentToSupplier ? "sent" : "new";
   }, [resolveLineSupplierName]);
@@ -6960,6 +6960,8 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
     const order = orders.find((item) => String(item.id) === String(issue.orderId));
     if (!order) { alert("Заявку не знайдено."); return; }
 
+    const now = new Date().toISOString();
+
     const updatedItems = (order.items || []).map((item, idx) => {
       if (idx !== issue.itemIndex) return item;
       const confirmedQty = toNumber(item.supplierResponseQty);
@@ -6968,8 +6970,20 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
         qty: confirmedQty,
         amount: confirmedQty * toNumber(item.unitPrice),
         supplierResponseStatus: "accepted",
-        supplierRespondedAt: item.supplierRespondedAt || new Date().toISOString(),
+        supplierRespondedAt: item.supplierRespondedAt || now,
+        actualReceivedQty: confirmedQty,
+        actualReceivedAmount: confirmedQty * toNumber(item.unitPrice),
+        receivedVarianceQty: confirmedQty - toNumber(item.qty),
+        receivedAt: now,
+        receivedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+        receivedById: user?.uid || user?.email || "",
       };
+    });
+
+    const allSupplierLinesResolved = updatedItems.length > 0 && updatedItems.every((item) => {
+      if (!item?.sentToSupplier) return false;
+      const responseStatus = getSupplierResponseStatus(item);
+      return responseStatus === "accepted" || responseStatus === "cancelled_by_supplier";
     });
 
     const totalItems = updatedItems.reduce((sum, item) => sum + toNumber(item.qty), 0);
@@ -6981,8 +6995,14 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       items: updatedItems,
       totalItems,
       totalAmount,
-      status: deriveOrderStatus(updatedItems, order.status),
-      correctedAt: new Date().toISOString(),
+      status: allSupplierLinesResolved ? "completed" : deriveOrderStatus(updatedItems, order.status),
+      correctedAt: now,
+      ...(allSupplierLinesResolved ? {
+        completedAt: now,
+        completedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+        completedById: user?.uid || user?.email || "",
+        receivedAt: now,
+      } : {}),
     });
 
     if (!result.success) { alert("Не вдалося прийняти підтверджену кількість."); }
