@@ -1026,7 +1026,7 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
             )}
           </div>
         </div>
-        {isEdit && (invNumberValue || nameValue) && (
+        {(invNumberValue || nameValue) && (
           <div className="mt-1 truncate text-sm text-indigo-700 font-medium">
             {invNumberValue && <span className="text-slate-500 mr-1.5">#{invNumberValue}</span>}
             {nameValue}
