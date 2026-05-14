@@ -778,9 +778,9 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
                   rowClassName
                 )}
               >
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-slate-900 leading-tight truncate select-text cursor-text">{asset.name || "-"}</p>
-                <div className="flex items-center gap-1">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                <p className="min-w-0 text-sm font-semibold text-slate-900 leading-tight break-words select-text cursor-text">{asset.name || "-"}</p>
+                <div className="flex flex-wrap items-center gap-1 sm:justify-end">
                   {isSessionHighlighted && (
                     <span className="inline-flex items-center rounded-md bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 whitespace-nowrap">
                       Змінено
