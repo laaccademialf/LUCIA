@@ -4669,17 +4669,17 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-slate-200">
-        <table className="min-w-full table-fixed text-sm">
-          <thead className="bg-slate-50 text-slate-700">
+      <div className="overflow-auto rounded-lg border border-slate-200 shadow-inner max-h-[68vh] xl:max-h-[72vh]">
+        <table className="min-w-full table-fixed text-xs sm:text-sm">
+          <thead className="sticky top-0 z-30 bg-slate-50 text-slate-700 shadow-sm">
             <tr>
-              <th className="w-28 px-2 py-2 text-left">Зелена картка</th>
-              <th className="w-44 px-2 py-2 text-left">Біла картка</th>
-              <th className="w-28 px-2 py-2 text-left">Група товарів</th>
-              <th className="w-40 px-2 py-2 text-left">Постачальник</th>
-              <th className="w-24 px-2 py-2 text-left">Код 1С</th>
+              <th className="sticky left-0 z-40 w-24 border-r border-slate-200 bg-slate-50 px-2 py-2 text-left sm:w-28">Зелена картка</th>
+              <th className="sticky left-24 z-40 w-36 border-r border-slate-200 bg-slate-50 px-2 py-2 text-left sm:left-28 sm:w-44">Біла картка</th>
+              <th className="sticky left-[240px] z-40 w-24 border-r border-slate-200 bg-slate-50 px-2 py-2 text-left sm:left-[288px] sm:w-28">Група товарів</th>
+              <th className="w-32 px-2 py-2 text-left sm:w-40">Постачальник</th>
+              <th className="w-20 px-2 py-2 text-left sm:w-24">Код 1С</th>
               {visibleRestaurants.map((restaurant) => (
-                <th key={`apl_header_${restaurant.id}`} className="h-14 w-16 border-l border-slate-200 px-1 py-1 text-center align-middle">
+                <th key={`apl_header_${restaurant.id}`} className="h-12 w-14 border-l border-slate-200 bg-slate-50 px-1 py-1 text-center align-middle sm:h-14 sm:w-16">
                   <div className="break-words text-[11px] font-semibold leading-3 text-slate-700">
                     {restaurant.name}
                   </div>
@@ -4693,7 +4693,7 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
               return (
                 <Fragment key={`apl_group_${groupNode.groupName}`}>
                   <tr className="border-t border-slate-300 bg-slate-100">
-                    <td colSpan={5 + visibleRestaurants.length} className="px-2 py-1.5 text-sm font-semibold text-slate-900">
+                    <td colSpan={5 + visibleRestaurants.length} className="sticky left-0 z-20 px-2 py-1.5 text-sm font-semibold text-slate-900 bg-slate-100">
                       <button type="button" className="inline-flex items-center gap-2" onClick={() => toggleAplGroup(groupNode.groupName)}>
                         <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">
                           {groupExpanded ? "−" : "+"}
@@ -4708,7 +4708,7 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
                     return (
                       <Fragment key={`apl_green_${groupNode.groupName}_${greenNode.greenCardName}`}>
                         <tr className="border-t border-dashed border-slate-300 bg-slate-50">
-                          <td colSpan={5 + visibleRestaurants.length} className="px-2 py-1.5 text-sm text-slate-800">
+                          <td colSpan={5 + visibleRestaurants.length} className="sticky left-0 z-20 px-2 py-1.5 text-sm text-slate-800 bg-slate-50">
                             <button type="button" className="inline-flex items-center gap-2" onClick={() => toggleAplGreenCard(groupNode.groupName, greenNode.greenCardName)}>
                               <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-700">
                                 {greenExpanded ? "−" : "+"}
@@ -4721,15 +4721,15 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
 
                         {greenExpanded && greenNode.rows.map((row) => (
                           <tr key={`apl_row_${row.key}`} className="border-t border-dashed border-slate-200">
-                            <td className="px-2 py-1.5 text-xs text-slate-500">{row.greenCardName}</td>
-                            <td className="px-2 py-1.5 font-medium text-slate-900">{row.whiteCardName}</td>
-                            <td className="px-2 py-1.5">{row.productGroup || "-"}</td>
-                            <td className="px-2 py-1.5 text-xs leading-4" title={row.supplier || "-"}>{row.supplier || "-"}</td>
-                            <td className="px-2 py-1.5">{row.code1C || "-"}</td>
+                            <td className="sticky left-0 z-10 border-r border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-500 sm:w-28">{row.greenCardName}</td>
+                            <td className="sticky left-24 z-10 border-r border-slate-200 bg-white px-2 py-1.5 font-medium text-slate-900 sm:left-28 sm:w-44">{row.whiteCardName}</td>
+                            <td className="sticky left-[240px] z-10 border-r border-slate-200 bg-white px-2 py-1.5 sm:left-[288px] sm:w-28">{row.productGroup || "-"}</td>
+                            <td className="px-2 py-1.5 text-xs leading-4 sm:w-40" title={row.supplier || "-"}>{row.supplier || "-"}</td>
+                            <td className="px-2 py-1.5 sm:w-24">{row.code1C || "-"}</td>
                             {visibleRestaurants.map((restaurant) => {
                               const cellState = getCellState(row, restaurant);
                               return (
-                                <td key={`apl_cell_${row.key}_${restaurant.id}`} className="w-16 border-l border-slate-200 px-2 py-1.5 text-center">
+                                <td key={`apl_cell_${row.key}_${restaurant.id}`} className="w-14 border-l border-slate-200 px-2 py-1.5 text-center sm:w-16">
                                   <input
                                     type="checkbox"
                                     checked={cellState.assigned}
