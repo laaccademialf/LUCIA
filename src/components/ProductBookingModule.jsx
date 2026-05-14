@@ -5860,7 +5860,6 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
   const draggedBoardIdRef = useRef("");
   const [dragOverStatus, setDragOverStatus] = useState("");
   const [dragOverArchive, setDragOverArchive] = useState(false);
-  const [optimisticBoardStatuses, setOptimisticBoardStatuses] = useState({});
   const [reassignSupplierDrafts, setReassignSupplierDrafts] = useState({});
   const [reassigningIssueKey, setReassigningIssueKey] = useState("");
   const [ordersViewMode, setOrdersViewMode] = useState("board");
@@ -5877,6 +5876,66 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       suppliersDirectory
     ) || "Без постачальника";
   }, [suppliersDirectory]);
+
+  const buildBoardLineKey = useCallback((order, item, options = {}) => {
+    const isCancelled = Boolean(options?.isCancelled);
+    const supplierHint = String(options?.supplierHint || "").trim();
+    const supplierName = supplierHint || resolveLineSupplierName(order, item);
+    const supplierToken = normalizeSupplierIdentity(supplierName) || "no-supplier";
+    const productToken = String(item?.productId || item?.productName || "line").trim() || "line";
+    return `${String(order?.id || "")}::${productToken}::${supplierToken}${isCancelled ? "::cancelled" : ""}`;
+  }, [resolveLineSupplierName]);
+
+  const buildSupplierBoardCardId = useCallback((supplierName, batchRows = {}) => {
+    const supplierToken = normalizeSupplierIdentity(supplierName) || "no-supplier";
+    const lineTokens = Object.values(batchRows)
+      .flatMap((row) => (Array.isArray(row?.restaurants) ? row.restaurants : []))
+      .map((entry) => String(entry?.lineKey || "").trim())
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right, "uk"));
+
+    const payload = lineTokens.length > 0 ? lineTokens.join("||") : "empty";
+    return `supplier-board::${supplierToken}::${payload}`;
+  }, []);
+
+  const parseSupplierBoardStatusesMap = useCallback((orderRecord = {}) => {
+    const rawValue = orderRecord?.supplierBoardStatuses ?? orderRecord?.supplier_board_statuses;
+    if (!rawValue) return {};
+
+    if (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)) {
+      return rawValue;
+    }
+
+    if (typeof rawValue === "string") {
+      const text = rawValue.trim();
+      if (!text) return {};
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch {
+        return {};
+      }
+    }
+
+    return {};
+  }, []);
+
+  const resolveSupplierLineBoardStatus = useCallback((order, item, supplierHint = "") => {
+    const supplierName = String(supplierHint || resolveLineSupplierName(order, item) || "").trim();
+    const supplierToken = normalizeSupplierIdentity(supplierName);
+    const itemLevelOwner = normalizeSupplierIdentity(item?.supplierBoardOwner || item?.supplier_board_owner || "");
+    const itemLevelStatus = String(item?.supplierBoardStatus || item?.supplier_board_status || "").trim();
+    if (itemLevelStatus && supplierToken && itemLevelOwner && itemLevelOwner === supplierToken) {
+      return itemLevelStatus;
+    }
+
+    const orderStatus = String(order?.status || "").trim();
+    if (orderStatus === "completed") return "completed";
+
+    return item?.sentToSupplier ? "sent" : "new";
+  }, [resolveLineSupplierName]);
 
   const roleScopedOrders = useMemo(() => {
     const filteredByRole = canManageOrders
@@ -6030,7 +6089,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
         orderIds: new Set(),
       };
     }
-    const lineKey = `${order.id}::${item.productId || item.productName || "line"}${isCancelled ? "::cancelled" : ""}`;
+    const lineKey = buildBoardLineKey(order, item, { isCancelled, supplierHint: supplierName });
     const effectiveQty = isCancelled ? toNumber(item.qty) : (lineEdits[lineKey] === undefined ? toNumber(item.qty) : toNumber(lineEdits[lineKey]));
     const effectiveAmount = isCancelled ? 0 : effectiveQty * toNumber(item.unitPrice);
 
@@ -6068,7 +6127,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       supplierMap[supplierName].lineSnapshots.push({
         sentToSupplier: Boolean(item?.sentToSupplier),
         responseStatus,
-        orderStatus: String(order.status || "new"),
+        boardStatus: resolveSupplierLineBoardStatus(order, item, supplierName),
       });
     }
   };
@@ -6133,7 +6192,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
         };
       }
 
-      const lineKey = `${order.id}::${item.productId || item.productName || "line"}${isCancelled ? "::cancelled" : ""}`;
+      const lineKey = buildBoardLineKey(order, item, { isCancelled, supplierHint: entry.supplier });
       const effectiveQty = isCancelled
         ? toNumber(item.qty)
         : (lineEdits[lineKey] === undefined ? toNumber(item.qty) : toNumber(lineEdits[lineKey]));
@@ -6176,19 +6235,19 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
         entry.lineSnapshots.push({
           sentToSupplier: Boolean(item?.sentToSupplier),
           responseStatus,
-          orderStatus: String(order.status || "new"),
+          boardStatus: resolveSupplierLineBoardStatus(order, item, entry.supplier),
         });
       }
     };
 
     const calculateBoardStatus = (lineSnapshots = []) => {
       const hasItems = lineSnapshots.length > 0;
-      const allCompleted = hasItems && lineSnapshots.every((item) => item.orderStatus === "completed");
+      const allCompleted = hasItems && lineSnapshots.every((item) => item.boardStatus === "completed");
       const hasUnsent = lineSnapshots.some((item) => !item.sentToSupplier);
       const hasSent = lineSnapshots.some((item) => item.sentToSupplier);
       const hasPending = lineSnapshots.some((item) => item.sentToSupplier && item.responseStatus === "pending");
       const hasIncident = lineSnapshots.some((item) => item.sentToSupplier && ["partial", "unavailable"].includes(item.responseStatus));
-      const hasManualProcessing = lineSnapshots.some((item) => item.orderStatus === "processing");
+      const hasManualProcessing = lineSnapshots.some((item) => item.boardStatus === "processing");
 
       if (allCompleted) return "completed";
       if (hasSent && hasUnsent) return "processing";
@@ -6281,16 +6340,17 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
         }
       });
 
-      batches.forEach((batch, index) => {
+      batches.forEach((batch) => {
         const rows = Object.values(batch.rows).map((row) => ({
           ...row,
           orderIds: Array.from(row.orderIds),
         }));
         const totalAmount = rows.reduce((sum, row) => sum + toNumber(row.totalAmount), 0);
         const totalQty = rows.reduce((sum, row) => sum + toNumber(row.totalQty), 0);
+        const boardCardId = buildSupplierBoardCardId(supplier, batch.rows);
 
         boardOrders.push({
-          id: `supplier-board::${supplier}::${index + 1}`,
+          id: boardCardId,
           supplier,
           status: calculateBoardStatus(batch.lineSnapshots),
           rows,
@@ -6312,7 +6372,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       const rightDate = String(right.deliveryDates?.[0] || "");
       return leftDate.localeCompare(rightDate, "uk");
     });
-  }, [visibleOrders, resolveLineSupplierName, lineEdits]);
+  }, [visibleOrders, resolveLineSupplierName, lineEdits, resolveSupplierLineBoardStatus, buildBoardLineKey, buildSupplierBoardCardId]);
 
   const dispatchableSuppliers = useMemo(() => Object.keys(consolidatedBySupplier), [consolidatedBySupplier]);
 
@@ -6409,12 +6469,12 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
   const ordersByStatus = useMemo(() => {
     const buckets = { new: [], processing: [], sent: [], confirmed: [], completed: [] };
     for (const order of supplierBoardOrders) {
-      const effectiveStatus = optimisticBoardStatuses[order.id] || order.status;
+      const effectiveStatus = order.status;
       const key = ["new", "processing", "sent", "confirmed", "completed"].includes(effectiveStatus) ? effectiveStatus : "new";
       buckets[key].push({ ...order, status: effectiveStatus });
     }
     return buckets;
-  }, [supplierBoardOrders, optimisticBoardStatuses]);
+  }, [supplierBoardOrders]);
 
   const totalOrderLines = useMemo(() => {
     return visibleOrders.reduce((sum, order) => sum + (order.items || []).length, 0);
@@ -6493,17 +6553,74 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
     }));
   };
 
-  const updateStatus = async (order, status) => {
+  const updateStatus = async (order, status, boardOrder = null) => {
     const now = new Date().toISOString();
+    const scopedSupplierName = String(boardOrder?.supplier || "").trim();
+    const normalizedSupplierScope = normalizeSupplierIdentity(scopedSupplierName);
+
+    const targetLineKeys = new Set(
+      (Array.isArray(boardOrder?.rows) ? boardOrder.rows : [])
+        .flatMap((row) => (Array.isArray(row?.restaurants) ? row.restaurants : []))
+        .filter((entry) => String(entry?.orderId || "") === String(order?.id || ""))
+        .map((entry) => String(entry?.lineKey || "").trim())
+        .filter(Boolean)
+    );
+    const hasTargetLineKeys = targetLineKeys.size > 0;
+
     const nextItems = (order.items || []).map((item) => {
+      const candidateLineKey = buildBoardLineKey(order, item, { supplierHint: scopedSupplierName });
+      const matchesByLineKey = hasTargetLineKeys ? targetLineKeys.has(candidateLineKey) : true;
+      const matchesSupplierScope = !normalizedSupplierScope || normalizeSupplierIdentity(resolveLineSupplierName(order, item)) === normalizedSupplierScope;
+      const shouldAffectItem = hasTargetLineKeys ? matchesByLineKey : matchesSupplierScope;
+      if (!shouldAffectItem) return item;
+
+      if (status === "processing") {
+        return {
+          ...item,
+          supplierBoardStatus: "processing",
+          supplier_board_status: "processing",
+          supplierBoardOwner: normalizedSupplierScope,
+          supplier_board_owner: normalizedSupplierScope,
+        };
+      }
+
       if (status !== "sent") return item;
-      if (item?.sentToSupplier) return item;
+
+      if (item?.sentToSupplier) {
+        return {
+          ...item,
+          supplierBoardStatus: "sent",
+          supplier_board_status: "sent",
+          supplierBoardOwner: normalizedSupplierScope,
+          supplier_board_owner: normalizedSupplierScope,
+        };
+      }
+
       return {
         ...item,
         sentToSupplier: true,
         sentAt: now,
+        supplierBoardStatus: "sent",
+        supplier_board_status: "sent",
+        supplierBoardOwner: normalizedSupplierScope,
+        supplier_board_owner: normalizedSupplierScope,
       };
     });
+
+    const currentScopedStatuses = parseSupplierBoardStatusesMap(order);
+    const nextScopedStatuses = { ...currentScopedStatuses };
+    if (normalizedSupplierScope) {
+      nextScopedStatuses[normalizedSupplierScope] = status;
+    }
+
+    const scopedStatusValues = Object.values(nextScopedStatuses)
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    let nextOrderStatus = deriveOrderStatus(nextItems, order?.status);
+    if (status === "processing" && String(nextOrderStatus || "") === "new") {
+      nextOrderStatus = "processing";
+    }
 
     const totalItems = nextItems.reduce((sum, item) => sum + toNumber(item.qty), 0);
     const totalAmount = nextItems.reduce((sum, item) => sum + toNumber(item.amount), 0);
@@ -6511,10 +6628,12 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
     const { id, ...payload } = order;
     const result = await updateOrder(id, {
       ...payload,
-      status,
+      status: nextOrderStatus,
       items: nextItems,
       totalItems,
       totalAmount,
+      supplierBoardStatuses: nextScopedStatuses,
+      supplier_board_statuses: JSON.stringify(nextScopedStatuses),
       updatedAt: now,
     });
     if (!result.success) {
@@ -6533,23 +6652,10 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
 
     if (targets.length === 0) return;
 
-    setOptimisticBoardStatuses((prev) => ({ ...prev, [boardOrder.id]: nextStatus }));
-    const results = await Promise.all(targets.map((target) => updateStatus(target, nextStatus)));
+    const results = await Promise.all(targets.map((target) => updateStatus(target, nextStatus, boardOrder)));
     if (results.some((item) => item === false)) {
-      setOptimisticBoardStatuses((prev) => {
-        const next = { ...prev };
-        delete next[boardOrder.id];
-        return next;
-      });
       return;
     }
-    window.setTimeout(() => {
-      setOptimisticBoardStatuses((prev) => {
-        const next = { ...prev };
-        delete next[boardOrder.id];
-        return next;
-      });
-    }, 1200);
   }, [canManageOrders, roleScopedOrders]);
 
   const getIssueAlternativeSuppliers = useCallback((issue) => {
@@ -6905,7 +7011,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
     setDraggedSupplierBoardId("");
     draggedBoardIdRef.current = "";
     if (!boardOrder) return;
-    const effectiveStatus = optimisticBoardStatuses[boardOrder.id] || boardOrder.status;
+    const effectiveStatus = boardOrder.status;
     if (!isBoardStatusDropAllowed(effectiveStatus, nextStatus)) {
       if (String(nextStatus || "") === "confirmed" || String(nextStatus || "") === "completed") {
         alert("У статуси 'Підтверджені' та 'Закриті' перетягувати не можна. Їх змінює постачальник або приймання.");
@@ -6917,7 +7023,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       return;
     }
     await updateSupplierBoardStatus(boardOrder, nextStatus);
-  }, [canManageOrders, draggedSupplierBoardId, supplierBoardOrders, updateSupplierBoardStatus, optimisticBoardStatuses, isBoardStatusDropAllowed]);
+  }, [canManageOrders, draggedSupplierBoardId, supplierBoardOrders, updateSupplierBoardStatus, isBoardStatusDropAllowed]);
 
   const moveOrderToArchive = async (order) => {
     if (!canManageOrders) return false;
@@ -6958,7 +7064,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
 
     if (!boardOrder) return;
     
-    const effectiveStatus = optimisticBoardStatuses[boardOrder.id] || boardOrder.status;
+    const effectiveStatus = boardOrder.status;
     
     if (effectiveStatus !== "completed") {
       alert("В архів можна перетягувати лише закриті заявки.");
@@ -7378,9 +7484,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                     if (!canManageOrders) return;
                     const draggedId = String(draggedBoardIdRef.current || draggedSupplierBoardId || event?.dataTransfer?.getData("text/plain") || "");
                     const draggedBoardOrder = supplierBoardOrders.find((entry) => String(entry.id) === draggedId);
-                    const draggedStatus = draggedBoardOrder
-                      ? (optimisticBoardStatuses[draggedBoardOrder.id] || draggedBoardOrder.status)
-                      : "";
+                    const draggedStatus = draggedBoardOrder ? draggedBoardOrder.status : "";
                     if (!isBoardStatusDropAllowed(draggedStatus, column.key)) return;
                     event.preventDefault();
                     if (dragOverArchive) setDragOverArchive(false);
@@ -7392,9 +7496,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                   onDrop={(event) => {
                     const draggedId = String(draggedBoardIdRef.current || draggedSupplierBoardId || event?.dataTransfer?.getData("text/plain") || "");
                     const draggedBoardOrder = supplierBoardOrders.find((entry) => String(entry.id) === draggedId);
-                    const draggedStatus = draggedBoardOrder
-                      ? (optimisticBoardStatuses[draggedBoardOrder.id] || draggedBoardOrder.status)
-                      : "";
+                    const draggedStatus = draggedBoardOrder ? draggedBoardOrder.status : "";
                     if (!isBoardStatusDropAllowed(draggedStatus, column.key)) return;
                     event.preventDefault();
                     void handleBoardDrop(column.key, event);
