@@ -4482,6 +4482,34 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
   const activeRestaurantIds = selectedRestaurantIds.length > 0 ? selectedRestaurantIds : allRestaurantIds;
   const visibleRestaurants = restaurants.filter((item) => activeRestaurantIds.includes(String(item.id || "")));
 
+  const aplColumnLayout = useMemo(() => {
+    const columnWeights = {
+      greenCard: 10,
+      whiteCard: 14,
+      productGroup: 10,
+      supplier: 12,
+      code1C: 8,
+      restaurant: 3,
+    };
+    const totalWeight = Object.values(columnWeights).slice(0, 5).reduce((sum, value) => sum + value, 0)
+      + (visibleRestaurants.length * columnWeights.restaurant);
+    const toPercent = (weight) => `${(weight / totalWeight) * 100}%`;
+
+    return {
+      greenCard: toPercent(columnWeights.greenCard),
+      whiteCard: toPercent(columnWeights.whiteCard),
+      productGroup: toPercent(columnWeights.productGroup),
+      supplier: toPercent(columnWeights.supplier),
+      code1C: toPercent(columnWeights.code1C),
+      restaurant: toPercent(columnWeights.restaurant),
+    };
+  }, [visibleRestaurants.length]);
+
+  const aplMatrixZoom = useMemo(() => {
+    if (visibleRestaurants.length <= 10) return 1;
+    return Math.max(0.72, 1 - ((visibleRestaurants.length - 10) * 0.045));
+  }, [visibleRestaurants.length]);
+
   const toggleRestaurantFilter = (restaurantId) => {
     const normalized = String(restaurantId || "");
     setSelectedRestaurantIds((prev) => {
@@ -4601,7 +4629,7 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
   };
 
   return (
-    <div className={cardClass}>
+    <div className={`${cardClass} px-2 sm:px-3 lg:px-4`}>
       <div className="mb-4 flex items-center gap-2">
         <Package size={18} className="text-indigo-600" />
         <h2 className="text-lg font-semibold">APL (OrderAPL): призначення білих карток по ресторанах</h2>
@@ -4669,97 +4697,109 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
         </div>
       </div>
 
-      <div className="overflow-auto rounded-lg border border-slate-200 shadow-inner max-h-[68vh] xl:max-h-[72vh]">
-        <table className="min-w-full table-fixed text-xs sm:text-sm">
-          <thead className="sticky top-0 z-30 bg-slate-50 text-slate-700 shadow-sm">
-            <tr>
-              <th className="sticky left-0 z-40 w-24 border-r border-slate-200 bg-slate-50 px-2 py-2 text-left sm:w-28">Зелена картка</th>
-              <th className="sticky left-24 z-40 w-36 border-r border-slate-200 bg-slate-50 px-2 py-2 text-left sm:left-28 sm:w-44">Біла картка</th>
-              <th className="sticky left-[240px] z-40 w-24 border-r border-slate-200 bg-slate-50 px-2 py-2 text-left sm:left-[288px] sm:w-28">Група товарів</th>
-              <th className="w-32 px-2 py-2 text-left sm:w-40">Постачальник</th>
-              <th className="w-20 px-2 py-2 text-left sm:w-24">Код 1С</th>
+      <div className="overflow-y-auto overflow-x-hidden rounded-lg border border-slate-200 shadow-inner max-h-[68vh] xl:max-h-[72vh]">
+        <div style={{ zoom: aplMatrixZoom }}>
+          <table className="w-full table-fixed text-[11px] sm:text-xs">
+            <colgroup>
+              <col style={{ width: aplColumnLayout.greenCard }} />
+              <col style={{ width: aplColumnLayout.whiteCard }} />
+              <col style={{ width: aplColumnLayout.productGroup }} />
+              <col style={{ width: aplColumnLayout.supplier }} />
+              <col style={{ width: aplColumnLayout.code1C }} />
               {visibleRestaurants.map((restaurant) => (
-                <th key={`apl_header_${restaurant.id}`} className="h-12 w-14 border-l border-slate-200 bg-slate-50 px-1 py-1 text-center align-middle sm:h-14 sm:w-16">
-                  <div className="break-words text-[11px] font-semibold leading-3 text-slate-700">
-                    {restaurant.name}
-                  </div>
-                </th>
+                <col key={`apl_col_${restaurant.id}`} style={{ width: aplColumnLayout.restaurant }} />
               ))}
-            </tr>
-          </thead>
-          <tbody>
-            {groupedRows.map((groupNode) => {
-              const groupExpanded = isAplGroupExpanded(groupNode.groupName);
-              return (
-                <Fragment key={`apl_group_${groupNode.groupName}`}>
-                  <tr className="border-t border-slate-300 bg-slate-100">
-                    <td colSpan={5 + visibleRestaurants.length} className="sticky left-0 z-20 px-2 py-1.5 text-sm font-semibold text-slate-900 bg-slate-100">
-                      <button type="button" className="inline-flex items-center gap-2" onClick={() => toggleAplGroup(groupNode.groupName)}>
-                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">
-                          {groupExpanded ? "−" : "+"}
-                        </span>
-                        {groupNode.groupName}
-                      </button>
-                    </td>
-                  </tr>
-
-                  {groupExpanded && groupNode.greenCards.map((greenNode) => {
-                    const greenExpanded = isAplGreenExpanded(groupNode.groupName, greenNode.greenCardName);
-                    return (
-                      <Fragment key={`apl_green_${groupNode.groupName}_${greenNode.greenCardName}`}>
-                        <tr className="border-t border-dashed border-slate-300 bg-slate-50">
-                          <td colSpan={5 + visibleRestaurants.length} className="sticky left-0 z-20 px-2 py-1.5 text-sm text-slate-800 bg-slate-50">
-                            <button type="button" className="inline-flex items-center gap-2" onClick={() => toggleAplGreenCard(groupNode.groupName, greenNode.greenCardName)}>
-                              <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-700">
-                                {greenExpanded ? "−" : "+"}
-                              </span>
-                              <span className="font-semibold">{greenNode.greenCardName}</span>
-                              <span className="text-xs text-slate-500">{greenNode.rows.length} білих карток</span>
-                            </button>
-                          </td>
-                        </tr>
-
-                        {greenExpanded && greenNode.rows.map((row) => (
-                          <tr key={`apl_row_${row.key}`} className="border-t border-dashed border-slate-200">
-                            <td className="sticky left-0 z-10 border-r border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-500 sm:w-28">{row.greenCardName}</td>
-                            <td className="sticky left-24 z-10 border-r border-slate-200 bg-white px-2 py-1.5 font-medium text-slate-900 sm:left-28 sm:w-44">{row.whiteCardName}</td>
-                            <td className="sticky left-[240px] z-10 border-r border-slate-200 bg-white px-2 py-1.5 sm:left-[288px] sm:w-28">{row.productGroup || "-"}</td>
-                            <td className="px-2 py-1.5 text-xs leading-4 sm:w-40" title={row.supplier || "-"}>{row.supplier || "-"}</td>
-                            <td className="px-2 py-1.5 sm:w-24">{row.code1C || "-"}</td>
-                            {visibleRestaurants.map((restaurant) => {
-                              const cellState = getCellState(row, restaurant);
-                              return (
-                                <td key={`apl_cell_${row.key}_${restaurant.id}`} className="w-14 border-l border-slate-200 px-2 py-1.5 text-center sm:w-16">
-                                  <input
-                                    type="checkbox"
-                                    checked={cellState.assigned}
-                                    onChange={() => {
-                                      void toggleAssignment(row, restaurant);
-                                    }}
-                                    disabled={!canManageApl}
-                                    className="h-4 w-4 accent-indigo-600"
-                                  />
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                      </Fragment>
-                    );
-                  })}
-                </Fragment>
-              );
-            })}
-
-            {groupedRows.length === 0 && (
+            </colgroup>
+            <thead className="sticky top-0 z-30 bg-slate-50 text-slate-700 shadow-sm">
               <tr>
-                <td colSpan={5 + Math.max(1, visibleRestaurants.length)} className="px-3 py-6 text-center text-slate-500">
-                  Немає даних для матриці APL. Спочатку імпортуйте шаблон 1С з білими/зеленими картками.
-                </td>
+                <th className="border-r border-slate-200 bg-slate-50 px-1.5 py-2 text-left">Зелена картка</th>
+                <th className="border-r border-slate-200 bg-slate-50 px-1.5 py-2 text-left">Біла картка</th>
+                <th className="border-r border-slate-200 bg-slate-50 px-1.5 py-2 text-left">Група товарів</th>
+                <th className="px-1.5 py-2 text-left">Постач.</th>
+                <th className="px-1.5 py-2 text-left">Код 1С</th>
+                {visibleRestaurants.map((restaurant) => (
+                  <th key={`apl_header_${restaurant.id}`} className="h-11 border-l border-slate-200 bg-slate-50 px-0.5 py-1 text-center align-middle sm:h-12">
+                    <div className="break-words text-[10px] font-semibold leading-3 text-slate-700">
+                      {restaurant.name}
+                    </div>
+                  </th>
+                ))}
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {groupedRows.map((groupNode) => {
+                const groupExpanded = isAplGroupExpanded(groupNode.groupName);
+                return (
+                  <Fragment key={`apl_group_${groupNode.groupName}`}>
+                    <tr className="border-t border-slate-300 bg-slate-100">
+                      <td colSpan={5 + visibleRestaurants.length} className="bg-slate-100 px-2 py-1.5 text-sm font-semibold text-slate-900">
+                        <button type="button" className="inline-flex items-center gap-2" onClick={() => toggleAplGroup(groupNode.groupName)}>
+                          <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">
+                            {groupExpanded ? "−" : "+"}
+                          </span>
+                          {groupNode.groupName}
+                        </button>
+                      </td>
+                    </tr>
+
+                    {groupExpanded && groupNode.greenCards.map((greenNode) => {
+                      const greenExpanded = isAplGreenExpanded(groupNode.groupName, greenNode.greenCardName);
+                      return (
+                        <Fragment key={`apl_green_${groupNode.groupName}_${greenNode.greenCardName}`}>
+                          <tr className="border-t border-dashed border-slate-300 bg-slate-50">
+                            <td colSpan={5 + visibleRestaurants.length} className="bg-slate-50 px-2 py-1.5 text-sm text-slate-800">
+                              <button type="button" className="inline-flex items-center gap-2" onClick={() => toggleAplGreenCard(groupNode.groupName, greenNode.greenCardName)}>
+                                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-700">
+                                  {greenExpanded ? "−" : "+"}
+                                </span>
+                                <span className="font-semibold">{greenNode.greenCardName}</span>
+                                <span className="text-xs text-slate-500">{greenNode.rows.length} білих карток</span>
+                              </button>
+                            </td>
+                          </tr>
+
+                          {greenExpanded && greenNode.rows.map((row) => (
+                            <tr key={`apl_row_${row.key}`} className="border-t border-dashed border-slate-200">
+                              <td className="border-r border-slate-200 bg-white px-1.5 py-1.5 text-[10px] text-slate-500 break-words">{row.greenCardName}</td>
+                              <td className="border-r border-slate-200 bg-white px-1.5 py-1.5 font-medium text-slate-900 break-words">{row.whiteCardName}</td>
+                              <td className="border-r border-slate-200 bg-white px-1.5 py-1.5 break-words">{row.productGroup || "-"}</td>
+                              <td className="px-1.5 py-1.5 text-[10px] leading-4 break-words" title={row.supplier || "-"}>{row.supplier || "-"}</td>
+                              <td className="px-1.5 py-1.5 break-all">{row.code1C || "-"}</td>
+                              {visibleRestaurants.map((restaurant) => {
+                                const cellState = getCellState(row, restaurant);
+                                return (
+                                  <td key={`apl_cell_${row.key}_${restaurant.id}`} className="border-l border-slate-200 px-1 py-1.5 text-center">
+                                    <input
+                                      type="checkbox"
+                                      checked={cellState.assigned}
+                                      onChange={() => {
+                                        void toggleAssignment(row, restaurant);
+                                      }}
+                                      disabled={!canManageApl}
+                                      className="h-4 w-4 accent-indigo-600"
+                                    />
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </Fragment>
+                      );
+                    })}
+                  </Fragment>
+                );
+              })}
+
+              {groupedRows.length === 0 && (
+                <tr>
+                  <td colSpan={5 + Math.max(1, visibleRestaurants.length)} className="px-3 py-6 text-center text-slate-500">
+                    Немає даних для матриці APL. Спочатку імпортуйте шаблон 1С з білими/зеленими картками.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
