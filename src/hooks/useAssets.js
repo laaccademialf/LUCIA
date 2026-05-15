@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   getAssets,
   addAsset,
@@ -138,6 +138,18 @@ export const useAssets = (enableRealtime = true) => {
     } catch { /* quota exceeded — ignore */ }
   };
 
+  const mutateAssetsAndCache = useCallback((updater) => {
+    setAssets((prev) => {
+      const base = Array.isArray(prev) ? prev : [];
+      const nextItems = typeof updater === "function" ? updater(base) : updater;
+      const normalized = normalizeAssets(nextItems);
+      try {
+        sessionStorage.setItem("lucia_assets_cache", JSON.stringify(normalized));
+      } catch { /* quota exceeded — ignore */ }
+      return normalized;
+    });
+  }, []);
+
   useEffect(() => {
     let unsubscribe;
     let unsubscribeAssetsEvents;
@@ -257,9 +269,15 @@ export const useAssets = (enableRealtime = true) => {
   const add = async (asset) => {
     try {
       const id = isAssetsApiEnabled() ? await addAssetApi(asset) : await addAsset(asset);
-      if (isAssetsApiEnabled()) {
-        await refreshAssetsFromApi();
-      }
+      mutateAssetsAndCache((prev) => [
+        ...prev,
+        {
+          ...(asset || {}),
+          id,
+          createdAt: asset?.createdAt || new Date().toISOString(),
+          updatedAt: asset?.updatedAt || new Date().toISOString(),
+        },
+      ]);
       return { success: true, id };
     } catch (err) {
       setError(err);
@@ -271,9 +289,28 @@ export const useAssets = (enableRealtime = true) => {
     try {
       if (isAssetsApiEnabled()) {
         await updateAssetApi(id, data);
-        await refreshAssetsFromApi();
+        mutateAssetsAndCache((prev) => prev.map((item) => (
+          String(item?.id || "") === String(id || "")
+            ? {
+                ...item,
+                ...(data || {}),
+                id: String(id || item?.id || ""),
+                updatedAt: new Date().toISOString(),
+              }
+            : item
+        )));
       } else {
         await updateAsset(id, data);
+        mutateAssetsAndCache((prev) => prev.map((item) => (
+          String(item?.id || "") === String(id || "")
+            ? {
+                ...item,
+                ...(data || {}),
+                id: String(id || item?.id || ""),
+                updatedAt: new Date().toISOString(),
+              }
+            : item
+        )));
       }
       return { success: true };
     } catch (err) {
@@ -286,10 +323,10 @@ export const useAssets = (enableRealtime = true) => {
     try {
       if (isAssetsApiEnabled()) {
         await deleteAssetApi(id);
-        await refreshAssetsFromApi();
       } else {
         await deleteAsset(id);
       }
+      mutateAssetsAndCache((prev) => prev.filter((item) => String(item?.id || "") !== String(id || "")));
       return { success: true };
     } catch (err) {
       setError(err);
