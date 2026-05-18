@@ -58,6 +58,34 @@ const getApiBaseUrl = () => {
   return "";
 };
 
+const getPrintAuthHeaders = () => {
+  const headers = { "Content-Type": "application/json" };
+
+  try {
+    const sessionToken = String(localStorage.getItem("lucia_auth_session_token") || "").trim();
+    if (sessionToken) {
+      headers["x-session-token"] = sessionToken;
+      headers.Authorization = `Bearer ${sessionToken}`;
+    }
+
+    const rawRuntimeConfig = localStorage.getItem("lucia_runtime_custom_config");
+    if (!rawRuntimeConfig) return headers;
+
+    const runtimeConfig = JSON.parse(rawRuntimeConfig);
+    const apiToken = String(runtimeConfig?.token || "").trim();
+    if (apiToken) {
+      headers["x-api-token"] = apiToken;
+      if (!headers.Authorization) {
+        headers.Authorization = `Bearer ${apiToken}`;
+      }
+    }
+  } catch {
+    // Ignore storage/auth header resolution errors and fallback to bare request.
+  }
+
+  return headers;
+};
+
 /* ---------- label dimensions ---------- */
 
 const LABEL_WIDTH_MM = 20;
@@ -183,7 +211,7 @@ const trySilentPrint = async (payload, printerConfig) => {
   try {
     const res = await fetch(`${apiBase}/api/print-label`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getPrintAuthHeaders(),
       body: JSON.stringify({
         data: uint8ToBase64(payload),
         printerIp: ip,

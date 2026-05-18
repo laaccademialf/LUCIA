@@ -434,6 +434,10 @@ const BOOTSTRAP_ADMIN_DISPLAY_NAME =
   String(process.env.LUCIA_BOOTSTRAP_ADMIN_DISPLAY_NAME || "Platform Admin").trim() || "Platform Admin";
 const BOOTSTRAP_MENU_ENABLED =
   String(process.env.LUCIA_BOOTSTRAP_MENU_ENABLED || "true").trim().toLowerCase() !== "false";
+const PUBLIC_REGISTER_ENABLED =
+  String(process.env.LUCIA_AUTH_PUBLIC_REGISTER_ENABLED || "true").trim().toLowerCase() !== "false";
+const DEFAULT_BOOTSTRAP_PASSWORD_IN_USE =
+  BOOTSTRAP_ADMIN_PASSWORD === "Admin123!";
 
 let bootstrapAdminPromise = null;
 
@@ -2289,6 +2293,10 @@ const handleMigrationNormalize = async (req, res) => {
 };
 
 const handleAuthRegister = async (req, res) => {
+  if (!PUBLIC_REGISTER_ENABLED) {
+    return sendJson(res, 403, { ok: false, error: "Public registration is disabled" });
+  }
+
   let payload;
   try {
     payload = await parseJsonBody(req);
@@ -3827,6 +3835,12 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === "/api/print-label" && req.method === "POST") {
     try {
+      const dbConfig = getAssetsRuntimeConfig();
+      const { profile } = await resolveAuthContext(req, dbConfig);
+      if (!isAuthorized(req) && !profile) {
+        return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+      }
+
       const body = await parseJsonBody(req, 2 * 1024 * 1024);
       const rawData = body.data; // base64-encoded TSPL payload
       const printerIp = String(body.printerIp || process.env.PRINTER_IP || "").trim();
@@ -3834,6 +3848,14 @@ const server = http.createServer(async (req, res) => {
 
       if (!rawData || !printerIp) {
         return sendJson(res, 400, { ok: false, error: "Missing data or printerIp" });
+      }
+
+      if (!/^[\d.]+$/.test(printerIp) && !/^[a-zA-Z0-9._-]+$/.test(printerIp)) {
+        return sendJson(res, 400, { ok: false, error: "Invalid printer IP" });
+      }
+
+      if (!Number.isInteger(printerPort) || printerPort < 1 || printerPort > 65535) {
+        return sendJson(res, 400, { ok: false, error: "Invalid printer port" });
       }
 
       const buffer = Buffer.from(rawData, "base64");
@@ -3905,4 +3927,16 @@ server.listen(PORT, HOST, () => {
   console.log(`Engine: ${ENGINE}`);
   console.log(`Health endpoint: http://${HOST}:${PORT}/health`);
   console.log(`Migration endpoint: http://${HOST}:${PORT}/migration/import`);
+
+  if (PUBLIC_REGISTER_ENABLED) {
+    console.warn(
+      "[security] Public self-registration is enabled. Set LUCIA_AUTH_PUBLIC_REGISTER_ENABLED=false to disable it."
+    );
+  }
+
+  if (BOOTSTRAP_ADMIN_ENABLED && DEFAULT_BOOTSTRAP_PASSWORD_IN_USE) {
+    console.warn(
+      "[security] Bootstrap admin uses the default password. Set LUCIA_BOOTSTRAP_ADMIN_PASSWORD and disable bootstrap after initial setup."
+    );
+  }
 });
