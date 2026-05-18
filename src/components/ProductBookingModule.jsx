@@ -1311,116 +1311,49 @@ function ProductAdminTab({
         </div>
       )}
 
-      {canManageProducts && (
-        <div className="mb-5 rounded-2xl border border-indigo-200 bg-indigo-50/70 p-4 text-sm text-indigo-900">
-          Ручне створення та ручне редагування довідника продуктів вимкнено. Актуалізація позицій виконується тільки через імпорт з 1С.
-        </div>
-      )}
-
-      {canManageProducts && (
-        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
-            <button
-              type="button"
-              onClick={toggleSelectAllFiltered}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-100"
-            >
-              {areAllFilteredSelected ? "Зняти вибір з видимих" : "Вибрати всі видимі"}
-            </button>
-            <span className="text-xs font-semibold text-slate-600">Вибрано: {selectedProductIds.length}</span>
-          </div>
-
-          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-            <button type="button" onClick={() => { void applyBulkStatus(true); }} className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">
-              Масово активувати
-            </button>
-            <button type="button" onClick={() => { void applyBulkStatus(false); }} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-semibold text-amber-700 hover:bg-amber-100">
-              Масово вимкнути
-            </button>
-            <button type="button" onClick={() => { void applyBulkDelete(); }} className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-sm font-semibold text-rose-700 hover:bg-rose-100">
-              Масово видалити
-            </button>
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-            <select className={inputClass} value={bulkSupplier} onChange={(e) => setBulkSupplier(e.target.value)}>
-              <option value="">Оберіть постачальника для масової заміни</option>
-              {suppliers.map((supplier) => (
-                <option key={`bulk_supplier_${supplier}`} value={supplier}>{supplier}</option>
-              ))}
-            </select>
-            <button type="button" onClick={() => { void applyBulkSupplier(); }} className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-100">
-              Застосувати постачальника
-            </button>
-            <select className={inputClass} value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)}>
-              <option value="">Оберіть категорію для масової заміни</option>
-              {categories.map((category) => (
-                <option key={`bulk_category_${category}`} value={category}>{category}</option>
-              ))}
-            </select>
-            <button type="button" onClick={() => { void applyBulkCategory(); }} className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-100">
-              Застосувати категорію
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-6">
-        <div>
-          <label className="text-sm font-semibold text-slate-800">Фільтр закладу</label>
+      <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,1.6fr)_repeat(5,minmax(0,0.75fr))_auto]">
+          <input
+            className={inputClass}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Пошук: назва, категорія, постачальник"
+            aria-label="Пошук по продуктах"
+          />
           <select
             className={inputClass}
             value={restaurantFilter}
             onChange={(e) => setRestaurantFilter(e.target.value)}
             disabled={!isGlobalAdmin}
+            aria-label="Фільтр закладу"
           >
             <option value="">{isGlobalAdmin ? "Всі заклади" : "Оберіть заклад"}</option>
             {productAdminRestaurants.map((restaurant) => (
               <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
             ))}
           </select>
-        </div>
-        <div className="lg:col-span-2">
-          <label className="text-sm font-semibold text-slate-800">Пошук по продуктах</label>
-          <input
-            className={inputClass}
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Назва, категорія, постачальник, од. вим."
-          />
-        </div>
-        <div>
-          <label className="text-sm font-semibold text-slate-800">Фільтр категорії</label>
-          <select className={inputClass} value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-            <option value="">Всі категорії</option>
+          <select className={inputClass} value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} aria-label="Фільтр категорії">
+            <option value="">Категорія</option>
             {categories.map((category) => (
               <option key={category} value={category}>{category}</option>
             ))}
           </select>
-        </div>
-        <div>
-          <label className="text-sm font-semibold text-slate-800">Фільтр підкатегорії</label>
-          <select className={inputClass} value={subcategoryFilter} onChange={(e) => setSubcategoryFilter(e.target.value)}>
-            <option value="">Всі підкатегорії</option>
+          <select className={inputClass} value={subcategoryFilter} onChange={(e) => setSubcategoryFilter(e.target.value)} aria-label="Фільтр підкатегорії">
+            <option value="">Підкатегорія</option>
             {(categoryFilter ? (subcategoriesByCategory?.[categoryFilter] || []) : Object.values(subcategoriesByCategory || {}).flat())
               .filter((value, index, arr) => arr.indexOf(value) === index)
               .map((subcategory) => (
                 <option key={subcategory} value={subcategory}>{subcategory}</option>
               ))}
           </select>
-        </div>
-        <div>
-          <label className="text-sm font-semibold text-slate-800">Фільтр постачальника</label>
-          <select className={inputClass} value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)}>
-            <option value="">Всі постачальники</option>
+          <select className={inputClass} value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)} aria-label="Фільтр постачальника">
+            <option value="">Постачальник</option>
             {suppliers.map((supplier) => (
               <option key={supplier} value={supplier}>{supplier}</option>
             ))}
           </select>
-        </div>
-        <div className="flex flex-col justify-end gap-2 lg:col-span-1">
-          <select className={inputClass} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="all">Всі статуси</option>
+          <select className={inputClass} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Фільтр статусу">
+            <option value="all">Статус</option>
             <option value="active">Активні</option>
             <option value="inactive">Вимкнені</option>
           </select>
@@ -1436,9 +1369,57 @@ function ProductAdminTab({
               setRestaurantFilter(isGlobalAdmin ? "" : String(user?.restaurant || ""));
             }}
           >
-            Скинути фільтри
+            Скинути
           </button>
         </div>
+
+        {canManageProducts && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-2">
+            <button
+              type="button"
+              onClick={toggleSelectAllFiltered}
+              className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              {areAllFilteredSelected ? "Зняти видимі" : "Вибрати видимі"}
+            </button>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+              {selectedProductIds.length}
+            </span>
+            {selectedProductIds.length > 0 ? (
+              <>
+                <button type="button" onClick={() => { void applyBulkStatus(true); }} className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100">
+                  Активувати
+                </button>
+                <button type="button" onClick={() => { void applyBulkStatus(false); }} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-100">
+                  Вимкнути
+                </button>
+                <button type="button" onClick={() => { void applyBulkDelete(); }} className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100">
+                  Видалити
+                </button>
+                <select className="min-w-[180px] flex-1" value={bulkSupplier} onChange={(e) => setBulkSupplier(e.target.value)}>
+                  <option value="">Постачальник для заміни</option>
+                  {suppliers.map((supplier) => (
+                    <option key={`bulk_supplier_${supplier}`} value={supplier}>{supplier}</option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => { void applyBulkSupplier(); }} className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100">
+                  Замінити
+                </button>
+                <select className="min-w-[180px] flex-1" value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)}>
+                  <option value="">Категорія для заміни</option>
+                  {categories.map((category) => (
+                    <option key={`bulk_category_${category}`} value={category}>{category}</option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => { void applyBulkCategory(); }} className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100">
+                  Замінити
+                </button>
+              </>
+            ) : (
+              <span className="text-xs text-slate-400">Оберіть позиції, щоб побачити масові дії</span>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="mb-3 flex items-center justify-between text-xs font-semibold text-slate-600">
@@ -5145,6 +5126,15 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
   const minimumOrderWarnings = useMemo(() => {
     return supplierTotals.filter((item) => item.minimum > 0 && item.amount < item.minimum);
   }, [supplierTotals]);
+  const minimumOrderTargetBySupplier = useMemo(() => {
+    const map = new Map();
+    supplierTotals.forEach((item) => {
+      if (toNumber(item.minimum) > 0) {
+        map.set(normalizeSupplierIdentity(item.supplier), Math.max(0, toNumber(item.minimum)));
+      }
+    });
+    return map;
+  }, [supplierTotals]);
   const hasMinimumOrderViolation = minimumOrderWarnings.length > 0;
 
   const draftTotalAmount = useMemo(() => {
@@ -5472,12 +5462,6 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
           </div>
         </div>
 
-        {isAplOrderingMode && (
-          <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-900">
-            Режим APL активний: для замовлення доступні зелені картки, сформовані з призначень білих карток по ресторану.
-          </div>
-        )}
-
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
           <div className="lg:col-span-2">
             <label className="text-sm font-semibold text-slate-800">Пошук</label>
@@ -5551,37 +5535,53 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                 <th className="px-3 py-2 text-left">Од. вим.</th>
                 <th className="px-3 py-2 text-left">Ціна за од.</th>
                 <th className="px-3 py-2 text-left">Кількість</th>
+                <th className="px-3 py-2 text-left">До мінімуму</th>
                 <th className="px-3 py-2 text-left">Сума</th>
               </tr>
             </thead>
             <tbody>
-              {paginatedProducts.map((product) => (
-                <tr key={product.id} className="border-t border-slate-200">
-                  <td className="px-3 py-2">{product.category}</td>
-                  <td className="px-3 py-2 font-medium text-slate-900">{product.name}</td>
-                  <td className="px-3 py-2">{product.unit || "-"}</td>
-                  <td className="px-3 py-2">{formatMoney(product.unitPrice)}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.1"
-                        className="w-28 rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm"
-                        value={quantities[product.id] || ""}
-                        onChange={(e) => setQuantities((p) => ({ ...p, [product.id]: e.target.value }))}
-                      />
-                      <span className="text-xs text-slate-500">{product.unit}</span>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 font-medium text-slate-900">
-                    {formatMoney(toNumber(quantities[product.id]) * toNumber(product.unitPrice))}
-                  </td>
-                </tr>
-              ))}
+              {paginatedProducts.map((product) => {
+                const supplierRaw = Array.isArray(product.supplierList) && product.supplierList.length > 0
+                  ? product.supplierList.join(", ")
+                  : product.supplier;
+                const resolvedSupplier = resolveSupplierForRestaurantContext(supplierRaw, selectedRestaurantContext, suppliersDirectory);
+                const supplierMinimumAmount = minimumOrderTargetBySupplier.get(normalizeSupplierIdentity(resolvedSupplier)) || 0;
+                const unitPrice = toNumber(product.unitPrice);
+                const minimumQtyHint = supplierMinimumAmount > 0 && unitPrice > 0
+                  ? supplierMinimumAmount / unitPrice
+                  : 0;
+
+                return (
+                  <tr key={product.id} className="border-t border-slate-200">
+                    <td className="px-3 py-2">{product.category}</td>
+                    <td className="px-3 py-2 font-medium text-slate-900">{product.name}</td>
+                    <td className="px-3 py-2">{product.unit || "-"}</td>
+                    <td className="px-3 py-2">{formatMoney(product.unitPrice)}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          className="w-28 rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm"
+                          value={quantities[product.id] || ""}
+                          onChange={(e) => setQuantities((p) => ({ ...p, [product.id]: e.target.value }))}
+                        />
+                        <span className="text-xs text-slate-500">{product.unit}</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-600">
+                      {minimumQtyHint > 0 ? `${minimumQtyHint.toLocaleString("uk-UA", { maximumFractionDigits: 2 })} ${product.unit || "од."}` : "—"}
+                    </td>
+                    <td className="px-3 py-2 font-medium text-slate-900">
+                      {formatMoney(toNumber(quantities[product.id]) * toNumber(product.unitPrice))}
+                    </td>
+                  </tr>
+                );
+              })}
               {filteredProducts.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-slate-500">
+                  <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
                     {restaurantId ? "За поточними фільтрами продукти не знайдено." : "Спочатку оберіть заклад."}
                   </td>
                 </tr>
@@ -8542,7 +8542,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
             </div>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-3">
             {filteredPortalOrders.map((order) => {
               const isExpanded = expandedOrderIds[String(order.id || "")];
               const toggleExpanded = () => {
@@ -8553,31 +8553,36 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
               };
 
               return (
-              <div key={order.id} className={cardClass}>
-                <div className="mb-0 flex flex-wrap items-center justify-between gap-3 pb-3 cursor-pointer hover:bg-slate-50 rounded-t-xl px-1 py-2 transition-colors" onClick={toggleExpanded} role="button" tabIndex={0}>
-                  <div className="flex flex-1 flex-wrap items-center gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg font-semibold text-slate-700">{isExpanded ? "▼" : "▶"}</span>
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <div className="text-base font-semibold text-slate-900">{order.restaurantName || "Без закладу"}</div>
-                          <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">
-                            {order.supplierItems.length} позицій
-                          </span>
-                          {order.isArchived && (
-                            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">Архів</span>
-                          )}
-                        </div>
-                        <div className="mt-1 text-xs text-slate-500">Заявка: {String(order.id || "—")} • Поставка: {formatDateUk(order.requiredDate)}</div>
+                <div key={order.id} className={`${cardClass} p-3 sm:p-4`}>
+                              <div className="flex flex-wrap items-center justify-between gap-2 cursor-pointer hover:bg-slate-50 rounded-xl px-1.5 py-1.5 transition-colors" onClick={toggleExpanded} role="button" tabIndex={0}>
+                                <div className="flex min-w-0 flex-1 items-center gap-2">
+                                  <span className="text-sm font-semibold text-slate-700">{isExpanded ? "▼" : "▶"}</span>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <div className="truncate text-sm font-semibold text-slate-900">{order.restaurantName || "Без закладу"}</div>
+                                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                                        {order.supplierItems.length} поз.
+                                      </span>
+                                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                        {formatDateUk(order.requiredDate)}
+                                      </span>
+                                      {order.isArchived && (
+                                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">Архів</span>
+                                      )}
                       </div>
+                                    <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                                      <span>ID: {String(order.id || "—")}</span>
+                                      <span>Очікує: {order.supplierSummary.pending}</span>
+                                      <span>Підтв.: {order.supplierSummary.accepted}</span>
+                                      {(order.supplierSummary.partial + order.supplierSummary.unavailable) > 0 && <span>Проблемні: {order.supplierSummary.partial + order.supplierSummary.unavailable}</span>}
+                                    </div>
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{statusLabel(order.status)}</span>
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">Очікує: {order.supplierSummary.pending}</span>
+                                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{statusLabel(order.status)}</span>
                     <button
                       type="button"
-                      className="rounded border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                                    className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
                       disabled={order.isArchived || savingKey === `order::${order.id}`}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -8591,126 +8596,126 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
 
                 {isExpanded && (
                   <>
-                    <div className="border-t border-slate-200 mb-4 pt-4">
-                      <div className="text-xs text-slate-500 mb-2">Створено: {formatDateTimeSafe(order.createdAt)}</div>
-                      {order.comment && <div className="text-xs text-slate-600 bg-slate-50 p-2 rounded">Коментар: {String(order.comment || "—")}</div>}
+                    <div className="mt-2 border-t border-slate-200 pt-2.5">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
+                        <span>Створено: {formatDateTimeSafe(order.createdAt)}</span>
+                        {order.comment && <span>Коментар: {String(order.comment || "—")}</span>}
+                      </div>
                     </div>
 
-                <div className="space-y-3">
-                  {order.supplierItems.map((item) => {
-                    const draft = getDraft(item);
-                    const status = String(draft.status || getSupplierResponseStatus(item));
-                    const requestedQty = `${toNumber(item.qty)} ${item.unit || ""}`.trim();
-                    const confirmedQty = status === "accepted" ? String(toNumber(item.qty)) : draft.responseQty;
+                    <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-slate-50 text-slate-600">
+                          <tr>
+                            <th className="px-3 py-2 text-left font-semibold">Товар</th>
+                            <th className="px-2 py-2 text-left font-semibold">Замовл.</th>
+                            <th className="px-2 py-2 text-left font-semibold">Ціна</th>
+                            <th className="px-2 py-2 text-left font-semibold">Сума</th>
+                            <th className="px-2 py-2 text-left font-semibold">Статус</th>
+                            <th className="px-2 py-2 text-left font-semibold">К-сть</th>
+                            <th className="px-2 py-2 text-left font-semibold">Коментар</th>
+                            <th className="px-2 py-2 text-left font-semibold">Дія</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {order.supplierItems.map((item) => {
+                            const draft = getDraft(item);
+                            const status = String(draft.status || getSupplierResponseStatus(item));
+                            const requestedQty = `${toNumber(item.qty)} ${item.unit || ""}`.trim();
+                            const confirmedQty = status === "accepted" ? String(toNumber(item.qty)) : draft.responseQty;
 
-                    return (
-                      <div key={item.lineKey} className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-sm">
-                        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                          <div className="min-w-0 flex-1 space-y-4">
-                            <div className="flex flex-wrap items-start gap-2">
-                              <div className="min-w-0 flex-1">
-                                <div className="text-base font-semibold text-slate-900">{item.productName || "Без назви"}</div>
-                                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                                  <span>Код позиції: {item.productId || "—"}</span>
-                                  <span>Поставка: {formatDateUk(order.requiredDate)}</span>
-                                </div>
-                              </div>
-                              <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                                {order.restaurantName || "Без закладу"}
-                              </span>
-                              <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getSupplierResponseBadgeClass(status)}`}>
-                                {getSupplierResponseLabel(status)}
-                              </span>
-                            </div>
+                            return (
+                              <tr key={item.lineKey} className="border-t border-slate-200 align-top">
+                                <td className="px-3 py-2.5">
+                                  <div className="min-w-[220px]">
+                                    <div className="font-semibold text-slate-900">{item.productName || "Без назви"}</div>
+                                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                                      <span>Код: {item.productId || "—"}</span>
+                                      <span>{item.supplierRespondedAt ? formatDateTimeSafe(item.supplierRespondedAt) : "Ще ні"}</span>
+                                    </div>
+                                    <div className="mt-1">
+                                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${getSupplierResponseBadgeClass(status)}`}>
+                                        {getSupplierResponseLabel(status)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-2 py-2.5 font-semibold text-slate-900 whitespace-nowrap">{requestedQty || "—"}</td>
+                                <td className="px-2 py-2.5 whitespace-nowrap">{toNumber(item.unitPrice).toFixed(2)}</td>
+                                <td className="px-2 py-2.5 whitespace-nowrap">{formatMoney(item.amount)}</td>
+                                <td className="px-2 py-2.5">
+                                  <select
+                                    className="w-[150px] rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
+                                    value={status}
+                                    disabled={order.isArchived}
+                                    onChange={(e) => patchDraft(item.lineKey, { status: e.target.value })}
+                                  >
+                                    <option value="pending">Очікує відповіді</option>
+                                    <option value="accepted">Підтвердити</option>
+                                    <option value="partial">Частково</option>
+                                    <option value="unavailable">Немає в наявності</option>
+                                  </select>
+                                </td>
+                                <td className="px-2 py-2.5">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    className="w-20 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
+                                    value={confirmedQty}
+                                    disabled={order.isArchived || status === "accepted" || status === "unavailable"}
+                                    onChange={(e) => {
+                                      const nextValue = e.target.value;
+                                      const requestedQtyValue = Math.max(0, toNumber(item.qty));
+                                      const responseQtyValue = toNumber(nextValue);
 
-                            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5">
-                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Замовлено</div>
-                                <div className="mt-1 text-sm font-semibold text-slate-900">{requestedQty || "—"}</div>
-                              </div>
-                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Ціна</div>
-                                <div className="mt-1 text-sm font-semibold text-slate-900">{toNumber(item.unitPrice).toFixed(2)}</div>
-                              </div>
-                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Сума</div>
-                                <div className="mt-1 text-sm font-semibold text-slate-900">{formatMoney(item.amount)}</div>
-                              </div>
-                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Підтверджено</div>
-                                <div className="mt-1 text-sm font-semibold text-slate-900">{confirmedQty || "—"}</div>
-                              </div>
-                              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 md:col-span-2 xl:col-span-1">
-                                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Оновлено</div>
-                                <div className="mt-1 text-sm font-semibold text-slate-900">{item.supplierRespondedAt ? formatDateTimeSafe(item.supplierRespondedAt) : "Ще не відповіли"}</div>
-                              </div>
-                            </div>
-                          </div>
+                                      let nextStatus = status;
+                                      if (nextValue === "") {
+                                        nextStatus = "partial";
+                                      } else if (responseQtyValue <= 0) {
+                                        nextStatus = "unavailable";
+                                      } else if (responseQtyValue < requestedQtyValue) {
+                                        nextStatus = "partial";
+                                      } else {
+                                        nextStatus = "accepted";
+                                      }
 
-                          <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white/90 p-4 xl:w-[420px]">
-                            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
-                              <div>
-                                <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Статус відповіді</label>
-                                <select
-                                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                                  value={status}
-                                  disabled={order.isArchived}
-                                  onChange={(e) => patchDraft(item.lineKey, { status: e.target.value })}
-                                >
-                                  <option value="pending">Очікує відповіді</option>
-                                  <option value="accepted">Підтвердити</option>
-                                  <option value="partial">Частково</option>
-                                  <option value="unavailable">Немає в наявності</option>
-                                </select>
-                              </div>
-                              <div>
-                                <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Підтверджена кількість</label>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  className="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                                  value={confirmedQty}
-                                  disabled={order.isArchived || status === "accepted" || status === "unavailable"}
-                                  onChange={(e) => patchDraft(item.lineKey, { responseQty: e.target.value })}
-                                />
-                              </div>
-                            </div>
-
-                            <div>
-                              <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Коментар постачальника</label>
-                              <textarea
-                                className="mt-1 min-h-24 w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                                value={draft.comment}
-                                disabled={order.isArchived}
-                                onChange={(e) => patchDraft(item.lineKey, { comment: e.target.value })}
-                                placeholder="Вкажіть заміну, причину відсутності або уточнення по поставці"
-                              />
-                            </div>
-
-                            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
-                              <div className="text-xs text-slate-500">
-                                Замовлено: <span className="font-semibold text-slate-700">{requestedQty || "—"}</span>
-                              </div>
-                              <button
-                                type="button"
-                                className="rounded-xl border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
-                                disabled={order.isArchived || savingKey === item.lineKey}
-                                onClick={() => { void saveLineResponse(order, item); }}
-                              >
-                                {savingKey === item.lineKey ? "Збереження..." : (savedLineKeys[item.lineKey] ? "Збережено" : (status === "accepted" ? "Підтвердити" : "Зберегти зміни"))}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                    </>
+                                      patchDraft(item.lineKey, {
+                                        responseQty: nextValue,
+                                        status: nextStatus,
+                                      });
+                                    }}
+                                  />
+                                </td>
+                                <td className="px-2 py-2.5">
+                                  <textarea
+                                    className="min-h-[38px] w-[220px] rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
+                                    value={draft.comment}
+                                    disabled={order.isArchived}
+                                    onChange={(e) => patchDraft(item.lineKey, { comment: e.target.value })}
+                                    placeholder="Коментар або заміна"
+                                  />
+                                </td>
+                                <td className="px-2 py-2.5">
+                                  <button
+                                    type="button"
+                                    className="whitespace-nowrap rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                                    disabled={order.isArchived || savingKey === item.lineKey}
+                                    onClick={() => { void saveLineResponse(order, item); }}
+                                  >
+                                    {savingKey === item.lineKey ? "Збереження..." : (savedLineKeys[item.lineKey] ? "Збережено" : (status === "accepted" ? "Підтвердити" : "Зберегти"))}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
                 )}
-              </div>
-            );
+                </div>
+              );
             })}
 
             {filteredPortalOrders.length === 0 && (
