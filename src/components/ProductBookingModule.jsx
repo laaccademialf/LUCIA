@@ -1733,6 +1733,14 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     setShowAddProductModal(false);
   };
 
+  const openAddProductModal = () => {
+    // Hide mobile keyboard
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
+    setShowAddProductModal(true);
+  };
+
   const currentUserId = useMemo(
     () => String(user?.uid || user?.id || user?.email || "unknown").trim() || "unknown",
     [user]
@@ -2111,6 +2119,11 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   };
 
   const openCalcModal = (productId, productName = "") => {
+    // Hide mobile keyboard
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
+    
     setActiveRowProductId(productId);
     setCalcModal({
       isOpen: true,
@@ -2131,6 +2144,11 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   };
 
   const closeCalcModal = () => {
+    // Ensure keyboard is hidden
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
+    
     setActiveRowProductId(null);
     setCalcModal((prev) => ({
       ...prev,
@@ -2758,7 +2776,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               )}
               <button
                 type="button"
-                onClick={() => setShowAddProductModal(true)}
+                onClick={openAddProductModal}
                 className={`absolute top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-slate-700 ${searchTerm ? "right-7" : "right-1"}`}
                 title="Додати продукт вручну"
               >
