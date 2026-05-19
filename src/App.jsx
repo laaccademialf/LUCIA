@@ -83,6 +83,7 @@ const FinancialAssetsReport = lazy(() => import("./components/FinancialAssetsRep
 const AssetDetailedReport = lazy(() => import("./components/AssetDetailedReport"));
 const MenuStructureEditor = lazy(() => import("./components/MenuStructureEditor"));
 const ProductBookingModule = lazy(() => import("./components/ProductBookingModule"));
+const CateringOperationsModule = lazy(() => import("./components/CateringOperationsModule"));
 const TechnologicalCardModule = lazy(() => import("./components/TechnologicalCardModule"));
 const ServiceRequestsModule = lazy(() => import("./components/ServiceRequestsModule"));
 const ChecklistModule = lazy(() => import("./components/ChecklistModule"));
@@ -3723,6 +3724,35 @@ function App() {
 
     const activeNavKey = String(activeNav || "").toLowerCase();
     const topTabKey = String(topTab || "").toLowerCase();
+    const isCateringNav =
+      activeNavKey.includes("catering") ||
+      activeNavKey.includes("cattering") ||
+      activeNavKey.includes("crmcatering") ||
+      activeNavKey.includes("kitchencatering") ||
+      activeNavKey.includes("reportcatering") ||
+      topTabKey.includes("catering") ||
+      topTabKey.includes("cattering") ||
+      topTabKey.includes("chefmonitor") ||
+      topTabKey.includes("salescateringreport") ||
+      topTabKey.includes("managmentpnl") ||
+      topTabKey.includes("managementpnl") ||
+      topTabKey.includes("ordercrm") ||
+      topTabKey.includes("contactcrm") ||
+      topTabKey.includes("typycalform") ||
+      topTabKey.includes("typicalform");
+
+    if (isCateringNav) {
+      return (
+        <div className="grid grid-cols-1">
+          <CateringOperationsModule
+            user={user}
+            activeNav={activeNav}
+            topTab={topTab}
+          />
+        </div>
+      );
+    }
+
     const isSupplierPortalNav =
       activeNavKey.includes("ordersupplier") ||
       activeNavKey.includes("ordersuplayer") ||
