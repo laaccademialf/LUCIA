@@ -273,6 +273,18 @@ const getCollectionSignature = (items) => {
     .join(";;");
 };
 
+const isNetworkLikeError = (error) => {
+  const message = String(error?.message || error || "").toLowerCase();
+  return (
+    message.includes("failed to fetch") ||
+    message.includes("load failed") ||
+    message.includes("networkerror") ||
+    message.includes("network error") ||
+    message.includes("fetch error") ||
+    message.includes("offline")
+  );
+};
+
 // Compute merged items from a per-user contributions map.
 // Each key in contributionsMap is a userId, value is an array of item objects.
 // Items with the same productId across different users have their qty/amount SUMMED.
@@ -973,7 +985,11 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true, id };
     } catch (err) {
-      setError(err);
+      if (!isNetworkLikeError(err)) {
+        setError(err);
+      } else {
+        setError(null);
+      }
       return { success: false, error: err };
     }
   };
@@ -988,7 +1004,11 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true };
     } catch (err) {
-      setError(err);
+      if (!isNetworkLikeError(err)) {
+        setError(err);
+      } else {
+        setError(null);
+      }
       return { success: false, error: err };
     }
   };

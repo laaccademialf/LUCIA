@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Package, ShoppingCart, ClipboardCheck, Trash2, Download, Upload, FileDown, X, Printer, Calculator, BarChart2 } from "lucide-react";
+import { Package, ShoppingCart, ClipboardCheck, Trash2, Download, Upload, FileDown, X, Printer, Calculator, BarChart2, Plus } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
 import {
   endProductInventorySession,
@@ -1675,6 +1675,9 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const [stockTakingPlace, setStockTakingPlace] = useState("");
   const [activeSession, setActiveSession] = useState(null);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [showAddProductModal, setShowAddProductModal] = useState(false);
+  const [addProductName, setAddProductName] = useState("");
+  const [manualProducts, setManualProducts] = useState({});
   // Calculator modal state
   const [calcModal, setCalcModal] = useState({
     isOpen: false,
@@ -1690,6 +1693,45 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const inventoryAvailableRestaurants = useMemo(() => {
     return (Array.isArray(restaurants) ? restaurants : []).filter((item) => String(item?.id || "").trim());
   }, [restaurants]);
+
+  const handleQuickAddProduct = () => {
+    const productName = String(addProductName || "").trim();
+    if (!productName) {
+      alert("Введіть назву продукту.");
+      return;
+    }
+
+    if (!restaurantId) {
+      alert("Спочатку оберіть ресторан.");
+      return;
+    }
+
+    const newProductId = `manual__${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const newProduct = {
+      id: newProductId,
+      name: productName,
+      code1C: "",
+      category: "",
+      unit: "шт",
+      unitPrice: 0,
+      restaurantId,
+      isActive: true,
+      isManual: true,
+    };
+
+    setManualProducts((prev) => ({
+      ...prev,
+      [newProductId]: newProduct,
+    }));
+
+    setQuantities((prev) => ({
+      ...prev,
+      [newProductId]: "0",
+    }));
+
+    setAddProductName("");
+    setShowAddProductModal(false);
+  };
 
   const currentUserId = useMemo(
     () => String(user?.uid || user?.id || user?.email || "unknown").trim() || "unknown",
@@ -1850,8 +1892,10 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const scopedProducts = useMemo(() => {
     const selectedRestaurantId = String(restaurantId || "");
     if (!selectedRestaurantId) return [];
-    return products.filter((item) => item.isActive !== false && sameRestaurant(item.restaurantId, selectedRestaurantId));
-  }, [products, restaurantId]);
+    const baseProducts = products.filter((item) => item.isActive !== false && sameRestaurant(item.restaurantId, selectedRestaurantId));
+    const manualProductsList = Object.values(manualProducts).filter((item) => sameRestaurant(item.restaurantId, selectedRestaurantId));
+    return [...baseProducts, ...manualProductsList];
+  }, [products, restaurantId, manualProducts]);
 
   useEffect(() => {
     const pendingRestore = pendingRestoreRef.current;
@@ -2712,6 +2756,14 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                   <X size={13} />
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => setShowAddProductModal(true)}
+                className={`absolute top-1/2 -translate-y-1/2 inline-flex h-5 w-5 items-center justify-center rounded text-slate-400 hover:text-slate-700 ${searchTerm ? "right-7" : "right-1"}`}
+                title="Додати продукт вручну"
+              >
+                <Plus size={14} />
+              </button>
               <datalist id="inventory-product-suggestions">
                 {keywordSuggestions.map((name) => (
                   <option key={name} value={name} />
@@ -2959,6 +3011,56 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
             <div className="mt-4 flex gap-2.5">
               <button onClick={closeCalcModal} className="flex-1 rounded-xl border border-slate-600 bg-[#1f2532] px-3 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-[#2a3244]">Скасувати</button>
               <button onClick={calcSave} className="flex-1 rounded-xl bg-emerald-600 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500">OK</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Product Modal */}
+      {showAddProductModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-3"
+          onClick={() => setShowAddProductModal(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4">
+              <h3 className="text-base font-semibold text-slate-900">Додати продукт</h3>
+            </div>
+            <div className="mb-4 space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Назва продукту*</label>
+                <input
+                  type="text"
+                  value={addProductName}
+                  onChange={(e) => setAddProductName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleQuickAddProduct();
+                    if (e.key === "Escape") setShowAddProductModal(false);
+                  }}
+                  placeholder="Введіть назву…"
+                  className={inputClass}
+                  autoFocus
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowAddProductModal(false)}
+                className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Скасувати
+              </button>
+              <button
+                type="button"
+                onClick={handleQuickAddProduct}
+                className="flex-1 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+              >
+                Додати
+              </button>
             </div>
           </div>
         </div>
