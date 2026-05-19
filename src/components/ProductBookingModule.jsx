@@ -144,6 +144,23 @@ const formatDateTimeSafe = (value) => {
   return raw;
 };
 
+const formatDateTimeCompact = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "-";
+  const date = new Date(raw);
+  if (!Number.isNaN(date.getTime())) {
+    return date.toLocaleString("uk-UA", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  }
+  return raw;
+};
+
 const resolveOrderCreatedAt = (order) => {
   if (!order || typeof order !== "object") return "";
   return String(
@@ -592,6 +609,26 @@ const DELIVERY_WEEK_DAYS = [
   { id: "sat", label: "Сб" },
   { id: "sun", label: "Нд" },
 ];
+
+const DELIVERY_WEEK_DAY_IDS = DELIVERY_WEEK_DAYS.map((day) => day.id);
+
+const normalizeContractDeliverySchedule = (contract = {}) => {
+  const deliveryDays = Array.isArray(contract?.deliveryDays)
+    ? contract.deliveryDays.map((day) => String(day || "").trim()).filter(Boolean)
+    : [];
+  const scheduleRaw = contract?.deliverySchedule && typeof contract.deliverySchedule === "object" && !Array.isArray(contract.deliverySchedule)
+    ? contract.deliverySchedule
+    : {};
+
+  const normalized = {};
+  DELIVERY_WEEK_DAY_IDS.forEach((dayId) => {
+    const included = deliveryDays.includes(dayId) || Object.prototype.hasOwnProperty.call(scheduleRaw, dayId);
+    if (!included) return;
+    const rawTime = String(scheduleRaw?.[dayId] || "").trim();
+    normalized[dayId] = /^\d{2}:\d{2}$/.test(rawTime) ? rawTime : "";
+  });
+  return normalized;
+};
 
 const isGlobalAdminUser = (user) => String(user?.role || "").toLowerCase() === "admin";
 
@@ -3592,9 +3629,7 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
   const normalizeContracts = (supplier) => {
     const contractsRaw = Array.isArray(supplier?.contracts) ? supplier.contracts : [];
     return contractsRaw.map((contract, index) => {
-      const deliveryDays = Array.isArray(contract?.deliveryDays)
-        ? contract.deliveryDays.map((day) => String(day || "").trim()).filter(Boolean)
-        : [];
+      const deliverySchedule = normalizeContractDeliverySchedule(contract);
       return {
         id: String(contract?.id || `${supplier?.id || "supplier"}_${index}`).trim(),
         restaurantId: String(contract?.restaurantId || "").trim(),
@@ -3605,7 +3640,8 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
         minimumOrderAmount: Math.max(0, toNumber(contract?.minimumOrderAmount || 0)),
         deliveryLeadDays: Math.max(0, Math.round(toNumber(contract?.deliveryLeadDays || 0))),
         paymentDelayDays: Math.max(0, Math.round(toNumber(contract?.paymentDelayDays || 0))),
-        deliveryDays: Array.from(new Set(deliveryDays)),
+        deliveryDays: Object.keys(deliverySchedule),
+        deliverySchedule,
       };
     });
   };
@@ -3618,7 +3654,9 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
 
   const saveSupplierContracts = async (supplier, contracts) => {
     const supplierId = String(supplier?.id || "").trim();
-    const normalizedContracts = (Array.isArray(contracts) ? contracts : []).map((contract, index) => ({
+    const normalizedContracts = (Array.isArray(contracts) ? contracts : []).map((contract, index) => {
+      const deliverySchedule = normalizeContractDeliverySchedule(contract);
+      return {
       id: String(contract?.id || `${supplier?.id || "supplier"}_${Date.now()}_${index}`).trim(),
       restaurantId: String(contract?.restaurantId || "").trim(),
       restaurantName:
@@ -3633,8 +3671,10 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
       minimumOrderAmount: Math.max(0, toNumber(contract?.minimumOrderAmount || 0)),
       deliveryLeadDays: Math.max(0, Math.round(toNumber(contract?.deliveryLeadDays || 0))),
       paymentDelayDays: Math.max(0, Math.round(toNumber(contract?.paymentDelayDays || 0))),
-      deliveryDays: Array.from(new Set((Array.isArray(contract?.deliveryDays) ? contract.deliveryDays : []).map((day) => String(day || "").trim()).filter(Boolean))),
-    }));
+      deliveryDays: Object.keys(deliverySchedule),
+      deliverySchedule,
+      };
+    });
 
     const invalidContract = normalizedContracts.find((contract) => !String(contract.restaurantId || "").trim());
     if (invalidContract) {
@@ -3671,6 +3711,66 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
     });
   };
 
+  const patchContractDeliverySchedule = (supplierId, contractId, updater) => {
+    setContractDrafts((prev) => {
+      const currentSupplier = suppliersById.get(String(supplierId || ""));
+      const current = Array.isArray(prev[supplierId]) ? prev[supplierId] : normalizeContracts(currentSupplier);
+      return {
+        ...prev,
+        [supplierId]: current.map((contract) => {
+          if (String(contract.id) !== String(contractId)) return contract;
+          const currentSchedule = normalizeContractDeliverySchedule(contract);
+          const nextSchedule = typeof updater === "function" ? updater(currentSchedule) : currentSchedule;
+          return {
+            ...contract,
+            deliverySchedule: nextSchedule,
+            deliveryDays: Object.keys(nextSchedule),
+          };
+        }),
+      };
+    });
+  };
+
+  const toggleContractDeliveryDay = (supplierId, contractId, dayId, checked) => {
+    patchContractDeliverySchedule(supplierId, contractId, (currentSchedule) => {
+      const nextSchedule = { ...currentSchedule };
+      if (checked) {
+        nextSchedule[dayId] = nextSchedule[dayId] || "";
+      } else {
+        delete nextSchedule[dayId];
+      }
+      return nextSchedule;
+    });
+  };
+
+  const updateContractDeliveryDayTime = (supplierId, contractId, dayId, value) => {
+    patchContractDeliverySchedule(supplierId, contractId, (currentSchedule) => ({
+      ...currentSchedule,
+      [dayId]: value,
+    }));
+  };
+
+  const applyContractTimeToAllSelectedDays = (supplierId, contractId, value) => {
+    patchContractDeliverySchedule(supplierId, contractId, (currentSchedule) => {
+      const nextSchedule = { ...currentSchedule };
+      Object.keys(nextSchedule).forEach((dayId) => {
+        nextSchedule[dayId] = value;
+      });
+      return nextSchedule;
+    });
+  };
+
+  const toggleContractAllDeliveryDays = (supplierId, contractId, checked) => {
+    patchContractDeliverySchedule(supplierId, contractId, (currentSchedule) => {
+      if (!checked) return {};
+      const templateTime = Object.values(currentSchedule).find(Boolean) || "";
+      return DELIVERY_WEEK_DAY_IDS.reduce((acc, dayId) => {
+        acc[dayId] = templateTime;
+        return acc;
+      }, {});
+    });
+  };
+
   const addContract = (supplier) => {
     const nextContract = {
       id: `${supplier.id}_${Date.now()}`,
@@ -3683,6 +3783,7 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
       deliveryLeadDays: 0,
       paymentDelayDays: 0,
       deliveryDays: [],
+      deliverySchedule: {},
     };
 
     setContractDrafts((prev) => {
@@ -4219,26 +4320,62 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
 
                                               <div className="mt-2">
                                                 <p className="text-[10px] font-semibold text-slate-700 mb-1">Графік поставок</p>
-                                                <div className="flex flex-wrap gap-1">
-                                                  {DELIVERY_WEEK_DAYS.map((day) => {
-                                                    const checked = (contract.deliveryDays || []).includes(day.id);
-                                                    return (
-                                                      <label key={`${contract.id}_${day.id}`} className="inline-flex items-center gap-0.5 rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] cursor-pointer hover:bg-indigo-50">
+                                                {(() => {
+                                                  const deliverySchedule = normalizeContractDeliverySchedule(contract);
+                                                  const selectedDayIds = Object.keys(deliverySchedule);
+                                                  const allDaysSelected = selectedDayIds.length === DELIVERY_WEEK_DAY_IDS.length;
+                                                  const sharedTime = selectedDayIds.length > 0 && selectedDayIds.every((dayId) => deliverySchedule[dayId] === deliverySchedule[selectedDayIds[0]])
+                                                    ? (deliverySchedule[selectedDayIds[0]] || "")
+                                                    : "";
+
+                                                  return (
+                                                    <div className="space-y-1.5">
+                                                      <div className="flex flex-wrap items-center gap-2">
+                                                        <label className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-1.5 py-1 text-[10px] cursor-pointer hover:bg-indigo-50">
+                                                          <input
+                                                            type="checkbox"
+                                                            checked={allDaysSelected}
+                                                            onChange={(e) => toggleContractAllDeliveryDays(item.id, contract.id, e.target.checked)}
+                                                          />
+                                                          Всі дні
+                                                        </label>
                                                         <input
-                                                          type="checkbox"
-                                                          checked={checked}
-                                                          onChange={(e) => {
-                                                            const current = new Set(contract.deliveryDays || []);
-                                                            if (e.target.checked) current.add(day.id);
-                                                            else current.delete(day.id);
-                                                            patchSupplierContract(item.id, contract.id, { deliveryDays: Array.from(current) });
-                                                          }}
+                                                          type="time"
+                                                          className="rounded border border-slate-300 bg-white px-1.5 py-1 text-[10px]"
+                                                          value={sharedTime}
+                                                          disabled={selectedDayIds.length === 0}
+                                                          onChange={(e) => applyContractTimeToAllSelectedDays(item.id, contract.id, e.target.value)}
                                                         />
-                                                        {day.label}
-                                                      </label>
-                                                    );
-                                                  })}
-                                                </div>
+                                                        <span className="text-[10px] text-slate-500">один час для вибраних</span>
+                                                      </div>
+                                                      <div className="grid grid-cols-2 gap-1 sm:grid-cols-4 xl:grid-cols-7">
+                                                        {DELIVERY_WEEK_DAYS.map((day) => {
+                                                          const checked = Object.prototype.hasOwnProperty.call(deliverySchedule, day.id);
+                                                          return (
+                                                            <div key={`${contract.id}_${day.id}`} className={`rounded border px-1.5 py-1 ${checked ? "border-indigo-300 bg-indigo-50/70" : "border-slate-200 bg-white"}`}>
+                                                              <label className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-700 cursor-pointer">
+                                                                <input
+                                                                  type="checkbox"
+                                                                  checked={checked}
+                                                                  onChange={(e) => toggleContractDeliveryDay(item.id, contract.id, day.id, e.target.checked)}
+                                                                />
+                                                                {day.label}
+                                                              </label>
+                                                              {checked && (
+                                                                <input
+                                                                  type="time"
+                                                                  className="mt-1 w-full rounded border border-slate-300 bg-white px-1 py-0.5 text-[10px]"
+                                                                  value={deliverySchedule[day.id] || ""}
+                                                                  onChange={(e) => updateContractDeliveryDayTime(item.id, contract.id, day.id, e.target.value)}
+                                                                />
+                                                              )}
+                                                            </div>
+                                                          );
+                                                        })}
+                                                      </div>
+                                                    </div>
+                                                  );
+                                                })()}
                                               </div>
                                             </td>
                                           </tr>
@@ -6588,14 +6725,22 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
         const totalAmount = rows.reduce((sum, row) => sum + toNumber(row.totalAmount), 0);
         const totalQty = rows.reduce((sum, row) => sum + toNumber(row.totalQty), 0);
         const boardCardId = buildSupplierBoardCardId(supplier, batch.rows);
+        const sourceOrders = Array.from(batch.orderIds)
+          .map((orderId) => visibleOrders.find((entry) => String(entry.id) === String(orderId)))
+          .filter(Boolean);
+        const completedRestaurantCount = sourceOrders.filter((entry) => String(entry.status || "") === "completed").length;
+        const pendingRestaurantCount = Math.max(0, batch.restaurants.size - completedRestaurantCount);
+        const calculatedStatus = calculateBoardStatus(batch.lineSnapshots);
 
         boardOrders.push({
           id: boardCardId,
           supplier,
-          status: calculateBoardStatus(batch.lineSnapshots),
+          status: completedRestaurantCount > 0 ? "completed" : calculatedStatus,
           rows,
           orderIds: Array.from(batch.orderIds),
           restaurantCount: batch.restaurants.size,
+          completedRestaurantCount,
+          pendingRestaurantCount,
           restaurants: Array.from(batch.restaurants),
           totalAmount,
           totalQty,
@@ -7331,6 +7476,11 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       return;
     }
 
+    if (toNumber(boardOrder.pendingRestaurantCount) > 0) {
+      alert("В архів можна перенести лише заявки, де закриті всі заклади зі списку.");
+      return;
+    }
+
     const targets = (boardOrder.orderIds || [])
       .map((orderId) => roleScopedOrders.find((entry) => String(entry.id) === String(orderId)))
       .filter(Boolean);
@@ -7787,13 +7937,16 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                           setEditingSupplierBoard(order);
                         }}
                       >
-                        <div className="flex items-center justify-between gap-1">
+                        <div>
                           <p className="truncate text-[11px] font-semibold leading-4 text-slate-900">{order.supplier || "Без постачальника"}</p>
-                          <span className="text-[10px] text-slate-500">{order.deliveryDates[0] || "-"}</span>
+                          <div className="mt-0.5 text-[10px] text-slate-500">{formatDateTimeCompact(order.deliveryDates[0])}</div>
                         </div>
                         <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10px] leading-4 text-slate-600">
                           <span>{order.positionsCount} поз.</span>
                           <span>{order.restaurantCount} закл.</span>
+                          {(toNumber(order.completedRestaurantCount) > 0 || toNumber(order.pendingRestaurantCount) > 0) && (
+                            <span>Прийняли: {toNumber(order.completedRestaurantCount)} / Не прийняли: {toNumber(order.pendingRestaurantCount)}</span>
+                          )}
                           <span>{formatMoney(order.totalAmount)}</span>
                           <span className="truncate">{order.totalQty.toFixed(2)}</span>
                         </div>
@@ -7968,7 +8121,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                 {archivedOrders.map((order) => (
                   <tr key={`archived_${order.id}`} className="border-t border-slate-200 align-top">
                     <td className="px-3 py-2">{order.restaurantName || "-"}</td>
-                    <td className="px-3 py-2">{order.requiredDate || "-"}</td>
+                    <td className="px-3 py-2">{formatDateTimeCompact(order.requiredDate)}</td>
                     <td className="px-3 py-2">{(order.items || []).length}</td>
                     <td className="px-3 py-2 font-medium">{formatMoney(order.totalAmount)}</td>
                     <td className="px-3 py-2 text-xs text-slate-600">{formatDateTimeSafe(order.archivedAt || order.updatedAt)}</td>
@@ -8012,7 +8165,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
             <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
               <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
                 <span className="rounded-full bg-white px-2 py-0.5 font-semibold text-slate-700">Статус: {statusLabel(editingSupplierBoard.status)}</span>
-                <span className="rounded-full bg-white px-2 py-0.5">Дати поставки: {editingSupplierBoard.deliveryDates.join(", ") || "—"}</span>
+                <span className="rounded-full bg-white px-2 py-0.5">Дати поставки: {(editingSupplierBoard.deliveryDates || []).map((value) => formatDateTimeCompact(value)).join(", ") || "—"}</span>
                 {(() => {
                   const linkedOrders = editingSupplierBoard.orderIds
                     .map((id) => roleScopedOrders.find((o) => String(o.id) === String(id)))
@@ -8074,7 +8227,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                   {editingSupplierBoard.rows.map((row, index) => (
                     <tr key={`supplier_modal_${row.productName}_${index}`} className="border-t border-slate-200 align-top">
                       <td className="px-2 py-1 font-medium text-slate-900">{row.productName}</td>
-                      <td className="px-2 py-1">{row.requiredDate || "-"}</td>
+                      <td className="px-2 py-1">{formatDateTimeCompact(row.requiredDate)}</td>
                       <td className="px-2 py-1">{row.totalQty} {row.unit}</td>
                       <td className="px-2 py-1 font-semibold">{formatMoney(row.totalAmount)}</td>
                       <td className="px-2 py-1">
@@ -8089,7 +8242,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                             const showReceivingStats = String(entry.orderStatus || "") === "completed";
                             return (
                               <div key={`modal_entry_${entry.orderId}_${entryIndex}`} className={`flex flex-wrap items-center gap-2 text-xs ${isIssue ? "text-rose-700" : "text-slate-700"}`}>
-                                <span className="min-w-[220px]">{entry.restaurantName} ({entry.requiredDate || "без дати"})</span>
+                                <span className="min-w-[220px]">{entry.restaurantName} ({formatDateTimeCompact(entry.requiredDate)})</span>
                                 {isIssue ? (
                                   <span className={`inline-flex rounded-full px-2 py-0.5 font-semibold ${getSupplierResponseBadgeClass(entry.responseStatus)}`}>
                                     {getSupplierResponseLabel(entry.responseStatus)}{entry.responseQty > 0 ? ` (підтв. ${entry.responseQty} ${row.unit})` : ""}
