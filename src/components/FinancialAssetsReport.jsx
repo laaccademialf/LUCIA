@@ -480,6 +480,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
     }));
   }, [assets, restaurantsById, restaurantsByKey]);
 
+  // Всі можливі опції отримуємо з повних даних активів, не залежно від фільтрів
   const restaurantOptions = useMemo(() => {
     const values = Array.from(new Set(assetsWithLabels.map((asset) => asset.__restaurantLabel)));
     return values.sort((left, right) => left.localeCompare(right, "uk"));
@@ -487,6 +488,23 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
 
   const businessUnitOptions = useMemo(() => {
     const values = Array.from(new Set(assetsWithLabels.map((asset) => asset.__businessUnit)));
+    return values.sort((left, right) => left.localeCompare(right, "uk"));
+  }, [assetsWithLabels]);
+
+  // ВАЖЛИВО: категорії, статуси і розміщення отримуємо з УСІХ активів, а не з відфільтрованих!
+  // Це забезпечує незалежність фільтрів один від одного
+  const categoryOptions = useMemo(() => {
+    const values = Array.from(new Set(assetsWithLabels.map((asset) => asset.__category)));
+    return values.sort((left, right) => left.localeCompare(right, "uk"));
+  }, [assetsWithLabels]);
+
+  const statusOptions = useMemo(() => {
+    const values = Array.from(new Set(assetsWithLabels.map((asset) => asset.__status)));
+    return values.sort((left, right) => left.localeCompare(right, "uk"));
+  }, [assetsWithLabels]);
+
+  const placementOptions = useMemo(() => {
+    const values = Array.from(new Set(assetsWithLabels.map((asset) => asset.__placement)));
     return values.sort((left, right) => left.localeCompare(right, "uk"));
   }, [assetsWithLabels]);
 
@@ -506,31 +524,8 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
     setSelectedBusinessUnits((prev) => syncSelection(prev, businessUnitOptions));
   }, [businessUnitOptions]);
 
-  const activeRestaurants = selectedRestaurants.length > 0 ? selectedRestaurants : restaurantOptions;
-  const activeBusinessUnits = selectedBusinessUnits.length > 0 ? selectedBusinessUnits : businessUnitOptions;
-
-  const assetsAfterRestaurantAndBusinessUnit = useMemo(() => {
-    return assetsWithLabels.filter(
-      (asset) => activeRestaurants.includes(asset.__restaurantLabel) && activeBusinessUnits.includes(asset.__businessUnit)
-    );
-  }, [assetsWithLabels, activeRestaurants, activeBusinessUnits]);
-
-  const categoryOptions = useMemo(() => {
-    const values = Array.from(new Set(assetsAfterRestaurantAndBusinessUnit.map((asset) => asset.__category)));
-    return values.sort((left, right) => left.localeCompare(right, "uk"));
-  }, [assetsAfterRestaurantAndBusinessUnit]);
-
-  const statusOptions = useMemo(() => {
-    const values = Array.from(new Set(assetsAfterRestaurantAndBusinessUnit.map((asset) => asset.__status)));
-    return values.sort((left, right) => left.localeCompare(right, "uk"));
-  }, [assetsAfterRestaurantAndBusinessUnit]);
-
-  const placementOptions = useMemo(() => {
-    const values = Array.from(new Set(assetsAfterRestaurantAndBusinessUnit.map((asset) => asset.__placement)));
-    return values.sort((left, right) => left.localeCompare(right, "uk"));
-  }, [assetsAfterRestaurantAndBusinessUnit]);
-
   useEffect(() => {
+    // Синхронізуємо категорії незалежно від інших фільтрів
     setSelectedCategories((prev) => syncSelection(prev, categoryOptions));
   }, [categoryOptions]);
 
@@ -542,18 +537,23 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
     setSelectedPlacements((prev) => syncSelection(prev, placementOptions));
   }, [placementOptions]);
 
+  const activeRestaurants = selectedRestaurants.length > 0 ? selectedRestaurants : restaurantOptions;
+  const activeBusinessUnits = selectedBusinessUnits.length > 0 ? selectedBusinessUnits : businessUnitOptions;
   const activeCategories = selectedCategories.length > 0 ? selectedCategories : categoryOptions;
   const activeStatuses = selectedStatuses.length > 0 ? selectedStatuses : statusOptions;
   const activePlacements = selectedPlacements.length > 0 ? selectedPlacements : placementOptions;
 
   const filteredAssets = useMemo(() => {
-    return assetsAfterRestaurantAndBusinessUnit.filter(
+    // Тепер фільтруємо за всіма 5 критеріями незалежно один від одного
+    return assetsWithLabels.filter(
       (asset) =>
+        activeRestaurants.includes(asset.__restaurantLabel) &&
+        activeBusinessUnits.includes(asset.__businessUnit) &&
         activeCategories.includes(asset.__category) &&
         activeStatuses.includes(asset.__status) &&
         activePlacements.includes(asset.__placement)
     );
-  }, [assetsAfterRestaurantAndBusinessUnit, activeCategories, activeStatuses, activePlacements]);
+  }, [assetsWithLabels, activeRestaurants, activeBusinessUnits, activeCategories, activeStatuses, activePlacements]);
 
   const groupedByBusinessUnit = useMemo(() => {
     return activeBusinessUnits
@@ -683,31 +683,72 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      {/* KPI КАРТИ ДЛЯ ДИРЕКТОРА */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="rounded-lg border border-slate-200 bg-gradient-to-br from-indigo-50 to-indigo-100 p-5 shadow-md">
+          <div className="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-1">Всього активів</div>
+          <div className="text-3xl font-bold text-indigo-900">{filteredAssets.length}</div>
+          <div className="text-xs text-indigo-700 mt-2">од.</div>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-gradient-to-br from-emerald-50 to-emerald-100 p-5 shadow-md">
+          <div className="text-xs font-semibold text-emerald-600 uppercase tracking-wide mb-1">Первісна вартість</div>
+          <div className="text-2xl font-bold text-emerald-900">
+            {filteredAssets.length > 0 ? formatCurrency(filteredAssets.reduce((sum, a) => sum + toNumber(a?.initialCost || a?.initial_cost), 0)) : "0 ₴"}
+          </div>
+          <div className="text-xs text-emerald-700 mt-2">усіх ОС</div>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-gradient-to-br from-blue-50 to-blue-100 p-5 shadow-md">
+          <div className="text-xs font-semibold text-blue-600 uppercase tracking-wide mb-1">Залишкова вартість</div>
+          <div className="text-2xl font-bold text-blue-900">
+            {filteredAssets.length > 0 ? formatCurrency(filteredAssets.reduce((sum, a) => sum + toNumber(a?.residualValue || a?.residual_value), 0)) : "0 ₴"}
+          </div>
+          <div className="text-xs text-blue-700 mt-2">остання інвент.</div>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-gradient-to-br from-orange-50 to-orange-100 p-5 shadow-md">
+          <div className="text-xs font-semibold text-orange-600 uppercase tracking-wide mb-1">Накопичений знос</div>
+          <div className="text-2xl font-bold text-orange-900">
+            {filteredAssets.length > 0 ? formatCurrency(filteredAssets.reduce((sum, a) => sum + (toNumber(a?.initialCost || a?.initial_cost) - toNumber(a?.residualValue || a?.residual_value)), 0)) : "0 ₴"}
+          </div>
+          <div className="text-xs text-orange-700 mt-2">дельта</div>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-gradient-to-br from-rose-50 to-rose-100 p-5 shadow-md">
+          <div className="text-xs font-semibold text-rose-600 uppercase tracking-wide mb-1">До списання</div>
+          <div className="text-3xl font-bold text-rose-900">{filteredAssets.filter(isWriteOffAsset).length}</div>
+          <div className="text-xs text-rose-700 mt-2">активів</div>
+        </div>
+      </div>
+
+      {/* ПАНЕЛЬ ФІЛЬТРІВ */}
+      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-md">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-2xl font-bold text-slate-900">Основний звіт по основних засобах</h2>
           <button
             type="button"
             onClick={resetFilters}
-            className="rounded px-2.5 py-1.5 text-xs font-semibold text-indigo-600 hover:bg-indigo-50"
+            className="rounded px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors border border-slate-300"
           >
-            ↺ Скинути
+            ↺ Скинути всі фільтри
           </button>
         </div>
 
-        <div className="mb-4 flex flex-wrap gap-2 text-[11px] text-slate-500">
-          <span className="font-semibold">Закладів: <span className="text-slate-700 font-bold">{activeRestaurants.length}</span></span>
-          <span className="text-slate-300">•</span>
-          <span className="font-semibold">Бізнес-напрямів: <span className="text-slate-700 font-bold">{activeBusinessUnits.length}</span></span>
-          <span className="text-slate-300">•</span>
-          <span className="font-semibold">Активів: <span className="text-slate-700 font-bold">{filteredAssets.length}</span></span>
+        <div className="mb-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs text-slate-600 bg-slate-50 p-3 rounded">
+          <div><span className="font-semibold text-slate-700">Закладів:</span> <span className="font-bold text-slate-900">{activeRestaurants.length}/{restaurantOptions.length}</span></div>
+          <div><span className="font-semibold text-slate-700">Бізнес-напрямів:</span> <span className="font-bold text-slate-900">{activeBusinessUnits.length}/{businessUnitOptions.length}</span></div>
+          <div><span className="font-semibold text-slate-700">Категорій:</span> <span className="font-bold text-slate-900">{activeCategories.length}/{categoryOptions.length}</span></div>
+          <div><span className="font-semibold text-slate-700">Статусів:</span> <span className="font-bold text-slate-900">{activeStatuses.length}/{statusOptions.length}</span></div>
+          <div><span className="font-semibold text-slate-700">Розміщень:</span> <span className="font-bold text-slate-900">{activePlacements.length}/{placementOptions.length}</span></div>
+          <div><span className="font-semibold text-slate-700">Активів:</span> <span className="font-bold text-slate-900">{filteredAssets.length}</span></div>
         </div>
 
-        <div className="border-t border-slate-100 pt-4 pb-2">
-          <div className="flex gap-2 overflow-x-auto">
+        <div className="border-t border-slate-100 pt-4">
+          <div className="flex gap-2 overflow-x-auto pb-2">
             <div className="flex-1 min-w-max">
               <FilterDropdown
-                title="Заклади"
+                title="📍 Заклади"
                 options={restaurantOptions}
                 selected={selectedRestaurants}
                 onToggle={(value) => setSelectedRestaurants((prev) => toggleOption(prev, value))}
@@ -718,7 +759,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
 
             <div className="flex-1 min-w-max">
               <FilterDropdown
-                title="Бізнес-напрями"
+                title="🏢 Бізнес-напрями"
                 options={businessUnitOptions}
                 selected={selectedBusinessUnits}
                 onToggle={(value) => setSelectedBusinessUnits((prev) => toggleOption(prev, value))}
@@ -729,7 +770,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
 
             <div className="flex-1 min-w-max">
               <FilterDropdown
-                title="Категорії"
+                title="📦 Категорії"
                 options={categoryOptions}
                 selected={selectedCategories}
                 onToggle={(value) => setSelectedCategories((prev) => toggleOption(prev, value))}
@@ -740,7 +781,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
 
             <div className="flex-1 min-w-max">
               <FilterDropdown
-                title="Статуси"
+                title="✓ Статуси"
                 options={statusOptions}
                 selected={selectedStatuses}
                 onToggle={(value) => setSelectedStatuses((prev) => toggleOption(prev, value))}
@@ -751,7 +792,7 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
 
             <div className="flex-1 min-w-max">
               <FilterDropdown
-                title="Розміщення"
+                title="📍 Розміщення"
                 options={placementOptions}
                 selected={selectedPlacements}
                 onToggle={(value) => setSelectedPlacements((prev) => toggleOption(prev, value))}
@@ -764,30 +805,30 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
       </div>
 
       {groupedByBusinessUnit.map((unitBlock) => (
-        <div key={unitBlock.businessUnit} className="space-y-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="text-xl font-semibold text-slate-900">Бізнес-напрям: {unitBlock.businessUnit}</h3>
+        <div key={unitBlock.businessUnit} className="space-y-4 rounded-lg border border-slate-200 bg-white p-6 shadow-md">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl font-bold text-slate-900">🏢 {unitBlock.businessUnit}</h3>
+            <div className="text-sm text-slate-500 font-semibold">{unitBlock.rows.length} активів</div>
+          </div>
 
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Показники</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Кількість в наявності</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Первісна вартість (всіх ОС)</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Оціночна вартість (остання інвент.)</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Знос (дельта), грн</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-t border-slate-200">
-                  <td className="px-3 py-2 font-semibold text-slate-900">Підсумок по бізнес-напряму</td>
-                  <td className="px-3 py-2 text-right text-slate-900">{unitBlock.summary.quantity}</td>
-                  <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(unitBlock.summary.initialValue)}</td>
-                  <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(unitBlock.summary.estimatedValue)}</td>
-                  <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(unitBlock.summary.wear)}</td>
-                </tr>
-              </tbody>
-            </table>
+          {/* Міні KPI для цього бізнес-напрямку */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            <div className="bg-indigo-50 rounded-lg p-3 border border-indigo-200">
+              <div className="text-xs font-semibold text-indigo-600">Всього</div>
+              <div className="text-lg font-bold text-indigo-900">{unitBlock.summary.quantity}</div>
+            </div>
+            <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-200">
+              <div className="text-xs font-semibold text-emerald-600">Первісна</div>
+              <div className="text-lg font-bold text-emerald-900">{formatCurrency(unitBlock.summary.initialValue)}</div>
+            </div>
+            <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
+              <div className="text-xs font-semibold text-blue-600">Залишкова</div>
+              <div className="text-lg font-bold text-blue-900">{formatCurrency(unitBlock.summary.estimatedValue)}</div>
+            </div>
+            <div className="bg-orange-50 rounded-lg p-3 border border-orange-200">
+              <div className="text-xs font-semibold text-orange-600">Знос</div>
+              <div className="text-lg font-bold text-orange-900">{formatCurrency(unitBlock.summary.wear)}</div>
+            </div>
           </div>
 
           <FinancialSummaryTable 
@@ -802,62 +843,69 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800">По розміщенню</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Кількість в наявності</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Первісна вартість (всіх ОС)</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Оціночна вартість (остання інвент.)</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Знос (дельта), грн</th>
+                  <th className="px-3 py-2 text-left font-semibold text-slate-800">📍 По розміщенню</th>
+                  <th className="px-3 py-2 text-right font-semibold text-slate-800">К-сть</th>
+                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Первісна вартість</th>
+                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Залишкова вартість</th>
+                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Знос, грн</th>
                 </tr>
               </thead>
               <tbody>
                 {unitBlock.byPlacement.map((placementRow) => (
-                  <tr key={placementRow.key} className="border-t border-slate-200">
-                    <td className="px-3 py-2 text-slate-900">{placementRow.placement}</td>
+                  <tr key={placementRow.key} className="border-t border-slate-200 hover:bg-slate-50">
+                    <td className="px-3 py-2 text-slate-900 font-medium">{placementRow.placement}</td>
                     <td className="px-3 py-2 text-right text-slate-900">{placementRow.quantity}</td>
                     <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(placementRow.initialValue)}</td>
                     <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(placementRow.estimatedValue)}</td>
-                    <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(placementRow.wear)}</td>
+                    <td className="px-3 py-2 text-right text-orange-600 font-semibold">{formatCurrency(placementRow.wear)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
 
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Спецстатуси</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Кількість</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Первісна вартість</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Оціночна вартість (остання інвент.)</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-t border-slate-200">
-                  <td className="px-3 py-2 font-semibold text-slate-900">До списання</td>
-                  <td className="px-3 py-2 text-right text-slate-900">{unitBlock.writeOffSummary.quantity}</td>
-                  <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(unitBlock.writeOffSummary.initialValue)}</td>
-                  <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(unitBlock.writeOffSummary.estimatedValue)}</td>
-                </tr>
-                <tr className="border-t border-slate-200">
-                  <td className="px-3 py-2 font-semibold text-slate-900">До вияснення</td>
-                  <td className="px-3 py-2 text-right text-slate-900">{unitBlock.clarificationSummary.quantity}</td>
-                  <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(unitBlock.clarificationSummary.initialValue)}</td>
-                  <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(unitBlock.clarificationSummary.estimatedValue)}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          {(unitBlock.writeOffSummary.quantity > 0 || unitBlock.clarificationSummary.quantity > 0) && (
+            <div className="overflow-x-auto rounded-lg border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-semibold text-slate-800">⚠️ Спеціальні статуси</th>
+                    <th className="px-3 py-2 text-right font-semibold text-slate-800">К-сть</th>
+                    <th className="px-3 py-2 text-right font-semibold text-slate-800">Первісна вартість</th>
+                    <th className="px-3 py-2 text-right font-semibold text-slate-800">Залишкова вартість</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unitBlock.writeOffSummary.quantity > 0 && (
+                    <tr className="border-t border-slate-200 bg-red-50">
+                      <td className="px-3 py-2 font-semibold text-red-900">🗑️ До списання</td>
+                      <td className="px-3 py-2 text-right text-red-900 font-bold">{unitBlock.writeOffSummary.quantity}</td>
+                      <td className="px-3 py-2 text-right text-red-900">{formatCurrency(unitBlock.writeOffSummary.initialValue)}</td>
+                      <td className="px-3 py-2 text-right text-red-900">{formatCurrency(unitBlock.writeOffSummary.estimatedValue)}</td>
+                    </tr>
+                  )}
+                  {unitBlock.clarificationSummary.quantity > 0 && (
+                    <tr className="border-t border-slate-200 bg-yellow-50">
+                      <td className="px-3 py-2 font-semibold text-yellow-900">❓ До вияснення</td>
+                      <td className="px-3 py-2 text-right text-yellow-900 font-bold">{unitBlock.clarificationSummary.quantity}</td>
+                      <td className="px-3 py-2 text-right text-yellow-900">{formatCurrency(unitBlock.clarificationSummary.initialValue)}</td>
+                      <td className="px-3 py-2 text-right text-yellow-900">{formatCurrency(unitBlock.clarificationSummary.estimatedValue)}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       ))}
 
-      <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
+      <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-md">
         <h3 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
           <Clock size={20} className="text-indigo-600" />
-          Структура активів за віком (роки з моменту введення)
+          📊 Структура активів за віком
         </h3>
-        <ResponsiveContainer width="100%" height={240}>
+        <p className="text-xs text-slate-500 mb-4">Розподіл активів по роках від моменту введення в експлуатацію</p>
+        <ResponsiveContainer width="100%" height={300}>
           <BarChart data={ageGroups}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="name" />
@@ -869,18 +917,19 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
       </div>
 
       {topAssetsByWear.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи з максимальним зносом</h3>
+        <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-md">
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">🔴 Активи з максимальним зносом (Top 10)</h3>
+          <p className="text-xs text-slate-500 mb-4">Активи, які потребують переоцінки чи списання</p>
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-50">
+              <thead className="bg-red-50">
                 <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Назва активу</th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Категорія</th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800">Розміщення</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Первісна вартість</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">Знос, грн</th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800">% знос</th>
+                  <th className="px-3 py-2 text-left font-semibold text-red-900">Назва активу</th>
+                  <th className="px-3 py-2 text-left font-semibold text-red-900">Категорія</th>
+                  <th className="px-3 py-2 text-left font-semibold text-red-900">Розміщення</th>
+                  <th className="px-3 py-2 text-right font-semibold text-red-900">Первісна вартість</th>
+                  <th className="px-3 py-2 text-right font-semibold text-red-900">Знос, грн</th>
+                  <th className="px-3 py-2 text-right font-semibold text-red-900">% знос</th>
                 </tr>
               </thead>
               <tbody>
@@ -889,13 +938,13 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
                   const initial = toNumber(asset?.initialCost || asset?.initial_cost);
                   const wearPercent = initial > 0 ? ((wear / initial) * 100).toFixed(1) : 0;
                   return (
-                    <tr key={`${asset.id}-${idx}`} className="border-t border-slate-200">
-                      <td className="px-3 py-2 text-slate-900">{normalizeText(asset?.name)}</td>
+                    <tr key={`${asset.id}-${idx}`} className="border-t border-slate-200 hover:bg-red-50">
+                      <td className="px-3 py-2 text-slate-900 font-medium">{normalizeText(asset?.name)}</td>
                       <td className="px-3 py-2 text-slate-700">{asset.__category}</td>
                       <td className="px-3 py-2 text-slate-700">{asset.__placement}</td>
                       <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(initial)}</td>
                       <td className="px-3 py-2 text-right font-semibold text-red-600">{formatCurrency(wear)}</td>
-                      <td className="px-3 py-2 text-right font-semibold text-red-600">{wearPercent}%</td>
+                      <td className="px-3 py-2 text-right font-bold text-red-700 text-lg">{wearPercent}%</td>
                     </tr>
                   );
                 })}
@@ -907,8 +956,9 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
 
       {filteredAssets.length > 0 && (
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">Розподіл активів по категоріях</h3>
+          <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-md">
+            <h3 className="text-lg font-semibold text-slate-900 mb-1 flex items-center gap-2">📦 Розподіл по категоріях</h3>
+            <p className="text-xs text-slate-500 mb-4">Кількість активів у кожній категорії</p>
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
               <ResponsiveContainer width="100%" height={320}>
                 <PieChart>
@@ -933,8 +983,9 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
             </div>
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">Розподіл активів по бізнес-напрямах</h3>
+          <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-md">
+            <h3 className="text-lg font-semibold text-slate-900 mb-1 flex items-center gap-2">🏢 Розподіл по бізнес-напрямах</h3>
+            <p className="text-xs text-slate-500 mb-4">Розподіл активів між різними напрямами</p>
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
               <ResponsiveContainer width="100%" height={320}>
                 <PieChart>
@@ -959,12 +1010,13 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
             </div>
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm xl:col-span-2">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи по розміщенню</h3>
-            <ResponsiveContainer width="100%" height={320}>
+          <div className="bg-white border border-slate-200 rounded-lg p-6 shadow-md xl:col-span-2">
+            <h3 className="text-lg font-semibold text-slate-900 mb-1 flex items-center gap-2">📍 Активи по розміщенню</h3>
+            <p className="text-xs text-slate-500 mb-4">Топ 8 розміщень за кількістю активів</p>
+            <ResponsiveContainer width="100%" height={340}>
               <BarChart data={placementDistribution}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" angle={-20} textAnchor="end" height={70} interval={0} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="name" angle={-25} textAnchor="end" height={80} interval={0} tick={{ fontSize: 11 }} />
                 <YAxis allowDecimals={false} />
                 <Tooltip formatter={(value) => `${value} шт`} />
                 <Bar dataKey="value" fill="#14b8a6" radius={[8, 8, 0, 0]} label={{ position: "top", fill: "#0f172a", fontSize: 12, fontWeight: 700 }} />
@@ -975,31 +1027,32 @@ export const FinancialAssetsReport = ({ assets = [], restaurants = [] }) => {
       )}
 
       {writeOffAssets.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-sm">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">Активи до списання</h3>
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
+        <div className="bg-white border border-rose-200 rounded-lg p-6 shadow-md bg-gradient-to-br from-white to-rose-50">
+          <h3 className="text-lg font-semibold text-rose-900 mb-1 flex items-center gap-2">🗑️ Активи до списання ({writeOffAssets.length})</h3>
+          <p className="text-xs text-rose-700 mb-4">Активи, позначені для списання або потребуючих переоцінки</p>
+          <div className="overflow-x-auto rounded-lg border border-rose-200">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-50">
+              <thead className="bg-rose-100">
                 <tr>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("name")} className="inline-flex items-center gap-1 hover:text-indigo-600">Назва активу <ArrowUpDown size={14} /></button></th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("category")} className="inline-flex items-center gap-1 hover:text-indigo-600">Категорія <ArrowUpDown size={14} /></button></th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("businessUnit")} className="inline-flex items-center gap-1 hover:text-indigo-600">Бізнес-напрям <ArrowUpDown size={14} /></button></th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("placement")} className="inline-flex items-center gap-1 hover:text-indigo-600">Розміщення <ArrowUpDown size={14} /></button></th>
-                  <th className="px-3 py-2 text-left font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("status")} className="inline-flex items-center gap-1 hover:text-indigo-600">Статус/Рішення <ArrowUpDown size={14} /></button></th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("quantity")} className="inline-flex items-center gap-1 hover:text-indigo-600">Кількість <ArrowUpDown size={14} /></button></th>
-                  <th className="px-3 py-2 text-right font-semibold text-slate-800"><button type="button" onClick={() => toggleWriteOffSort("initialValue")} className="inline-flex items-center gap-1 hover:text-indigo-600">Первісна вартість <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-left font-semibold text-rose-900"><button type="button" onClick={() => toggleWriteOffSort("name")} className="inline-flex items-center gap-1 hover:text-rose-700">Назва <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-left font-semibold text-rose-900"><button type="button" onClick={() => toggleWriteOffSort("category")} className="inline-flex items-center gap-1 hover:text-rose-700">Категорія <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-left font-semibold text-rose-900"><button type="button" onClick={() => toggleWriteOffSort("businessUnit")} className="inline-flex items-center gap-1 hover:text-rose-700">Напрям <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-left font-semibold text-rose-900"><button type="button" onClick={() => toggleWriteOffSort("placement")} className="inline-flex items-center gap-1 hover:text-rose-700">Розміщення <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-left font-semibold text-rose-900"><button type="button" onClick={() => toggleWriteOffSort("status")} className="inline-flex items-center gap-1 hover:text-rose-700">Статус <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-right font-semibold text-rose-900"><button type="button" onClick={() => toggleWriteOffSort("quantity")} className="inline-flex items-center gap-1 hover:text-rose-700">К-сть <ArrowUpDown size={14} /></button></th>
+                  <th className="px-3 py-2 text-right font-semibold text-rose-900"><button type="button" onClick={() => toggleWriteOffSort("initialValue")} className="inline-flex items-center gap-1 hover:text-rose-700">Вартість <ArrowUpDown size={14} /></button></th>
                 </tr>
               </thead>
               <tbody>
                 {sortedWriteOffAssets.map((asset, idx) => (
-                  <tr key={`${asset.id}-${idx}`} className="border-t border-slate-200">
-                    <td className="px-3 py-2 text-slate-900">{normalizeText(asset?.name)}</td>
+                  <tr key={`${asset.id}-${idx}`} className="border-t border-rose-200 hover:bg-rose-100/50">
+                    <td className="px-3 py-2 text-slate-900 font-medium">{normalizeText(asset?.name)}</td>
                     <td className="px-3 py-2 text-slate-700">{asset.__category}</td>
                     <td className="px-3 py-2 text-slate-700">{asset.__businessUnit}</td>
                     <td className="px-3 py-2 text-slate-700">{asset.__placement}</td>
-                    <td className="px-3 py-2 text-slate-700">{asset.__status}</td>
-                    <td className="px-3 py-2 text-right text-slate-900">{getInventoryQuantity(asset)}</td>
-                    <td className="px-3 py-2 text-right text-slate-900">{formatCurrency(asset?.initialCost || asset?.initial_cost)}</td>
+                    <td className="px-3 py-2 text-rose-700 font-semibold">{asset.__status}</td>
+                    <td className="px-3 py-2 text-right text-slate-900 font-semibold">{getInventoryQuantity(asset)}</td>
+                    <td className="px-3 py-2 text-right text-rose-700 font-bold">{formatCurrency(asset?.initialCost || asset?.initial_cost)}</td>
                   </tr>
                 ))}
               </tbody>
