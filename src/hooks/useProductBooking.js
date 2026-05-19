@@ -539,20 +539,33 @@ export const useProductBooking = (enableRealtime = true) => {
   };
 
   const updateProduct = async (id, data, options = {}) => {
+    const normalizedId = String(id || "");
+    const payload = data || {};
+    const skipReload = Boolean(options?.skipReload);
+    let previousItem = null;
+
+    if (skipReload) {
+      updateProductsState((prev) => prev.map((item) => {
+        if (String(item.id) !== normalizedId) return item;
+        previousItem = { ...item };
+        return { ...item, ...payload, id: normalizedId };
+      }));
+    }
+
     try {
-      const skipReload = Boolean(options?.skipReload);
       if (isCollectionsApiEnabled()) {
-        await updateCollectionItemApi("bookingProducts", id, data);
-        if (skipReload) {
-          updateProductsState((prev) => prev.map((item) => (String(item.id) === String(id) ? { ...item, ...data, id: String(id) } : item)));
-        } else {
+        await updateCollectionItemApi("bookingProducts", normalizedId, payload);
+        if (!skipReload) {
           await reloadAllApi();
         }
       } else {
-        await updateBookingProduct(id, data);
+        await updateBookingProduct(normalizedId, payload);
       }
       return { success: true };
     } catch (err) {
+      if (skipReload && previousItem) {
+        updateProductsState((prev) => prev.map((item) => (String(item.id) === normalizedId ? previousItem : item)));
+      }
       setError(err);
       return { success: false, error: err };
     }

@@ -9,7 +9,6 @@ import {
   ChevronRight,
   ClipboardList,
   Clock3,
-  Database,
   Download,
   FileDown,
   Folder,
@@ -23,6 +22,8 @@ import {
   Upload,
   UserIcon,
   Users,
+  Wifi,
+  WifiOff,
   Wrench,
 } from "lucide-react";
 import clsx from "clsx";
@@ -48,7 +49,6 @@ import {
   subscribeToActiveAssetInventorySession,
   subscribeToAssetInventorySessions,
 } from "./firebase/firestore";
-import { activeFirebaseConfig, isRuntimeFirebaseConfig } from "./firebase/config";
 import { useRestaurants } from "./hooks/useRestaurants";
 import { useAssets } from "./hooks/useAssets";
 import { useAssetFields } from "./hooks/useAssetFields";
@@ -61,7 +61,6 @@ import {
 import { useChecklists } from "./hooks/useChecklists";
 import { useServiceRequests } from "./hooks/useServiceRequests";
 import { logAuditEvent } from "./firebase/audit";
-import { getCurrentRuntimeCustomConfig, getPrimaryConnection } from "./data/firebaseConnections";
 import { isCollectionsApiEnabled, getCollectionItemApi } from "./api/collectionsApi";
 import { batchImportAssetsApi, isAssetsApiEnabled } from "./api/assetsApi";
 
@@ -438,22 +437,10 @@ const playCenterAlertTone = () => {
 
 function App() {
   const [currentTime, setCurrentTime] = useState(() => new Date());
-  const runtimeCustomConfig = useMemo(() => getCurrentRuntimeCustomConfig(), []);
-  const primaryConnection = useMemo(() => getPrimaryConnection(), []);
-
-  const activeDbBadge = useMemo(() => {
-    if (runtimeCustomConfig) {
-      return {
-        label: primaryConnection?.name || runtimeCustomConfig.apiBaseUrl || "custom-api",
-        tag: "custom",
-      };
-    }
-
-    return {
-      label: activeFirebaseConfig?.projectId || "default",
-      tag: isRuntimeFirebaseConfig ? "runtime" : "firebase",
-    };
-  }, [runtimeCustomConfig, primaryConnection]);
+  const [isOnline, setIsOnline] = useState(() => {
+    if (typeof navigator === "undefined") return true;
+    return navigator.onLine;
+  });
 
   useEffect(() => {
     const timerId = setInterval(() => {
@@ -461,6 +448,92 @@ function App() {
     }, 1000);
 
     return () => clearInterval(timerId);
+  }, []);
+
+  useEffect(() => {
+    let isDisposed = false;
+
+    const probeConnectivity = async () => {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        if (!isDisposed) setIsOnline(false);
+        return;
+      }
+
+      const probeTargets = [
+        `https://api.ipify.org?format=json&net_probe=${Date.now()}`,
+        `https://httpbin.org/ip?net_probe=${Date.now()}`,
+      ];
+
+      let hasSuccess = false;
+
+      for (const probeUrl of probeTargets) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+        try {
+          const response = await fetch(probeUrl, {
+            method: "GET",
+            cache: "no-store",
+            credentials: "omit",
+            headers: {
+              Accept: "application/json",
+            },
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            continue;
+          }
+
+          const payload = await response.json();
+          const ipValue = String(payload?.ip || payload?.origin || "").trim();
+          if (ipValue) {
+            hasSuccess = true;
+            break;
+          }
+        } catch {
+          // Try the next probe target.
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      }
+
+      if (!isDisposed) {
+        setIsOnline(hasSuccess);
+      }
+    };
+
+    const handleOnline = () => {
+      void probeConnectivity();
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    const handleVisibilityOrFocus = () => {
+      void probeConnectivity();
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("focus", handleVisibilityOrFocus);
+    document.addEventListener("visibilitychange", handleVisibilityOrFocus);
+
+    const intervalId = setInterval(() => {
+      void probeConnectivity();
+    }, 10000);
+
+    void probeConnectivity();
+
+    return () => {
+      isDisposed = true;
+      clearInterval(intervalId);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("focus", handleVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
+    };
   }, []);
 
                                   // --- Функція для завантаження всіх лічильників ---
@@ -4499,14 +4572,14 @@ function App() {
               
               {/* Користувач, сповіщення та вихід - праворуч */}
               <div className="flex items-center gap-2 sm:gap-4">
-                <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300">
-                  <Database size={16} />
-                  <span className="text-xs font-semibold">
-                    БД: {activeDbBadge.label}
+                <div className={clsx(
+                  "hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-100",
+                  isOnline ? "bg-emerald-800/70" : "bg-rose-800/70"
+                )}>
+                  {isOnline ? <Wifi size={16} /> : <WifiOff size={16} />}
+                  <span className="text-xs font-semibold uppercase tracking-wide">
+                    {isOnline ? "Онлайн" : "Офлайн"}
                   </span>
-                  {(isRuntimeFirebaseConfig || runtimeCustomConfig) && (
-                    <span className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">custom</span>
-                  )}
                 </div>
                 <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300">
                   <Clock3 size={16} />

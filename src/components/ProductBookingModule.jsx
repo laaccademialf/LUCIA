@@ -63,6 +63,8 @@ const normalizeTabKind = (tabId = "") => {
 
 const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
+const INVENTORY_DRAFT_STORAGE_PREFIX = "lucia_inventory_draft_v1__";
+const INVENTORY_OFFLINE_QUEUE_STORAGE_KEY = "lucia_inventory_offline_queue_v1";
 
 const getErrorMessage = (error, fallbackMessage) => {
   const message = String(error?.message || error || "").trim();
@@ -78,6 +80,36 @@ const toNumber = (value) => {
 };
 
 const formatMoney = (value) => `${toNumber(value).toFixed(2)} грн`;
+
+const readJsonFromStorage = (key, fallbackValue) => {
+  if (typeof window === "undefined" || !key) return fallbackValue;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallbackValue;
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallbackValue;
+  } catch {
+    return fallbackValue;
+  }
+};
+
+const writeJsonToStorage = (key, value) => {
+  if (typeof window === "undefined" || !key) return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage quota/errors; save flow will still work online.
+  }
+};
+
+const removeStorageKey = (key) => {
+  if (typeof window === "undefined" || !key) return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Ignore storage errors.
+  }
+};
 
 const normalizeProductIdentity = (value) => {
   return String(value || "")
@@ -1593,6 +1625,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const isGlobalAdmin = isGlobalAdminUser(user);
   const quantityInputRefs = useRef({});
   const pendingRestoreRef = useRef(null);
+  const isFlushingOfflineQueueRef = useRef(false);
   const [activeRowProductId, setActiveRowProductId] = useState(null);
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
   // quantities = accumulated/committed totals per productId (used for saving & green highlight)
@@ -1604,6 +1637,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const [inventoryDate, setInventoryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [stockTakingPlace, setStockTakingPlace] = useState("");
   const [activeSession, setActiveSession] = useState(null);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
   // Calculator modal state
   const [calcModal, setCalcModal] = useState({
     isOpen: false,
@@ -1619,6 +1653,115 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const inventoryAvailableRestaurants = useMemo(() => {
     return (Array.isArray(restaurants) ? restaurants : []).filter((item) => String(item?.id || "").trim());
   }, [restaurants]);
+
+  const currentUserId = useMemo(
+    () => String(user?.uid || user?.id || user?.email || "unknown").trim() || "unknown",
+    [user]
+  );
+
+  const inventoryDraftStorageKey = useMemo(() => {
+    const normalizedRestaurantId = String(restaurantId || "").trim() || "none";
+    return `${INVENTORY_DRAFT_STORAGE_PREFIX}${currentUserId}__${normalizedRestaurantId}`;
+  }, [currentUserId, restaurantId]);
+
+  const readOfflineQueue = useCallback(() => {
+    const queue = readJsonFromStorage(INVENTORY_OFFLINE_QUEUE_STORAGE_KEY, []);
+    return Array.isArray(queue) ? queue : [];
+  }, []);
+
+  const writeOfflineQueue = useCallback((queue) => {
+    writeJsonToStorage(INVENTORY_OFFLINE_QUEUE_STORAGE_KEY, Array.isArray(queue) ? queue : []);
+    setPendingSyncCount(Array.isArray(queue) ? queue.length : 0);
+  }, []);
+
+  const removeOfflineQueueItem = useCallback((queueItemId) => {
+    const queue = readOfflineQueue();
+    const nextQueue = queue.filter((entry) => String(entry?.id || "") !== String(queueItemId || ""));
+    writeOfflineQueue(nextQueue);
+  }, [readOfflineQueue, writeOfflineQueue]);
+
+  const enqueueOfflineSave = useCallback((entry) => {
+    const queue = readOfflineQueue();
+    const queueId = String(entry?.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+    const scopeKey = String(entry?.scopeKey || "").trim();
+
+    const filteredQueue = queue.filter((item) => {
+      if (!scopeKey) return true;
+      return String(item?.scopeKey || "") !== scopeKey;
+    });
+
+    const nextQueue = [
+      ...filteredQueue,
+      {
+        ...entry,
+        id: queueId,
+        queuedAt: String(entry?.queuedAt || new Date().toISOString()),
+      },
+    ];
+
+    writeOfflineQueue(nextQueue);
+  }, [readOfflineQueue, writeOfflineQueue]);
+
+  const flushOfflineQueue = useCallback(async () => {
+    if (isFlushingOfflineQueueRef.current) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+
+    const queue = readOfflineQueue();
+    if (queue.length === 0) {
+      setPendingSyncCount(0);
+      return;
+    }
+
+    isFlushingOfflineQueueRef.current = true;
+    try {
+      for (const entry of queue) {
+        const mode = String(entry?.mode || "").trim();
+        const payload = entry?.payload && typeof entry.payload === "object" ? entry.payload : null;
+        if (!payload) {
+          removeOfflineQueueItem(entry?.id);
+          continue;
+        }
+
+        let result = { success: false };
+        if (mode === "update" && entry?.inventoryId) {
+          result = await updateInventory(String(entry.inventoryId), payload);
+        } else {
+          result = await createInventory(payload);
+        }
+
+        if (!result?.success) {
+          break;
+        }
+
+        removeOfflineQueueItem(entry?.id);
+      }
+    } finally {
+      isFlushingOfflineQueueRef.current = false;
+      setPendingSyncCount(readOfflineQueue().length);
+    }
+  }, [createInventory, updateInventory, readOfflineQueue, removeOfflineQueueItem]);
+
+  useEffect(() => {
+    setPendingSyncCount(readOfflineQueue().length);
+  }, [readOfflineQueue]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      void flushOfflineQueue();
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", handleOnline);
+    }
+
+    void flushOfflineQueue();
+
+    return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener("online", handleOnline);
+      }
+    };
+  }, [flushOfflineQueue]);
 
   useEffect(() => {
     if (isGlobalAdmin) return;
@@ -1685,11 +1828,46 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       return;
     }
 
+    const draft = readJsonFromStorage(inventoryDraftStorageKey, null);
+    if (draft && typeof draft === "object") {
+      setQuantities(draft.quantities && typeof draft.quantities === "object" ? draft.quantities : {});
+      setInputValues(draft.inputValues && typeof draft.inputValues === "object" ? draft.inputValues : {});
+      setEditingInventoryId(String(draft.editingInventoryId || ""));
+      setInventoryDate(String(draft.inventoryDate || new Date().toISOString().slice(0, 10)));
+      setStockTakingPlace(String(draft.stockTakingPlace || ""));
+      return;
+    }
+
     setQuantities({});
     setInputValues({});
     setEditingInventoryId("");
     setStockTakingPlace("");
-  }, [restaurantId]);
+  }, [restaurantId, inventoryDraftStorageKey]);
+
+  useEffect(() => {
+    if (!restaurantId) return;
+
+    const hasDraftData =
+      Object.keys(quantities || {}).length > 0 ||
+      Object.keys(inputValues || {}).length > 0 ||
+      Boolean(String(stockTakingPlace || "").trim()) ||
+      Boolean(String(editingInventoryId || "").trim());
+
+    if (!hasDraftData) {
+      removeStorageKey(inventoryDraftStorageKey);
+      return;
+    }
+
+    writeJsonToStorage(inventoryDraftStorageKey, {
+      restaurantId: String(restaurantId || ""),
+      inventoryDate,
+      editingInventoryId: String(editingInventoryId || ""),
+      stockTakingPlace: String(stockTakingPlace || ""),
+      quantities,
+      inputValues,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [inventoryDraftStorageKey, restaurantId, inventoryDate, editingInventoryId, stockTakingPlace, quantities, inputValues]);
 
   const keywordSuggestions = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -2055,19 +2233,40 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       inventorySessionEndedAt: nowIso,
     };
 
-    const result = editingInventoryId
-      ? await updateInventory(editingInventoryId, {
+    const saveMode = editingInventoryId ? "update" : "create";
+    const savePayload = editingInventoryId
+      ? {
           ...payload,
           updatedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
           updatedById: user?.uid || "",
           updatedAt: nowIso,
-        })
-      : await createInventory(payload);
+        }
+      : payload;
+
+    const result = saveMode === "update"
+      ? await updateInventory(editingInventoryId, savePayload)
+      : await createInventory(savePayload);
 
     if (!result.success) {
-      alert("Не вдалося зберегти інвентаризацію.");
+      const scopeKey = `${String(restaurantId || "")}__${String(inventoryDate || "")}__${currentUserId}`;
+      enqueueOfflineSave({
+        mode: saveMode,
+        inventoryId: String(editingInventoryId || ""),
+        payload: savePayload,
+        scopeKey,
+        userId: currentUserId,
+      });
+
+      const isOfflineNow = typeof navigator !== "undefined" && navigator.onLine === false;
+      alert(
+        isOfflineNow
+          ? "Інтернет-з'єднання відсутнє. Дані інвентаризації збережено локально та поставлено в чергу синхронізації."
+          : "Не вдалося зберегти інвентаризацію на сервері. Дані збережено локально та буде повторена синхронізація."
+      );
       return;
     }
+
+    removeStorageKey(inventoryDraftStorageKey);
 
     if (result.id && !editingInventoryId) {
       setEditingInventoryId(String(result.id));
@@ -2499,6 +2698,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
             <div className="text-[11px] text-slate-500 leading-tight">
               {editingInventoryId && <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">Ред. режим</span>}
               {filledLines.length > 0 && <span className="ml-1">· {filledLines.length} поз.</span>}
+              {pendingSyncCount > 0 && <span className="ml-1 text-amber-700">· Очікує синхронізації: {pendingSyncCount}</span>}
             </div>
             <div className="flex items-center gap-1.5">
               {editingInventoryId && (
