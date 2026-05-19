@@ -1972,8 +1972,13 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
 
   const filteredProducts = useMemo(() => {
     const term = String(searchTerm || "").trim().toLowerCase();
-    if (!term) return scopedProducts;
-    return scopedProducts.filter((item) => {
+    const sortedProducts = [...scopedProducts].sort((a, b) => {
+      const aName = String(a?.name || "").trim();
+      const bName = String(b?.name || "").trim();
+      return aName.localeCompare(bName, "uk", { sensitivity: "base" });
+    });
+    if (!term) return sortedProducts;
+    return sortedProducts.filter((item) => {
       const haystack = [item?.name, item?.code1C, item?.category, item?.unit]
         .filter(Boolean)
         .join(" ")
@@ -3104,7 +3109,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   );
 }
 
-function InventoryListTab({ listProducts, restaurants, user, canManage, replaceInventoryListForRestaurant }) {
+function InventoryListTab({ listProducts, restaurants, user, replaceInventoryListForRestaurant }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const importInputRef = useRef(null);
   const importInputId = "inventory-list-import-input";
@@ -3255,62 +3260,56 @@ function InventoryListTab({ listProducts, restaurants, user, canManage, replaceI
         </div>
       </div>
 
-      {canManage ? (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <input
-            id={importInputId}
-            ref={importInputRef}
-            type="file"
-            accept=".xlsx,.xls"
-            style={{
-              position: "absolute",
-              width: "1px",
-              height: "1px",
-              padding: 0,
-              margin: "-1px",
-              overflow: "hidden",
-              clip: "rect(0, 0, 0, 0)",
-              whiteSpace: "nowrap",
-              border: 0,
-            }}
-            onChange={handleImportList}
-          />
-          <button
-            type="button"
-            onClick={() => {
-              void handleDownloadTemplate();
-            }}
-            className="inline-flex items-center gap-2 rounded-lg bg-slate-600 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-500"
-          >
-            <FileDown size={15} /> Завантажити шаблон
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const input = importInputRef.current || document.getElementById(importInputId);
-              if (input && typeof input.click === "function") {
-                input.click();
-              } else {
-                alert("Не вдалося відкрити вибір файлу. Оновіть сторінку і спробуйте ще раз.");
-              }
-            }}
-            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-          >
-            <Upload size={15} /> Імпортувати та замінити список
-          </button>
-          <button
-            type="button"
-            onClick={handleClearList}
-            className="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
-          >
-            <Trash2 size={15} /> Очистити список
-          </button>
-        </div>
-      ) : (
-        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Лише адміністратор або відділ закупівель може завантажувати/очищати список.
-        </div>
-      )}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <input
+          id={importInputId}
+          ref={importInputRef}
+          type="file"
+          accept=".xlsx,.xls"
+          style={{
+            position: "absolute",
+            width: "1px",
+            height: "1px",
+            padding: 0,
+            margin: "-1px",
+            overflow: "hidden",
+            clip: "rect(0, 0, 0, 0)",
+            whiteSpace: "nowrap",
+            border: 0,
+          }}
+          onChange={handleImportList}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            void handleDownloadTemplate();
+          }}
+          className="inline-flex items-center gap-2 rounded-lg bg-slate-600 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-500"
+        >
+          <FileDown size={15} /> Завантажити шаблон
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const input = importInputRef.current || document.getElementById(importInputId);
+            if (input && typeof input.click === "function") {
+              input.click();
+            } else {
+              alert("Не вдалося відкрити вибір файлу. Оновіть сторінку і спробуйте ще раз.");
+            }
+          }}
+          className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+        >
+          <Upload size={15} /> Імпортувати та замінити список
+        </button>
+        <button
+          type="button"
+          onClick={handleClearList}
+          className="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
+        >
+          <Trash2 size={15} /> Очистити список
+        </button>
+      </div>
 
       <div className="mb-3 flex items-center justify-between text-xs font-semibold text-slate-600">
         <span>Позицій у списку: {filteredList.length} з {scopedList.length}</span>
@@ -9969,7 +9968,6 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
         listProducts={normalizedInventoryListProducts}
         restaurants={effectiveRestaurants}
         user={user}
-        canManage={canManageProducts}
         replaceInventoryListForRestaurant={replaceInventoryListForRestaurant}
       />
     );
