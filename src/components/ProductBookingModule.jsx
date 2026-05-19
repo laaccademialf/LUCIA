@@ -2761,7 +2761,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                   if (searchTerm) setSearchTerm("");
                 }}
                 placeholder="Пошук продукту…"
-                list="inventory-product-suggestions"
                 autoComplete="off"
               />
               {searchTerm && (
