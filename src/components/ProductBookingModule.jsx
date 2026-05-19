@@ -2105,6 +2105,11 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     const product = scopedProducts.find((item) => String(item?.id || "") === String(productId || ""));
     if (!product?.id) return;
 
+    // Hide mobile keyboard
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
+
     setActiveRowProductId(product.id);
     setCalcModal({
       isOpen: true,
@@ -2123,17 +2128,18 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     if (document.activeElement && typeof document.activeElement.blur === 'function') {
       document.activeElement.blur();
     }
-    
+
+    const currentQty = formatCalculatorValue(quantities[productId]);
     setActiveRowProductId(productId);
     setCalcModal({
       isOpen: true,
       productId,
       productName: String(productName || ""),
-      display: formatCalculatorValue(quantities[productId]),
+      display: currentQty,
       expression: "",
       memory: toNumber(quantities[productId], 0),
       lastOp: null,
-      newNumber: true,
+      newNumber: true,  // first digit press will replace the displayed qty
     });
   };
 
@@ -2281,9 +2287,16 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       return;
     }
 
+    // Evaluate the full expression if one is active (e.g. "5 + 3" → 8)
+    const currentDisplay = String(calcModal.display || "0").replace(/,/g, ".");
+    const hasExpression = String(calcModal.expression || "").trim();
+    const valueToSave = hasExpression
+      ? evaluateCalculatorExpression(`${calcModal.expression}${currentDisplay}`)
+      : toNumber(currentDisplay, 0);
+
     setQuantities((prev) => ({
       ...prev,
-      [productId]: String(toNumber(calcModal.display, 0)),
+      [productId]: String(valueToSave),
     }));
     setInputValues((prev) => {
       if (!Object.prototype.hasOwnProperty.call(prev, productId)) return prev;
@@ -2994,10 +3007,15 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
           >
             <div className="mb-3 text-right">
               <p className="truncate text-[11px] uppercase tracking-wide text-slate-400">{calcModal.productName}</p>
+              {/* Expression context line — shown only when building an expression */}
+              {String(calcModal.expression || "").trim() && (
+                <p className="mt-1 text-right text-sm text-slate-500 tracking-wide">
+                  {calcModal.expression}{calcModal.newNumber ? "" : calcModal.display}
+                </p>
+              )}
               <div className="mt-2 min-h-[56px] break-words rounded-2xl bg-[#11151f] px-3 py-2 text-right text-4xl font-light text-white">
-                {calcModal.newNumber
-                  ? (calcModal.expression || calcModal.display)
-                  : `${calcModal.expression}${calcModal.display}`}
+                {/* When awaiting right-operand after operator, show "0" as placeholder */}
+                {calcModal.newNumber && String(calcModal.expression || "").trim() ? "0" : calcModal.display}
               </div>
             </div>
             <div className="grid grid-cols-4 gap-2.5">
