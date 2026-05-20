@@ -54,14 +54,125 @@ const normalizeKey = (value) => String(value || "")
   .toLowerCase()
   .replace(/[^a-zа-яіїєґ0-9]+/gi, "");
 
-const buildOrderTitle = (eventType, companyName, customerName) => {
-  const cleanType = String(eventType || "").trim();
+const extractNumber = (value) => {
+  const raw = String(value ?? "").trim().replace(",", ".");
+  if (!raw) return 0;
+  const match = raw.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return 0;
+  return Number(match[0]) || 0;
+};
+
+const BEVERAGE_KEYWORDS = [
+  "нап",
+  "drink",
+  "beverage",
+  "juice",
+  "сік",
+  "вода",
+  "water",
+  "чай",
+  "coffee",
+  "кава",
+  "лимонад",
+  "soda",
+  "cola",
+  "коктейл",
+  "bar",
+  "бар",
+];
+
+const ALCOHOL_KEYWORDS = [
+  "алког",
+  "спирт",
+  "вино",
+  "wine",
+  "beer",
+  "пиво",
+  "whisky",
+  "віскі",
+  "vodka",
+  "горіл",
+  "rum",
+  "ром",
+  "gin",
+  "джин",
+  "tequila",
+  "текіла",
+  "cognac",
+  "коньяк",
+  "brandy",
+  "бренді",
+  "liqueur",
+  "лікер",
+  "champagne",
+  "шампан",
+  "prosecco",
+  "просекко",
+];
+
+const hasAnyKeyword = (value, keywords) => {
+  const probe = normalizeKey(value);
+  if (!probe) return false;
+  return keywords.some((item) => probe.includes(normalizeKey(item)));
+};
+
+const toProposalMetrics = (items, guestCountRaw) => {
+  const safeItems = Array.isArray(items) ? items : [];
+  const guestCount = Math.max(0, Number(guestCountRaw || 0));
+
+  const totals = safeItems.reduce((acc, item) => {
+    const quantity = Math.max(0, Number(item?.quantity || 0));
+    const amount = Math.max(0, Number(item?.amount || Number(item?.unitPrice || 0) * quantity || 0));
+    const outputPerPortion = Math.max(0, extractNumber(item?.output));
+    const outputTotal = outputPerPortion * quantity;
+    const haystack = [item?.category, item?.subcategory, item?.productName, item?.output].filter(Boolean).join(" ");
+    const isAlcohol = hasAnyKeyword(haystack, ALCOHOL_KEYWORDS);
+    const isBeverage = isAlcohol || hasAnyKeyword(haystack, BEVERAGE_KEYWORDS) || normalizeKey(String(item?.output || "")).includes("мл");
+
+    acc.totalMenuCost += amount;
+    if (isAlcohol) {
+      acc.totalAlcoholMl += outputTotal;
+    } else if (isBeverage) {
+      acc.totalNonAlcoholMl += outputTotal;
+    } else {
+      acc.totalFoodGrams += outputTotal;
+    }
+
+    return acc;
+  }, {
+    totalFoodGrams: 0,
+    totalNonAlcoholMl: 0,
+    totalAlcoholMl: 0,
+    totalMenuCost: 0,
+  });
+
+  return {
+    ...totals,
+    guestCount,
+    foodPerGuestGrams: guestCount > 0 ? totals.totalFoodGrams / guestCount : 0,
+    nonAlcoholPerGuestMl: guestCount > 0 ? totals.totalNonAlcoholMl / guestCount : 0,
+    alcoholPerGuestMl: guestCount > 0 ? totals.totalAlcoholMl / guestCount : 0,
+    costPerGuest: guestCount > 0 ? totals.totalMenuCost / guestCount : 0,
+  };
+};
+
+const formatNumberUk = (value, fractionDigits = 0) => new Intl.NumberFormat("uk-UA", {
+  minimumFractionDigits: fractionDigits,
+  maximumFractionDigits: fractionDigits,
+}).format(Number(value || 0));
+
+const escapeHtml = (value) => String(value ?? "")
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll("\"", "&quot;")
+  .replaceAll("'", "&#039;");
+
+const buildOrderTitle = (_eventType, companyName, customerName) => {
   const cleanCompany = String(companyName || "").trim();
   const cleanCustomer = String(customerName || "").trim();
   const customerBlock = [cleanCompany, cleanCustomer].filter(Boolean).join(" — ");
-  if (cleanType && customerBlock) return `${cleanType} для ${customerBlock}`;
-  if (cleanType) return cleanType;
-  if (customerBlock) return `Захід для ${customerBlock}`;
+  if (customerBlock) return customerBlock;
   return "";
 };
 
@@ -79,6 +190,9 @@ const emptyOrder = {
   amount: "",
   guestCount: "",
   eventDate: "",
+  eventTime: "",
+  paymentType: "",
+  discountValue: "",
   status: "new",
   notes: "",
   tags: "",
@@ -164,6 +278,28 @@ const FIELD_PRESETS = [
     options: "Telegram, Instagram, Сайт, Телефон, Email, Рекомендація",
   },
   {
+    id: "paymentType",
+    label: "Тип оплати",
+    key: "paymentType",
+    category: "order",
+    type: "select",
+    required: false,
+    placeholder: "Оберіть тип оплати",
+    description: "Використовується в CRM угоді та таблиці",
+    options: "ФОП-ФОП, Безготівка, Готівка, Картка, Післяплата",
+  },
+  {
+    id: "eventTime",
+    label: "Час проведення",
+    key: "eventTime",
+    category: "order",
+    type: "text",
+    required: false,
+    placeholder: "Наприклад 18:30",
+    description: "Час старту події",
+    options: "",
+  },
+  {
     id: "orderTags",
     label: "Теги угоди",
     key: "orderTags",
@@ -175,6 +311,43 @@ const FIELD_PRESETS = [
     options: "VIP, Повторне звернення, Терміново, Пріоритет",
   },
 ];
+
+const ORDER_TABLE_COLUMNS = [
+  { id: "title", label: "Угода" },
+  { id: "status", label: "Стадія" },
+  { id: "managerName", label: "Менеджер" },
+  { id: "serviceManagerName", label: "Сервіс менеджер" },
+  { id: "eventType", label: "Тип заходу" },
+  { id: "clientType", label: "Тип клієнта" },
+  { id: "leadSource", label: "Джерело" },
+  { id: "contactName", label: "Контакт (ПІБ)" },
+  { id: "contactCompany", label: "Контакт (компанія)" },
+  { id: "contactPhone", label: "Телефон контакту" },
+  { id: "contactEmail", label: "Email контакту" },
+  { id: "contactAddress", label: "Адреса контакту" },
+  { id: "contactIndustry", label: "Промисловість контакту" },
+  { id: "contactManager", label: "Менеджер контакту" },
+  { id: "contactNotes", label: "Нотатки контакту" },
+  { id: "eventDateTime", label: "Дата/час" },
+  { id: "paymentType", label: "Тип оплати" },
+  { id: "guestCount", label: "Гостей" },
+  { id: "discountValue", label: "Знижка" },
+  { id: "amount", label: "Сума" },
+  { id: "tags", label: "Теги" },
+];
+
+const DEFAULT_ORDER_TABLE_COLUMN_IDS = [
+  "title",
+  "status",
+  "managerName",
+  "serviceManagerName",
+  "eventDateTime",
+  "paymentType",
+  "guestCount",
+  "amount",
+];
+
+const ORDER_TABLE_COLUMNS_STORAGE_KEY = "lucia_catering_crm_order_table_columns";
 
 const baseInput = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100";
 const compactActionBtn = "inline-flex h-7 items-center justify-center rounded-md border px-2 text-[11px] font-semibold transition";
@@ -218,16 +391,55 @@ export default function CateringCrmTab({
   const [showContactModal, setShowContactModal] = useState(false);
   const [showFieldModal, setShowFieldModal] = useState(false);
   const [draggedOrderId, setDraggedOrderId] = useState("");
-  const [ordersViewMode, setOrdersViewMode] = useState("kanban");
+  const [ordersViewMode, setOrdersViewMode] = useState("table");
   const [showProposalModal, setShowProposalModal] = useState(false);
   const [proposalForm, setProposalForm] = useState(emptyProposal);
+  const [proposalProductSearch, setProposalProductSearch] = useState("");
+  const [proposalCategoryFilter, setProposalCategoryFilter] = useState("all");
+  const [proposalSubcategoryFilter, setProposalSubcategoryFilter] = useState("all");
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [contactSearch, setContactSearch] = useState("");
   const [contactManagerFilter, setContactManagerFilter] = useState("");
   const [contactIndustryFilter, setContactIndustryFilter] = useState("");
   const [fieldSearch, setFieldSearch] = useState("");
   const [fieldCategoryFilter, setFieldCategoryFilter] = useState("all");
+  const [showColumnsMenu, setShowColumnsMenu] = useState(false);
+  const [draggedColumnId, setDraggedColumnId] = useState("");
+  const [orderTableColumns, setOrderTableColumns] = useState(() => {
+    const fallback = ORDER_TABLE_COLUMNS.map((column) => ({
+      id: column.id,
+      visible: DEFAULT_ORDER_TABLE_COLUMN_IDS.includes(column.id),
+    }));
+
+    if (typeof window === "undefined") return fallback;
+    try {
+      const raw = window.localStorage.getItem(ORDER_TABLE_COLUMNS_STORAGE_KEY);
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return fallback;
+
+      const parsedMap = new Map(
+        parsed
+          .filter((item) => item && typeof item === "object")
+          .map((item) => [String(item.id || ""), Boolean(item.visible)]),
+      );
+
+      const orderedKnown = parsed
+        .map((item) => String(item?.id || ""))
+        .filter((id) => ORDER_TABLE_COLUMNS.some((column) => column.id === id));
+      const missingKnown = ORDER_TABLE_COLUMNS.map((column) => column.id).filter((id) => !orderedKnown.includes(id));
+      const finalOrder = [...orderedKnown, ...missingKnown];
+
+      return finalOrder.map((id) => ({
+        id,
+        visible: parsedMap.has(id) ? Boolean(parsedMap.get(id)) : DEFAULT_ORDER_TABLE_COLUMN_IDS.includes(id),
+      }));
+    } catch {
+      return fallback;
+    }
+  });
   const contactImportRef = useRef(null);
+  const columnsMenuRef = useRef(null);
 
   useEffect(() => {
     setOrderForm(createDefaultOrder(currentUserName));
@@ -235,9 +447,36 @@ export default function CateringCrmTab({
     setFieldForm(emptyField);
   }, [mode, currentUserName]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(ORDER_TABLE_COLUMNS_STORAGE_KEY, JSON.stringify(orderTableColumns));
+  }, [orderTableColumns]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (!columnsMenuRef.current) return;
+      if (columnsMenuRef.current.contains(event.target)) return;
+      setShowColumnsMenu(false);
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const boardOrders = useMemo(() => orders.filter((item) => item.status !== "cancelled"), [orders]);
+  const cancelledOrders = useMemo(() => orders.filter((item) => item.status === "cancelled"), [orders]);
   const wonAmount = useMemo(() => orders.filter((item) => item.status === "confirmed").reduce((sum, item) => sum + Number(item.amount || 0), 0), [orders]);
   const pipelineAmount = useMemo(() => orders.filter((item) => item.status !== "confirmed" && item.status !== "cancelled").reduce((sum, item) => sum + Number(item.amount || 0), 0), [orders]);
+  const statusSummary = useMemo(
+    () => ORDER_STATUSES.map((status) => {
+      const byStatus = orders.filter((item) => String(item.status || "") === status.id);
+      return {
+        ...status,
+        count: byStatus.length,
+      };
+    }),
+    [orders],
+  );
 
   const eventTypeOptions = useMemo(() => {
     const eventTypeTemplateOptions = fieldTemplates
@@ -270,6 +509,16 @@ export default function CateringCrmTab({
     return map;
   }, [contacts]);
 
+  const contactsById = useMemo(() => {
+    const map = new Map();
+    contacts.forEach((item) => {
+      const id = String(item?.id || "").trim();
+      if (!id) return;
+      map.set(id, item);
+    });
+    return map;
+  }, [contacts]);
+
   const productsByCategory = useMemo(() => {
     const grouped = new Map();
     (Array.isArray(assortmentItems) ? assortmentItems : []).forEach((item) => {
@@ -277,8 +526,64 @@ export default function CateringCrmTab({
       if (!grouped.has(category)) grouped.set(category, []);
       grouped.get(category).push(item);
     });
-    return Array.from(grouped.entries()).map(([category, items]) => ({ category, items }));
+    return Array.from(grouped.entries())
+      .sort((a, b) => a[0].localeCompare(b[0], "uk"))
+      .map(([category, items]) => ({
+        category,
+        items: [...items].sort((a, b) => String(a?.productName || "").localeCompare(String(b?.productName || ""), "uk")),
+      }));
   }, [assortmentItems]);
+
+  const proposalCategoryOptions = useMemo(
+    () => productsByCategory.map((group) => group.category),
+    [productsByCategory],
+  );
+
+  const proposalSubcategoryOptions = useMemo(() => {
+    const source = Array.isArray(assortmentItems) ? assortmentItems : [];
+    const set = new Set();
+    source.forEach((item) => {
+      const category = String(item?.category || "Без категорії").trim() || "Без категорії";
+      if (proposalCategoryFilter !== "all" && category !== proposalCategoryFilter) return;
+      const subcategory = String(item?.subcategory || "").trim();
+      if (subcategory) set.add(subcategory);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "uk"));
+  }, [assortmentItems, proposalCategoryFilter]);
+
+  const filteredProductsByCategory = useMemo(() => {
+    const probe = normalizeKey(proposalProductSearch);
+    return productsByCategory
+      .map((group) => {
+        if (proposalCategoryFilter !== "all" && group.category !== proposalCategoryFilter) return null;
+        const items = group.items.filter((item) => {
+          const subcategory = String(item?.subcategory || "").trim();
+          if (proposalSubcategoryFilter !== "all" && subcategory !== proposalSubcategoryFilter) return false;
+          if (!probe) return true;
+          const haystack = normalizeKey(
+            [
+              item?.productName,
+              item?.name,
+              item?.category,
+              item?.subcategory,
+              item?.output,
+            ].filter(Boolean).join(" "),
+          );
+          return haystack.includes(probe);
+        });
+        if (items.length === 0) return null;
+        return {
+          category: group.category,
+          items,
+        };
+      })
+      .filter(Boolean);
+  }, [productsByCategory, proposalProductSearch, proposalCategoryFilter, proposalSubcategoryFilter]);
+
+  const filteredProductsCount = useMemo(
+    () => filteredProductsByCategory.reduce((sum, group) => sum + group.items.length, 0),
+    [filteredProductsByCategory],
+  );
 
   const proposalsByOrder = useMemo(() => {
     const map = new Map();
@@ -324,6 +629,7 @@ export default function CateringCrmTab({
 
   const clientTypeOptions = useMemo(() => getFieldTemplateOptions(["clientType", "тип клієнта", "тип клиента"]), [fieldTemplates]);
   const leadSourceOptions = useMemo(() => getFieldTemplateOptions(["leadSource", "leadChannel", "джерело", "джерело ліда", "канал", "source"]), [fieldTemplates]);
+  const paymentTypeOptions = useMemo(() => getFieldTemplateOptions(["paymentType", "тип оплати", "оплата", "payment"]), [fieldTemplates]);
   const industryOptions = useMemo(() => getFieldTemplateOptions(["industry", "промисловість", "бізнес напрям", "напрям"]), [fieldTemplates]);
 
   const contactManagerOptions = useMemo(() => {
@@ -404,6 +710,9 @@ export default function CateringCrmTab({
   };
 
   const openProposalBuilder = (order) => {
+    setProposalProductSearch("");
+    setProposalCategoryFilter("all");
+    setProposalSubcategoryFilter("all");
     setProposalForm({
       ...emptyProposal,
       orderId: String(order?.id || ""),
@@ -419,6 +728,9 @@ export default function CateringCrmTab({
   };
 
   const openExistingProposalEditor = (proposal, order) => {
+    setProposalProductSearch("");
+    setProposalCategoryFilter("all");
+    setProposalSubcategoryFilter("all");
     const fallbackOrder = order || orders.find((item) => String(item.id) === String(proposal?.orderId));
     setProposalForm({
       ...emptyProposal,
@@ -531,6 +843,232 @@ export default function CateringCrmTab({
     [proposalForm.items],
   );
 
+  const proposalItemsByCategory = useMemo(() => {
+    const grouped = new Map();
+    proposalForm.items.forEach((item) => {
+      const category = String(item?.category || "Без категорії").trim() || "Без категорії";
+      if (!grouped.has(category)) grouped.set(category, []);
+      grouped.get(category).push(item);
+    });
+    return Array.from(grouped.entries()).map(([category, items]) => ({ category, items }));
+  }, [proposalForm.items]);
+
+  const proposalGuestCount = useMemo(() => {
+    const relatedOrder = orders.find((item) => String(item.id) === String(proposalForm.orderId));
+    return Number(relatedOrder?.guestCount || 0);
+  }, [orders, proposalForm.orderId]);
+
+  const proposalMetrics = useMemo(
+    () => toProposalMetrics(proposalForm.items, proposalGuestCount),
+    [proposalForm.items, proposalGuestCount],
+  );
+
+  const handleExportProposalPdf = (proposal = proposalForm, linkedOrder = null) => {
+    if (typeof window === "undefined") return;
+
+    const items = Array.isArray(proposal?.items) ? proposal.items : [];
+    if (items.length === 0) {
+      window.alert("Додайте позиції у КП перед експортом в PDF.");
+      return;
+    }
+
+    const order = linkedOrder || orders.find((item) => String(item.id) === String(proposal?.orderId));
+    const metrics = toProposalMetrics(items, Number(order?.guestCount || 0));
+
+    const grouped = new Map();
+    items.forEach((item) => {
+      const category = String(item?.category || "Без категорії").trim() || "Без категорії";
+      if (!grouped.has(category)) grouped.set(category, []);
+      grouped.get(category).push(item);
+    });
+
+    const linesHtml = Array.from(grouped.entries())
+      .map(([category, rows]) => {
+        const rowHtml = rows.map((item) => {
+          const qty = Number(item?.quantity || 0);
+          const unitPrice = Number(item?.unitPrice || 0);
+          const amount = Number(item?.amount || unitPrice * qty || 0);
+          return `
+            <div class="line-item">
+              <div class="name">${escapeHtml(item?.productName || "—")}</div>
+              <div>${escapeHtml(item?.output || "—")}</div>
+              <div>${escapeHtml(formatMoney(unitPrice))}</div>
+              <div>${escapeHtml(formatNumberUk(qty, 0))}</div>
+              <div class="sum">${escapeHtml(formatMoney(amount))}</div>
+            </div>
+          `;
+        }).join("");
+
+        return `
+          <section class="category-block">
+            <h3>${escapeHtml(category)}</h3>
+            <div class="line-head">
+              <div>Позиція</div>
+              <div>Вихід</div>
+              <div>Ціна</div>
+              <div>К-сть</div>
+              <div>Сума</div>
+            </div>
+            ${rowHtml}
+          </section>
+        `;
+      })
+      .join("");
+
+    const html = `
+      <!doctype html>
+      <html lang="uk">
+        <head>
+          <meta charset="UTF-8" />
+          <title>${escapeHtml(proposal?.title || "Комерційна пропозиція")}</title>
+          <style>
+            @page { size: A4; margin: 14mm; }
+            * { box-sizing: border-box; }
+            body {
+              margin: 0;
+              font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+              color: #0f172a;
+              background: #fff;
+            }
+            .sheet { width: 100%; }
+            .top {
+              display: grid;
+              grid-template-columns: 1fr auto;
+              gap: 12px;
+              margin-bottom: 14px;
+              align-items: end;
+            }
+            .title {
+              margin: 0;
+              font-size: 24px;
+              font-weight: 700;
+              color: #112b61;
+            }
+            .meta {
+              display: grid;
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+              gap: 8px;
+              margin-bottom: 16px;
+              font-size: 12px;
+            }
+            .meta div {
+              border: 1px solid #cbd5e1;
+              border-radius: 8px;
+              padding: 7px 9px;
+              background: #f8fafc;
+            }
+            .category-block {
+              border: 1px solid #dbe4f0;
+              border-radius: 10px;
+              padding: 10px;
+              margin-bottom: 10px;
+              page-break-inside: avoid;
+            }
+            .category-block h3 {
+              margin: 0 0 8px;
+              font-size: 14px;
+              text-align: center;
+              color: #112b61;
+              text-transform: uppercase;
+              letter-spacing: 0.04em;
+            }
+            .line-head,
+            .line-item {
+              display: grid;
+              grid-template-columns: 2.3fr 0.9fr 0.9fr 0.7fr 1fr;
+              gap: 8px;
+              align-items: center;
+            }
+            .line-head {
+              font-size: 11px;
+              font-weight: 700;
+              color: #64748b;
+              border-bottom: 1px solid #e2e8f0;
+              padding-bottom: 6px;
+            }
+            .line-item {
+              font-size: 12px;
+              padding: 7px 0;
+              border-bottom: 1px dashed #e2e8f0;
+            }
+            .line-item:last-child { border-bottom: 0; }
+            .line-item .name { font-weight: 600; }
+            .line-item .sum { font-weight: 700; }
+            .totals {
+              margin-top: 14px;
+              border: 1px solid #bfd0f0;
+              border-radius: 10px;
+              overflow: hidden;
+            }
+            .totals-row {
+              display: grid;
+              grid-template-columns: 1fr auto;
+              gap: 8px;
+              padding: 9px 12px;
+              border-bottom: 1px solid #dbe4f0;
+              font-size: 13px;
+            }
+            .totals-row:last-child { border-bottom: 0; }
+            .totals-row strong { color: #0b1c44; }
+            .totals-row.main {
+              background: #112b61;
+              color: #fff;
+              font-weight: 700;
+              font-size: 14px;
+            }
+            .footer {
+              margin-top: 14px;
+              font-size: 11px;
+              color: #64748b;
+            }
+            @media print {
+              .sheet { page-break-inside: avoid; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="sheet">
+            <div class="top">
+              <h1 class="title">${escapeHtml(proposal?.title || "Комерційна пропозиція")}</h1>
+              <div>${escapeHtml(new Date().toLocaleDateString("uk-UA"))}</div>
+            </div>
+
+            <div class="meta">
+              <div><strong>Компанія:</strong> ${escapeHtml(proposal?.companyName || order?.companyName || "—")}</div>
+              <div><strong>Клієнт:</strong> ${escapeHtml(proposal?.customerName || order?.customerName || "—")}</div>
+              <div><strong>Менеджер:</strong> ${escapeHtml(proposal?.managerName || order?.managerName || "—")}</div>
+              <div><strong>К-сть гостей:</strong> ${escapeHtml(metrics.guestCount > 0 ? formatNumberUk(metrics.guestCount, 0) : "—")}</div>
+            </div>
+
+            ${linesHtml}
+
+            <div class="totals">
+              <div class="totals-row"><span>Вихід меню на 1 Гостя, грам</span><strong>${escapeHtml(formatNumberUk(metrics.foodPerGuestGrams, 0))}</strong></div>
+              <div class="totals-row"><span>Вихід безалкогольних напоїв на 1 Гостя, мл</span><strong>${escapeHtml(formatNumberUk(metrics.nonAlcoholPerGuestMl, 0))}</strong></div>
+              <div class="totals-row"><span>Вихід алкогольних напоїв на 1 Гостя, мл</span><strong>${escapeHtml(formatNumberUk(metrics.alcoholPerGuestMl, 0))}</strong></div>
+              <div class="totals-row"><span>Вартість меню на 1 Гостя, грн</span><strong>${escapeHtml(formatNumberUk(metrics.costPerGuest, 0))}</strong></div>
+              <div class="totals-row main"><span>Всього за меню, грн</span><strong>${escapeHtml(formatNumberUk(metrics.totalMenuCost, 0))}</strong></div>
+            </div>
+
+            ${proposal?.notes ? `<div class="footer"><strong>Коментар:</strong> ${escapeHtml(proposal.notes)}</div>` : ""}
+          </div>
+        </body>
+      </html>
+    `;
+
+    const printWindow = window.open("", "_blank", "noopener,noreferrer");
+    if (!printWindow) {
+      window.alert("Не вдалося відкрити вікно для PDF. Перевірте блокування popup.");
+      return;
+    }
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+  };
+
   const moveOrderToStatus = (orderId, nextStatus) => {
     if (!orderId || !nextStatus) return;
     const sourceOrder = orders.find((item) => String(item.id) === String(orderId));
@@ -542,39 +1080,175 @@ export default function CateringCrmTab({
     setSelectedOrderId("");
   };
 
+  const visibleOrderTableColumns = useMemo(
+    () => orderTableColumns.filter((column) => column.visible),
+    [orderTableColumns],
+  );
+
+  const getOrderTableCellValue = (item, columnId) => {
+    const relatedContact =
+      contactsById.get(String(item?.contactId || "").trim())
+      || contactLookup.get(normalizeKey(`${String(item?.companyName || "").trim()} ${String(item?.customerName || "").trim()}`))
+      || contactLookup.get(normalizeKey(String(item?.customerName || "").trim()))
+      || contactLookup.get(normalizeKey(String(item?.companyName || "").trim()))
+      || null;
+
+    switch (columnId) {
+      case "title":
+        return <span className="font-semibold text-slate-900">{item.title || "Без назви"}</span>;
+      case "status":
+        return ORDER_STATUSES.find((status) => status.id === item.status)?.label || item.status;
+      case "managerName":
+        return item.managerName || "—";
+      case "serviceManagerName":
+        return item.serviceManagerName || "—";
+      case "eventType":
+        return item.eventType || "—";
+      case "clientType":
+        return item.clientType || "—";
+      case "leadSource":
+        return item.leadSource || "—";
+      case "contactName":
+        return relatedContact?.name || item.customerName || "—";
+      case "contactCompany":
+        return relatedContact?.company || item.companyName || "—";
+      case "contactPhone":
+        return relatedContact?.phone || "—";
+      case "contactEmail":
+        return relatedContact?.email || "—";
+      case "contactAddress":
+        return relatedContact?.address || "—";
+      case "contactIndustry":
+        return relatedContact?.industry || "—";
+      case "contactManager":
+        return relatedContact?.assignedManager || "—";
+      case "contactNotes":
+        return relatedContact?.notes || "—";
+      case "eventDateTime":
+        return `${formatDateUk(item.eventDate)}${item.eventTime ? ` • ${item.eventTime}` : ""}`;
+      case "paymentType":
+        return item.paymentType || "—";
+      case "guestCount":
+        return item.guestCount || "—";
+      case "discountValue":
+        return item.discountValue || "—";
+      case "amount":
+        return formatMoney(item.amount);
+      case "tags":
+        return Array.isArray(item.tags) && item.tags.length > 0 ? item.tags.join(", ") : "—";
+      default:
+        return "—";
+    }
+  };
+
+  const toggleTableColumn = (columnId) => {
+    setOrderTableColumns((prev) => prev.map((column) => (column.id === columnId ? { ...column, visible: !column.visible } : column)));
+  };
+
+  const moveTableColumn = (fromId, toId) => {
+    if (!fromId || !toId || fromId === toId) return;
+    setOrderTableColumns((prev) => {
+      const fromIndex = prev.findIndex((column) => column.id === fromId);
+      const toIndex = prev.findIndex((column) => column.id === toId);
+      if (fromIndex < 0 || toIndex < 0) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  };
+
   const orderCards = (
-    <div className="space-y-5">
+    <div className="space-y-3">
       <div className="grid grid-cols-1 gap-4">
         <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
-          <div className="flex items-center justify-between gap-2">
-            <div className="inline-flex items-center gap-1 rounded-xl bg-slate-100 p-1 shadow-inner ring-1 ring-slate-200">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-1 rounded-xl bg-slate-100 p-1 shadow-inner ring-1 ring-slate-200">
+                <button
+                  type="button"
+                  className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition ${ordersViewMode === "kanban" ? "bg-[#112b61] text-white shadow-sm" : "text-slate-600 hover:bg-white/80"}`}
+                  onClick={() => setOrdersViewMode("kanban")}
+                >
+                  Борд
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition ${ordersViewMode === "table" ? "bg-[#112b61] text-white shadow-sm" : "text-slate-600 hover:bg-white/80"}`}
+                  onClick={() => setOrdersViewMode("table")}
+                >
+                  Таблиця
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1 text-[11px]">
+                {statusSummary.map((status) => (
+                  <span key={status.id} className={`rounded-lg border px-2 py-1 ${status.tone}`}>
+                    {status.label}: <span className="font-semibold">{status.count}</span>
+                  </span>
+                ))}
+                <span className="rounded-lg border border-sky-200 bg-sky-50 px-2 py-1 text-sky-700">Контакти: <span className="font-semibold text-sky-900">{contacts.length}</span></span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {ordersViewMode === "table" && (
+                <div className="relative" ref={columnsMenuRef}>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    onClick={() => setShowColumnsMenu((prev) => !prev)}
+                  >
+                    Колонки
+                  </button>
+                  {showColumnsMenu && (
+                    <div className="absolute right-0 z-30 mt-2 w-72 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                      <p className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Показ / порядок колонок</p>
+                      <div className="max-h-72 space-y-1 overflow-auto">
+                        {orderTableColumns.map((column) => {
+                          const label = ORDER_TABLE_COLUMNS.find((item) => item.id === column.id)?.label || column.id;
+                          return (
+                            <div
+                              key={column.id}
+                              draggable
+                              className="flex cursor-grab items-center gap-2 rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-50 active:cursor-grabbing"
+                              onDragStart={() => setDraggedColumnId(column.id)}
+                              onDragOver={(event) => event.preventDefault()}
+                              onDrop={() => {
+                                moveTableColumn(draggedColumnId, column.id);
+                                setDraggedColumnId("");
+                              }}
+                              onDragEnd={() => setDraggedColumnId("")}
+                            >
+                              <span className="text-slate-400">::</span>
+                              <input
+                                type="checkbox"
+                                className="h-3.5 w-3.5"
+                                checked={column.visible}
+                                onChange={() => toggleTableColumn(column.id)}
+                              />
+                              <span className="truncate">{label}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <button
                 type="button"
-                className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition ${ordersViewMode === "kanban" ? "bg-[#112b61] text-white shadow-sm" : "text-slate-600 hover:bg-white/80"}`}
-                onClick={() => setOrdersViewMode("kanban")}
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={saving}
+                onClick={() => {
+                  setOrderForm(createDefaultOrder(currentUserName));
+                  setShowNewOrderModal(true);
+                }}
               >
-                Борд
-              </button>
-              <button
-                type="button"
-                className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition ${ordersViewMode === "table" ? "bg-[#112b61] text-white shadow-sm" : "text-slate-600 hover:bg-white/80"}`}
-                onClick={() => setOrdersViewMode("table")}
-              >
-                Таблиця
+                <Plus size={15} className="inline mr-1" />
+                Нова угода
               </button>
             </div>
-            <button
-              type="button"
-              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={saving}
-              onClick={() => {
-                setOrderForm(createDefaultOrder(currentUserName));
-                setShowNewOrderModal(true);
-              }}
-            >
-              <Plus size={15} className="inline mr-1" />
-              Нова угода
-            </button>
           </div>
 
           <>
@@ -685,6 +1359,30 @@ export default function CateringCrmTab({
                         <p className="mt-1 text-[11px] text-slate-500">Формат відображення в картках: dd.mm.yyyy</p>
                       </div>
                     </div>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Час проведення</label>
+                        <input
+                          type="time"
+                          className={baseInput}
+                          value={orderForm.eventTime}
+                          onFocus={openNativeDatePicker}
+                          onClick={openNativeDatePicker}
+                          onChange={(event) => setOrderForm((prev) => ({ ...prev, eventTime: event.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип оплати</label>
+                        <select className={baseInput} value={orderForm.paymentType} onChange={(event) => setOrderForm((prev) => ({ ...prev, paymentType: event.target.value }))}>
+                          <option value="">Оберіть тип оплати</option>
+                          {(paymentTypeOptions.length > 0 ? paymentTypeOptions : ["ФОП-ФОП", "Безготівка", "Готівка", "Картка", "Післяплата"]).map((value) => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Знижка грн/%</label>
+                        <input className={baseInput} value={orderForm.discountValue} onChange={(event) => setOrderForm((prev) => ({ ...prev, discountValue: event.target.value }))} placeholder="10% або 5000" />
+                      </div>
+                    </div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Гостей</label>
@@ -737,71 +1435,38 @@ export default function CateringCrmTab({
       </div>
 
       <div className="space-y-4">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Активний pipeline</p>
-            <p className="mt-2 text-2xl font-semibold text-slate-900">{formatMoney(pipelineAmount)}</p>
-            <p className="mt-1 text-xs text-slate-500">Угод у роботі: {boardOrders.length}</p>
-          </div>
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Підтверджено</p>
-            <p className="mt-2 text-2xl font-semibold text-emerald-900">{formatMoney(wonAmount)}</p>
-            <p className="mt-1 text-xs text-emerald-700">Кухня бачить ці замовлення в моніторі</p>
-          </div>
-          <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">Контакти</p>
-            <p className="mt-2 text-2xl font-semibold text-sky-900">{contacts.length}</p>
-            <p className="mt-1 text-xs text-sky-700">Усі контакти закріплені за менеджером</p>
-          </div>
-        </div>
-
         {ordersViewMode === "table" ? (
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
-            <table className="min-w-full text-sm">
-              <thead className="text-left text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">Угода</th>
-                  <th className="px-3 py-2">Стадія</th>
-                  <th className="px-3 py-2">Менеджер</th>
-                  <th className="px-3 py-2">Сервіс менеджер</th>
-                  <th className="px-3 py-2">Подія</th>
-                  <th className="px-3 py-2">Сума</th>
-                  <th className="px-3 py-2">Дії</th>
-                </tr>
-              </thead>
-              <tbody>
-                {boardOrders.map((item) => (
-                  <tr key={item.id} className="border-t border-slate-200">
-                    <td className="px-3 py-3">
-                      <div className="font-semibold text-slate-900">{item.title || "Без назви"}</div>
-                      <div className="text-xs text-slate-500">{[item.companyName, item.customerName].filter(Boolean).join(" — ") || "—"}</div>
-                    </td>
-                    <td className="px-3 py-3 text-slate-700">{ORDER_STATUSES.find((status) => status.id === item.status)?.label || item.status}</td>
-                    <td className="px-3 py-3 text-slate-700">{item.managerName || "—"}</td>
-                    <td className="px-3 py-3 text-slate-700">{item.serviceManagerName || "—"}</td>
-                    <td className="px-3 py-3 text-slate-700">{formatDateUk(item.eventDate)}</td>
-                    <td className="px-3 py-3 text-slate-700">{formatMoney(item.amount)}</td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-2">
-                        <button type="button" className="rounded-md border border-slate-300 p-1 text-slate-600 hover:bg-white" onClick={() => openOrderEditor(item)}>
-                          <Pencil size={14} />
-                        </button>
-                        {item.status === "brief" && (
-                          <button type="button" className="rounded-md border border-indigo-300 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50" onClick={() => handleOpenProposalForBrief(item)}>
-                            Створити пропозицію
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {boardOrders.length === 0 && (
+          <div className="space-y-3">
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+              <table className="min-w-full text-sm">
+                <thead className="text-left text-slate-500">
                   <tr>
-                    <td colSpan={7} className="px-3 py-8 text-center text-slate-500">Поки порожньо</td>
+                    {visibleOrderTableColumns.map((column) => {
+                      const label = ORDER_TABLE_COLUMNS.find((item) => item.id === column.id)?.label || column.id;
+                      return (
+                        <th key={column.id} className="px-3 py-2">{label}</th>
+                      );
+                    })}
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {boardOrders.map((item) => (
+                    <tr key={item.id} className="cursor-pointer border-t border-slate-200 hover:bg-slate-50/70" onClick={() => setSelectedOrderId(String(item.id))}>
+                      {visibleOrderTableColumns.map((column) => (
+                        <td key={`${item.id}_${column.id}`} className="px-3 py-2.5 text-slate-700">
+                          {getOrderTableCellValue(item, column.id)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                  {boardOrders.length === 0 && (
+                    <tr>
+                      <td colSpan={Math.max(visibleOrderTableColumns.length, 1)} className="px-3 py-8 text-center text-slate-500">Поки порожньо</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         ) : (
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-6">
@@ -899,6 +1564,8 @@ export default function CateringCrmTab({
                         <div className="truncate">Гостей: <span className="font-medium text-slate-800">{item.guestCount || "—"}</span></div>
                         <div className="truncate">Сума: <span className="font-medium text-slate-800">{formatMoney(item.amount)}</span></div>
                         <div className="truncate">Подія: <span className="font-medium text-slate-800">{formatDateUk(item.eventDate)}</span></div>
+                        <div className="truncate">Час: <span className="font-medium text-slate-800">{item.eventTime || "—"}</span></div>
+                        <div className="truncate">Оплата: <span className="font-medium text-slate-800">{item.paymentType || "—"}</span></div>
                         <div className="truncate">Джерело: <span className="font-medium text-slate-800">{item.leadSource || "—"}</span></div>
                       </div>
 
@@ -938,10 +1605,58 @@ export default function CateringCrmTab({
                 </button>
               </div>
 
-              <div className="mb-4 grid grid-cols-1 gap-2 text-xs text-slate-700 sm:grid-cols-3">
+              <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                <select
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
+                  value={selectedOrder.status}
+                  onChange={(event) => moveOrderToStatus(selectedOrder.id, event.target.value)}
+                >
+                  {ORDER_STATUSES.map((status) => <option key={status.id} value={status.id}>{status.label}</option>)}
+                </select>
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-white"
+                  onClick={() => {
+                    closeOrderDetails();
+                    openOrderEditor(selectedOrder);
+                  }}
+                >
+                  Редагувати
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-indigo-300 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+                  onClick={() => {
+                    closeOrderDetails();
+                    handleOpenProposalForBrief(selectedOrder);
+                  }}
+                >
+                  КП{selectedOrderProposals.length > 0 ? ` (${selectedOrderProposals.length})` : ""}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                  onClick={() => {
+                    if (!window.confirm("Видалити CRM-угоду?")) return;
+                    void onDeleteOrder(selectedOrder.id);
+                    closeOrderDetails();
+                  }}
+                >
+                  Видалити
+                </button>
+              </div>
+
+              <div className="mb-4 grid grid-cols-1 gap-2 text-xs text-slate-700 sm:grid-cols-4">
                 <div className="rounded-lg bg-slate-50 px-2.5 py-2">Стадія: <span className="font-semibold text-slate-900">{ORDER_STATUSES.find((status) => status.id === selectedOrder.status)?.label || selectedOrder.status}</span></div>
                 <div className="rounded-lg bg-slate-50 px-2.5 py-2">Подія: <span className="font-semibold text-slate-900">{formatDateUk(selectedOrder.eventDate)}</span></div>
+                <div className="rounded-lg bg-slate-50 px-2.5 py-2">Час: <span className="font-semibold text-slate-900">{selectedOrder.eventTime || "—"}</span></div>
                 <div className="rounded-lg bg-slate-50 px-2.5 py-2">Сума: <span className="font-semibold text-slate-900">{formatMoney(selectedOrder.amount)}</span></div>
+              </div>
+
+              <div className="mb-4 grid grid-cols-1 gap-2 text-xs text-slate-700 sm:grid-cols-3">
+                <div className="rounded-lg bg-slate-50 px-2.5 py-2">Тип оплати: <span className="font-semibold text-slate-900">{selectedOrder.paymentType || "—"}</span></div>
+                <div className="rounded-lg bg-slate-50 px-2.5 py-2">Гостей: <span className="font-semibold text-slate-900">{selectedOrder.guestCount || "—"}</span></div>
+                <div className="rounded-lg bg-slate-50 px-2.5 py-2">Знижка: <span className="font-semibold text-slate-900">{selectedOrder.discountValue || "—"}</span></div>
               </div>
 
               <div className="rounded-xl border border-slate-200">
@@ -971,6 +1686,13 @@ export default function CateringCrmTab({
                             <td className="px-3 py-2 text-slate-700">{formatMoney(proposal.totalAmount)}</td>
                             <td className="px-3 py-2">
                               <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  className="rounded-md border border-indigo-300 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+                                  onClick={() => handleExportProposalPdf(proposal, selectedOrder)}
+                                >
+                                  PDF
+                                </button>
                                 <button
                                   type="button"
                                   className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
@@ -1033,6 +1755,13 @@ export default function CateringCrmTab({
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
+                          className="rounded-md border border-indigo-300 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+                          onClick={() => handleExportProposalPdf(item)}
+                        >
+                          PDF
+                        </button>
+                        <button
+                          type="button"
                           className="rounded-md border border-amber-200 px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50"
                           onClick={() => {
                             if (!window.confirm("Перенести пропозицію в скасовані?")) return;
@@ -1065,73 +1794,103 @@ export default function CateringCrmTab({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-4 shadow-sm">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <h3 className="text-base font-semibold text-rose-900">Скасовані пропозиції</h3>
-            <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-rose-700">{proposalStats.cancelled.length}</span>
+        <div className="overflow-x-auto rounded-2xl border border-rose-200 bg-rose-50/50 p-2 shadow-sm">
+          <div className="mb-1 flex items-center justify-between px-2 py-1">
+            <p className="text-xs font-semibold uppercase tracking-wide text-rose-700">Втрачені замовлення</p>
+            <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-rose-700">{cancelledOrders.length}</span>
           </div>
-          <div className="overflow-x-auto rounded-xl border border-rose-100 bg-white">
-            <table className="min-w-full text-sm">
-              <thead className="text-left text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">Назва</th>
-                  <th className="px-3 py-2">Клієнт</th>
-                  <th className="px-3 py-2">Менеджер</th>
-                  <th className="px-3 py-2">Сума</th>
-                  <th className="px-3 py-2">Дії</th>
-                </tr>
-              </thead>
-              <tbody>
-                {proposalStats.cancelled.map((item) => (
-                  <tr key={item.id} className="border-t border-slate-200">
-                    <td className="px-3 py-3 font-medium text-slate-900">{item.title || item.orderTitle || "КП"}</td>
-                    <td className="px-3 py-3 text-slate-700">{[item.companyName, item.customerName].filter(Boolean).join(" — ") || "—"}</td>
-                    <td className="px-3 py-3 text-slate-700">{item.managerName || "—"}</td>
-                    <td className="px-3 py-3 text-slate-700">{formatMoney(item.totalAmount)}</td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          className="rounded-md border border-emerald-200 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
-                          onClick={() => void onSaveProposal({ ...item, status: "draft" })}
-                        >
-                          Повернути в роботу
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-md border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50"
-                          onClick={() => {
-                            if (!window.confirm("Видалити комерційну пропозицію назавжди?")) return;
-                            void onDeleteProposal(item.id);
-                          }}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
+          <table className="min-w-full text-sm">
+            <thead className="text-left text-rose-700/80">
+              <tr>
+                {visibleOrderTableColumns.map((column) => {
+                  const label = ORDER_TABLE_COLUMNS.find((item) => item.id === column.id)?.label || column.id;
+                  return (
+                    <th key={`bottom_cancelled_${column.id}`} className="px-3 py-2">{label}</th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {cancelledOrders.map((item) => (
+                <tr key={`bottom_cancelled_row_${item.id}`} className="cursor-pointer border-t border-rose-100 hover:bg-white" onClick={() => setSelectedOrderId(String(item.id))}>
+                  {visibleOrderTableColumns.map((column) => (
+                    <td key={`bottom_cancelled_${item.id}_${column.id}`} className="px-3 py-2.5 text-slate-700">
+                      {getOrderTableCellValue(item, column.id)}
                     </td>
-                  </tr>
-                ))}
-                {proposalStats.cancelled.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-8 text-center text-slate-500">Скасованих пропозицій поки немає.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                  ))}
+                </tr>
+              ))}
+              {cancelledOrders.length === 0 && (
+                <tr>
+                  <td colSpan={Math.max(visibleOrderTableColumns.length, 1)} className="px-3 py-6 text-center text-slate-500">Втрачених замовлень поки немає.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
 
         {showProposalModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
-            <div className="w-full max-w-6xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex max-h-[94vh] w-full max-w-[96vw] flex-col rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl xl:max-w-7xl 2xl:max-w-[1720px]">
               <h3 className="mb-4 text-lg font-semibold text-slate-900">{proposalForm.id ? "Редагування комерційної пропозиції" : "Конструктор комерційної пропозиції"}</h3>
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-                <div className="rounded-xl border border-slate-200 p-3">
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[390px_minmax(0,1fr)]">
+                <div className="flex min-h-0 flex-col rounded-xl border border-slate-200 p-3">
                   <div className="mb-2 text-sm font-semibold text-slate-900">Продукти з Керування асортиментом</div>
-                  <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
-                    {productsByCategory.map((group) => (
+
+                  <div className="mb-3 space-y-2">
+                    <input
+                      className={`${baseInput} h-9 py-1.5 text-xs`}
+                      value={proposalProductSearch}
+                      onChange={(event) => setProposalProductSearch(event.target.value)}
+                      placeholder="Пошук позиції"
+                    />
+
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <select
+                        className={`${baseInput} h-9 py-1.5 text-xs`}
+                        value={proposalCategoryFilter}
+                        onChange={(event) => {
+                          setProposalCategoryFilter(event.target.value);
+                          setProposalSubcategoryFilter("all");
+                        }}
+                      >
+                        <option value="all">Усі категорії</option>
+                        {proposalCategoryOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                      </select>
+
+                      <select
+                        className={`${baseInput} h-9 py-1.5 text-xs`}
+                        value={proposalSubcategoryFilter}
+                        onChange={(event) => setProposalSubcategoryFilter(event.target.value)}
+                      >
+                        <option value="all">Усі підкатегорії</option>
+                        {proposalSubcategoryOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                      </select>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs text-slate-500">
+                      <span>Знайдено позицій: <span className="font-semibold text-slate-700">{filteredProductsCount}</span></span>
+                      <button
+                        type="button"
+                        className="rounded-md border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                        onClick={() => {
+                          setProposalProductSearch("");
+                          setProposalCategoryFilter("all");
+                          setProposalSubcategoryFilter("all");
+                        }}
+                      >
+                        Скинути
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                    {filteredProductsByCategory.map((group) => (
                       <div key={group.category}>
-                        <div className="mb-1 text-xs font-semibold uppercase text-slate-500">{group.category}</div>
+                        <div className="mb-1 flex items-center justify-between text-xs font-semibold uppercase text-slate-500">
+                          <span>{group.category}</span>
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">{group.items.length}</span>
+                        </div>
                         <div className="space-y-1">
                           {group.items.map((product) => (
                             <button
@@ -1147,15 +1906,15 @@ export default function CateringCrmTab({
                         </div>
                       </div>
                     ))}
-                    {productsByCategory.length === 0 && (
+                    {filteredProductsByCategory.length === 0 && (
                       <div className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-500">
-                        Поки немає продуктів в асортименті.
+                        Нічого не знайдено за поточними фільтрами.
                       </div>
                     )}
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-slate-200 p-3">
+                <div className="flex min-h-0 flex-col rounded-xl border border-slate-200 p-3">
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <input className={baseInput} value={proposalForm.title} onChange={(event) => setProposalForm((prev) => ({ ...prev, title: event.target.value }))} placeholder="Назва КП" />
                     <select className={baseInput} value={proposalForm.status} onChange={(event) => setProposalForm((prev) => ({ ...prev, status: event.target.value }))}>
@@ -1164,12 +1923,10 @@ export default function CateringCrmTab({
                   </div>
                   <textarea className={`${baseInput} mt-3 min-h-[72px]`} value={proposalForm.notes} onChange={(event) => setProposalForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Коментар до КП" />
 
-                  <div className="mt-3 overflow-x-auto">
+                  <div className="mt-3 min-h-0 flex-1 overflow-auto">
                     <table className="min-w-full text-sm">
                       <thead className="text-left text-slate-500">
                         <tr>
-                          <th className="px-2 py-2">Категорія</th>
-                          <th className="px-2 py-2">Підкатегорія</th>
                           <th className="px-2 py-2">Позиція</th>
                           <th className="px-2 py-2">Вихід</th>
                           <th className="px-2 py-2">Ціна</th>
@@ -1178,39 +1935,71 @@ export default function CateringCrmTab({
                           <th className="px-2 py-2"> </th>
                         </tr>
                       </thead>
-                      <tbody>
-                        {proposalForm.items.map((item) => (
-                          <tr key={item.id} className="border-t border-slate-200">
-                            <td className="px-2 py-2 text-xs">{item.category || "—"}</td>
-                            <td className="px-2 py-2 text-xs">{item.subcategory || "—"}</td>
-                            <td className="px-2 py-2 text-xs font-semibold">{item.productName}</td>
-                            <td className="px-2 py-2 text-xs">{item.output || "—"}</td>
-                            <td className="px-2 py-2">
-                              <input className="w-24 rounded border border-slate-300 px-2 py-1 text-xs" value={item.unitPrice} onChange={(event) => updateProposalItem(item.id, { unitPrice: Number(event.target.value || 0) })} />
-                            </td>
-                            <td className="px-2 py-2">
-                              <input className="w-20 rounded border border-slate-300 px-2 py-1 text-xs" value={item.quantity} onChange={(event) => updateProposalItem(item.id, { quantity: Number(event.target.value || 0) })} />
-                            </td>
-                            <td className="px-2 py-2 text-xs font-semibold">{formatMoney(item.amount)}</td>
-                            <td className="px-2 py-2">
-                              <button type="button" className="rounded border border-rose-200 p-1 text-rose-600 hover:bg-rose-50" onClick={() => removeProposalItem(item.id)}>
-                                <Trash2 size={12} />
-                              </button>
-                            </td>
+                      {proposalItemsByCategory.map((group) => (
+                        <tbody key={`proposal_group_${group.category}`}>
+                          <tr className="border-t border-slate-200 bg-slate-50/70">
+                            <td colSpan={6} className="px-2 py-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-600">{group.category}</td>
                           </tr>
-                        ))}
-                        {proposalForm.items.length === 0 && (
+                          {group.items.map((item) => (
+                            <tr key={item.id} className="border-t border-slate-200">
+                              <td className="px-2 py-2 text-xs font-semibold">{item.productName}</td>
+                              <td className="px-2 py-2 text-xs">{item.output || "—"}</td>
+                              <td className="px-2 py-2">
+                                <input className="w-24 rounded border border-slate-300 px-2 py-1 text-xs" value={item.unitPrice} onChange={(event) => updateProposalItem(item.id, { unitPrice: Number(event.target.value || 0) })} />
+                              </td>
+                              <td className="px-2 py-2">
+                                <input className="w-20 rounded border border-slate-300 px-2 py-1 text-xs" value={item.quantity} onChange={(event) => updateProposalItem(item.id, { quantity: Number(event.target.value || 0) })} />
+                              </td>
+                              <td className="px-2 py-2 text-xs font-semibold">{formatMoney(item.amount)}</td>
+                              <td className="px-2 py-2">
+                                <button type="button" className="rounded border border-rose-200 p-1 text-rose-600 hover:bg-rose-50" onClick={() => removeProposalItem(item.id)}>
+                                  <Trash2 size={12} />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      ))}
+                      {proposalForm.items.length === 0 && (
+                        <tbody>
                           <tr>
-                            <td colSpan={8} className="px-2 py-8 text-center text-xs text-slate-500">Додайте позиції зліва.</td>
+                            <td colSpan={6} className="px-2 py-8 text-center text-xs text-slate-500">Додайте позиції зліва.</td>
                           </tr>
-                        )}
-                      </tbody>
+                        </tbody>
+                      )}
                     </table>
+                  </div>
+
+                  <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70">
+                    <div className="grid grid-cols-1 divide-y divide-slate-200 text-xs sm:grid-cols-[1fr_auto] sm:divide-y-0 sm:[&>div:nth-child(2n+1)]:border-r sm:[&>div:nth-child(2n+1)]:border-slate-200">
+                      <div className="px-3 py-2 text-slate-600">Вихід меню на 1 Гостя, грам</div>
+                      <div className="px-3 py-2 text-right font-semibold text-slate-900">{formatNumberUk(proposalMetrics.foodPerGuestGrams, 0)}</div>
+
+                      <div className="px-3 py-2 text-slate-600">Вихід безалкогольних напоїв на 1 Гостя, мл</div>
+                      <div className="px-3 py-2 text-right font-semibold text-slate-900">{formatNumberUk(proposalMetrics.nonAlcoholPerGuestMl, 0)}</div>
+
+                      <div className="px-3 py-2 text-slate-600">Вихід алкогольних напоїв на 1 Гостя, мл</div>
+                      <div className="px-3 py-2 text-right font-semibold text-slate-900">{formatNumberUk(proposalMetrics.alcoholPerGuestMl, 0)}</div>
+
+                      <div className="px-3 py-2 text-slate-600">Вартість меню на 1 Гостя, грн</div>
+                      <div className="px-3 py-2 text-right font-semibold text-slate-900">{formatNumberUk(proposalMetrics.costPerGuest, 0)}</div>
+
+                      <div className="bg-[#112b61] px-3 py-2 text-[13px] font-semibold text-white">Всього за меню, грн</div>
+                      <div className="bg-[#112b61] px-3 py-2 text-right text-[13px] font-bold text-white">{formatNumberUk(proposalMetrics.totalMenuCost, 0)}</div>
+                    </div>
                   </div>
 
                   <div className="mt-4 flex items-center justify-between border-t border-slate-200 pt-3">
                     <div className="text-sm font-semibold text-slate-900">Разом: {formatMoney(proposalTotal)}</div>
                     <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg border border-indigo-300 px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50"
+                        disabled={proposalForm.items.length === 0}
+                        onClick={() => handleExportProposalPdf(proposalForm)}
+                      >
+                        <FileText size={14} className="mr-1 inline" /> PDF
+                      </button>
                       <button type="button" className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={() => setShowProposalModal(false)}>
                         Скасувати
                       </button>
