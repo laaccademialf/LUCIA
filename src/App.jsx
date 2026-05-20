@@ -1260,6 +1260,11 @@ function App() {
   const topTabs = useMemo(() => {
     const tabsFromMenu = getTabsForSection(activeNav);
     const allTabs = tabsFromMenu.map((tab) => {
+      const normalizedTabId = String(tab?.id || "").toLowerCase();
+      const rawLabel = String(tab?.label || "").trim();
+      if (normalizedTabId.includes("cateringrolesettings") || rawLabel.toLowerCase().includes("cateringrolesettings")) {
+        return { ...tab, label: "Управління ролями" };
+      }
       if (String(tab?.label || "").trim().toLowerCase() === "управління надцінками") {
         return { ...tab, label: "Управління націнками" };
       }
@@ -3739,7 +3744,9 @@ function App() {
       topTabKey.includes("ordercrm") ||
       topTabKey.includes("contactcrm") ||
       topTabKey.includes("typycalform") ||
-      topTabKey.includes("typicalform");
+      topTabKey.includes("typicalform") ||
+      topTabKey.includes("rolesettings") ||
+      topTabKey.includes("cateringrolesettings");
 
     if (isCateringNav) {
       return (
@@ -4712,7 +4719,32 @@ function App() {
 
           <div
             className={clsx(
-              "mx-auto max-w-screen-2xl px-3 sm:px-6 lg:px-8",
+              (
+                String(activeNav || "").toLowerCase().includes("catering") ||
+                String(activeNav || "").toLowerCase().includes("cattering") ||
+                String(activeNav || "").toLowerCase().includes("crmcatering") ||
+                String(activeNav || "").toLowerCase().includes("kitchencatering") ||
+                String(activeNav || "").toLowerCase().includes("reportcatering") ||
+                String(activeNav || "").toLowerCase().includes("asortiment") ||
+                String(activeNav || "").toLowerCase().includes("assortment") ||
+                String(activeNav || "").toLowerCase().includes("кейтеринг") ||
+                String(topTab || "").toLowerCase().includes("catering") ||
+                String(topTab || "").toLowerCase().includes("cattering") ||
+                String(topTab || "").toLowerCase().includes("chefmonitor") ||
+                String(topTab || "").toLowerCase().includes("salescateringreport") ||
+                String(topTab || "").toLowerCase().includes("managmentpnl") ||
+                String(topTab || "").toLowerCase().includes("managementpnl") ||
+                String(topTab || "").toLowerCase().includes("ordercrm") ||
+                String(topTab || "").toLowerCase().includes("contactcrm") ||
+                String(topTab || "").toLowerCase().includes("typycalform") ||
+                String(topTab || "").toLowerCase().includes("typicalform") ||
+                String(topTab || "").toLowerCase().includes("rolesettings") ||
+                String(topTab || "").toLowerCase().includes("cateringrolesettings") ||
+                String(topTab || "").toLowerCase().includes("asortiment") ||
+                String(topTab || "").toLowerCase().includes("assortment")
+              )
+                ? "w-full max-w-none px-0 sm:px-1 lg:px-2"
+                : "mx-auto max-w-screen-2xl px-3 sm:px-6 lg:px-8",
               (activeNav.includes("productbooking") || activeNav.includes("inventory-products"))
                 ? "pt-1 pb-4 sm:pt-2 sm:pb-6"
                 : "py-4 sm:py-8"

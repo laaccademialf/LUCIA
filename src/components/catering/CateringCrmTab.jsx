@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, ClipboardList, ContactRound, FileText, Pencil, Plus, Trash2, Users } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ClipboardList, ContactRound, Download, FileDown, FileText, Pencil, Plus, Trash2, Upload, Users } from "lucide-react";
+import {
+  downloadCateringContactsTemplate,
+  exportCateringContactsToExcel,
+  importCateringContactsFromExcel,
+} from "../../utils/cateringExcel";
 
 const ORDER_STATUSES = [
   { id: "new", label: "Новий / Інтерес", tone: "border-slate-200 bg-slate-50 text-slate-700" },
@@ -11,7 +16,7 @@ const ORDER_STATUSES = [
   { id: "cancelled", label: "Втрачено", tone: "border-rose-200 bg-rose-50 text-rose-700" },
 ];
 
-const FIELD_TYPES = ["text", "textarea", "number", "date", "select", "checkbox"];
+const FIELD_TYPES = ["text", "textarea", "number", "date", "select", "multiselect", "checkbox"];
 
 const formatMoney = (value) => new Intl.NumberFormat("uk-UA", {
   style: "currency",
@@ -19,12 +24,58 @@ const formatMoney = (value) => new Intl.NumberFormat("uk-UA", {
   maximumFractionDigits: 0,
 }).format(Number(value || 0));
 
+const formatDateUk = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "—";
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) return `${isoMatch[3]}.${isoMatch[2]}.${isoMatch[1]}`;
+  const ukMatch = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (ukMatch) return raw;
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toLocaleDateString("uk-UA");
+  return raw;
+};
+
+const toDateInputValue = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) return raw;
+  const ukMatch = raw.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (ukMatch) return `${ukMatch[3]}-${ukMatch[2]}-${ukMatch[1]}`;
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+  return "";
+};
+
+const normalizeKey = (value) => String(value || "")
+  .toLowerCase()
+  .replace(/[^a-zа-яіїєґ0-9]+/gi, "");
+
+const buildOrderTitle = (eventType, companyName, customerName) => {
+  const cleanType = String(eventType || "").trim();
+  const cleanCompany = String(companyName || "").trim();
+  const cleanCustomer = String(customerName || "").trim();
+  const customerBlock = [cleanCompany, cleanCustomer].filter(Boolean).join(" — ");
+  if (cleanType && customerBlock) return `${cleanType} для ${customerBlock}`;
+  if (cleanType) return cleanType;
+  if (customerBlock) return `Захід для ${customerBlock}`;
+  return "";
+};
+
 const emptyOrder = {
   id: "",
   title: "",
   customerName: "",
+  companyName: "",
+  eventType: "",
   contactId: "",
   managerName: "",
+  serviceManagerName: "",
+  clientType: "",
+  leadSource: "",
   amount: "",
   guestCount: "",
   eventDate: "",
@@ -37,9 +88,12 @@ const emptyContact = {
   id: "",
   name: "",
   company: "",
+  industry: "",
+  address: "",
   phone: "",
   email: "",
   assignedManager: "",
+  leadSource: "",
   notes: "",
 };
 
@@ -47,19 +101,100 @@ const emptyField = {
   id: "",
   label: "",
   key: "",
+  category: "order",
   type: "text",
   required: false,
   placeholder: "",
+  description: "",
+  options: "",
 };
 
+const emptyProposal = {
+  id: "",
+  orderId: "",
+  orderTitle: "",
+  title: "",
+  customerName: "",
+  companyName: "",
+  managerName: "",
+  status: "draft",
+  notes: "",
+  items: [],
+};
+
+const PROPOSAL_STATUS_OPTIONS = [
+  { value: "draft", label: "Чернетка" },
+  { value: "sent", label: "Надіслано" },
+  { value: "approved", label: "Погоджено" },
+  { value: "cancelled", label: "Скасовано" },
+];
+
+const FIELD_PRESETS = [
+  {
+    id: "eventType",
+    label: "Тип заходу",
+    key: "eventType",
+    category: "order",
+    type: "select",
+    required: true,
+    placeholder: "Оберіть тип заходу",
+    description: "Використовується в назві угоди",
+    options: "Фуршет, Банкет, Кава-брейк, Корпоратив",
+  },
+  {
+    id: "clientType",
+    label: "Тип клієнта",
+    key: "clientType",
+    category: "customer",
+    type: "select",
+    required: false,
+    placeholder: "Постійний / Новий",
+    description: "Фіксує рівень лояльності клієнта",
+    options: "Постійний, Новий",
+  },
+  {
+    id: "leadSource",
+    label: "Джерело ліда",
+    key: "leadSource",
+    category: "source",
+    type: "select",
+    required: false,
+    placeholder: "Звідки прийшов клієнт",
+    description: "Наприклад: Telegram, Instagram, Сайт, Рекомендація",
+    options: "Telegram, Instagram, Сайт, Телефон, Email, Рекомендація",
+  },
+  {
+    id: "orderTags",
+    label: "Теги угоди",
+    key: "orderTags",
+    category: "tags",
+    type: "multiselect",
+    required: false,
+    placeholder: "Позначки угоди",
+    description: "Допомагає фільтрувати CRM",
+    options: "VIP, Повторне звернення, Терміново, Пріоритет",
+  },
+];
+
 const baseInput = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100";
+const compactActionBtn = "inline-flex h-7 items-center justify-center rounded-md border px-2 text-[11px] font-semibold transition";
+
+const openNativeDatePicker = (event) => {
+  const input = event.currentTarget;
+  if (typeof input?.showPicker === "function") {
+    input.showPicker();
+  }
+};
 
 export default function CateringCrmTab({
   mode,
   orders,
   contacts,
   fieldTemplates,
+  proposals,
+  assortmentItems,
   managers,
+  currentUserName,
   saving,
   onSaveOrder,
   onDeleteOrder,
@@ -67,75 +202,467 @@ export default function CateringCrmTab({
   onDeleteContact,
   onSaveField,
   onDeleteField,
+  onSaveProposal,
+  onDeleteProposal,
 }) {
-  const [orderForm, setOrderForm] = useState(emptyOrder);
+  const createDefaultOrder = (managerName) => ({
+    ...emptyOrder,
+    managerName: String(managerName || "").trim(),
+    serviceManagerName: String(managerName || "").trim(),
+  });
+
+  const [orderForm, setOrderForm] = useState(() => createDefaultOrder(currentUserName));
   const [contactForm, setContactForm] = useState(emptyContact);
   const [fieldForm, setFieldForm] = useState(emptyField);
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [showFieldModal, setShowFieldModal] = useState(false);
+  const [draggedOrderId, setDraggedOrderId] = useState("");
+  const [ordersViewMode, setOrdersViewMode] = useState("kanban");
+  const [showProposalModal, setShowProposalModal] = useState(false);
+  const [proposalForm, setProposalForm] = useState(emptyProposal);
+  const [selectedOrderId, setSelectedOrderId] = useState("");
+  const [contactSearch, setContactSearch] = useState("");
+  const [contactManagerFilter, setContactManagerFilter] = useState("");
+  const [contactIndustryFilter, setContactIndustryFilter] = useState("");
+  const [fieldSearch, setFieldSearch] = useState("");
+  const [fieldCategoryFilter, setFieldCategoryFilter] = useState("all");
+  const contactImportRef = useRef(null);
 
   useEffect(() => {
-    setOrderForm(emptyOrder);
+    setOrderForm(createDefaultOrder(currentUserName));
     setContactForm(emptyContact);
     setFieldForm(emptyField);
-  }, [mode]);
+  }, [mode, currentUserName]);
 
   const boardOrders = useMemo(() => orders.filter((item) => item.status !== "cancelled"), [orders]);
   const wonAmount = useMemo(() => orders.filter((item) => item.status === "confirmed").reduce((sum, item) => sum + Number(item.amount || 0), 0), [orders]);
   const pipelineAmount = useMemo(() => orders.filter((item) => item.status !== "confirmed" && item.status !== "cancelled").reduce((sum, item) => sum + Number(item.amount || 0), 0), [orders]);
 
+  const eventTypeOptions = useMemo(() => {
+    const eventTypeTemplateOptions = fieldTemplates
+      .filter((item) => {
+        const key = normalizeKey(item.key);
+        const label = normalizeKey(item.label);
+        return key === "eventtype" || label === "типзаходу";
+      })
+      .flatMap((item) => (Array.isArray(item.options) ? item.options : []));
+
+    const dedicatedTypeRows = fieldTemplates
+      .filter((item) => normalizeKey(item.key).startsWith("eventtypeoption"))
+      .map((item) => item.label);
+
+    return Array.from(new Set([...eventTypeTemplateOptions, ...dedicatedTypeRows].map((item) => String(item || "").trim()).filter(Boolean)));
+  }, [fieldTemplates]);
+
+  const contactLookup = useMemo(() => {
+    const map = new Map();
+    contacts.forEach((item) => {
+      const name = String(item.name || "").trim();
+      const company = String(item.company || "").trim();
+      if (name) map.set(normalizeKey(name), item);
+      if (company) map.set(normalizeKey(company), item);
+      if (name && company) map.set(normalizeKey(`${name} ${company}`), item);
+      if (name && company) map.set(normalizeKey(`${name} • ${company}`), item);
+      if (name && company) map.set(normalizeKey(`${company} ${name}`), item);
+      if (name && company) map.set(normalizeKey(`${company} • ${name}`), item);
+    });
+    return map;
+  }, [contacts]);
+
+  const productsByCategory = useMemo(() => {
+    const grouped = new Map();
+    (Array.isArray(assortmentItems) ? assortmentItems : []).forEach((item) => {
+      const category = String(item.category || "Без категорії").trim() || "Без категорії";
+      if (!grouped.has(category)) grouped.set(category, []);
+      grouped.get(category).push(item);
+    });
+    return Array.from(grouped.entries()).map(([category, items]) => ({ category, items }));
+  }, [assortmentItems]);
+
+  const proposalsByOrder = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(proposals) ? proposals : []).forEach((item) => {
+      const key = String(item.orderId || "");
+      if (!key) return;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(item);
+    });
+    return map;
+  }, [proposals]);
+
+  const proposalStats = useMemo(() => {
+    const all = Array.isArray(proposals) ? proposals : [];
+    const active = all.filter((item) => String(item.status || "draft").toLowerCase() !== "cancelled");
+    const cancelled = all.filter((item) => String(item.status || "").toLowerCase() === "cancelled");
+    return { all, active, cancelled };
+  }, [proposals]);
+
+  const selectedOrder = useMemo(
+    () => orders.find((item) => String(item.id) === String(selectedOrderId)) || null,
+    [orders, selectedOrderId],
+  );
+
+  const selectedOrderProposals = useMemo(() => {
+    if (!selectedOrder) return [];
+    return [...(proposalsByOrder.get(String(selectedOrder.id)) || [])].sort((a, b) => {
+      const left = new Date(String(a?.updatedAt || a?.createdAt || 0)).getTime();
+      const right = new Date(String(b?.updatedAt || b?.createdAt || 0)).getTime();
+      return right - left;
+    });
+  }, [selectedOrder, proposalsByOrder]);
+
+  const getFieldTemplateOptions = (keys = []) => {
+    const normalizedKeys = keys.map((item) => normalizeKey(item));
+    const values = fieldTemplates
+      .filter((item) => normalizedKeys.includes(normalizeKey(item.key)) || normalizedKeys.includes(normalizeKey(item.label)))
+      .flatMap((item) => (Array.isArray(item.options) ? item.options : []))
+      .map((item) => String(item || "").trim())
+      .filter(Boolean);
+    return Array.from(new Set(values));
+  };
+
+  const clientTypeOptions = useMemo(() => getFieldTemplateOptions(["clientType", "тип клієнта", "тип клиента"]), [fieldTemplates]);
+  const leadSourceOptions = useMemo(() => getFieldTemplateOptions(["leadSource", "leadChannel", "джерело", "джерело ліда", "канал", "source"]), [fieldTemplates]);
+  const industryOptions = useMemo(() => getFieldTemplateOptions(["industry", "промисловість", "бізнес напрям", "напрям"]), [fieldTemplates]);
+
+  const contactManagerOptions = useMemo(() => {
+    const set = new Set(contacts.map((item) => String(item.assignedManager || "").trim()).filter(Boolean));
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "uk"));
+  }, [contacts]);
+
+  const contactIndustryFilterOptions = useMemo(() => {
+    const set = new Set(contacts.map((item) => String(item.industry || "").trim()).filter(Boolean));
+    return Array.from(set).sort((a, b) => a.localeCompare(b, "uk"));
+  }, [contacts]);
+
+  const filteredContacts = useMemo(() => {
+    const probe = normalizeKey(contactSearch);
+    return contacts.filter((item) => {
+      if (contactManagerFilter && String(item.assignedManager || "").trim() !== contactManagerFilter) return false;
+      if (contactIndustryFilter && String(item.industry || "").trim() !== contactIndustryFilter) return false;
+      if (!probe) return true;
+      const haystack = normalizeKey([item.name, item.company, item.industry, item.address, item.phone, item.email, item.assignedManager, item.leadSource].filter(Boolean).join(" "));
+      return haystack.includes(probe);
+    });
+  }, [contacts, contactSearch, contactManagerFilter, contactIndustryFilter]);
+
+  const handleDownloadContactsTemplate = () => {
+    downloadCateringContactsTemplate();
+  };
+
+  const handleExportContacts = () => {
+    exportCateringContactsToExcel(contacts);
+  };
+
+  const handleImportContacts = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      const importedRows = await importCateringContactsFromExcel(file);
+      if (!Array.isArray(importedRows) || importedRows.length === 0) {
+        window.alert("У файлі не знайдено контактів для імпорту.");
+        return;
+      }
+
+      let importedCount = 0;
+      for (const row of importedRows) {
+        // eslint-disable-next-line no-await-in-loop
+        const result = await onSaveContact(row);
+        if (result?.success) importedCount += 1;
+      }
+
+      window.alert(`Імпорт завершено. Додано/оновлено контактів: ${importedCount}.`);
+    } catch (error) {
+      console.error("Помилка імпорту контактів:", error);
+      window.alert("Не вдалося імпортувати контакти з Excel.");
+    }
+  };
+
+  const filteredFieldTemplates = useMemo(() => {
+    const probe = normalizeKey(fieldSearch);
+    return fieldTemplates.filter((item) => {
+      const categoryPass = fieldCategoryFilter === "all" || String(item.category || "").trim() === fieldCategoryFilter;
+      if (!categoryPass) return false;
+      if (!probe) return true;
+      const haystack = normalizeKey([item.label, item.key, item.category, item.type, item.description, ...(Array.isArray(item.options) ? item.options : [])].filter(Boolean).join(" "));
+      return haystack.includes(probe);
+    });
+  }, [fieldTemplates, fieldSearch, fieldCategoryFilter]);
+
+  const openOrderEditor = (item) => {
+    const normalizedDate = toDateInputValue(item?.eventDate);
+    setOrderForm({
+      ...createDefaultOrder(currentUserName),
+      ...item,
+      eventDate: normalizedDate,
+      tags: Array.isArray(item?.tags) ? item.tags.join(", ") : String(item?.tags || ""),
+    });
+    setShowNewOrderModal(true);
+  };
+
+  const openProposalBuilder = (order) => {
+    setProposalForm({
+      ...emptyProposal,
+      orderId: String(order?.id || ""),
+      orderTitle: String(order?.title || "").trim(),
+      title: `КП: ${String(order?.title || "Нова пропозиція").trim()}`,
+      customerName: String(order?.customerName || "").trim(),
+      companyName: String(order?.companyName || "").trim(),
+      managerName: String(order?.managerName || currentUserName || "").trim(),
+      notes: String(order?.notes || "").trim(),
+      items: [],
+    });
+    setShowProposalModal(true);
+  };
+
+  const openExistingProposalEditor = (proposal, order) => {
+    const fallbackOrder = order || orders.find((item) => String(item.id) === String(proposal?.orderId));
+    setProposalForm({
+      ...emptyProposal,
+      id: String(proposal?.id || ""),
+      orderId: String(proposal?.orderId || fallbackOrder?.id || ""),
+      orderTitle: String(proposal?.orderTitle || fallbackOrder?.title || "").trim(),
+      title: String(proposal?.title || "").trim(),
+      customerName: String(proposal?.customerName || fallbackOrder?.customerName || "").trim(),
+      companyName: String(proposal?.companyName || fallbackOrder?.companyName || "").trim(),
+      managerName: String(proposal?.managerName || fallbackOrder?.managerName || currentUserName || "").trim(),
+      status: String(proposal?.status || "draft").trim() || "draft",
+      notes: String(proposal?.notes || "").trim(),
+      items: Array.isArray(proposal?.items)
+        ? proposal.items.map((item) => ({
+          id: String(item?.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+          category: String(item?.category || "").trim(),
+          subcategory: String(item?.subcategory || "").trim(),
+          productName: String(item?.productName || "").trim(),
+          output: String(item?.output || "").trim(),
+          unitPrice: Number(item?.unitPrice || 0),
+          quantity: Number(item?.quantity || 0),
+          amount: Number(item?.amount || Number(item?.unitPrice || 0) * Number(item?.quantity || 0)),
+        }))
+        : [],
+    });
+    setShowProposalModal(true);
+  };
+
+  const handleOpenProposalForBrief = (order) => {
+    const orderId = String(order?.id || "");
+    if (!orderId) {
+      openProposalBuilder(order);
+      return;
+    }
+
+    const existing = [...(proposalsByOrder.get(orderId) || [])]
+      .sort((a, b) => {
+        const left = new Date(String(a?.updatedAt || a?.createdAt || 0)).getTime();
+        const right = new Date(String(b?.updatedAt || b?.createdAt || 0)).getTime();
+        return right - left;
+      })[0];
+
+    if (!existing) {
+      openProposalBuilder(order);
+      return;
+    }
+
+    const shouldEditExisting = window.confirm(
+      "Для цього брифу вже є КП. Натисніть ОК, щоб редагувати наявне КП, або Скасувати, щоб створити нове.",
+    );
+
+    if (shouldEditExisting) {
+      openExistingProposalEditor(existing, order);
+      return;
+    }
+
+    openProposalBuilder(order);
+  };
+
+  const markProposalCancelled = async (item) => {
+    const result = await onSaveProposal({ ...item, status: "cancelled" });
+    return result?.success;
+  };
+
+  const addProposalItem = (product) => {
+    setProposalForm((prev) => {
+      const unitPrice = Number(product?.unitPrice || 0);
+      const nextItem = {
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        category: String(product?.category || "").trim(),
+        subcategory: String(product?.subcategory || "").trim(),
+        productName: String(product?.productName || product?.name || "").trim(),
+        output: String(product?.output || "").trim(),
+        unitPrice,
+        quantity: 1,
+        amount: unitPrice,
+      };
+      return {
+        ...prev,
+        items: [...prev.items, nextItem],
+      };
+    });
+  };
+
+  const updateProposalItem = (itemId, patch) => {
+    setProposalForm((prev) => ({
+      ...prev,
+      items: prev.items.map((item) => {
+        if (item.id !== itemId) return item;
+        const next = { ...item, ...patch };
+        const unitPrice = Number(next.unitPrice || 0);
+        const quantity = Number(next.quantity || 0);
+        return {
+          ...next,
+          amount: unitPrice * quantity,
+        };
+      }),
+    }));
+  };
+
+  const removeProposalItem = (itemId) => {
+    setProposalForm((prev) => ({
+      ...prev,
+      items: prev.items.filter((item) => item.id !== itemId),
+    }));
+  };
+
+  const proposalTotal = useMemo(
+    () => proposalForm.items.reduce((sum, item) => sum + Number(item.amount || 0), 0),
+    [proposalForm.items],
+  );
+
+  const moveOrderToStatus = (orderId, nextStatus) => {
+    if (!orderId || !nextStatus) return;
+    const sourceOrder = orders.find((item) => String(item.id) === String(orderId));
+    if (!sourceOrder || sourceOrder.status === nextStatus) return;
+    void onSaveOrder({ ...sourceOrder, status: nextStatus });
+  };
+
+  const closeOrderDetails = () => {
+    setSelectedOrderId("");
+  };
+
   const orderCards = (
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Plus size={18} className="text-indigo-600" />
-              <h3 className="text-base font-semibold text-slate-900">Нове замовлення CRM</h3>
+        <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <div className="inline-flex items-center gap-1 rounded-xl bg-slate-100 p-1 shadow-inner ring-1 ring-slate-200">
+              <button
+                type="button"
+                className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition ${ordersViewMode === "kanban" ? "bg-[#112b61] text-white shadow-sm" : "text-slate-600 hover:bg-white/80"}`}
+                onClick={() => setOrdersViewMode("kanban")}
+              >
+                Борд
+              </button>
+              <button
+                type="button"
+                className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition ${ordersViewMode === "table" ? "bg-[#112b61] text-white shadow-sm" : "text-slate-600 hover:bg-white/80"}`}
+                onClick={() => setOrdersViewMode("table")}
+              >
+                Таблиця
+              </button>
             </div>
             <button
               type="button"
-              className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={saving}
               onClick={() => {
-                setOrderForm(emptyOrder);
+                setOrderForm(createDefaultOrder(currentUserName));
                 setShowNewOrderModal(true);
               }}
             >
-              <Plus size={16} className="inline mr-1" />
+              <Plus size={15} className="inline mr-1" />
               Нова угода
             </button>
           </div>
+
           <>
             {showNewOrderModal && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
                 <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-                  <h3 className="mb-4 text-lg font-semibold text-slate-900">Нова CRM угода</h3>
+                  <h3 className="mb-4 text-lg font-semibold text-slate-900">{orderForm.id ? "Редагування CRM угоди" : "Нова CRM угода"}</h3>
                   <div className="space-y-3 max-h-[70vh] overflow-y-auto">
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Назва угоди</label>
-                      <input className={baseInput} value={orderForm.title} onChange={(event) => setOrderForm((prev) => ({ ...prev, title: event.target.value }))} placeholder="Напр. Фуршет для Softsvit" />
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип заходу</label>
+                        <select
+                          className={baseInput}
+                          value={orderForm.eventType}
+                          onChange={(event) => {
+                            const nextEventType = event.target.value;
+                            setOrderForm((prev) => ({
+                              ...prev,
+                              eventType: nextEventType,
+                              title: buildOrderTitle(nextEventType, prev.companyName, prev.customerName),
+                            }));
+                          }}
+                        >
+                          <option value="">Оберіть тип заходу</option>
+                          {eventTypeOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Клієнт / контакт</label>
+                        <input
+                          className={baseInput}
+                          list="catering-client-contact-list"
+                          value={orderForm.customerName}
+                          onChange={(event) => {
+                            const nextCustomer = event.target.value;
+                            const matched = contactLookup.get(normalizeKey(nextCustomer));
+                            setOrderForm((prev) => ({
+                              ...prev,
+                              customerName: matched?.name || nextCustomer,
+                              companyName: matched?.company || "",
+                              contactId: matched?.id || "",
+                              title: buildOrderTitle(prev.eventType, matched?.company || "", matched?.name || nextCustomer),
+                            }));
+                          }}
+                          placeholder="Почніть вводити ім'я/компанію"
+                        />
+                        <datalist id="catering-client-contact-list">
+                          {contacts.map((item) => (
+                            <option key={item.id} value={item.company ? `${item.company} • ${item.name}` : item.name}>{item.company ? `${item.company} • ${item.name}` : item.name}</option>
+                          ))}
+                        </datalist>
+                      </div>
                     </div>
+
                     <div>
-                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Клієнт</label>
-                      <input className={baseInput} value={orderForm.customerName} onChange={(event) => setOrderForm((prev) => ({ ...prev, customerName: event.target.value }))} placeholder="Назва компанії або контакт" />
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Назва угоди (генерується автоматично)</label>
+                      <input className={`${baseInput} bg-slate-50`} value={buildOrderTitle(orderForm.eventType, orderForm.companyName, orderForm.customerName)} readOnly />
                     </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Контакт</label>
-                      <select className={baseInput} value={orderForm.contactId} onChange={(event) => setOrderForm((prev) => ({ ...prev, contactId: event.target.value }))}>  
-                        <option value="">Без прив'язки</option>
-                        {contacts.map((item) => (
-                          <option key={item.id} value={item.id}>{item.name}{item.company ? ` • ${item.company}` : ""}</option>
-                        ))}
-                      </select>
-                    </div>
+
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Менеджер</label>
                         <input className={baseInput} list="catering-sales-managers" value={orderForm.managerName} onChange={(event) => setOrderForm((prev) => ({ ...prev, managerName: event.target.value }))} placeholder="Прізвище менеджера" />
                       </div>
                       <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Сервіс менеджер</label>
+                        <input className={baseInput} list="catering-sales-managers" value={orderForm.serviceManagerName} onChange={(event) => setOrderForm((prev) => ({ ...prev, serviceManagerName: event.target.value }))} placeholder="Відповідальний сервіс менеджер" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип клієнта</label>
+                        <select className={baseInput} value={orderForm.clientType} onChange={(event) => setOrderForm((prev) => ({ ...prev, clientType: event.target.value }))}>
+                          <option value="">Оберіть тип клієнта</option>
+                          {(clientTypeOptions.length > 0 ? clientTypeOptions : ["Постійний", "Новий"]).map((value) => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Джерело ліда</label>
+                        <select className={baseInput} value={orderForm.leadSource} onChange={(event) => setOrderForm((prev) => ({ ...prev, leadSource: event.target.value }))}>
+                          <option value="">Оберіть джерело ліда</option>
+                          {(leadSourceOptions.length > 0 ? leadSourceOptions : ["Telegram", "Instagram", "Рекомендація", "Сайт", "Вхідний дзвінок"]).map((value) => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                      </div>
+                      <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Стадія</label>
-                        <select className={baseInput} value={orderForm.status} onChange={(event) => setOrderForm((prev) => ({ ...prev, status: event.target.value }))}>  
+                        <select className={baseInput} value={orderForm.status} onChange={(event) => setOrderForm((prev) => ({ ...prev, status: event.target.value }))}>
                           {ORDER_STATUSES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
                         </select>
                       </div>
@@ -147,7 +674,15 @@ export default function CateringCrmTab({
                       </div>
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Дата події</label>
-                        <input type="date" className={baseInput} value={orderForm.eventDate} onChange={(event) => setOrderForm((prev) => ({ ...prev, eventDate: event.target.value }))} />
+                        <input
+                          type="date"
+                          className={baseInput}
+                          value={orderForm.eventDate}
+                          onFocus={openNativeDatePicker}
+                          onClick={openNativeDatePicker}
+                          onChange={(event) => setOrderForm((prev) => ({ ...prev, eventDate: event.target.value }))}
+                        />
+                        <p className="mt-1 text-[11px] text-slate-500">Формат відображення в картках: dd.mm.yyyy</p>
                       </div>
                     </div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -169,12 +704,16 @@ export default function CateringCrmTab({
                     <button
                       type="button"
                       className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={saving || !orderForm.title.trim() || !orderForm.customerName.trim()}
+                      disabled={saving || !orderForm.customerName.trim() || !orderForm.eventType.trim()}
                       onClick={async () => {
-                        const result = await onSaveOrder(orderForm);
+                        const payload = {
+                          ...orderForm,
+                          title: buildOrderTitle(orderForm.eventType, orderForm.companyName, orderForm.customerName),
+                        };
+                        const result = await onSaveOrder(payload);
                         if (result?.success) {
                           setShowNewOrderModal(false);
-                          setOrderForm(emptyOrder);
+                          setOrderForm(createDefaultOrder(currentUserName));
                         }
                       }}
                     >
@@ -182,7 +721,7 @@ export default function CateringCrmTab({
                     </button>
                     <button type="button" className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={() => {
                       setShowNewOrderModal(false);
-                      setOrderForm(emptyOrder);
+                      setOrderForm(createDefaultOrder(currentUserName));
                     }}>
                       Скасувати
                     </button>
@@ -216,30 +755,124 @@ export default function CateringCrmTab({
           </div>
         </div>
 
+        {ordersViewMode === "table" ? (
+          <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+            <table className="min-w-full text-sm">
+              <thead className="text-left text-slate-500">
+                <tr>
+                  <th className="px-3 py-2">Угода</th>
+                  <th className="px-3 py-2">Стадія</th>
+                  <th className="px-3 py-2">Менеджер</th>
+                  <th className="px-3 py-2">Сервіс менеджер</th>
+                  <th className="px-3 py-2">Подія</th>
+                  <th className="px-3 py-2">Сума</th>
+                  <th className="px-3 py-2">Дії</th>
+                </tr>
+              </thead>
+              <tbody>
+                {boardOrders.map((item) => (
+                  <tr key={item.id} className="border-t border-slate-200">
+                    <td className="px-3 py-3">
+                      <div className="font-semibold text-slate-900">{item.title || "Без назви"}</div>
+                      <div className="text-xs text-slate-500">{[item.companyName, item.customerName].filter(Boolean).join(" — ") || "—"}</div>
+                    </td>
+                    <td className="px-3 py-3 text-slate-700">{ORDER_STATUSES.find((status) => status.id === item.status)?.label || item.status}</td>
+                    <td className="px-3 py-3 text-slate-700">{item.managerName || "—"}</td>
+                    <td className="px-3 py-3 text-slate-700">{item.serviceManagerName || "—"}</td>
+                    <td className="px-3 py-3 text-slate-700">{formatDateUk(item.eventDate)}</td>
+                    <td className="px-3 py-3 text-slate-700">{formatMoney(item.amount)}</td>
+                    <td className="px-3 py-3">
+                      <div className="flex items-center gap-2">
+                        <button type="button" className="rounded-md border border-slate-300 p-1 text-slate-600 hover:bg-white" onClick={() => openOrderEditor(item)}>
+                          <Pencil size={14} />
+                        </button>
+                        {item.status === "brief" && (
+                          <button type="button" className="rounded-md border border-indigo-300 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50" onClick={() => handleOpenProposalForBrief(item)}>
+                            Створити пропозицію
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {boardOrders.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="px-3 py-8 text-center text-slate-500">Поки порожньо</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-6">
           {ORDER_STATUSES.filter((item) => item.id !== "cancelled").map((column) => {
             const columnOrders = boardOrders.filter((item) => item.status === column.id);
             return (
-              <div key={column.id} className="min-w-0 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div
+                key={column.id}
+                className="min-w-0 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"
+                onDragOver={(event) => {
+                  event.preventDefault();
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const droppedId = event.dataTransfer.getData("text/plain") || draggedOrderId;
+                  setDraggedOrderId("");
+                  moveOrderToStatus(droppedId, column.id);
+                }}
+              >
                 <div className={`mb-3 rounded-xl border px-3 py-2 text-xs font-semibold ${column.tone}`}>
                   {column.label}: {columnOrders.length}
                 </div>
                 <div className="space-y-2">
                   {columnOrders.map((item) => (
-                    <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div
+                      key={item.id}
+                      className="cursor-grab rounded-xl border border-slate-200 bg-slate-50/80 p-2.5 shadow-sm active:cursor-grabbing"
+                      draggable
+                      onClick={() => setSelectedOrderId(String(item.id))}
+                      onDragStart={(event) => {
+                        setDraggedOrderId(String(item.id));
+                        event.dataTransfer.setData("text/plain", String(item.id));
+                        event.dataTransfer.effectAllowed = "move";
+                      }}
+                      onDragEnd={() => {
+                        setDraggedOrderId("");
+                      }}
+                    >
                       <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="text-sm font-semibold text-slate-900">{item.title || "Без назви"}</div>
-                          <div className="text-xs text-slate-500">{item.customerName || "Без клієнта"}</div>
+                        <div className="min-w-0">
+                          <div className="line-clamp-2 text-[15px] font-semibold leading-tight text-slate-900">{item.title || "Без назви"}</div>
+                          <div className="mt-0.5 text-xs text-slate-500">{item.customerName || "Без клієнта"}</div>
                         </div>
                         <div className="flex items-center gap-1">
-                          <button type="button" className="rounded-md border border-slate-300 p-1 text-slate-600 hover:bg-white" onClick={() => setOrderForm({ ...item, tags: (item.tags || []).join(", ") })}>
-                            <Pencil size={14} />
-                          </button>
                           <button
                             type="button"
-                            className="rounded-md border border-rose-200 p-1 text-rose-600 hover:bg-rose-50"
-                            onClick={() => {
+                            className={`${compactActionBtn} border-slate-300 text-slate-600 hover:bg-white`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openOrderEditor(item);
+                            }}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          {item.status === "brief" && (
+                            <button
+                              type="button"
+                              className={`${compactActionBtn} border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleOpenProposalForBrief(item);
+                              }}
+                            >
+                              КП
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className={`${compactActionBtn} border-rose-200 text-rose-600 hover:bg-rose-50`}
+                            onClick={(event) => {
+                              event.stopPropagation();
                               if (!window.confirm("Видалити CRM-угоду?")) return;
                               void onDeleteOrder(item.id);
                             }}
@@ -248,32 +881,36 @@ export default function CateringCrmTab({
                           </button>
                         </div>
                       </div>
-                      <div className="mt-3 space-y-1 text-xs text-slate-600">
-                        <div>Менеджер: <span className="font-medium text-slate-800">{item.managerName || "—"}</span></div>
-                        <div>Сума: <span className="font-medium text-slate-800">{formatMoney(item.amount)}</span></div>
-                        <div>Подія: <span className="font-medium text-slate-800">{item.eventDate || "—"}</span></div>
-                        <div>Гостей: <span className="font-medium text-slate-800">{item.guestCount || "—"}</span></div>
+
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {item.eventType && <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">{item.eventType}</span>}
+                        {item.clientType && <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700">{item.clientType}</span>}
+                        {item.leadSource && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">{item.leadSource}</span>}
+                        {proposalsByOrder.get(String(item.id))?.length > 0 && (
+                          <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700">
+                            КП: {proposalsByOrder.get(String(item.id)).length}
+                          </span>
+                        )}
                       </div>
+
+                      <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[12px] text-slate-600">
+                        <div className="truncate">Менеджер: <span className="font-medium text-slate-800">{item.managerName || "—"}</span></div>
+                        <div className="truncate">Сервіс: <span className="font-medium text-slate-800">{item.serviceManagerName || "—"}</span></div>
+                        <div className="truncate">Гостей: <span className="font-medium text-slate-800">{item.guestCount || "—"}</span></div>
+                        <div className="truncate">Сума: <span className="font-medium text-slate-800">{formatMoney(item.amount)}</span></div>
+                        <div className="truncate">Подія: <span className="font-medium text-slate-800">{formatDateUk(item.eventDate)}</span></div>
+                        <div className="truncate">Джерело: <span className="font-medium text-slate-800">{item.leadSource || "—"}</span></div>
+                      </div>
+
                       {(item.tags || []).length > 0 && (
-                        <div className="mt-3 flex flex-wrap gap-1">
+                        <div className="mt-2 flex flex-wrap gap-1">
                           {(item.tags || []).map((tag) => (
-                            <span key={`${item.id}_${tag}`} className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-600">
+                            <span key={`${item.id}_${tag}`} className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-medium text-slate-600">
                               {tag}
                             </span>
                           ))}
                         </div>
                       )}
-                      <div className="mt-3">
-                        <select
-                          className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800"
-                          value={item.status}
-                          onChange={(event) => {
-                            void onSaveOrder({ ...item, status: event.target.value });
-                          }}
-                        >
-                          {ORDER_STATUSES.map((statusItem) => <option key={statusItem.id} value={statusItem.id}>{statusItem.label}</option>)}
-                        </select>
-                      </div>
                     </div>
                   ))}
                   {columnOrders.length === 0 && (
@@ -286,59 +923,405 @@ export default function CateringCrmTab({
             );
           })}
         </div>
+        )}
+
+        {selectedOrder && (
+          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-4" onClick={closeOrderDetails}>
+            <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-900">{selectedOrder.title || "Деталі замовлення"}</h3>
+                  <p className="mt-0.5 text-xs text-slate-500">{[selectedOrder.companyName, selectedOrder.customerName].filter(Boolean).join(" — ") || "—"}</p>
+                </div>
+                <button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={closeOrderDetails}>
+                  Закрити
+                </button>
+              </div>
+
+              <div className="mb-4 grid grid-cols-1 gap-2 text-xs text-slate-700 sm:grid-cols-3">
+                <div className="rounded-lg bg-slate-50 px-2.5 py-2">Стадія: <span className="font-semibold text-slate-900">{ORDER_STATUSES.find((status) => status.id === selectedOrder.status)?.label || selectedOrder.status}</span></div>
+                <div className="rounded-lg bg-slate-50 px-2.5 py-2">Подія: <span className="font-semibold text-slate-900">{formatDateUk(selectedOrder.eventDate)}</span></div>
+                <div className="rounded-lg bg-slate-50 px-2.5 py-2">Сума: <span className="font-semibold text-slate-900">{formatMoney(selectedOrder.amount)}</span></div>
+              </div>
+
+              <div className="rounded-xl border border-slate-200">
+                <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2">
+                  <h4 className="text-sm font-semibold text-slate-900">Комерційні пропозиції цього замовлення</h4>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{selectedOrderProposals.length}</span>
+                </div>
+
+                <div className="max-h-[320px] overflow-auto">
+                  {selectedOrderProposals.length === 0 ? (
+                    <div className="px-3 py-6 text-center text-sm text-slate-500">Ще немає КП для цього замовлення.</div>
+                  ) : (
+                    <table className="min-w-full text-sm">
+                      <thead className="text-left text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2">Назва</th>
+                          <th className="px-3 py-2">Статус</th>
+                          <th className="px-3 py-2">Сума</th>
+                          <th className="px-3 py-2">Дії</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedOrderProposals.map((proposal) => (
+                          <tr key={proposal.id} className="border-t border-slate-200">
+                            <td className="px-3 py-2 font-medium text-slate-900">{proposal.title || proposal.orderTitle || "КП"}</td>
+                            <td className="px-3 py-2 text-slate-700">{PROPOSAL_STATUS_OPTIONS.find((row) => row.value === String(proposal.status || "draft").toLowerCase())?.label || proposal.status || "draft"}</td>
+                            <td className="px-3 py-2 text-slate-700">{formatMoney(proposal.totalAmount)}</td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                  onClick={() => {
+                                    closeOrderDetails();
+                                    openExistingProposalEditor(proposal, selectedOrder);
+                                  }}
+                                >
+                                  Редагувати
+                                </button>
+                                <button
+                                  type="button"
+                                  className="rounded-md border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                                  onClick={() => {
+                                    if (!window.confirm("Видалити комерційну пропозицію?")) return;
+                                    void onDeleteProposal(proposal.id);
+                                  }}
+                                >
+                                  Видалити
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="text-base font-semibold text-slate-900">Комерційні пропозиції (активні)</h3>
+            <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{proposalStats.active.length}</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="text-left text-slate-500">
+                <tr>
+                  <th className="px-3 py-2">Назва</th>
+                  <th className="px-3 py-2">Клієнт</th>
+                  <th className="px-3 py-2">Менеджер</th>
+                  <th className="px-3 py-2">Статус</th>
+                  <th className="px-3 py-2">Сума</th>
+                  <th className="px-3 py-2">Дії</th>
+                </tr>
+              </thead>
+              <tbody>
+                {proposalStats.active.map((item) => (
+                  <tr key={item.id} className="border-t border-slate-200">
+                    <td className="px-3 py-3 font-medium text-slate-900">{item.title || item.orderTitle || "КП"}</td>
+                    <td className="px-3 py-3 text-slate-700">{[item.companyName, item.customerName].filter(Boolean).join(" — ") || "—"}</td>
+                    <td className="px-3 py-3 text-slate-700">{item.managerName || "—"}</td>
+                    <td className="px-3 py-3 text-slate-700">{PROPOSAL_STATUS_OPTIONS.find((row) => row.value === String(item.status || "draft").toLowerCase())?.label || item.status || "draft"}</td>
+                    <td className="px-3 py-3 text-slate-700">{formatMoney(item.totalAmount)}</td>
+                    <td className="px-3 py-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border border-amber-200 px-2 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50"
+                          onClick={() => {
+                            if (!window.confirm("Перенести пропозицію в скасовані?")) return;
+                            void markProposalCancelled(item);
+                          }}
+                        >
+                          Скасувати
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50"
+                          onClick={() => {
+                            if (!window.confirm("Видалити комерційну пропозицію?")) return;
+                            void onDeleteProposal(item.id);
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {proposalStats.active.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-8 text-center text-slate-500">Ще немає активних комерційних пропозицій.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="text-base font-semibold text-rose-900">Скасовані пропозиції</h3>
+            <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-rose-700">{proposalStats.cancelled.length}</span>
+          </div>
+          <div className="overflow-x-auto rounded-xl border border-rose-100 bg-white">
+            <table className="min-w-full text-sm">
+              <thead className="text-left text-slate-500">
+                <tr>
+                  <th className="px-3 py-2">Назва</th>
+                  <th className="px-3 py-2">Клієнт</th>
+                  <th className="px-3 py-2">Менеджер</th>
+                  <th className="px-3 py-2">Сума</th>
+                  <th className="px-3 py-2">Дії</th>
+                </tr>
+              </thead>
+              <tbody>
+                {proposalStats.cancelled.map((item) => (
+                  <tr key={item.id} className="border-t border-slate-200">
+                    <td className="px-3 py-3 font-medium text-slate-900">{item.title || item.orderTitle || "КП"}</td>
+                    <td className="px-3 py-3 text-slate-700">{[item.companyName, item.customerName].filter(Boolean).join(" — ") || "—"}</td>
+                    <td className="px-3 py-3 text-slate-700">{item.managerName || "—"}</td>
+                    <td className="px-3 py-3 text-slate-700">{formatMoney(item.totalAmount)}</td>
+                    <td className="px-3 py-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border border-emerald-200 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                          onClick={() => void onSaveProposal({ ...item, status: "draft" })}
+                        >
+                          Повернути в роботу
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50"
+                          onClick={() => {
+                            if (!window.confirm("Видалити комерційну пропозицію назавжди?")) return;
+                            void onDeleteProposal(item.id);
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {proposalStats.cancelled.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-8 text-center text-slate-500">Скасованих пропозицій поки немає.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {showProposalModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+            <div className="w-full max-w-6xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+              <h3 className="mb-4 text-lg font-semibold text-slate-900">{proposalForm.id ? "Редагування комерційної пропозиції" : "Конструктор комерційної пропозиції"}</h3>
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+                <div className="rounded-xl border border-slate-200 p-3">
+                  <div className="mb-2 text-sm font-semibold text-slate-900">Продукти з Керування асортиментом</div>
+                  <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
+                    {productsByCategory.map((group) => (
+                      <div key={group.category}>
+                        <div className="mb-1 text-xs font-semibold uppercase text-slate-500">{group.category}</div>
+                        <div className="space-y-1">
+                          {group.items.map((product) => (
+                            <button
+                              key={product.id}
+                              type="button"
+                              className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-left text-xs hover:bg-slate-50"
+                              onClick={() => addProposalItem(product)}
+                            >
+                              <div className="font-semibold text-slate-800">{product.productName}</div>
+                              <div className="text-slate-500">{product.subcategory || "—"} • {product.output || "—"} • {formatMoney(product.unitPrice)}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    {productsByCategory.length === 0 && (
+                      <div className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-500">
+                        Поки немає продуктів в асортименті.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 p-3">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <input className={baseInput} value={proposalForm.title} onChange={(event) => setProposalForm((prev) => ({ ...prev, title: event.target.value }))} placeholder="Назва КП" />
+                    <select className={baseInput} value={proposalForm.status} onChange={(event) => setProposalForm((prev) => ({ ...prev, status: event.target.value }))}>
+                      {PROPOSAL_STATUS_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                    </select>
+                  </div>
+                  <textarea className={`${baseInput} mt-3 min-h-[72px]`} value={proposalForm.notes} onChange={(event) => setProposalForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Коментар до КП" />
+
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="text-left text-slate-500">
+                        <tr>
+                          <th className="px-2 py-2">Категорія</th>
+                          <th className="px-2 py-2">Підкатегорія</th>
+                          <th className="px-2 py-2">Позиція</th>
+                          <th className="px-2 py-2">Вихід</th>
+                          <th className="px-2 py-2">Ціна</th>
+                          <th className="px-2 py-2">К-сть</th>
+                          <th className="px-2 py-2">Сума</th>
+                          <th className="px-2 py-2"> </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {proposalForm.items.map((item) => (
+                          <tr key={item.id} className="border-t border-slate-200">
+                            <td className="px-2 py-2 text-xs">{item.category || "—"}</td>
+                            <td className="px-2 py-2 text-xs">{item.subcategory || "—"}</td>
+                            <td className="px-2 py-2 text-xs font-semibold">{item.productName}</td>
+                            <td className="px-2 py-2 text-xs">{item.output || "—"}</td>
+                            <td className="px-2 py-2">
+                              <input className="w-24 rounded border border-slate-300 px-2 py-1 text-xs" value={item.unitPrice} onChange={(event) => updateProposalItem(item.id, { unitPrice: Number(event.target.value || 0) })} />
+                            </td>
+                            <td className="px-2 py-2">
+                              <input className="w-20 rounded border border-slate-300 px-2 py-1 text-xs" value={item.quantity} onChange={(event) => updateProposalItem(item.id, { quantity: Number(event.target.value || 0) })} />
+                            </td>
+                            <td className="px-2 py-2 text-xs font-semibold">{formatMoney(item.amount)}</td>
+                            <td className="px-2 py-2">
+                              <button type="button" className="rounded border border-rose-200 p-1 text-rose-600 hover:bg-rose-50" onClick={() => removeProposalItem(item.id)}>
+                                <Trash2 size={12} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {proposalForm.items.length === 0 && (
+                          <tr>
+                            <td colSpan={8} className="px-2 py-8 text-center text-xs text-slate-500">Додайте позиції зліва.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between border-t border-slate-200 pt-3">
+                    <div className="text-sm font-semibold text-slate-900">Разом: {formatMoney(proposalTotal)}</div>
+                    <div className="flex gap-2">
+                      <button type="button" className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={() => setShowProposalModal(false)}>
+                        Скасувати
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+                        disabled={saving || !proposalForm.orderId || proposalForm.items.length === 0}
+                        onClick={async () => {
+                          const result = await onSaveProposal({
+                            ...proposalForm,
+                            totalAmount: proposalTotal,
+                          });
+                          if (result?.success) {
+                            setShowProposalModal(false);
+                            setProposalForm(emptyProposal);
+                            const orderToMove = orders.find((item) => String(item.id) === String(proposalForm.orderId));
+                            if (orderToMove && orderToMove.status === "brief") {
+                              void onSaveOrder({ ...orderToMove, status: "proposal" });
+                            }
+                          }
+                        }}
+                      >
+                        {proposalForm.id ? "Оновити КП" : "Зберегти КП"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 
   const contactsView = (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <ContactRound size={18} className="text-indigo-600" />
-          <h3 className="text-base font-semibold text-slate-900">Контакт клієнта</h3>
-        </div>
-        <div className="space-y-3">
-          <input className={baseInput} value={contactForm.name} onChange={(event) => setContactForm((prev) => ({ ...prev, name: event.target.value }))} placeholder="Ім'я або назва компанії" />
-          <input className={baseInput} value={contactForm.company} onChange={(event) => setContactForm((prev) => ({ ...prev, company: event.target.value }))} placeholder="Компанія" />
-          <input className={baseInput} value={contactForm.phone} onChange={(event) => setContactForm((prev) => ({ ...prev, phone: event.target.value }))} placeholder="Телефон" />
-          <input className={baseInput} value={contactForm.email} onChange={(event) => setContactForm((prev) => ({ ...prev, email: event.target.value }))} placeholder="Email" />
-          <input className={baseInput} list="catering-contact-managers" value={contactForm.assignedManager} onChange={(event) => setContactForm((prev) => ({ ...prev, assignedManager: event.target.value }))} placeholder="Закріплений менеджер" />
-          <textarea className={`${baseInput} min-h-[96px]`} value={contactForm.notes} onChange={(event) => setContactForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Коментар, джерело контакту, особливості клієнта" />
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={saving || !contactForm.name.trim() || !contactForm.assignedManager.trim()}
-              onClick={async () => {
-                const result = await onSaveContact(contactForm);
-                if (result?.success) setContactForm(emptyContact);
-              }}
-            >
-              {contactForm.id ? "Оновити контакт" : "Додати контакт"}
-            </button>
-            {contactForm.id && (
-              <button type="button" className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={() => setContactForm(emptyContact)}>
-                Скасувати
-              </button>
-            )}
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="mb-3 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+            <Users size={18} className="text-sky-600" />
+            <h3 className="text-base font-semibold text-slate-900">Компанії та контакти</h3>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{contacts.length}</span>
           </div>
-          <datalist id="catering-contact-managers">
-            {managers.map((manager) => <option key={manager} value={manager} />)}
-          </datalist>
-        </div>
-      </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={handleDownloadContactsTemplate}>
+                <FileDown size={14} /> Шаблон
+              </button>
+              <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={handleExportContacts}>
+                <Download size={14} /> Експорт
+              </button>
+              <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => contactImportRef.current?.click()}>
+                <Upload size={14} /> Імпорт
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-indigo-600 text-white shadow hover:bg-indigo-500"
+                onClick={() => {
+                  setContactForm(emptyContact);
+                  setShowContactModal(true);
+                }}
+                title="Додати контакт"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+          </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <Users size={18} className="text-sky-600" />
-          <h3 className="text-base font-semibold text-slate-900">Контакти клієнтів</h3>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <input
+              ref={contactImportRef}
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              onChange={handleImportContacts}
+            />
+            <input
+              className={`${baseInput} h-9 w-full py-1.5 text-xs`}
+              value={contactSearch}
+              onChange={(event) => setContactSearch(event.target.value)}
+              placeholder="Пошук контакту"
+            />
+            <select
+              className={`${baseInput} h-9 w-full py-1.5 text-xs`}
+              value={contactManagerFilter}
+              onChange={(event) => setContactManagerFilter(event.target.value)}
+            >
+              <option value="">Усі менеджери</option>
+              {contactManagerOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <select
+              className={`${baseInput} h-9 w-full py-1.5 text-xs`}
+              value={contactIndustryFilter}
+              onChange={(event) => setContactIndustryFilter(event.target.value)}
+            >
+              <option value="">Усі промисловості</option>
+              {contactIndustryFilterOptions.map((ind) => <option key={ind} value={ind}>{ind}</option>)}
+            </select>
+          </div>
         </div>
+
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="text-left text-slate-500">
               <tr>
                 <th className="px-3 py-2">Контакт</th>
                 <th className="px-3 py-2">Компанія</th>
+                <th className="px-3 py-2">Промисловість</th>
+                <th className="px-3 py-2">Адреса</th>
+                <th className="px-3 py-2">Джерело ліда</th>
                 <th className="px-3 py-2">Менеджер</th>
                 <th className="px-3 py-2">Телефон</th>
                 <th className="px-3 py-2">Email</th>
@@ -346,16 +1329,26 @@ export default function CateringCrmTab({
               </tr>
             </thead>
             <tbody>
-              {contacts.map((item) => (
+              {filteredContacts.map((item) => (
                 <tr key={item.id} className="border-t border-slate-200 align-top">
                   <td className="px-3 py-3 font-medium text-slate-900">{item.name}</td>
                   <td className="px-3 py-3 text-slate-700">{item.company || "—"}</td>
+                  <td className="px-3 py-3 text-slate-700">{item.industry || "—"}</td>
+                  <td className="px-3 py-3 text-slate-700">{item.address || "—"}</td>
+                  <td className="px-3 py-3 text-slate-700">{item.leadSource || "—"}</td>
                   <td className="px-3 py-3 text-slate-700">{item.assignedManager || "—"}</td>
                   <td className="px-3 py-3 text-slate-700">{item.phone || "—"}</td>
                   <td className="px-3 py-3 text-slate-700">{item.email || "—"}</td>
                   <td className="px-3 py-3">
                     <div className="flex items-center gap-2">
-                      <button type="button" className="rounded-md border border-slate-300 p-1.5 text-slate-600 hover:bg-slate-50" onClick={() => setContactForm(item)}>
+                      <button
+                        type="button"
+                        className="rounded-md border border-slate-300 p-1.5 text-slate-600 hover:bg-slate-50"
+                        onClick={() => {
+                          setContactForm(item);
+                          setShowContactModal(true);
+                        }}
+                      >
                         <Pencil size={14} />
                       </button>
                       <button
@@ -372,98 +1365,275 @@ export default function CateringCrmTab({
                   </td>
                 </tr>
               ))}
-              {contacts.length === 0 && (
+              {filteredContacts.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-8 text-center text-slate-500">Контактів ще немає.</td>
+                  <td colSpan={9} className="px-3 py-8 text-center text-slate-500">Контактів за фільтром не знайдено.</td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {showContactModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+          <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-center gap-2">
+              <ContactRound size={18} className="text-indigo-600" />
+              <h3 className="text-lg font-semibold text-slate-900">{contactForm.id ? "Редагування контакту" : "Новий контакт"}</h3>
+            </div>
+            <div className="space-y-3">
+              <input className={baseInput} value={contactForm.name} onChange={(event) => setContactForm((prev) => ({ ...prev, name: event.target.value }))} placeholder="Ім'я або назва компанії" />
+              <input className={baseInput} value={contactForm.company} onChange={(event) => setContactForm((prev) => ({ ...prev, company: event.target.value }))} placeholder="Компанія" />
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <input className={baseInput} list="catering-industry-list" value={contactForm.industry} onChange={(event) => setContactForm((prev) => ({ ...prev, industry: event.target.value }))} placeholder="Промисловість / бізнес напрям" />
+                <input className={baseInput} value={contactForm.address} onChange={(event) => setContactForm((prev) => ({ ...prev, address: event.target.value }))} placeholder="Адреса" />
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <input className={baseInput} value={contactForm.phone} onChange={(event) => setContactForm((prev) => ({ ...prev, phone: event.target.value }))} placeholder="Телефон" />
+                <input className={baseInput} value={contactForm.email} onChange={(event) => setContactForm((prev) => ({ ...prev, email: event.target.value }))} placeholder="Email" />
+              </div>
+              <input className={baseInput} list="catering-contact-managers" value={contactForm.assignedManager} onChange={(event) => setContactForm((prev) => ({ ...prev, assignedManager: event.target.value }))} placeholder="Закріплений менеджер" />
+              <input className={baseInput} list="catering-lead-source-list" value={contactForm.leadSource} onChange={(event) => setContactForm((prev) => ({ ...prev, leadSource: event.target.value }))} placeholder="Джерело ліда" />
+              <textarea className={`${baseInput} min-h-[96px]`} value={contactForm.notes} onChange={(event) => setContactForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Коментар, джерело контакту, особливості клієнта" />
+            </div>
+            <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-200 pt-4">
+              <button
+                type="button"
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={saving || !contactForm.name.trim() || !contactForm.assignedManager.trim()}
+                onClick={async () => {
+                  const result = await onSaveContact(contactForm);
+                  if (result?.success) {
+                    setContactForm(emptyContact);
+                    setShowContactModal(false);
+                  }
+                }}
+              >
+                {contactForm.id ? "Оновити контакт" : "Додати контакт"}
+              </button>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                onClick={() => {
+                  setContactForm(emptyContact);
+                  setShowContactModal(false);
+                }}
+              >
+                Скасувати
+              </button>
+            </div>
+            <datalist id="catering-lead-source-list">
+              {["Рекомендація", "Сайт", "Соціальні мережі", "Реклама", "Виставка", "Холодний дзвінок", "Повторне звернення", "Інше"].map((source) => <option key={source} value={source} />)}
+            </datalist>
+            <datalist id="catering-contact-managers">
+              {managers.map((manager) => <option key={manager} value={manager} />)}
+            </datalist>
+            <datalist id="catering-industry-list">
+              {industryOptions.map((value) => <option key={value} value={value} />)}
+            </datalist>
+          </div>
+        </div>
+      )}
     </div>
   );
 
   const fieldsView = (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+    <div className="space-y-4">
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <FileText size={18} className="text-violet-600" />
-          <h3 className="text-base font-semibold text-slate-900">Типове поле CRM</h3>
-        </div>
-        <div className="space-y-3">
-          <input className={baseInput} value={fieldForm.label} onChange={(event) => setFieldForm((prev) => ({ ...prev, label: event.target.value }))} placeholder="Назва поля" />
-          <input className={baseInput} value={fieldForm.key} onChange={(event) => setFieldForm((prev) => ({ ...prev, key: event.target.value }))} placeholder="Ключ, напр. event_format" />
-          <select className={baseInput} value={fieldForm.type} onChange={(event) => setFieldForm((prev) => ({ ...prev, type: event.target.value }))}>
-            {FIELD_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-          </select>
-          <input className={baseInput} value={fieldForm.placeholder} onChange={(event) => setFieldForm((prev) => ({ ...prev, placeholder: event.target.value }))} placeholder="Плейсхолдер або підказка" />
-          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-            <input type="checkbox" checked={fieldForm.required} onChange={(event) => setFieldForm((prev) => ({ ...prev, required: event.target.checked }))} />
-            Обов'язкове поле
-          </label>
-          <div className="flex flex-wrap gap-2">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <ClipboardList size={18} className="text-violet-600" />
+            <h3 className="text-base font-semibold text-slate-900">Управління типовими полями</h3>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{fieldTemplates.length}</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              className={`${baseInput} w-[220px]`}
+              value={fieldSearch}
+              onChange={(event) => setFieldSearch(event.target.value)}
+              placeholder="Пошук поля"
+            />
+            <select className={`${baseInput} w-[180px]`} value={fieldCategoryFilter} onChange={(event) => setFieldCategoryFilter(event.target.value)}>
+              <option value="all">Усі категорії</option>
+              <option value="order">Замовлення</option>
+              <option value="customer">Клієнт</option>
+              <option value="source">Джерело/канал</option>
+              <option value="tags">Теги</option>
+              <option value="other">Інше</option>
+            </select>
             <button
               type="button"
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={saving || !fieldForm.label.trim() || !fieldForm.key.trim()}
-              onClick={async () => {
-                const result = await onSaveField(fieldForm);
-                if (result?.success) setFieldForm(emptyField);
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-indigo-600 text-white shadow hover:bg-indigo-500"
+              onClick={() => {
+                setFieldForm(emptyField);
+                setShowFieldModal(true);
               }}
+              title="Додати поле"
             >
-              {fieldForm.id ? "Оновити поле" : "Додати поле"}
+              <Plus size={18} />
             </button>
-            {fieldForm.id && (
-              <button type="button" className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={() => setFieldForm(emptyField)}>
-                Скасувати
-              </button>
-            )}
           </div>
+        </div>
+
+        <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Швидкі шаблони</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {FIELD_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                onClick={() => {
+                  setFieldForm({ ...preset, id: "" });
+                  setShowFieldModal(true);
+                }}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="text-left text-slate-500">
+              <tr>
+                <th className="px-3 py-2">Назва</th>
+                <th className="px-3 py-2">Ключ</th>
+                <th className="px-3 py-2">Категорія</th>
+                <th className="px-3 py-2">Тип</th>
+                <th className="px-3 py-2">Опції</th>
+                <th className="px-3 py-2">Дії</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredFieldTemplates.map((item) => (
+                <tr key={item.id} className="border-t border-slate-200 align-top">
+                  <td className="px-3 py-3">
+                    <div className="font-medium text-slate-900">{item.label}</div>
+                    {item.description && <div className="mt-1 text-xs text-slate-500">{item.description}</div>}
+                  </td>
+                  <td className="px-3 py-3 text-slate-700">{item.key}</td>
+                  <td className="px-3 py-3 text-slate-700">{item.category || "other"}</td>
+                  <td className="px-3 py-3 text-slate-700">
+                    {item.type}
+                    {item.required && <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700">обов'язкове</span>}
+                  </td>
+                  <td className="px-3 py-3 text-slate-700">{Array.isArray(item.options) ? item.options.length : 0}</td>
+                  <td className="px-3 py-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="rounded-md border border-slate-300 p-1.5 text-slate-600 hover:bg-slate-50"
+                        onClick={() => {
+                          setFieldForm({
+                            ...item,
+                            options: Array.isArray(item.options) ? item.options.join(", ") : "",
+                          });
+                          setShowFieldModal(true);
+                        }}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50"
+                        onClick={() => {
+                          if (!window.confirm("Видалити типове поле?")) return;
+                          void onDeleteField(item.id);
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filteredFieldTemplates.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-3 py-8 text-center text-slate-500">Полів за фільтром не знайдено.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex items-center gap-2">
-          <ClipboardList size={18} className="text-violet-600" />
-          <h3 className="text-base font-semibold text-slate-900">Набір типових полів</h3>
-        </div>
-        <div className="space-y-3">
-          {fieldTemplates.map((item) => (
-            <div key={item.id} className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-semibold text-slate-900">{item.label}</p>
-                  <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-600">{item.type}</span>
-                  {item.required && <span className="rounded-full bg-rose-100 px-2 py-1 text-[11px] font-semibold text-rose-700">обов'язкове</span>}
-                </div>
-                <p className="mt-1 text-xs text-slate-500">{item.key}</p>
-                {item.placeholder && <p className="mt-1 text-sm text-slate-600">{item.placeholder}</p>}
-              </div>
-              <div className="flex items-center gap-2">
-                <button type="button" className="rounded-md border border-slate-300 p-2 text-slate-600 hover:bg-white" onClick={() => setFieldForm(item)}>
-                  <Pencil size={14} />
-                </button>
-                <button
-                  type="button"
-                  className="rounded-md border border-rose-200 p-2 text-rose-600 hover:bg-rose-50"
-                  onClick={() => {
-                    if (!window.confirm("Видалити типове поле?")) return;
-                    void onDeleteField(item.id);
-                  }}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
+      {showFieldModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-center gap-2">
+              <FileText size={18} className="text-violet-600" />
+              <h3 className="text-lg font-semibold text-slate-900">{fieldForm.id ? "Редагування типового поля" : "Нове типове поле"}</h3>
             </div>
-          ))}
-          {fieldTemplates.length === 0 && (
-            <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-500">
-              Типові поля ще не налаштовані.
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <input className={baseInput} value={fieldForm.label} onChange={(event) => setFieldForm((prev) => ({ ...prev, label: event.target.value }))} placeholder="Назва поля" />
+              <input className={baseInput} value={fieldForm.key} onChange={(event) => setFieldForm((prev) => ({ ...prev, key: event.target.value }))} placeholder="Ключ, напр. eventType" />
+              <select className={baseInput} value={fieldForm.category} onChange={(event) => setFieldForm((prev) => ({ ...prev, category: event.target.value }))}>
+                <option value="order">Замовлення</option>
+                <option value="customer">Клієнт</option>
+                <option value="source">Джерело/канал</option>
+                <option value="tags">Теги</option>
+                <option value="other">Інше</option>
+              </select>
+              <select className={baseInput} value={fieldForm.type} onChange={(event) => setFieldForm((prev) => ({ ...prev, type: event.target.value }))}>
+                {FIELD_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
             </div>
-          )}
+            <input className={`${baseInput} mt-3`} value={fieldForm.placeholder} onChange={(event) => setFieldForm((prev) => ({ ...prev, placeholder: event.target.value }))} placeholder="Плейсхолдер або підказка" />
+            <input className={`${baseInput} mt-3`} value={fieldForm.description} onChange={(event) => setFieldForm((prev) => ({ ...prev, description: event.target.value }))} placeholder="Опис / для чого це поле" />
+
+            {(fieldForm.type === "select" || fieldForm.type === "multiselect" || normalizeKey(fieldForm.key) === "eventtype") && (
+              <textarea
+                className={`${baseInput} mt-3 min-h-[90px]`}
+                value={fieldForm.options}
+                onChange={(event) => setFieldForm((prev) => ({ ...prev, options: event.target.value }))}
+                placeholder="Опції через кому, напр.: Фуршет, Банкет, Кава-брейк"
+              />
+            )}
+
+            <label className="mt-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              <input type="checkbox" checked={fieldForm.required} onChange={(event) => setFieldForm((prev) => ({ ...prev, required: event.target.checked }))} />
+              Обов'язкове поле
+            </label>
+
+            <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-200 pt-4">
+              <button
+                type="button"
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={saving || !fieldForm.label.trim() || !fieldForm.key.trim()}
+                onClick={async () => {
+                  const result = await onSaveField({
+                    ...fieldForm,
+                    options: String(fieldForm.options || "")
+                      .split(",")
+                      .map((item) => item.trim())
+                      .filter(Boolean),
+                  });
+                  if (result?.success) {
+                    setFieldForm(emptyField);
+                    setShowFieldModal(false);
+                  }
+                }}
+              >
+                {fieldForm.id ? "Оновити поле" : "Додати поле"}
+              </button>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                onClick={() => {
+                  setFieldForm(emptyField);
+                  setShowFieldModal(false);
+                }}
+              >
+                Скасувати
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 
