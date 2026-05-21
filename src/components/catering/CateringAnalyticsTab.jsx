@@ -29,10 +29,21 @@ export default function CateringAnalyticsTab({ orders, plans, managers, saving, 
     const navKey = String(activeNav || "").toLowerCase();
     const tabKey = String(topTab || "").toLowerCase();
     const probe = `${navKey} ${tabKey}`;
-    return probe.includes("salescateringreport") || 
-           probe.includes("report") || 
-           probe.includes("analytics") && !probe.includes("plan") &&
-           !probe.includes("managment") && !probe.includes("management");
+
+    const isManagementMode =
+      probe.includes("managment") ||
+      probe.includes("management") ||
+      probe.includes("managementpnl") ||
+      probe.includes("managmentpnl") ||
+      probe.includes("plan");
+
+    if (isManagementMode) return false;
+
+    return (
+      probe.includes("salescateringreport") ||
+      probe.includes("report") ||
+      probe.includes("analytics")
+    );
   }, [activeNav, topTab]);
 
   const monthOrders = useMemo(() => {
@@ -84,100 +95,154 @@ export default function CateringAnalyticsTab({ orders, plans, managers, saving, 
     return { confirmedAmount, pipelineAmount, avgDeal };
   }, [monthOrders]);
 
+  const monthPlanSummary = useMemo(() => {
+    const totalActual = managerStats.reduce((sum, item) => sum + Number(item.actualAmount || 0), 0);
+    const totalTarget = managerStats.reduce((sum, item) => sum + Number(item.targetAmount || 0), 0);
+    const totalGap = totalActual - totalTarget;
+    const completion = totalTarget > 0 ? Math.round((totalActual / totalTarget) * 100) : 0;
+    const plannedManagers = managerStats.filter((item) => item.targetAmount > 0).length;
+    return {
+      totalActual,
+      totalTarget,
+      totalGap,
+      completion,
+      plannedManagers,
+      totalManagers: managerStats.length,
+    };
+  }, [managerStats]);
+
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
-            <div className="flex items-center gap-2 text-emerald-700"><TrendingUp size={16} /> Продажі місяця</div>
-            <div className="mt-2 text-2xl font-semibold text-emerald-900">{formatMoney(summary.confirmedAmount)}</div>
-          </div>
-          <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 shadow-sm">
-            <div className="flex items-center gap-2 text-sky-700"><BarChart3 size={16} /> Pipeline</div>
-            <div className="mt-2 text-2xl font-semibold text-sky-900">{formatMoney(summary.pipelineAmount)}</div>
-          </div>
-          <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
-            <div className="flex items-center gap-2 text-violet-700"><Goal size={16} /> Середній чек</div>
-            <div className="mt-2 text-2xl font-semibold text-violet-900">{formatMoney(summary.avgDeal)}</div>
-          </div>
-        </div>
+      {isReportMode ? (
+        <>
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+                <div className="flex items-center gap-2 text-emerald-700"><TrendingUp size={16} /> Продажі місяця</div>
+                <div className="mt-2 text-2xl font-semibold text-emerald-900">{formatMoney(summary.confirmedAmount)}</div>
+              </div>
+              <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 shadow-sm">
+                <div className="flex items-center gap-2 text-sky-700"><BarChart3 size={16} /> Pipeline</div>
+                <div className="mt-2 text-2xl font-semibold text-sky-900">{formatMoney(summary.pipelineAmount)}</div>
+              </div>
+              <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4 shadow-sm">
+                <div className="flex items-center gap-2 text-violet-700"><Goal size={16} /> Середній чек</div>
+                <div className="mt-2 text-2xl font-semibold text-violet-900">{formatMoney(summary.avgDeal)}</div>
+              </div>
+            </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Місяць аналітики</label>
-          <input type="month" className={baseInput} value={selectedMonth} onChange={(event) => {
-            setSelectedMonth(event.target.value);
-            setPlanForm((prev) => ({ ...prev, month: event.target.value }));
-          }} />
-          <p className="mt-2 text-xs text-slate-500">Аналітика рахується за датою події або створення CRM-угоди.</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="mb-4 flex items-center gap-2">
-            <BarChart3 size={18} className="text-indigo-600" />
-            <h3 className="text-base font-semibold text-slate-900">Продажі по стадіях</h3>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Місяць аналітики</label>
+              <input type="month" className={baseInput} value={selectedMonth} onChange={(event) => {
+                setSelectedMonth(event.target.value);
+                setPlanForm((prev) => ({ ...prev, month: event.target.value }));
+              }} />
+              <p className="mt-2 text-xs text-slate-500">Аналітика рахується за датою події або створення CRM-угоди.</p>
+            </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="text-left text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">Стадія</th>
-                  <th className="px-3 py-2">К-сть угод</th>
-                  <th className="px-3 py-2">Сума</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stageStats.map((item) => (
-                  <tr key={item.stage} className="border-t border-slate-200">
-                    <td className="px-3 py-3 font-medium text-slate-900">{item.label}</td>
-                    <td className="px-3 py-3 text-slate-700">{item.count}</td>
-                    <td className="px-3 py-3 text-slate-700">{formatMoney(item.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-4 flex items-center gap-2">
+                <BarChart3 size={18} className="text-indigo-600" />
+                <h3 className="text-base font-semibold text-slate-900">Продажі по стадіях</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="text-left text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2">Стадія</th>
+                      <th className="px-3 py-2">К-сть угод</th>
+                      <th className="px-3 py-2">Сума</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stageStats.map((item) => (
+                      <tr key={item.stage} className="border-t border-slate-200">
+                        <td className="px-3 py-3 font-medium text-slate-900">{item.label}</td>
+                        <td className="px-3 py-3 text-slate-700">{item.count}</td>
+                        <td className="px-3 py-3 text-slate-700">{formatMoney(item.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-4 flex items-center gap-2">
+                <Goal size={18} className="text-amber-600" />
+                <h3 className="text-base font-semibold text-slate-900">План менеджера</h3>
+              </div>
+              <p className="text-sm text-slate-600">У режимі звіту редагування планів недоступне. Використовуйте розділ «Планування».</p>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Місяць планування</label>
+            <input type="month" className={baseInput} value={selectedMonth} onChange={(event) => {
+              setSelectedMonth(event.target.value);
+              setPlanForm((prev) => ({ ...prev, month: event.target.value }));
+            }} />
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="mb-4 flex items-center gap-2">
             <Goal size={18} className="text-amber-600" />
             <h3 className="text-base font-semibold text-slate-900">План менеджера</h3>
           </div>
-          {isReportMode ? (
-            <p className="text-sm text-slate-600">У режимі звіту редагування планів недоступне. Використовуйте розділ «Планування».</p>
-          ) : (
-            <div className="space-y-3">
-              <input className={baseInput} list="catering-plan-managers" value={planForm.managerName} onChange={(event) => setPlanForm((prev) => ({ ...prev, managerName: event.target.value }))} placeholder="Менеджер" />
-              <input type="month" className={baseInput} value={planForm.month} onChange={(event) => setPlanForm((prev) => ({ ...prev, month: event.target.value }))} />
-              <input className={baseInput} value={planForm.targetAmount} onChange={(event) => setPlanForm((prev) => ({ ...prev, targetAmount: event.target.value }))} placeholder="Планова сума" />
-              <textarea className={`${baseInput} min-h-[84px]`} value={planForm.notes} onChange={(event) => setPlanForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Коментар до плану" />
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={saving || !planForm.managerName.trim() || !planForm.month}
-                  onClick={async () => {
-                    const result = await onSavePlan(planForm);
-                    if (result?.success) {
-                      setPlanForm({ id: "", managerName: "", month: selectedMonth, targetAmount: "", notes: "" });
-                    }
-                  }}
-                >
-                  {planForm.id ? "Оновити план" : "Зберегти план"}
+          <div className="space-y-3">
+            <input className={baseInput} list="catering-plan-managers" value={planForm.managerName} onChange={(event) => setPlanForm((prev) => ({ ...prev, managerName: event.target.value }))} placeholder="Менеджер" />
+            <input type="month" className={baseInput} value={planForm.month} onChange={(event) => setPlanForm((prev) => ({ ...prev, month: event.target.value }))} />
+            <input className={baseInput} value={planForm.targetAmount} onChange={(event) => setPlanForm((prev) => ({ ...prev, targetAmount: event.target.value }))} placeholder="Планова сума" />
+            <textarea className={`${baseInput} min-h-[84px]`} value={planForm.notes} onChange={(event) => setPlanForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Коментар до плану" />
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={saving || !planForm.managerName.trim() || !planForm.month}
+                onClick={async () => {
+                  const result = await onSavePlan(planForm);
+                  if (result?.success) {
+                    setPlanForm({ id: "", managerName: "", month: selectedMonth, targetAmount: "", notes: "" });
+                  }
+                }}
+              >
+                {planForm.id ? "Оновити план" : "Зберегти план"}
+              </button>
+              {planForm.id && (
+                <button type="button" className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={() => setPlanForm({ id: "", managerName: "", month: selectedMonth, targetAmount: "", notes: "" })}>
+                  Скасувати
                 </button>
-                {planForm.id && (
-                  <button type="button" className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={() => setPlanForm({ id: "", managerName: "", month: selectedMonth, targetAmount: "", notes: "" })}>
-                    Скасувати
-                  </button>
-                )}
-              </div>
-              <datalist id="catering-plan-managers">
-                {managers.map((manager) => <option key={manager} value={manager} />)}
-              </datalist>
+              )}
             </div>
-          )}
+            <datalist id="catering-plan-managers">
+              {managers.map((manager) => <option key={manager} value={manager} />)}
+            </datalist>
+          </div>
+        </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+        <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">План місяця</p>
+          <p className="mt-2 text-xl font-semibold text-indigo-900">{formatMoney(monthPlanSummary.totalTarget)}</p>
+        </div>
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Факт місяця</p>
+          <p className="mt-2 text-xl font-semibold text-emerald-900">{formatMoney(monthPlanSummary.totalActual)}</p>
+        </div>
+        <div className={`rounded-2xl border p-4 shadow-sm ${monthPlanSummary.totalGap >= 0 ? "border-emerald-200 bg-emerald-50" : "border-rose-200 bg-rose-50"}`}>
+          <p className={`text-xs font-semibold uppercase tracking-wide ${monthPlanSummary.totalGap >= 0 ? "text-emerald-700" : "text-rose-700"}`}>Відхилення</p>
+          <p className={`mt-2 text-xl font-semibold ${monthPlanSummary.totalGap >= 0 ? "text-emerald-900" : "text-rose-900"}`}>{formatMoney(monthPlanSummary.totalGap)}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Виконання плану</p>
+          <p className="mt-2 text-xl font-semibold text-slate-900">{monthPlanSummary.completion}%</p>
+          <p className="mt-1 text-xs text-slate-500">З планом: {monthPlanSummary.plannedManagers}/{monthPlanSummary.totalManagers}</p>
         </div>
       </div>
 
@@ -194,6 +259,7 @@ export default function CateringAnalyticsTab({ orders, plans, managers, saving, 
                 <th className="px-3 py-2">Активні угоди</th>
                 <th className="px-3 py-2">Факт</th>
                 <th className="px-3 py-2">План</th>
+                <th className="px-3 py-2">Відхилення</th>
                 <th className="px-3 py-2">Виконання</th>
                 <th className="px-3 py-2">Дії</th>
               </tr>
@@ -205,6 +271,13 @@ export default function CateringAnalyticsTab({ orders, plans, managers, saving, 
                   <td className="px-3 py-3 text-slate-700">{item.activeDeals}</td>
                   <td className="px-3 py-3 text-slate-700">{formatMoney(item.actualAmount)}</td>
                   <td className="px-3 py-3 text-slate-700">{item.targetAmount > 0 ? formatMoney(item.targetAmount) : "—"}</td>
+                  <td className="px-3 py-3">
+                    {item.targetAmount > 0 ? (
+                      <span className={item.actualAmount - item.targetAmount >= 0 ? "font-semibold text-emerald-700" : "font-semibold text-rose-700"}>
+                        {formatMoney(item.actualAmount - item.targetAmount)}
+                      </span>
+                    ) : "—"}
+                  </td>
                   <td className="px-3 py-3">
                     {item.targetAmount > 0 ? (
                       <div className="min-w-[160px]">
@@ -223,22 +296,30 @@ export default function CateringAnalyticsTab({ orders, plans, managers, saving, 
                       item.targetAmount > 0 ? <span className="text-slate-700">{formatMoney(item.targetAmount)}</span> : "—"
                     ) : (
                       <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                          onClick={() => {
+                            if (item.plan) {
+                              setPlanForm({ id: item.plan.id, managerName: item.plan.managerName, month: item.plan.month, targetAmount: String(item.plan.targetAmount || ""), notes: item.plan.notes || "" });
+                              return;
+                            }
+                            setPlanForm({ id: "", managerName: item.managerName, month: selectedMonth, targetAmount: "", notes: "" });
+                          }}
+                        >
+                          {item.plan ? "Редагувати" : "Додати план"}
+                        </button>
                         {item.plan && (
-                          <>
-                            <button type="button" className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => setPlanForm({ id: item.plan.id, managerName: item.plan.managerName, month: item.plan.month, targetAmount: String(item.plan.targetAmount || ""), notes: item.plan.notes || "" })}>
-                              Редагувати
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded-md border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50"
-                              onClick={() => {
-                                if (!window.confirm("Видалити план менеджера?")) return;
-                                void onDeletePlan(item.plan.id);
-                              }}
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </>
+                          <button
+                            type="button"
+                            className="rounded-md border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50"
+                            onClick={() => {
+                              if (!window.confirm("Видалити план менеджера?")) return;
+                              void onDeletePlan(item.plan.id);
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
                         )}
                       </div>
                     )}
@@ -247,7 +328,7 @@ export default function CateringAnalyticsTab({ orders, plans, managers, saving, 
               ))}
               {managerStats.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-8 text-center text-slate-500">За цей місяць ще немає даних.</td>
+                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">За цей місяць ще немає даних.</td>
                 </tr>
               )}
             </tbody>

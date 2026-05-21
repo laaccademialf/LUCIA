@@ -77,8 +77,18 @@ const BEVERAGE_KEYWORDS = [
   "soda",
   "cola",
   "коктейл",
-  "bar",
-  "бар",
+];
+
+const VAT_RULES_FIELD_KEYS = [
+  "paymenttypevatrules",
+  "vatrulesbypaymenttype",
+  "pdvrulesbypaymenttype",
+  "pdvbypaymenttype",
+];
+
+const PAYMENT_TYPE_FIELD_KEYS = [
+  "paymenttype",
+  "типоплати",
 ];
 
 const ALCOHOL_KEYWORDS = [
@@ -160,6 +170,38 @@ const formatNumberUk = (value, fractionDigits = 0) => new Intl.NumberFormat("uk-
   minimumFractionDigits: fractionDigits,
   maximumFractionDigits: fractionDigits,
 }).format(Number(value || 0));
+
+const parseVatRuleFromOption = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const parts = raw.split(/\||=|:/);
+  const paymentType = String(parts[0] || "").trim();
+  const vatPercent = Number(String(parts[1] || "").trim().replace(",", "."));
+  if (!paymentType || !Number.isFinite(vatPercent)) return null;
+  return {
+    paymentType,
+    vatPercent: Math.max(0, vatPercent),
+  };
+};
+
+const parseVatRules = (fieldTemplate) => {
+  const options = Array.isArray(fieldTemplate?.options) ? fieldTemplate.options : [];
+  return options
+    .map(parseVatRuleFromOption)
+    .filter(Boolean);
+};
+
+const serializeVatRule = ({ paymentType, vatPercent }) => `${String(paymentType || "").trim()}|${Number(vatPercent || 0)}`;
+
+const getVatPercentForPaymentType = (paymentType, vatRules) => {
+  const paymentProbe = normalizeKey(paymentType);
+  if (!paymentProbe) return 0;
+  const directMatch = (Array.isArray(vatRules) ? vatRules : []).find((rule) => normalizeKey(rule.paymentType) === paymentProbe);
+  if (directMatch) return Number(directMatch.vatPercent || 0);
+  const containsMatch = (Array.isArray(vatRules) ? vatRules : []).find((rule) => paymentProbe.includes(normalizeKey(rule.paymentType)));
+  if (containsMatch) return Number(containsMatch.vatPercent || 0);
+  return 0;
+};
 
 const escapeHtml = (value) => String(value ?? "")
   .replaceAll("&", "&amp;")
@@ -403,6 +445,7 @@ export default function CateringCrmTab({
   const [contactIndustryFilter, setContactIndustryFilter] = useState("");
   const [fieldSearch, setFieldSearch] = useState("");
   const [fieldCategoryFilter, setFieldCategoryFilter] = useState("all");
+  const [vatRulesDraft, setVatRulesDraft] = useState([]);
   const [showColumnsMenu, setShowColumnsMenu] = useState(false);
   const [draggedColumnId, setDraggedColumnId] = useState("");
   const [orderTableColumns, setOrderTableColumns] = useState(() => {
@@ -477,6 +520,19 @@ export default function CateringCrmTab({
     }),
     [orders],
   );
+
+  const crmProgress = useMemo(() => {
+    const activeOrders = orders.filter((item) => item.status !== "cancelled");
+    const confirmedOrders = activeOrders.filter((item) => item.status === "confirmed");
+    const total = activeOrders.length;
+    const done = confirmedOrders.length;
+    const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+    return {
+      total,
+      done,
+      percent,
+    };
+  }, [orders]);
 
   const eventTypeOptions = useMemo(() => {
     const eventTypeTemplateOptions = fieldTemplates
@@ -629,7 +685,12 @@ export default function CateringCrmTab({
 
   const clientTypeOptions = useMemo(() => getFieldTemplateOptions(["clientType", "тип клієнта", "тип клиента"]), [fieldTemplates]);
   const leadSourceOptions = useMemo(() => getFieldTemplateOptions(["leadSource", "leadChannel", "джерело", "джерело ліда", "канал", "source"]), [fieldTemplates]);
-  const paymentTypeOptions = useMemo(() => getFieldTemplateOptions(["paymentType", "тип оплати", "оплата", "payment"]), [fieldTemplates]);
+  const paymentTypeOptions = useMemo(() => {
+    const baseOptions = getFieldTemplateOptions(["paymentType", "тип оплати", "оплата", "payment"]);
+    const vatTemplate = fieldTemplates.find((item) => VAT_RULES_FIELD_KEYS.includes(normalizeKey(item?.key || item?.label)));
+    const vatOptions = parseVatRules(vatTemplate).map((item) => String(item.paymentType || "").trim()).filter(Boolean);
+    return Array.from(new Set([...baseOptions, ...vatOptions]));
+  }, [fieldTemplates]);
   const industryOptions = useMemo(() => getFieldTemplateOptions(["industry", "промисловість", "бізнес напрям", "напрям"]), [fieldTemplates]);
 
   const contactManagerOptions = useMemo(() => {
@@ -697,6 +758,52 @@ export default function CateringCrmTab({
       return haystack.includes(probe);
     });
   }, [fieldTemplates, fieldSearch, fieldCategoryFilter]);
+
+  const vatRulesTemplate = useMemo(
+    () => fieldTemplates.find((item) => VAT_RULES_FIELD_KEYS.includes(normalizeKey(item?.key || item?.label))),
+    [fieldTemplates],
+  );
+
+  const vatRules = useMemo(() => parseVatRules(vatRulesTemplate), [vatRulesTemplate]);
+
+  useEffect(() => {
+    setVatRulesDraft(vatRules.length > 0 ? vatRules : [{ paymentType: "", vatPercent: 0 }]);
+  }, [vatRulesTemplate?.id, vatRulesTemplate?.updatedAt]);
+
+  const nonVatFieldTemplates = useMemo(
+    () => filteredFieldTemplates.filter((item) => {
+      const normalized = normalizeKey(item?.key || item?.label);
+      if (VAT_RULES_FIELD_KEYS.includes(normalized)) return false;
+      if (PAYMENT_TYPE_FIELD_KEYS.includes(normalized)) return false;
+      return true;
+    }),
+    [filteredFieldTemplates],
+  );
+
+  const saveVatRules = async () => {
+    const prepared = vatRulesDraft
+      .map((row) => ({
+        paymentType: String(row?.paymentType || "").trim(),
+        vatPercent: Math.max(0, Number(row?.vatPercent || 0)),
+      }))
+      .filter((row) => row.paymentType);
+
+    const result = await onSaveField({
+      id: vatRulesTemplate?.id || "",
+      label: "ПДВ за типом оплати",
+      key: "paymentTypeVatRules",
+      category: "order",
+      type: "select",
+      required: false,
+      placeholder: "Правила ПДВ для суми КП",
+      description: "Формат options: Тип оплати|Відсоток ПДВ",
+      options: prepared.map(serializeVatRule),
+    });
+
+    if (result?.success) {
+      window.alert("Правила ПДВ збережено.");
+    }
+  };
 
   const openOrderEditor = (item) => {
     const normalizedDate = toDateInputValue(item?.eventDate);
@@ -838,11 +945,6 @@ export default function CateringCrmTab({
     }));
   };
 
-  const proposalTotal = useMemo(
-    () => proposalForm.items.reduce((sum, item) => sum + Number(item.amount || 0), 0),
-    [proposalForm.items],
-  );
-
   const proposalItemsByCategory = useMemo(() => {
     const grouped = new Map();
     proposalForm.items.forEach((item) => {
@@ -858,9 +960,29 @@ export default function CateringCrmTab({
     return Number(relatedOrder?.guestCount || 0);
   }, [orders, proposalForm.orderId]);
 
+  const proposalPaymentType = useMemo(() => {
+    const relatedOrder = orders.find((item) => String(item.id) === String(proposalForm.orderId));
+    return String(relatedOrder?.paymentType || "").trim();
+  }, [orders, proposalForm.orderId]);
+
   const proposalMetrics = useMemo(
     () => toProposalMetrics(proposalForm.items, proposalGuestCount),
     [proposalForm.items, proposalGuestCount],
+  );
+
+  const proposalVatPercent = useMemo(
+    () => getVatPercentForPaymentType(proposalPaymentType, vatRules),
+    [proposalPaymentType, vatRules],
+  );
+
+  const proposalVatAmount = useMemo(
+    () => proposalMetrics.totalMenuCost * (proposalVatPercent / 100),
+    [proposalMetrics.totalMenuCost, proposalVatPercent],
+  );
+
+  const proposalTotalWithVat = useMemo(
+    () => proposalMetrics.totalMenuCost + proposalVatAmount,
+    [proposalMetrics.totalMenuCost, proposalVatAmount],
   );
 
   const handleExportProposalPdf = (proposal = proposalForm, linkedOrder = null) => {
@@ -874,6 +996,10 @@ export default function CateringCrmTab({
 
     const order = linkedOrder || orders.find((item) => String(item.id) === String(proposal?.orderId));
     const metrics = toProposalMetrics(items, Number(order?.guestCount || 0));
+    const paymentType = String(order?.paymentType || "").trim();
+    const vatPercent = getVatPercentForPaymentType(paymentType, vatRules);
+    const vatAmount = metrics.totalMenuCost * (vatPercent / 100);
+    const totalWithVat = metrics.totalMenuCost + vatAmount;
 
     const grouped = new Map();
     items.forEach((item) => {
@@ -1047,7 +1173,9 @@ export default function CateringCrmTab({
               <div class="totals-row"><span>Вихід безалкогольних напоїв на 1 Гостя, мл</span><strong>${escapeHtml(formatNumberUk(metrics.nonAlcoholPerGuestMl, 0))}</strong></div>
               <div class="totals-row"><span>Вихід алкогольних напоїв на 1 Гостя, мл</span><strong>${escapeHtml(formatNumberUk(metrics.alcoholPerGuestMl, 0))}</strong></div>
               <div class="totals-row"><span>Вартість меню на 1 Гостя, грн</span><strong>${escapeHtml(formatNumberUk(metrics.costPerGuest, 0))}</strong></div>
+              <div class="totals-row"><span>ПДВ ${escapeHtml(formatNumberUk(vatPercent, 0))}%</span><strong>${escapeHtml(formatNumberUk(vatAmount, 0))}</strong></div>
               <div class="totals-row main"><span>Всього за меню, грн</span><strong>${escapeHtml(formatNumberUk(metrics.totalMenuCost, 0))}</strong></div>
+              <div class="totals-row main"><span>Всього з ПДВ, грн</span><strong>${escapeHtml(formatNumberUk(totalWithVat, 0))}</strong></div>
             </div>
 
             ${proposal?.notes ? `<div class="footer"><strong>Коментар:</strong> ${escapeHtml(proposal.notes)}</div>` : ""}
@@ -1056,17 +1184,43 @@ export default function CateringCrmTab({
       </html>
     `;
 
-    const printWindow = window.open("", "_blank", "noopener,noreferrer");
-    if (!printWindow) {
-      window.alert("Не вдалося відкрити вікно для PDF. Перевірте блокування popup.");
+    const frame = document.createElement("iframe");
+    frame.style.position = "fixed";
+    frame.style.width = "0";
+    frame.style.height = "0";
+    frame.style.border = "0";
+    frame.style.opacity = "0";
+    frame.setAttribute("aria-hidden", "true");
+    document.body.appendChild(frame);
+
+    const printDoc = frame.contentWindow?.document;
+    if (!printDoc || !frame.contentWindow) {
+      frame.remove();
+      window.alert("Не вдалося сформувати PDF. Спробуйте ще раз.");
       return;
     }
 
-    printWindow.document.open();
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
+    printDoc.open();
+    printDoc.write(html);
+    printDoc.close();
+
+    const cleanup = () => {
+      window.setTimeout(() => {
+        frame.remove();
+      }, 400);
+    };
+
+    frame.onload = () => {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+      cleanup();
+    };
+
+    window.setTimeout(() => {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+      cleanup();
+    }, 250);
   };
 
   const moveOrderToStatus = (orderId, nextStatus) => {
@@ -1179,6 +1333,16 @@ export default function CateringCrmTab({
                 >
                   Таблиця
                 </button>
+              </div>
+
+              <div className="min-w-[210px] px-1 py-0.5">
+                <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
+                  <span className="font-semibold text-slate-700">Виконання плану</span>
+                  <span>{crmProgress.percent}%</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-slate-100">
+                  <div className="h-1.5 rounded-full bg-emerald-500" style={{ width: `${Math.min(100, crmProgress.percent)}%` }} />
+                </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-1 text-[11px]">
@@ -1375,7 +1539,7 @@ export default function CateringCrmTab({
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип оплати</label>
                         <select className={baseInput} value={orderForm.paymentType} onChange={(event) => setOrderForm((prev) => ({ ...prev, paymentType: event.target.value }))}>
                           <option value="">Оберіть тип оплати</option>
-                          {(paymentTypeOptions.length > 0 ? paymentTypeOptions : ["ФОП-ФОП", "Безготівка", "Готівка", "Картка", "Післяплата"]).map((value) => <option key={value} value={value}>{value}</option>)}
+                          {paymentTypeOptions.map((value) => <option key={value} value={value}>{value}</option>)}
                         </select>
                       </div>
                       <div>
@@ -1922,6 +2086,11 @@ export default function CateringCrmTab({
                     </select>
                   </div>
                   <textarea className={`${baseInput} mt-3 min-h-[72px]`} value={proposalForm.notes} onChange={(event) => setProposalForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Коментар до КП" />
+                  <div className="mt-2 text-xs text-slate-500">
+                    Тип оплати: <span className="font-semibold text-slate-700">{proposalPaymentType || "не вказано"}</span>
+                    {" • "}
+                    ПДВ: <span className="font-semibold text-slate-700">{formatNumberUk(proposalVatPercent, 0)}%</span>
+                  </div>
 
                   <div className="mt-3 min-h-0 flex-1 overflow-auto">
                     <table className="min-w-full text-sm">
@@ -1984,13 +2153,19 @@ export default function CateringCrmTab({
                       <div className="px-3 py-2 text-slate-600">Вартість меню на 1 Гостя, грн</div>
                       <div className="px-3 py-2 text-right font-semibold text-slate-900">{formatNumberUk(proposalMetrics.costPerGuest, 0)}</div>
 
+                      <div className="px-3 py-2 text-slate-600">ПДВ {formatNumberUk(proposalVatPercent, 0)}%</div>
+                      <div className="px-3 py-2 text-right font-semibold text-slate-900">{formatNumberUk(proposalVatAmount, 0)}</div>
+
                       <div className="bg-[#112b61] px-3 py-2 text-[13px] font-semibold text-white">Всього за меню, грн</div>
                       <div className="bg-[#112b61] px-3 py-2 text-right text-[13px] font-bold text-white">{formatNumberUk(proposalMetrics.totalMenuCost, 0)}</div>
+
+                      <div className="bg-[#0b1c44] px-3 py-2 text-[13px] font-semibold text-white">Всього з ПДВ, грн</div>
+                      <div className="bg-[#0b1c44] px-3 py-2 text-right text-[13px] font-bold text-white">{formatNumberUk(proposalTotalWithVat, 0)}</div>
                     </div>
                   </div>
 
                   <div className="mt-4 flex items-center justify-between border-t border-slate-200 pt-3">
-                    <div className="text-sm font-semibold text-slate-900">Разом: {formatMoney(proposalTotal)}</div>
+                    <div className="text-sm font-semibold text-slate-900">Разом: {formatMoney(proposalTotalWithVat)}</div>
                     <div className="flex gap-2">
                       <button
                         type="button"
@@ -2010,7 +2185,7 @@ export default function CateringCrmTab({
                         onClick={async () => {
                           const result = await onSaveProposal({
                             ...proposalForm,
-                            totalAmount: proposalTotal,
+                            totalAmount: proposalTotalWithVat,
                           });
                           if (result?.success) {
                             setShowProposalModal(false);
@@ -2229,123 +2404,193 @@ export default function CateringCrmTab({
 
   const fieldsView = (
     <div className="space-y-4">
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="rounded-2xl border border-indigo-100 bg-gradient-to-r from-indigo-50 via-white to-sky-50 p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <ClipboardList size={18} className="text-violet-600" />
-            <h3 className="text-base font-semibold text-slate-900">Управління типовими полями</h3>
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{fieldTemplates.length}</span>
+            <h3 className="text-base font-semibold text-slate-900">Конструктор типових полів і правил</h3>
+            <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-600">{fieldTemplates.length}</span>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              className={`${baseInput} w-[220px]`}
-              value={fieldSearch}
-              onChange={(event) => setFieldSearch(event.target.value)}
-              placeholder="Пошук поля"
-            />
-            <select className={`${baseInput} w-[180px]`} value={fieldCategoryFilter} onChange={(event) => setFieldCategoryFilter(event.target.value)}>
-              <option value="all">Усі категорії</option>
-              <option value="order">Замовлення</option>
-              <option value="customer">Клієнт</option>
-              <option value="source">Джерело/канал</option>
-              <option value="tags">Теги</option>
-              <option value="other">Інше</option>
-            </select>
-            <button
-              type="button"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-indigo-600 text-white shadow hover:bg-indigo-500"
-              onClick={() => {
-                setFieldForm(emptyField);
-                setShowFieldModal(true);
-              }}
-              title="Додати поле"
-            >
-              <Plus size={18} />
-            </button>
-          </div>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-500"
+            onClick={() => {
+              setFieldForm(emptyField);
+              setShowFieldModal(true);
+            }}
+          >
+            <Plus size={14} /> Додати типове поле
+          </button>
         </div>
+      </div>
 
-        <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Швидкі шаблони</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {FIELD_PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
-                onClick={() => {
-                  setFieldForm({ ...preset, id: "" });
-                  setShowFieldModal(true);
-                }}
-              >
-                {preset.label}
-              </button>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 shadow-sm">
+          <div className="mb-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Бізнес-правило КП</p>
+            <h4 className="mt-1 text-sm font-semibold text-slate-900">ПДВ залежно від типу оплати</h4>
+            <p className="mt-1 text-xs text-slate-600">Вибраний у CRM тип оплати автоматично визначає відсоток ПДВ у підсумку КП та PDF.</p>
+          </div>
+
+          <div className="space-y-2">
+            {vatRulesDraft.map((row, index) => (
+              <div key={`vat_row_${index}`} className="grid grid-cols-[1fr_120px_32px] gap-2">
+                <input
+                  className={`${baseInput} py-1.5 text-xs`}
+                  list="catering-payment-type-list"
+                  value={row.paymentType}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setVatRulesDraft((prev) => prev.map((item, itemIndex) => (itemIndex === index ? { ...item, paymentType: value } : item)));
+                  }}
+                  placeholder="Тип оплати"
+                />
+                <input
+                  className={`${baseInput} py-1.5 text-xs`}
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={row.vatPercent}
+                  onChange={(event) => {
+                    const value = Number(event.target.value || 0);
+                    setVatRulesDraft((prev) => prev.map((item, itemIndex) => (itemIndex === index ? { ...item, vatPercent: value } : item)));
+                  }}
+                  placeholder="% ПДВ"
+                />
+                <button
+                  type="button"
+                  className="rounded-md border border-rose-200 text-rose-600 hover:bg-rose-50"
+                  onClick={() => {
+                    setVatRulesDraft((prev) => (prev.length === 1 ? [{ paymentType: "", vatPercent: 0 }] : prev.filter((_, itemIndex) => itemIndex !== index)));
+                  }}
+                  title="Видалити правило"
+                >
+                  <Trash2 size={14} className="mx-auto" />
+                </button>
+              </div>
             ))}
           </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+              onClick={() => setVatRulesDraft((prev) => [...prev, { paymentType: "", vatPercent: 0 }])}
+            >
+              + Додати правило
+            </button>
+            <button
+              type="button"
+              className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+              disabled={saving}
+              onClick={() => {
+                void saveVatRules();
+              }}
+            >
+              Зберегти ПДВ-правила
+            </button>
+          </div>
+
+          <datalist id="catering-payment-type-list">
+            {paymentTypeOptions.map((value) => <option key={value} value={value} />)}
+          </datalist>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="text-left text-slate-500">
-              <tr>
-                <th className="px-3 py-2">Назва</th>
-                <th className="px-3 py-2">Ключ</th>
-                <th className="px-3 py-2">Категорія</th>
-                <th className="px-3 py-2">Тип</th>
-                <th className="px-3 py-2">Опції</th>
-                <th className="px-3 py-2">Дії</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredFieldTemplates.map((item) => (
-                <tr key={item.id} className="border-t border-slate-200 align-top">
-                  <td className="px-3 py-3">
-                    <div className="font-medium text-slate-900">{item.label}</div>
-                    {item.description && <div className="mt-1 text-xs text-slate-500">{item.description}</div>}
-                  </td>
-                  <td className="px-3 py-3 text-slate-700">{item.key}</td>
-                  <td className="px-3 py-3 text-slate-700">{item.category || "other"}</td>
-                  <td className="px-3 py-3 text-slate-700">
-                    {item.type}
-                    {item.required && <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700">обов'язкове</span>}
-                  </td>
-                  <td className="px-3 py-3 text-slate-700">{Array.isArray(item.options) ? item.options.length : 0}</td>
-                  <td className="px-3 py-3">
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        className="rounded-md border border-slate-300 p-1.5 text-slate-600 hover:bg-slate-50"
-                        onClick={() => {
-                          setFieldForm({
-                            ...item,
-                            options: Array.isArray(item.options) ? item.options.join(", ") : "",
-                          });
-                          setShowFieldModal(true);
-                        }}
-                      >
-                        <Pencil size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-md border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50"
-                        onClick={() => {
-                          if (!window.confirm("Видалити типове поле?")) return;
-                          void onDeleteField(item.id);
-                        }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h4 className="text-sm font-semibold text-slate-900">Каталог типових полів</h4>
+              <p className="text-xs text-slate-500">Швидко редагуйте поля, опції та обов'язковість.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className={`${baseInput} w-[220px]`}
+                value={fieldSearch}
+                onChange={(event) => setFieldSearch(event.target.value)}
+                placeholder="Пошук поля"
+              />
+              <select className={`${baseInput} w-[180px]`} value={fieldCategoryFilter} onChange={(event) => setFieldCategoryFilter(event.target.value)}>
+                <option value="all">Усі категорії</option>
+                <option value="order">Замовлення</option>
+                <option value="customer">Клієнт</option>
+                <option value="source">Джерело/канал</option>
+                <option value="tags">Теги</option>
+                <option value="other">Інше</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Швидкі шаблони</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {FIELD_PRESETS.filter((preset) => preset.id !== "paymentType").map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className="rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                  onClick={() => {
+                    setFieldForm({ ...preset, id: "" });
+                    setShowFieldModal(true);
+                  }}
+                >
+                  {preset.label}
+                </button>
               ))}
-              {filteredFieldTemplates.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-3 py-8 text-center text-slate-500">Полів за фільтром не знайдено.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {nonVatFieldTemplates.map((item) => (
+              <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50/50 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{item.label}</p>
+                    <p className="text-xs text-slate-500">Ключ: {item.key}</p>
+                    {item.description && <p className="mt-1 text-xs text-slate-500">{item.description}</p>}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">{item.category || "other"}</span>
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">{item.type}</span>
+                    {item.required && <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700">обов'язкове</span>}
+                  </div>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-xs text-slate-500">Опцій: {Array.isArray(item.options) ? item.options.length : 0}</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="rounded-md border border-slate-300 p-1.5 text-slate-600 hover:bg-slate-50"
+                      onClick={() => {
+                        setFieldForm({
+                          ...item,
+                          options: Array.isArray(item.options) ? item.options.join(", ") : "",
+                        });
+                        setShowFieldModal(true);
+                      }}
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-md border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50"
+                      onClick={() => {
+                        if (!window.confirm("Видалити типове поле?")) return;
+                        void onDeleteField(item.id);
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {nonVatFieldTemplates.length === 0 && (
+              <div className="rounded-xl border border-dashed border-slate-300 px-3 py-8 text-center text-sm text-slate-500">
+                Полів за фільтром не знайдено.
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
