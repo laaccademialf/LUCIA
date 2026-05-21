@@ -6,12 +6,20 @@ const normalizeHeader = (value) => String(value || "")
   .replace(/\s+/g, " ")
   .replace(/[^a-zа-яіїєґ0-9 ]/gi, "");
 
-const getCellValue = (row, keys) => {
+const getCellValue = (row, keys, fallbackIndex = null) => {
   for (const key of keys) {
     const normalizedKey = normalizeHeader(key);
     const matchKey = Object.keys(row || {}).find((candidate) => normalizeHeader(candidate) === normalizedKey);
     if (matchKey) return row[matchKey];
   }
+
+  if (Number.isInteger(fallbackIndex) && fallbackIndex >= 0) {
+    const columns = Object.keys(row || {});
+    if (fallbackIndex < columns.length) {
+      return row[columns[fallbackIndex]];
+    }
+  }
+
   return "";
 };
 
@@ -133,7 +141,7 @@ export const importCateringAssortmentFromExcel = (file) =>
         category: asText(getCellValue(row, ["Категорія", "Category", "Група"])),
         subcategory: asText(getCellValue(row, ["Підкатегорія", "Subcategory", "Підгрупа"])),
         productName: asText(getCellValue(row, ["Назва продукту", "Product name", "Назва", "Позиція"])),
-        output: asText(getCellValue(row, ["Вихід", "Output", "Порція"])),
+        output: asText(getCellValue(row, ["Вихід", "Output", "Порція", "Вихід в грамах", "Выход в граммах"], 2)),
         unitPrice: asMoney(getCellValue(row, ["Ціна", "Unit price", "Продажна ціна"])),
         costPrice: asMoney(getCellValue(row, ["Собівартість", "Cost price", "Закупівельна ціна"])),
       }))

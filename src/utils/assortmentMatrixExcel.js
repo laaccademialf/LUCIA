@@ -8,6 +8,30 @@ const toNumber = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const normalizeHeader = (value) => String(value || "")
+  .trim()
+  .toLowerCase()
+  .replace(/\s+/g, " ")
+  .replace(/[^a-zа-яіїєґ0-9 ]/gi, "");
+
+const getCellValue = (row, keys = [], fallbackColumnIndex = null) => {
+  const rowKeys = Object.keys(row || {});
+  for (const key of keys) {
+    const normalizedKey = normalizeHeader(key);
+    const matchedKey = rowKeys.find((candidate) => normalizeHeader(candidate) === normalizedKey);
+    if (!matchedKey) continue;
+    const value = row[matchedKey];
+    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  }
+
+  if (fallbackColumnIndex !== null && fallbackColumnIndex >= 0 && fallbackColumnIndex < rowKeys.length) {
+    const fallbackKey = rowKeys[fallbackColumnIndex];
+    return row[fallbackKey];
+  }
+
+  return "";
+};
+
 /* ═══════════════  EXPORT MATRIX  ═══════════════ */
 
 export const exportAssortmentMatrixToExcel = (
@@ -155,7 +179,25 @@ export const importAssortmentMatrixFromExcel = (file, restaurants = [], specific
               saleUnit: String(row["Одиниця продажу"] || row["Sale Unit"] || row["Unit Sale"] || row["Unit"] || "").trim(),
               portionSaleUnit: String(row["Одиниця продажу порції"] || row["Portion Sale Unit"] || "").trim(),
               bottleVolumeMl: toNumber(row["Об'єм пляшки, мл"] || row["Bottle Volume Ml"] || row["Bottle Volume"] || 0),
-              portionVolumeMl: toNumber(row["Об'єм порції, мл"] || row["Portion Volume Ml"] || row["Portion Volume"] || 0),
+              portionVolumeMl: toNumber(
+                getCellValue(
+                  row,
+                  [
+                    "Об'єм порції, мл",
+                    "Обєм порції, мл",
+                    "Вихід в грамах",
+                    "Вихід, г",
+                    "Выход, г",
+                    "Грами",
+                    "Грам",
+                    "Portion Volume Ml",
+                    "Portion Volume",
+                    "Output, g",
+                    "Output g",
+                  ],
+                  2,
+                ),
+              ),
               unit: String(row["Одиниця продажу"] || row["Sale Unit"] || row["Одиниця виміру"] || row["Unit"] || "").trim(),
               supplier: String(row["Постачальник"] || row["Supplier"] || "").trim(),
               code1C: String(row["Код 1С"] || row["Код"] || row["Code 1C"] || "").trim(),
@@ -226,7 +268,25 @@ export const importAssortmentSpecsFromExcel = (file) => {
               saleUnit: String(row["Одиниця продажу"] || row["Sale Unit"] || row["Unit"] || "").trim(),
               portionSaleUnit: String(row["Одиниця продажу порції"] || row["Portion Sale Unit"] || "").trim(),
               bottleVolumeMl: toNumber(row["Об'єм пляшки, мл"] || row["Bottle Volume Ml"] || row["Bottle Volume"] || 0),
-              portionVolumeMl: toNumber(row["Об'єм порції, мл"] || row["Portion Volume Ml"] || row["Portion Volume"] || 0),
+              portionVolumeMl: toNumber(
+                getCellValue(
+                  row,
+                  [
+                    "Об'єм порції, мл",
+                    "Обєм порції, мл",
+                    "Вихід в грамах",
+                    "Вихід, г",
+                    "Выход, г",
+                    "Грами",
+                    "Грам",
+                    "Portion Volume Ml",
+                    "Portion Volume",
+                    "Output, g",
+                    "Output g",
+                  ],
+                  2,
+                ),
+              ),
               unit: String(row["Одиниця продажу"] || row["Sale Unit"] || row["Одиниця виміру"] || row["Unit"] || "").trim(),
               supplier: String(row["Постачальник"] || row["Supplier"] || "").trim(),
               code1C: String(row["Код 1С"] || row["Code 1C"] || row["Code"] || "").trim(),

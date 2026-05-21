@@ -1383,6 +1383,35 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
     }
   };
 
+  const selectAllVisible = () => {
+    setSelectedIds(new Set(catalogRows.map((row) => row.id)));
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+  };
+
+  const bulkUnassignAllVisibleForRestaurant = async () => {
+    if (!selectedRestaurantId || bulkBusy) return;
+    const assignedRows = catalogRows.filter((row) => row.isAssignedToSelected);
+    if (assignedRows.length === 0) {
+      alert("У вибраному закладі немає позицій для масового зняття.");
+      return;
+    }
+    if (!confirm(`Зняти всі видимі позиції (${assignedRows.length}) з закладу ${selectedRestaurantName || ""}?`)) return;
+
+    setBulkBusy(true);
+    try {
+      for (const row of assignedRows) {
+        // eslint-disable-next-line no-await-in-loop
+        await upsertAssignmentForRestaurant(row, false);
+      }
+      setSelectedIds(new Set());
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   const bulkAssignToMultipleRestaurants = async (targetRestaurantIds) => {
     if (targetRestaurantIds.length === 0 || selectedIds.size === 0 || bulkBusy) return;
     setBulkBusy(true);
@@ -1869,6 +1898,21 @@ const MatrixView = ({ items, specifications, typicalFields, restaurants, user, b
               : `Ти бачиш лише продукцію, дозволену для закладу ${selectedRestaurantName || ""}.`}
           </span>
         </div>
+
+        {canEdit && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Масові дії</span>
+            <button type="button" className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50" onClick={selectAllVisible} disabled={catalogRows.length === 0}>
+              Виділити всі видимі
+            </button>
+            <button type="button" className="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50" onClick={clearSelection} disabled={selectedIds.size === 0}>
+              Скинути виділення
+            </button>
+            <button type="button" className="rounded border border-rose-300 bg-white px-3 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50" onClick={bulkUnassignAllVisibleForRestaurant} disabled={!selectedRestaurantId || bulkBusy || catalogRows.length === 0}>
+              {bulkBusy ? "Обробка…" : "Зняти всі видимі з закладу"}
+            </button>
+          </div>
+        )}
 
         {canEdit && selectedIds.size > 0 && (
           <div className="sticky top-0 z-20 mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 shadow-sm">
@@ -3106,6 +3150,16 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
     setSelectedIds(new Set());
   };
 
+  const bulkDeleteAll = async () => {
+    if (products.length === 0) return;
+    if (!confirm(`Видалити ВСІ позиції (${products.length})?`)) return;
+    for (const product of products) {
+      // eslint-disable-next-line no-await-in-loop
+      await deleteSpec(product.id);
+    }
+    setSelectedIds(new Set());
+  };
+
   const bulkSetActive = async (active) => {
     if (selectedIds.size === 0) return;
     for (const id of selectedIds) {
@@ -3201,6 +3255,12 @@ const SpecificationsView = ({ specifications, typicalFields, user, barAccess, ad
           {canManage && (
             <button type="button" className={btnPrimary} onClick={() => { setEditSpec(null); setShowForm(true); }}>
               <Plus size={16} /> Додати продукцію
+            </button>
+          )}
+
+          {canManage && (
+            <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 shadow-sm hover:bg-red-50 transition" onClick={bulkDeleteAll} disabled={products.length === 0}>
+              <Trash2 size={16} /> Видалити все
             </button>
           )}
 
