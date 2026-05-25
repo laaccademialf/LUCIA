@@ -431,6 +431,13 @@ export const loginUser = async (email, password) => {
     });
 
     setAuthSessionToken(String(payload?.token || ""));
+    // [LUCIA-DEBUG] перевіряємо, що повертає /auth/login
+    try {
+      // eslint-disable-next-line no-console
+      console.log("[LUCIA-DEBUG] /auth/login raw payload", payload);
+      // eslint-disable-next-line no-console
+      console.log("[LUCIA-DEBUG] /auth/login user keys", Object.keys(payload?.user || {}));
+    } catch { /* noop */ }
     const user = applyPlatformAdminOverride(payload?.user || null);
     notifyAuthApiSubscribers(user);
     return user;
@@ -627,6 +634,13 @@ export const getCurrentUser = () => {
           method: "GET",
           headers: authApiHeaders(false),
         });
+        // [LUCIA-DEBUG] перевіряємо, що саме повертає бекенд /auth/me
+        try {
+          // eslint-disable-next-line no-console
+          console.log("[LUCIA-DEBUG] /auth/me raw payload", payload);
+          // eslint-disable-next-line no-console
+          console.log("[LUCIA-DEBUG] /auth/me user keys", Object.keys(payload?.user || {}));
+        } catch { /* noop */ }
         const user = applyPlatformAdminOverride(payload?.user || null);
 
         // Деякі проксі можуть загубити нестандартний заголовок сесії на окремих запитах.
