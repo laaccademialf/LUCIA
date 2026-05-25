@@ -61,6 +61,7 @@ const resolveFirebaseUserProfile = async (firebaseUser) => {
     displayName: firebaseUser?.displayName || "",
     role: isPlatformAdminEmail(firebaseUser?.email) ? "admin" : "user",
     restaurant: "",
+    restaurants: [],
     position: "",
     workRole: "",
   };
@@ -77,6 +78,40 @@ const resolveFirebaseUserProfile = async (firebaseUser) => {
     const resolvedRole = shouldForceAdmin ? "admin" : userData.role || "user";
     const shouldUpsertProfile = !userDoc.exists() || (shouldForceAdmin && userData.role !== "admin");
 
+    // Multi-restaurant access lives in `restaurants` array on the user record.
+    // Accept legacy aliases (restaurant_ids / restaurantIds), JSON-string and CSV.
+    const parseRestaurantsArray = (raw) => {
+      if (Array.isArray(raw)) {
+        return raw.map((v) => String(v || "").trim()).filter(Boolean);
+      }
+      if (typeof raw === "string") {
+        const text = raw.trim();
+        if (!text) return [];
+        if (text.startsWith("[")) {
+          try {
+            const parsed = JSON.parse(text);
+            if (Array.isArray(parsed)) {
+              return parsed.map((v) => String(v || "").trim()).filter(Boolean);
+            }
+          } catch {
+            /* fallthrough */
+          }
+        }
+        return text.split(",").map((v) => v.trim()).filter(Boolean);
+      }
+      return [];
+    };
+
+    const restaurantsArray = (() => {
+      const fromArray = parseRestaurantsArray(
+        userData.restaurants ?? userData.restaurant_ids ?? userData.restaurantIds
+      );
+      if (fromArray.length > 0) return fromArray;
+      const single = String(userData.restaurant || "").trim();
+      return single ? [single] : [];
+    })();
+    const primaryRestaurant = String(userData.restaurant || restaurantsArray[0] || "").trim();
+
     if (shouldUpsertProfile) {
       await setDoc(
         userRef,
@@ -84,7 +119,8 @@ const resolveFirebaseUserProfile = async (firebaseUser) => {
           email: firebaseUser.email || "",
           displayName: firebaseUser.displayName || userData.displayName || "",
           role: resolvedRole,
-          restaurant: userData.restaurant || "",
+          restaurant: primaryRestaurant,
+          restaurants: restaurantsArray,
           position: userData.position || "",
           workRole: userData.workRole || "",
           ...(userDoc.exists() ? {} : { createdAt: new Date().toISOString() }),
@@ -99,7 +135,8 @@ const resolveFirebaseUserProfile = async (firebaseUser) => {
       email: firebaseUser.email,
       displayName: firebaseUser.displayName || userData.displayName || "",
       role: resolvedRole,
-      restaurant: userData.restaurant || "",
+      restaurant: primaryRestaurant,
+      restaurants: restaurantsArray,
       position: userData.position || "",
       workRole: userData.workRole || "",
     });
