@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from "react";
 import DeployInfo from "./components/DeployInfo";
+import { ClockBadgeTime, ClockBadgeDateTime } from "./components/ClockBadge";
 import {
   Archive,
   BarChart3,
@@ -437,19 +438,10 @@ const playCenterAlertTone = () => {
 };
 
 function App() {
-  const [currentTime, setCurrentTime] = useState(() => new Date());
   const [isOnline, setIsOnline] = useState(() => {
     if (typeof navigator === "undefined") return true;
     return navigator.onLine;
   });
-
-  useEffect(() => {
-    const timerId = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-
-    return () => clearInterval(timerId);
-  }, []);
 
   useEffect(() => {
     let isDisposed = false;
@@ -2978,9 +2970,10 @@ function App() {
                     <h2 className="text-xl sm:text-2xl font-bold">Огляд системи</h2>
                     <p className="text-indigo-100 text-sm mt-1">Ключові показники по модулях у реальному часі</p>
                   </div>
-                  <div className="rounded-xl bg-white/15 px-3 py-2 text-sm font-semibold">
-                    Оновлено: {currentTime.toLocaleString("uk-UA")}
-                  </div>
+                  <ClockBadgeDateTime
+                    prefix="Оновлено:"
+                    className="rounded-xl bg-white/15 px-3 py-2 text-sm font-semibold"
+                  />
                 </div>
               </div>
 
@@ -4702,13 +4695,7 @@ function App() {
                 </div>
                 <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300">
                   <Clock3 size={16} />
-                  <span className="text-sm font-medium tabular-nums">
-                    {currentTime.toLocaleTimeString("uk-UA", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    })}
-                  </span>
+                  <ClockBadgeTime className="text-sm font-medium tabular-nums" />
                 </div>
                 {/* Дзвоник сповіщень */}
                 <button

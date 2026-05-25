@@ -79,6 +79,7 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
+              autoComplete="username"
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
               placeholder="your@email.com"
             />
@@ -93,6 +94,7 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
+              autoComplete="current-password"
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
               placeholder="••••••••"
             />
