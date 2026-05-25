@@ -1243,6 +1243,44 @@ const getAssetsData = async (dbConfig) => {
   throw new Error(`Unsupported engine for assets: ${dbConfig.dbEngine}`);
 };
 
+// In-memory cache for the full /api/assets list. Loading and serializing
+// thousands of assets from MySQL takes seconds; serving repeated requests
+// (page reload, tab switch, parallel lite+full fetches) from cache makes
+// them near-instant. Invalidated by createAssetData/updateAssetData/
+// deleteAssetData below.
+const ASSETS_CACHE_TTL_MS = Math.max(
+  1000,
+  Number.parseInt(String(process.env.ASSETS_CACHE_TTL_MS || "30000"), 10) || 30000
+);
+const assetsCache = new Map(); // key -> { at, promise }
+const buildAssetsCacheKey = (dbConfig) => {
+  const engine = String(dbConfig?.dbEngine || "");
+  if (engine === "mysql") {
+    const c = dbConfig?.mysqlConfig || {};
+    return `mysql:${c.host}:${c.port}:${c.user}:${c.database}`;
+  }
+  if (engine === "postgres") return `postgres:${dbConfig?.postgresUrl || ""}`;
+  return `file:${DATA_DIR}`;
+};
+const invalidateAssetsCache = () => {
+  assetsCache.clear();
+};
+const getAssetsDataCached = (dbConfig) => {
+  const key = buildAssetsCacheKey(dbConfig);
+  const now = Date.now();
+  const entry = assetsCache.get(key);
+  if (entry && now - entry.at < ASSETS_CACHE_TTL_MS) {
+    return entry.promise;
+  }
+  const promise = getAssetsData(dbConfig).catch((err) => {
+    // Don't keep a failed promise cached.
+    if (assetsCache.get(key)?.promise === promise) assetsCache.delete(key);
+    throw err;
+  });
+  assetsCache.set(key, { at: now, promise });
+  return promise;
+};
+
 const filterAssetsInMemory = (assets, {
   search = "",
   locationName = "",
@@ -3007,6 +3045,7 @@ const handleAssetsBatchImport = async (req, res) => {
     }
 
     broadcastAssetsSse("assets-change", { type: "batch-import", at: nowIso(), created: results.created, updated: results.updated });
+    invalidateAssetsCache();
     return sendJson(res, 200, { ok: true, ...results });
   }
 
@@ -3031,6 +3070,7 @@ const handleAssetsBatchImport = async (req, res) => {
   }
 
   broadcastAssetsSse("assets-change", { type: "batch-import", at: nowIso(), created: results.created, updated: results.updated });
+  invalidateAssetsCache();
   return sendJson(res, 200, { ok: true, ...results });
 };
 
@@ -3077,7 +3117,7 @@ const handleAssetsApi = async (req, res, assetId) => {
 
     const hasPaging = Boolean(pageRaw || pageSizeRaw);
     if (!hasPaging && !search && !locationName && !status && !category && !decision) {
-      const assets = await getAssetsData(dbConfig);
+      const assets = await getAssetsDataCached(dbConfig);
       const responseData = lite ? stripHeavyFields(assets) : assets;
       logSlowAssetsGet({
         elapsedMs: Date.now() - startedAt,
@@ -3137,6 +3177,7 @@ const handleAssetsApi = async (req, res, assetId) => {
     }
 
     const id = await createAssetData(payload, dbConfig);
+    invalidateAssetsCache();
     broadcastAssetsSse("assets-change", {
       type: "created",
       id: String(id || ""),
@@ -3154,6 +3195,7 @@ const handleAssetsApi = async (req, res, assetId) => {
     }
 
     await updateAssetData(assetId, payload, dbConfig);
+    invalidateAssetsCache();
     broadcastAssetsSse("assets-change", {
       type: "updated",
       id: String(assetId || ""),
@@ -3164,6 +3206,7 @@ const handleAssetsApi = async (req, res, assetId) => {
 
   if (method === "DELETE" && assetId) {
     await deleteAssetData(assetId, dbConfig);
+    invalidateAssetsCache();
     broadcastAssetsSse("assets-change", {
       type: "deleted",
       id: String(assetId || ""),
