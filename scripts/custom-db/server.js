@@ -102,42 +102,53 @@ const sendJson = (res, status, payload) => {
   const req = res.req;
   const acceptEncoding = String(req?.headers?.["accept-encoding"] || "");
   const shouldCompress = body.length >= 1024;
+
+  // Choose encoding. Prefer gzip over brotli — brotli has much higher CPU
+  // cost on the server and blocks the event loop under load, which hurts
+  // concurrent requests (e.g. lite + full fetched in parallel on first paint).
+  let encoder = null;
   let encoding = null;
-  let compressed = null;
   if (shouldCompress) {
-    try {
-      if (/\bbr\b/i.test(acceptEncoding) && typeof zlib.brotliCompressSync === "function") {
-        compressed = zlib.brotliCompressSync(body);
-        encoding = "br";
-      } else if (/\bgzip\b/i.test(acceptEncoding)) {
-        compressed = zlib.gzipSync(body);
-        encoding = "gzip";
-      } else if (/\bdeflate\b/i.test(acceptEncoding)) {
-        compressed = zlib.deflateSync(body);
-        encoding = "deflate";
-      }
-    } catch {
-      compressed = null;
-      encoding = null;
+    if (/\bgzip\b/i.test(acceptEncoding)) {
+      encoder = zlib.gzip;
+      encoding = "gzip";
+    } else if (/\bdeflate\b/i.test(acceptEncoding)) {
+      encoder = zlib.deflate;
+      encoding = "deflate";
+    } else if (/\bbr\b/i.test(acceptEncoding) && typeof zlib.brotliCompress === "function") {
+      encoder = zlib.brotliCompress;
+      encoding = "br";
     }
   }
 
-  const headers = {
-    "Content-Type": "application/json; charset=utf-8",
+  const writeUncompressed = () => {
+    res.writeHead(status, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Length": Buffer.byteLength(body),
+    });
+    res.end(body);
   };
 
-  if (compressed && encoding) {
-    headers["Content-Encoding"] = encoding;
-    headers["Vary"] = "Accept-Encoding";
-    headers["Content-Length"] = compressed.length;
-    res.writeHead(status, headers);
-    res.end(compressed);
+  if (!encoder) {
+    writeUncompressed();
     return;
   }
 
-  headers["Content-Length"] = Buffer.byteLength(body);
-  res.writeHead(status, headers);
-  res.end(body);
+  // Async compression — does NOT block the event loop, so other in-flight
+  // requests stay responsive.
+  encoder(body, (err, compressed) => {
+    if (err || !compressed) {
+      writeUncompressed();
+      return;
+    }
+    res.writeHead(status, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Encoding": encoding,
+      "Vary": "Accept-Encoding",
+      "Content-Length": compressed.length,
+    });
+    res.end(compressed);
+  });
 };
 
 const logSlowAssetsGet = (details) => {
