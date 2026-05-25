@@ -1110,14 +1110,13 @@ function App() {
       try {
         const rolePerms = await getRolePermissions(roleIdOrName);
         setUserPermissions(rolePerms.permissions || {});
-        const restaurantsExplicitlyConfigured = Object.prototype.hasOwnProperty.call(rolePerms || {}, "restaurants");
-        setRoleRestaurantsConfigured(restaurantsExplicitlyConfigured);
-        const normalizedRestaurantIds = Array.isArray(rolePerms?.restaurants)
-          ? rolePerms.restaurants
-              .map((id) => String(id || "").trim())
-              .filter(Boolean)
+        // Доступ до ресторанів більше НЕ береться з ролі: він визначається індивідуально
+        // по користувачу (user.restaurants[]). Нижче заповнюємо roleRestaurantIds з профілю як єдине джерело істини.
+        setRoleRestaurantsConfigured(false);
+        const userRestaurantIds = Array.isArray(user?.restaurants)
+          ? user.restaurants.map((id) => String(id || "").trim()).filter(Boolean)
           : [];
-        setRoleRestaurantIds(normalizedRestaurantIds);
+        setRoleRestaurantIds(userRestaurantIds);
       } catch (err) {
         console.error("Помилка отримання прав доступу для користувача:", err);
         setUserPermissions({});

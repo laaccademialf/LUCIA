@@ -32,18 +32,61 @@ const updateUsersByEmailInApiMode = async (id, payload = {}) => {
   await Promise.all(idsToUpdate.map((userId) => updateCollectionItemApi("users", userId, payload)));
 };
 
+const parseRestaurantsArray = (raw) => {
+  if (Array.isArray(raw)) {
+    return Array.from(
+      new Set(raw.map((v) => String(v || "").trim()).filter(Boolean))
+    );
+  }
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (!text) return [];
+    if (text.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+          return Array.from(
+            new Set(parsed.map((v) => String(v || "").trim()).filter(Boolean))
+          );
+        }
+      } catch {
+        /* fallthrough */
+      }
+    }
+    return Array.from(
+      new Set(text.split(",").map((v) => v.trim()).filter(Boolean))
+    );
+  }
+  return [];
+};
+
 const normalizeUserRecord = (user) => {
   if (!user || typeof user !== "object") return user;
 
   const createdAt = user.createdAt || user.created_at || "";
   const updatedAt = user.updatedAt || user.updated_at || "";
 
+  const restaurantsArray = (() => {
+    const raw = user.restaurants ?? user.restaurant_ids ?? user.restaurantIds;
+    const parsed = parseRestaurantsArray(raw);
+    if (parsed.length > 0) return parsed;
+    const single = user.restaurant || user.restaurant_id || user.restaurant_name || "";
+    return single ? [String(single).trim()] : [];
+  })();
+  const primaryRestaurant =
+    user.restaurant ||
+    user.restaurant_id ||
+    user.restaurant_name ||
+    restaurantsArray[0] ||
+    "";
+
   return {
     ...user,
     displayName: user.displayName || user.display_name || "",
     email: user.email || user.user_email || "",
     role: user.role || "user",
-    restaurant: user.restaurant || user.restaurant_id || user.restaurant_name || "",
+    restaurant: primaryRestaurant,
+    restaurants: restaurantsArray,
     restaurantName: user.restaurantName || user.restaurant_name || user.restaurant || "",
     position: user.position || user.position_name || "",
     workRole: user.work_role_name || user.work_role || user.workRole || "",

@@ -399,28 +399,72 @@ const sessionTokenFromRequest = (req) => {
   return "";
 };
 
-const mapUserProfile = (profile) => ({
-  uid: String(profile?.id || ""),
-  email: normalizeEmail(profile?.email || profile?.user_email || ""),
-  displayName: readFirstString(profile?.displayName, profile?.display_name),
-  role: readFirstString(profile?.role, "user") || "user",
-  restaurant: readFirstString(
+const parseRestaurantsList = (raw) => {
+  if (Array.isArray(raw)) {
+    return raw.map((v) => String(v || "").trim()).filter(Boolean);
+  }
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (!text) return [];
+    if (text.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+          return parsed.map((v) => String(v || "").trim()).filter(Boolean);
+        }
+      } catch {
+        /* fallthrough */
+      }
+    }
+    return text
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+
+const mapUserProfile = (profile) => {
+  const restaurantsList = (() => {
+    const fromArray = parseRestaurantsList(
+      profile?.restaurants ?? profile?.restaurant_ids ?? profile?.restaurantIds
+    );
+    if (fromArray.length > 0) return fromArray;
+    const single = readFirstString(
+      profile?.restaurant,
+      profile?.restaurantId,
+      profile?.restaurant_id,
+      profile?.restaurantName,
+      profile?.restaurant_name
+    );
+    return single ? [single] : [];
+  })();
+  const primaryRestaurant = readFirstString(
     profile?.restaurant,
     profile?.restaurantId,
     profile?.restaurant_id,
     profile?.restaurantName,
-    profile?.restaurant_name
-  ),
-  restaurantName: readFirstString(
-    profile?.restaurantName,
     profile?.restaurant_name,
-    profile?.restaurant,
-    profile?.restaurantId,
-    profile?.restaurant_id
-  ),
-  position: readFirstString(profile?.position, profile?.position_name),
-  workRole: readFirstString(profile?.work_role_name, profile?.work_role, profile?.workRole),
-});
+    restaurantsList[0]
+  );
+  return {
+    uid: String(profile?.id || ""),
+    email: normalizeEmail(profile?.email || profile?.user_email || ""),
+    displayName: readFirstString(profile?.displayName, profile?.display_name),
+    role: readFirstString(profile?.role, "user") || "user",
+    restaurant: primaryRestaurant,
+    restaurants: restaurantsList,
+    restaurantName: readFirstString(
+      profile?.restaurantName,
+      profile?.restaurant_name,
+      profile?.restaurant,
+      profile?.restaurantId,
+      profile?.restaurant_id
+    ),
+    position: readFirstString(profile?.position, profile?.position_name),
+    workRole: readFirstString(profile?.work_role_name, profile?.work_role, profile?.workRole),
+  };
+};
 
 const BOOTSTRAP_ADMIN_ENABLED =
   String(process.env.LUCIA_BOOTSTRAP_ADMIN_ENABLED || "true").trim().toLowerCase() !== "false";
@@ -2601,6 +2645,18 @@ const handleAuthAdminCreateUser = async (req, res) => {
   const displayName = String(payload?.displayName || "").trim();
   const role = String(payload?.role || "user").trim() || "user";
   const restaurant = String(payload?.restaurant || "").trim();
+  const restaurantsRaw = payload?.restaurants;
+  const restaurantsList = Array.isArray(restaurantsRaw)
+    ? Array.from(
+        new Set(
+          restaurantsRaw
+            .map((v) => String(v || "").trim())
+            .filter(Boolean)
+        )
+      )
+    : restaurant
+      ? [restaurant]
+      : [];
   const position = String(payload?.position || "").trim();
   const workRole = String(payload?.workRole || "").trim();
   const currentPassword = String(payload?.currentPassword || "");
@@ -2659,12 +2715,14 @@ const handleAuthAdminCreateUser = async (req, res) => {
     dbConfig
   );
 
+  const primaryRestaurant = restaurant || restaurantsList[0] || "";
   const profilePayload = {
     id: userId,
     email,
     displayName: displayName || email,
     role,
-    restaurant,
+    restaurant: primaryRestaurant,
+    restaurants: restaurantsList,
     position,
     workRole,
     createdAt: nowIso(),
@@ -3165,7 +3223,42 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
       next.position_name = positionValue;
     }
 
-    const restaurantValue = [next.restaurant, next.restaurantId, next.restaurant_id, next.restaurantName, next.restaurant_name]
+    // Multi-restaurant list (per-user access). Accept array, JSON string or CSV.
+    const restaurantsListRaw =
+      next.restaurants ?? next.restaurant_ids ?? next.restaurantIds;
+    let restaurantsList = [];
+    if (Array.isArray(restaurantsListRaw)) {
+      restaurantsList = restaurantsListRaw
+        .map((v) => normalizeString(v))
+        .filter(Boolean);
+    } else if (typeof restaurantsListRaw === "string") {
+      const text = restaurantsListRaw.trim();
+      if (text.startsWith("[")) {
+        try {
+          const parsed = JSON.parse(text);
+          if (Array.isArray(parsed)) {
+            restaurantsList = parsed.map((v) => normalizeString(v)).filter(Boolean);
+          }
+        } catch {
+          /* keep empty */
+        }
+      }
+      if (restaurantsList.length === 0 && text) {
+        restaurantsList = text.split(",").map((v) => v.trim()).filter(Boolean);
+      }
+    }
+    // De-duplicate while preserving order
+    restaurantsList = Array.from(new Set(restaurantsList));
+
+    const primaryFromList = restaurantsList[0] || "";
+    const restaurantValue = [
+      next.restaurant,
+      next.restaurantId,
+      next.restaurant_id,
+      next.restaurantName,
+      next.restaurant_name,
+      primaryFromList,
+    ]
       .map(normalizeString)
       .find(Boolean);
     if (restaurantValue) {
@@ -3173,6 +3266,16 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
       next.restaurant_id = restaurantValue;
       next.restaurant_name = restaurantValue;
     }
+
+    if (restaurantsList.length > 0) {
+      next.restaurants = restaurantsList;
+    } else if (Object.prototype.hasOwnProperty.call(next, "restaurants")) {
+      // Explicit empty list — keep empty array so caller can clear access
+      next.restaurants = [];
+    }
+    // Clean up alias keys so we persist a single canonical field
+    delete next.restaurant_ids;
+    delete next.restaurantIds;
 
     return next;
   };

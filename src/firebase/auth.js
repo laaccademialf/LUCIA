@@ -303,7 +303,14 @@ export const registerUser = async (email, password, displayName) => {
  * @param {string} role - Системна роль (user або admin)
  * @returns {Promise<Object>} Дані створеного користувача
  */
-export const createUserByAdmin = async (email, password, displayName, currentUser, currentPassword, restaurant, position, workRole, role = "user") => {
+export const createUserByAdmin = async (email, password, displayName, currentUser, currentPassword, restaurant, position, workRole, role = "user", restaurants = null) => {
+  const restaurantsList = Array.isArray(restaurants)
+    ? Array.from(new Set(restaurants.map((v) => String(v || "").trim()).filter(Boolean)))
+    : restaurant
+      ? [String(restaurant).trim()].filter(Boolean)
+      : [];
+  const primaryRestaurant = String(restaurant || restaurantsList[0] || "").trim();
+
   if (isAuthApiEnabled()) {
     const effectiveCurrentUser = currentUser || authApiCurrentUser || getCachedAuthUser();
     const payload = await authApiRequest("/auth/admin-create-user", {
@@ -313,7 +320,8 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
         email,
         password,
         displayName,
-        restaurant,
+        restaurant: primaryRestaurant,
+        restaurants: restaurantsList,
         position,
         workRole,
         role,
@@ -341,7 +349,8 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
       email: newUser.email,
       displayName: displayName,
       role: isPlatformAdminEmail(newUser.email) ? "admin" : role || "user",
-      restaurant: restaurant || "",
+      restaurant: primaryRestaurant,
+      restaurants: restaurantsList,
       position: position || "",
       workRole: workRole || "",
       createdAt: new Date().toISOString(),
@@ -359,7 +368,8 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
       email: newUser.email,
       displayName: displayName,
       role: role || "user",
-      restaurant: restaurant || "",
+      restaurant: primaryRestaurant,
+      restaurants: restaurantsList,
       position: position || "",
       workRole: workRole || "",
     });

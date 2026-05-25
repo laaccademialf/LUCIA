@@ -23,6 +23,7 @@ export const UsersTable = ({ currentUser }) => {
     displayName: "",
     email: "",
     restaurant: "",
+    restaurants: [],
     position: "",
     workRole: "",
   });
@@ -56,6 +57,22 @@ export const UsersTable = ({ currentUser }) => {
   const getRestaurantName = (restaurantId) => {
     const restaurant = restaurants.find(r => r.id === restaurantId);
     return restaurant ? restaurant.name : "-";
+  };
+
+  const getUserRestaurantIds = (user) => {
+    if (Array.isArray(user?.restaurants) && user.restaurants.length > 0) {
+      return user.restaurants.map((id) => String(id || "").trim()).filter(Boolean);
+    }
+    const single = String(user?.restaurant || "").trim();
+    return single ? [single] : [];
+  };
+
+  const formatUserRestaurants = (user) => {
+    const ids = getUserRestaurantIds(user);
+    if (ids.length === 0) return "-";
+    const names = ids.map((id) => getRestaurantName(id));
+    if (names.length <= 2) return names.join(", ");
+    return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
   };
 
   const handleRoleToggle = async (userId, currentRole) => {
@@ -118,6 +135,7 @@ export const UsersTable = ({ currentUser }) => {
       displayName: user.displayName || "",
       email: user.email || "",
       restaurant: user.restaurant || "",
+      restaurants: getUserRestaurantIds(user),
       position: user.position || "",
       workRole: user.workRole || "",
     });
@@ -129,6 +147,7 @@ export const UsersTable = ({ currentUser }) => {
       displayName: "",
       email: "",
       restaurant: "",
+      restaurants: [],
       position: "",
       workRole: "",
     });
@@ -137,11 +156,19 @@ export const UsersTable = ({ currentUser }) => {
   const handleSaveEdit = async () => {
     try {
       setError("");
-      await updateUser(editingUser, editForm);
+      const normalizedRestaurants = Array.from(
+        new Set((editForm.restaurants || []).map((id) => String(id || "").trim()).filter(Boolean))
+      );
+      const payload = {
+        ...editForm,
+        restaurants: normalizedRestaurants,
+        restaurant: normalizedRestaurants[0] || "",
+      };
+      await updateUser(editingUser, payload);
       
       setUsers((prev) =>
         prev.map((user) =>
-          user.id === editingUser ? { ...user, ...editForm } : user
+          user.id === editingUser ? { ...user, ...payload } : user
         )
       );
       
@@ -150,6 +177,7 @@ export const UsersTable = ({ currentUser }) => {
         displayName: "",
         email: "",
         restaurant: "",
+        restaurants: [],
         position: "",
         workRole: "",
       });
@@ -201,9 +229,16 @@ export const UsersTable = ({ currentUser }) => {
 
   // Визначаємо, чи керуючий
   const isManager = authUser && authUser.workRole === "Керуючий";
-  // Якщо керуючий — фільтруємо користувачів лише по своєму ресторану
-  const visibleUsers = isManager && authUser?.restaurant
-    ? users.filter(u => u.restaurant === authUser.restaurant)
+  // Набір доступних ресторанів керуючого (переважно user.restaurants, фолбек — user.restaurant)
+  const managerRestaurantIds = isManager
+    ? Array.from(new Set(getUserRestaurantIds(authUser)))
+    : [];
+  // Якщо керуючий — відображаємо лише користувачів з перетином по ресторанах
+  const visibleUsers = isManager && managerRestaurantIds.length > 0
+    ? users.filter(u => {
+        const ids = getUserRestaurantIds(u);
+        return ids.some((id) => managerRestaurantIds.includes(id));
+      })
     : users;
 
   return (
@@ -304,7 +339,7 @@ export const UsersTable = ({ currentUser }) => {
                     </td>
                     <td className="py-3 px-4 text-sm text-slate-600">{user.email}</td>
                     <td className="py-3 px-4 text-sm text-slate-600">
-                      {getRestaurantName(user.restaurant)}
+                      {formatUserRestaurants(user)}
                     </td>
                     <td className="py-3 px-4 text-sm text-slate-600">
                       {user.position || "-"}
@@ -464,20 +499,53 @@ export const UsersTable = ({ currentUser }) => {
 
               <div>
                 <label className="block text-sm font-semibold text-slate-800 mb-2">
-                  Ресторан
+                  Ресторани (доступ)
                 </label>
-                <select
-                  value={editForm.restaurant}
-                  onChange={(e) => setEditForm({ ...editForm, restaurant: e.target.value })}
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                >
-                  <option value="">Оберіть ресторан</option>
-                  {restaurants.map((restaurant) => (
-                    <option key={restaurant.id} value={restaurant.id}>
-                      {restaurant.name}
-                    </option>
-                  ))}
-                </select>
+                {(() => {
+                  const allowed = isManager && managerRestaurantIds.length > 0
+                    ? restaurants.filter((r) => managerRestaurantIds.includes(String(r.id)))
+                    : restaurants;
+                  if (allowed.length === 0) {
+                    return (
+                      <p className="text-sm text-slate-500">Немає доступних ресторанів</p>
+                    );
+                  }
+                  return (
+                    <div className="max-h-48 overflow-y-auto rounded-lg border border-gray-300 bg-white px-3 py-2 space-y-1">
+                      {allowed.map((restaurant) => {
+                        const checked = (editForm.restaurants || []).map(String).includes(String(restaurant.id));
+                        return (
+                          <label
+                            key={restaurant.id}
+                            className="flex items-center gap-2 text-sm text-gray-800 cursor-pointer hover:bg-slate-50 px-1 py-0.5 rounded"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                setEditForm((prev) => {
+                                  const current = Array.isArray(prev.restaurants) ? prev.restaurants.map(String) : [];
+                                  const next = e.target.checked
+                                    ? Array.from(new Set([...current, String(restaurant.id)]))
+                                    : current.filter((id) => id !== String(restaurant.id));
+                                  return {
+                                    ...prev,
+                                    restaurants: next,
+                                    restaurant: next[0] || "",
+                                  };
+                                });
+                              }}
+                            />
+                            <span>{restaurant.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+                <p className="text-xs text-slate-500 mt-1">
+                  Користувач матиме доступ до всіх відмічених ресторанів. Перший зі списку вважається основним.
+                </p>
               </div>
 
               <div>

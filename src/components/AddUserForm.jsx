@@ -72,6 +72,7 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
     password: "",
     role: "user",
     restaurant: "",
+    restaurants: [],
     position: "",
     workRole: "",
   });
@@ -85,12 +86,40 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
     loadData();
   }, []);
 
-  // Якщо керуючий — встановлюємо ресторан за замовчуванням (його ресторан)
+  // Доступні ресторани для керуючого: перетин з його власним списком доступу
+  const managerRestaurantIds = React.useMemo(() => {
+    if (!isManager || !user) return [];
+    const ids = Array.isArray(user?.restaurants) && user.restaurants.length > 0
+      ? user.restaurants
+      : (user?.restaurant ? [user.restaurant] : []);
+    return ids.map((id) => String(id || "").trim()).filter(Boolean);
+  }, [isManager, user]);
+
+  const availableRestaurants = React.useMemo(() => {
+    if (!isManager) return restaurants;
+    if (managerRestaurantIds.length === 0) return [];
+    const allow = new Set(managerRestaurantIds.map((id) => String(id)));
+    return restaurants.filter((r) => allow.has(String(r.id)));
+  }, [restaurants, isManager, managerRestaurantIds]);
+
+  // Якщо керуючий — встановлюємо ресторани за замовчуванням (його ресторани)
   useEffect(() => {
-    if (isManager && user && user.restaurant && formData.restaurant !== user.restaurant) {
-      setFormData((prev) => ({ ...prev, restaurant: user.restaurant }));
-    }
-  }, [isManager, user, formData.restaurant]);
+    if (!isManager) return;
+    if (managerRestaurantIds.length === 0) return;
+    setFormData((prev) => {
+      // Уникаємо зайвих оновлень, якщо вже встановлено те саме
+      const sameSingle = String(prev.restaurant || "") === String(managerRestaurantIds[0] || "");
+      const prevList = Array.isArray(prev.restaurants) ? prev.restaurants : [];
+      const sameList = prevList.length === managerRestaurantIds.length
+        && prevList.every((id, idx) => String(id) === String(managerRestaurantIds[idx]));
+      if (sameSingle && sameList) return prev;
+      return {
+        ...prev,
+        restaurant: managerRestaurantIds[0] || "",
+        restaurants: managerRestaurantIds.slice(),
+      };
+    });
+  }, [isManager, managerRestaurantIds]);
 
   const loadData = async () => {
     try {
@@ -126,16 +155,18 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
     setError("");
 
     try {
+      const primaryRestaurant = formData.restaurants?.[0] || formData.restaurant || "";
       await createUserByAdmin(
         formData.email,
         formData.password,
         formData.displayName,
         currentUser,
         adminPassword,
-        formData.restaurant,
+        primaryRestaurant,
         formData.position,
         formData.workRole,
-        formData.role
+        formData.role,
+        formData.restaurants
       );
       
       setSuccess(`Користувач ${formData.displayName} успішно створений!`);
@@ -145,6 +176,7 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
         password: "",
         role: "user",
         restaurant: "",
+        restaurants: [],
         position: "",
         workRole: "",
       });
@@ -244,30 +276,57 @@ export const AddUserForm = ({ onSuccess, currentUser }) => {
 
         <div>
           <label className="block text-sm font-semibold text-slate-800 mb-2">
-            Ресторан *
+            Ресторани *
           </label>
-          <select
-            value={formData.restaurant}
-            onChange={(e) => setFormData((prev) => ({ ...prev, restaurant: e.target.value }))}
+          {availableRestaurants.length === 0 ? (
+            <p className="text-sm text-red-600">
+              {isManager
+                ? "У вас немає доступу до жодного ресторану — неможливо створити користувача."
+                : "Немає ресторанів у довіднику."}
+            </p>
+          ) : (
+            <div className="max-h-48 overflow-y-auto rounded-lg border border-gray-300 bg-white px-3 py-2 space-y-1">
+              {availableRestaurants.map((restaurant) => {
+                const checked = (formData.restaurants || []).map(String).includes(String(restaurant.id));
+                return (
+                  <label
+                    key={restaurant.id}
+                    className="flex items-center gap-2 text-sm text-gray-800 cursor-pointer hover:bg-slate-50 px-1 py-0.5 rounded"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        setFormData((prev) => {
+                          const current = Array.isArray(prev.restaurants) ? prev.restaurants.map(String) : [];
+                          const next = e.target.checked
+                            ? Array.from(new Set([...current, String(restaurant.id)]))
+                            : current.filter((id) => id !== String(restaurant.id));
+                          return {
+                            ...prev,
+                            restaurants: next,
+                            restaurant: next[0] || "",
+                          };
+                        });
+                      }}
+                    />
+                    <span>{restaurant.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+          <p className="text-xs text-slate-500 mt-1">
+            Користувач матиме доступ до всіх відмічених ресторанів. Перший зі списку вважається основним.
+          </p>
+          {/* Прихований інпут для збереження валідації required */}
+          <input
+            type="hidden"
+            value={(formData.restaurants || []).join(",")}
             required
-            className={baseInput}
-            disabled={isManager}
-          >
-            {isManager ? (
-              restaurants
-                .filter(r => r.id === user.restaurant)
-                .map((restaurant) => (
-                  <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
-                ))
-            ) : (
-              <>
-                <option value="">Оберіть ресторан</option>
-                {restaurants.map((restaurant) => (
-                  <option key={restaurant.id} value={restaurant.id}>{restaurant.name}</option>
-                ))}
-              </>
-            )}
-          </select>
+            onInvalid={(e) => e.target.setCustomValidity("Оберіть хоча б один ресторан")}
+            onChange={(e) => e.target.setCustomValidity("")}
+          />
         </div>
 
         <div>

@@ -1,11 +1,9 @@
 import { useState, useEffect } from "react";
-import { Shield, Save, AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
+import { Shield, Save, AlertCircle, Check, ChevronDown, ChevronRight, Info } from "lucide-react";
 import { getWorkRoles } from "../firebase/rolesPositions";
-import RestaurantMultiSelect from "./RestaurantMultiSelect";
 import { getRolePermissions, saveRolePermissions } from "../firebase/permissions";
 
 export const RolePermissionsManager = ({ menuStructure = [] }) => {
-  const [restaurants, setRestaurants] = useState([]);
   // Стан згортання секцій
   // За замовчуванням усі секції згорнуті
   const [collapsedSections, setCollapsedSections] = useState(() => {
@@ -26,7 +24,6 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
   const [roles, setRoles] = useState([]);
   const [selectedRole, setSelectedRole] = useState(null);
   const [permissions, setPermissions] = useState({});
-  const [roleRestaurants, setRoleRestaurants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -34,10 +31,6 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
 
   useEffect(() => {
     loadRoles();
-    // Завантажити список ресторанів
-    import("../firebase/firestore").then(({ getRestaurants }) => {
-      getRestaurants().then(setRestaurants).catch(() => setRestaurants([]));
-    });
   }, []);
 
   const loadRoles = async () => {
@@ -59,11 +52,9 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
     try {
       const rolePerms = await getRolePermissions(role.id);
       setPermissions(rolePerms.permissions || {});
-      setRoleRestaurants(Array.isArray(rolePerms.restaurants) ? rolePerms.restaurants : []);
     } catch (error) {
       console.error("Помилка завантаження дозволів:", error);
       setPermissions({});
-      setRoleRestaurants([]);
     }
   };
 
@@ -113,12 +104,9 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
           normalizedPermissions[key] = value;
         }
       });
-      // Додаємо ресторани
-      const savePayload = {
-        permissions: normalizedPermissions,
-        restaurants: roleRestaurants,
-      };
-      await saveRolePermissions(selectedRole.id, selectedRole.name, normalizedPermissions, roleRestaurants);
+      // Доступ до ресторанів більше не зберігається на рівні ролі — він прив'язаний до користувача (user.restaurants[]).
+      // Передаємо порожній масив для збереження сигнатури функції.
+      await saveRolePermissions(selectedRole.id, selectedRole.name, normalizedPermissions, []);
       setSuccess(`Доступи для ролі "${selectedRole.name}" успішно збережено!`);
     } catch (error) {
       console.error("Помилка збереження:", error);
@@ -193,12 +181,12 @@ export const RolePermissionsManager = ({ menuStructure = [] }) => {
               <h3 className="text-lg font-semibold text-slate-900 mb-4">
                 Налаштування доступів для ролі: <span className="text-indigo-600">{selectedRole.name}</span>
               </h3>
-              {/* Вибір ресторанів для ролі */}
-              <RestaurantMultiSelect
-                restaurants={restaurants}
-                value={roleRestaurants}
-                onChange={setRoleRestaurants}
-              />
+              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg text-sm flex items-start gap-2">
+                <Info size={16} className="mt-0.5 flex-shrink-0" />
+                <span>
+                  Доступ до ресторанів тепер налаштовується індивідуально в обліковому записі користувача (розділ «Користувачі»). Цей екран відповідає лише за доступ до меню та вкладок.
+                </span>
+              </div>
 
               {menuStructure.length === 0 ? (
                 <div className="p-4 bg-yellow-100 border border-yellow-400 text-yellow-800 rounded-lg">
