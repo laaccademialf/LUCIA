@@ -1303,13 +1303,20 @@ const ensureAssetsCacheEntry = (dbConfig) => {
   const now = Date.now();
   let entry = assetsCache.get(key);
   if (entry && now - entry.at < ASSETS_CACHE_TTL_MS) {
+    console.log(`[assets-cache] HIT key=${key} age=${now - entry.at}ms hasFullJson=${!!entry.full.jsonBuf} hasFullGzip=${!!entry.full.gzipBuf} hasLiteJson=${!!entry.lite.jsonBuf} hasLiteGzip=${!!entry.lite.gzipBuf}`);
     return entry;
   }
+  console.log(`[assets-cache] MISS key=${key} reason=${entry ? `expired age=${now - entry.at}ms` : "no-entry"}`);
   entry = { at: now, full: {}, lite: {} };
-  entry.dataPromise = getAssetsData(dbConfig).catch((err) => {
-    if (assetsCache.get(key) === entry) assetsCache.delete(key);
-    throw err;
-  });
+  entry.dataPromise = getAssetsData(dbConfig)
+    .then((data) => {
+      console.log(`[assets-cache] DB fetch complete count=${data.length} elapsed=${Date.now() - now}ms`);
+      return data;
+    })
+    .catch((err) => {
+      if (assetsCache.get(key) === entry) assetsCache.delete(key);
+      throw err;
+    });
   assetsCache.set(key, entry);
   return entry;
 };
@@ -3187,7 +3194,10 @@ const handleAssetsApi = async (req, res, assetId) => {
       // Fast path: serve from the response cache (pre-serialized JSON +
       // pre-gzipped buffer). This skips DB read, JSON.stringify, and gzip
       // for repeat requests within ASSETS_CACHE_TTL_MS.
+      console.log(`[assets-cache] GET /api/assets lite=${lite} ua-encoding="${req.headers?.["accept-encoding"] || ""}"`);
       const cached = await getAssetsResponseCached(dbConfig, { lite });
+      const elapsed = Date.now() - startedAt;
+      console.log(`[assets-cache] GET /api/assets lite=${lite} served count=${cached.count} jsonLen=${cached.jsonBuf.length} gzipLen=${cached.gzipBuf?.length || 0} elapsed=${elapsed}ms`);
       logSlowAssetsGet({
         elapsedMs: Date.now() - startedAt,
         dbEngine: dbConfig.dbEngine,
