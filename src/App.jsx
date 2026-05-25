@@ -977,9 +977,33 @@ function App() {
   useEffect(() => {
     if (!restaurantsLoading) {
       const normalizeText = (value) => String(value || "").trim().toLowerCase();
+      const parseRestaurantList = (raw) => {
+        if (Array.isArray(raw)) {
+          return raw.map((value) => String(value || "").trim()).filter(Boolean);
+        }
+        if (typeof raw === "string") {
+          const text = raw.trim();
+          if (!text) return [];
+          if (text.startsWith("[")) {
+            try {
+              const parsed = JSON.parse(text);
+              if (Array.isArray(parsed)) {
+                return parsed.map((value) => String(value || "").trim()).filter(Boolean);
+              }
+            } catch {
+              // fallback to CSV parsing
+            }
+          }
+          return text.split(",").map((value) => value.trim()).filter(Boolean);
+        }
+        return [];
+      };
       const profileRestaurantCandidates = Array.from(
         new Set(
           [
+            ...parseRestaurantList(user?.restaurants),
+            ...parseRestaurantList(user?.restaurant_ids),
+            ...parseRestaurantList(user?.restaurantIds),
             user?.restaurant,
             user?.restaurantId,
             user?.restaurant_id,
@@ -1049,9 +1073,28 @@ function App() {
         // Адмін бачить всі ресторани
         setRestaurants(firebaseRestaurants);
       } else if (Array.isArray(roleRestaurantIds) && roleRestaurantIds.length > 0) {
-        // Якщо у ролі є масив ресторанів
-        const allowed = firebaseRestaurants.filter((r) => roleRestaurantIds.includes(String(r.id)));
-        setRestaurants(allowed);
+        // Доступи користувача можуть містити id, назву або regNumber.
+        // Тому матчимо гнучко, а не тільки по id.
+        const allowedKeys = new Set(
+          roleRestaurantIds
+            .map((value) => String(value || "").trim().toLowerCase())
+            .filter(Boolean)
+        );
+        const allowed = firebaseRestaurants.filter((restaurant) => {
+          const id = String(restaurant?.id || "").trim().toLowerCase();
+          const name = String(restaurant?.name || "").trim().toLowerCase();
+          const regNumber = String(restaurant?.regNumber || restaurant?.reg_number || "").trim().toLowerCase();
+          return allowedKeys.has(id) || allowedKeys.has(name) || allowedKeys.has(regNumber);
+        });
+
+        if (allowed.length > 0) {
+          setRestaurants(allowed);
+        } else if (profileRestaurantCandidates.length > 0) {
+          // Якщо формат у профілі/дозволах не співпав зі словником, тримаємо фолбек по профілю.
+          setRestaurants(matchRestaurantsByProfile());
+        } else {
+          setRestaurants([]);
+        }
       } else if (roleRestaurantsConfigured) {
         // Якщо у ролі явно налаштовано доступи, але список порожній,
         // використовуємо ресторан з профілю користувача як fallback.
@@ -1083,6 +1126,28 @@ function App() {
   // --- Завантаження прав для поточного користувача (за роллю/робочою роллю)
   useEffect(() => {
     const loadPermissions = async () => {
+      const parseRestaurantList = (raw) => {
+        if (Array.isArray(raw)) {
+          return raw.map((value) => String(value || "").trim()).filter(Boolean);
+        }
+        if (typeof raw === "string") {
+          const text = raw.trim();
+          if (!text) return [];
+          if (text.startsWith("[")) {
+            try {
+              const parsed = JSON.parse(text);
+              if (Array.isArray(parsed)) {
+                return parsed.map((value) => String(value || "").trim()).filter(Boolean);
+              }
+            } catch {
+              // fallback to CSV parsing
+            }
+          }
+          return text.split(",").map((value) => value.trim()).filter(Boolean);
+        }
+        return [];
+      };
+
       if (!user) {
         setUserPermissions({});
         setRoleRestaurantIds([]);
@@ -1113,9 +1178,20 @@ function App() {
         // Доступ до ресторанів більше НЕ береться з ролі: він визначається індивідуально
         // по користувачу (user.restaurants[]). Нижче заповнюємо roleRestaurantIds з профілю як єдине джерело істини.
         setRoleRestaurantsConfigured(false);
-        const userRestaurantIds = Array.isArray(user?.restaurants)
-          ? user.restaurants.map((id) => String(id || "").trim()).filter(Boolean)
-          : [];
+        const userRestaurantIds = Array.from(
+          new Set(
+            [
+              ...parseRestaurantList(user?.restaurants),
+              ...parseRestaurantList(user?.restaurant_ids),
+              ...parseRestaurantList(user?.restaurantIds),
+              String(user?.restaurant || "").trim(),
+              String(user?.restaurantId || "").trim(),
+              String(user?.restaurant_id || "").trim(),
+              String(user?.restaurantName || "").trim(),
+              String(user?.restaurant_name || "").trim(),
+            ].filter(Boolean)
+          )
+        );
         setRoleRestaurantIds(userRestaurantIds);
       } catch (err) {
         console.error("Помилка отримання прав доступу для користувача:", err);
