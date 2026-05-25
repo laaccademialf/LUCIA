@@ -253,9 +253,9 @@ export const useAssets = (enableRealtime = true) => {
           void fetchViaApi({ lite: false });
         };
         if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
-          window.requestIdleCallback(scheduleFullFetch, { timeout: 2000 });
+          window.requestIdleCallback(scheduleFullFetch, { timeout: 400 });
         } else {
-          setTimeout(scheduleFullFetch, 200);
+          setTimeout(scheduleFullFetch, 50);
         }
       })();
 
