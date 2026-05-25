@@ -1304,9 +1304,10 @@ const ensureAssetsCacheEntry = (dbConfig) => {
   let entry = assetsCache.get(key);
   if (entry && now - entry.at < ASSETS_CACHE_TTL_MS) {
     console.log(`[assets-cache] HIT key=${key} age=${now - entry.at}ms hasFullJson=${!!entry.full.jsonBuf} hasFullGzip=${!!entry.full.gzipBuf} hasLiteJson=${!!entry.lite.jsonBuf} hasLiteGzip=${!!entry.lite.gzipBuf}`);
-    return entry;
+    return { entry, hit: true, key, age: now - entry.at };
   }
   console.log(`[assets-cache] MISS key=${key} reason=${entry ? `expired age=${now - entry.at}ms` : "no-entry"}`);
+  const missReason = entry ? "expired" : "no-entry";
   entry = { at: now, full: {}, lite: {} };
   entry.dataPromise = getAssetsData(dbConfig)
     .then((data) => {
@@ -1318,18 +1319,21 @@ const ensureAssetsCacheEntry = (dbConfig) => {
       throw err;
     });
   assetsCache.set(key, entry);
-  return entry;
+  return { entry, hit: false, key, age: 0, missReason };
 };
-const getAssetsDataCached = (dbConfig) => ensureAssetsCacheEntry(dbConfig).dataPromise;
+const getAssetsDataCached = (dbConfig) => ensureAssetsCacheEntry(dbConfig).entry.dataPromise;
 const gzipBuffer = (buf) => new Promise((resolve) => {
   zlib.gzip(buf, (err, out) => resolve(err || !out ? null : out));
 });
-// Returns { jsonBuf, gzipBuf } where gzipBuf may be null if gzip is not yet
-// ready or compression failed. JSON is always available.
+// Returns { jsonBuf, gzipBuf, count, diag } where gzipBuf may be null if
+// gzip is not yet ready or compression failed. JSON is always available.
+// `diag` carries cache hit/miss and which buckets were already populated.
 const getAssetsResponseCached = async (dbConfig, { lite }) => {
-  const entry = ensureAssetsCacheEntry(dbConfig);
-  const data = await entry.dataPromise;
+  const { entry, hit, key, age, missReason } = ensureAssetsCacheEntry(dbConfig);
   const bucket = lite ? entry.lite : entry.full;
+  const jsonAlreadyCached = !!bucket.jsonBuf;
+  const gzipAlreadyCached = !!bucket.gzipBuf;
+  const data = await entry.dataPromise;
   if (!bucket.jsonBuf) {
     const payload = lite ? stripAssetsHeavyFields(data) : data;
     bucket.jsonBuf = Buffer.from(JSON.stringify({ ok: true, data: payload }));
@@ -1343,7 +1347,19 @@ const getAssetsResponseCached = async (dbConfig, { lite }) => {
     }
     await bucket.gzipPromise;
   }
-  return { jsonBuf: bucket.jsonBuf, gzipBuf: bucket.gzipBuf, count: data.length };
+  return {
+    jsonBuf: bucket.jsonBuf,
+    gzipBuf: bucket.gzipBuf,
+    count: data.length,
+    diag: {
+      hit,
+      key,
+      age,
+      missReason: missReason || null,
+      jsonAlreadyCached,
+      gzipAlreadyCached,
+    },
+  };
 };
 // Warm up the cache so the very first user request doesn't pay the cold
 // fetch+serialize+gzip cost. Coalesces concurrent warmups.
@@ -3198,6 +3214,19 @@ const handleAssetsApi = async (req, res, assetId) => {
       const cached = await getAssetsResponseCached(dbConfig, { lite });
       const elapsed = Date.now() - startedAt;
       console.log(`[assets-cache] GET /api/assets lite=${lite} served count=${cached.count} jsonLen=${cached.jsonBuf.length} gzipLen=${cached.gzipBuf?.length || 0} elapsed=${elapsed}ms`);
+      const diagHeaders = {
+        "X-Lucia-Cache": cached.diag.hit ? "HIT" : "MISS",
+        "X-Lucia-Cache-Age-Ms": String(cached.diag.age),
+        "X-Lucia-Cache-Json": cached.diag.jsonAlreadyCached ? "cached" : "computed",
+        "X-Lucia-Cache-Gzip": cached.diag.gzipAlreadyCached ? "cached" : "computed",
+        "X-Lucia-Cache-MissReason": cached.diag.missReason || "",
+        "X-Lucia-Cache-Ttl-Ms": String(ASSETS_CACHE_TTL_MS),
+        "X-Lucia-Pid": String(process.pid),
+        "X-Lucia-Server-Ms": String(elapsed),
+        "X-Lucia-Asset-Count": String(cached.count),
+        "X-Lucia-Json-Bytes": String(cached.jsonBuf.length),
+        "X-Lucia-Gzip-Bytes": String(cached.gzipBuf?.length || 0),
+      };
       logSlowAssetsGet({
         elapsedMs: Date.now() - startedAt,
         dbEngine: dbConfig.dbEngine,
@@ -3215,8 +3244,14 @@ const handleAssetsApi = async (req, res, assetId) => {
       setCorsHeaders(res);
       const acceptEncoding = String(req.headers?.["accept-encoding"] || "");
       const supportsGzip = /\bgzip\b/i.test(acceptEncoding);
+      // Expose diag headers so client-side can verify cache behavior via CORS.
+      res.setHeader(
+        "Access-Control-Expose-Headers",
+        "X-Lucia-Cache, X-Lucia-Cache-Age-Ms, X-Lucia-Cache-Json, X-Lucia-Cache-Gzip, X-Lucia-Cache-MissReason, X-Lucia-Cache-Ttl-Ms, X-Lucia-Pid, X-Lucia-Server-Ms, X-Lucia-Asset-Count, X-Lucia-Json-Bytes, X-Lucia-Gzip-Bytes"
+      );
       if (cached.gzipBuf && supportsGzip) {
         res.writeHead(200, {
+          ...diagHeaders,
           "Content-Type": "application/json; charset=utf-8",
           "Content-Encoding": "gzip",
           "Vary": "Accept-Encoding",
@@ -3225,6 +3260,7 @@ const handleAssetsApi = async (req, res, assetId) => {
         res.end(cached.gzipBuf);
       } else {
         res.writeHead(200, {
+          ...diagHeaders,
           "Content-Type": "application/json; charset=utf-8",
           "Content-Length": cached.jsonBuf.length,
         });
