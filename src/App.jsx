@@ -1068,30 +1068,6 @@ function App() {
         return matched;
       };
 
-      // [LUCIA-DEBUG] Тимчасова діагностика доступів до ресторанів.
-      // Видалити після з'ясування причини, чому користувач бачить менше ресторанів.
-      try {
-        // eslint-disable-next-line no-console
-        console.log("[LUCIA-DEBUG] restaurants filter effect", {
-          userRole: user?.role,
-          userEmail: user?.email,
-          userRestaurantsRaw: user?.restaurants,
-          userRestaurantIdsAlias: user?.restaurant_ids ?? user?.restaurantIds,
-          userSingleRestaurant: user?.restaurant,
-          profileRestaurantCandidates,
-          roleRestaurantIds,
-          roleRestaurantsConfigured,
-          firebaseRestaurantsCount: firebaseRestaurants?.length,
-          firebaseRestaurants: (firebaseRestaurants || []).map((r) => ({
-            id: r?.id,
-            name: r?.name,
-            regNumber: r?.regNumber || r?.reg_number,
-          })),
-        });
-      } catch {
-        /* noop */
-      }
-
       // Фільтрація ресторанів на основі ролі користувача
       if (user?.role === 'admin') {
         // Адмін бачить всі ресторани
@@ -1111,21 +1087,11 @@ function App() {
           return allowedKeys.has(id) || allowedKeys.has(name) || allowedKeys.has(regNumber);
         });
 
-        // eslint-disable-next-line no-console
-        console.log("[LUCIA-DEBUG] matched by allowedKeys", {
-          allowedKeys: Array.from(allowedKeys),
-          matchedCount: allowed.length,
-          matched: allowed.map((r) => ({ id: r?.id, name: r?.name })),
-        });
-
         if (allowed.length > 0) {
           setRestaurants(allowed);
         } else if (profileRestaurantCandidates.length > 0) {
           // Якщо формат у профілі/дозволах не співпав зі словником, тримаємо фолбек по профілю.
-          const fallback = matchRestaurantsByProfile();
-          // eslint-disable-next-line no-console
-          console.log("[LUCIA-DEBUG] using matchRestaurantsByProfile fallback", fallback);
-          setRestaurants(fallback);
+          setRestaurants(matchRestaurantsByProfile());
         } else {
           setRestaurants([]);
         }
