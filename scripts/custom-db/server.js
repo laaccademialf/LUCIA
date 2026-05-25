@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import net from "node:net";
+import zlib from "node:zlib";
 import { DEFAULT_MENU_STRUCTURE } from "../../src/data/defaultMenuStructure.js";
 
 const PORT = Number(process.env.MIGRATION_PORT || 8787);
@@ -94,10 +95,48 @@ const setCorsHeaders = (res) => {
 const sendJson = (res, status, payload) => {
   const body = JSON.stringify(payload);
   setCorsHeaders(res);
-  res.writeHead(status, {
+
+  // Compress large JSON responses (e.g. /api/assets returning thousands of
+  // records) — typically shrinks the payload by 5–10x and dramatically
+  // reduces transfer time on slow networks.
+  const req = res.req;
+  const acceptEncoding = String(req?.headers?.["accept-encoding"] || "");
+  const shouldCompress = body.length >= 1024;
+  let encoding = null;
+  let compressed = null;
+  if (shouldCompress) {
+    try {
+      if (/\bbr\b/i.test(acceptEncoding) && typeof zlib.brotliCompressSync === "function") {
+        compressed = zlib.brotliCompressSync(body);
+        encoding = "br";
+      } else if (/\bgzip\b/i.test(acceptEncoding)) {
+        compressed = zlib.gzipSync(body);
+        encoding = "gzip";
+      } else if (/\bdeflate\b/i.test(acceptEncoding)) {
+        compressed = zlib.deflateSync(body);
+        encoding = "deflate";
+      }
+    } catch {
+      compressed = null;
+      encoding = null;
+    }
+  }
+
+  const headers = {
     "Content-Type": "application/json; charset=utf-8",
-    "Content-Length": Buffer.byteLength(body),
-  });
+  };
+
+  if (compressed && encoding) {
+    headers["Content-Encoding"] = encoding;
+    headers["Vary"] = "Accept-Encoding";
+    headers["Content-Length"] = compressed.length;
+    res.writeHead(status, headers);
+    res.end(compressed);
+    return;
+  }
+
+  headers["Content-Length"] = Buffer.byteLength(body);
+  res.writeHead(status, headers);
   res.end(body);
 };
 
