@@ -1252,7 +1252,37 @@ const ASSETS_CACHE_TTL_MS = Math.max(
   1000,
   Number.parseInt(String(process.env.ASSETS_CACHE_TTL_MS || "30000"), 10) || 30000
 );
-const assetsCache = new Map(); // key -> { at, promise }
+// Cache entry shape:
+//   { at, dataPromise, full: { jsonBuf, gzipBuf, gzipPromise },
+//                       lite: { jsonBuf, gzipBuf, gzipPromise } }
+// Pre-serializing JSON and pre-gzipping the buffer means repeated requests
+// skip BOTH DB read AND JSON.stringify/gzip work — which together account
+// for most of the wall-clock time on the unfiltered /api/assets endpoint.
+const assetsCache = new Map();
+const ASSETS_HEAVY_FIELDS = [
+  "photos",
+  "inventoryChangeHistory",
+  "inventory_change_history",
+  "transferHistory",
+  "transfer_history",
+  "writeOffHistory",
+  "write_off_history",
+  "employeeUsageHistory",
+  "employee_usage_history",
+];
+const stripAssetsHeavyFields = (items) => items.map((item) => {
+  const out = { ...item };
+  for (const key of ASSETS_HEAVY_FIELDS) {
+    if (key in out) {
+      if (key === "photos" || key === "inventoryChangeHistory" || key === "inventory_change_history") {
+        out[key] = Array.isArray(out[key]) ? out[key].length : 0;
+      } else {
+        delete out[key];
+      }
+    }
+  }
+  return out;
+});
 const buildAssetsCacheKey = (dbConfig) => {
   const engine = String(dbConfig?.dbEngine || "");
   if (engine === "mysql") {
@@ -1264,21 +1294,70 @@ const buildAssetsCacheKey = (dbConfig) => {
 };
 const invalidateAssetsCache = () => {
   assetsCache.clear();
+  // Re-warm in the background so the next user request is already served
+  // from a hot cache rather than triggering a cold DB read.
+  scheduleAssetsCacheWarmup();
 };
-const getAssetsDataCached = (dbConfig) => {
+const ensureAssetsCacheEntry = (dbConfig) => {
   const key = buildAssetsCacheKey(dbConfig);
   const now = Date.now();
-  const entry = assetsCache.get(key);
+  let entry = assetsCache.get(key);
   if (entry && now - entry.at < ASSETS_CACHE_TTL_MS) {
-    return entry.promise;
+    return entry;
   }
-  const promise = getAssetsData(dbConfig).catch((err) => {
-    // Don't keep a failed promise cached.
-    if (assetsCache.get(key)?.promise === promise) assetsCache.delete(key);
+  entry = { at: now, full: {}, lite: {} };
+  entry.dataPromise = getAssetsData(dbConfig).catch((err) => {
+    if (assetsCache.get(key) === entry) assetsCache.delete(key);
     throw err;
   });
-  assetsCache.set(key, { at: now, promise });
-  return promise;
+  assetsCache.set(key, entry);
+  return entry;
+};
+const getAssetsDataCached = (dbConfig) => ensureAssetsCacheEntry(dbConfig).dataPromise;
+const gzipBuffer = (buf) => new Promise((resolve) => {
+  zlib.gzip(buf, (err, out) => resolve(err || !out ? null : out));
+});
+// Returns { jsonBuf, gzipBuf } where gzipBuf may be null if gzip is not yet
+// ready or compression failed. JSON is always available.
+const getAssetsResponseCached = async (dbConfig, { lite }) => {
+  const entry = ensureAssetsCacheEntry(dbConfig);
+  const data = await entry.dataPromise;
+  const bucket = lite ? entry.lite : entry.full;
+  if (!bucket.jsonBuf) {
+    const payload = lite ? stripAssetsHeavyFields(data) : data;
+    bucket.jsonBuf = Buffer.from(JSON.stringify({ ok: true, data: payload }));
+  }
+  if (!bucket.gzipBuf) {
+    if (!bucket.gzipPromise) {
+      bucket.gzipPromise = gzipBuffer(bucket.jsonBuf).then((buf) => {
+        bucket.gzipBuf = buf;
+        return buf;
+      });
+    }
+    await bucket.gzipPromise;
+  }
+  return { jsonBuf: bucket.jsonBuf, gzipBuf: bucket.gzipBuf, count: data.length };
+};
+// Warm up the cache so the very first user request doesn't pay the cold
+// fetch+serialize+gzip cost. Coalesces concurrent warmups.
+let assetsWarmupInFlight = null;
+const scheduleAssetsCacheWarmup = () => {
+  if (assetsWarmupInFlight) return assetsWarmupInFlight;
+  assetsWarmupInFlight = (async () => {
+    try {
+      const dbConfig = getAssetsRuntimeConfig();
+      // Warm both shapes (full + lite) and their gzipped buffers.
+      await Promise.all([
+        getAssetsResponseCached(dbConfig, { lite: false }),
+        getAssetsResponseCached(dbConfig, { lite: true }),
+      ]);
+    } catch (err) {
+      console.warn("[assets-cache] warmup failed:", err?.message || err);
+    } finally {
+      assetsWarmupInFlight = null;
+    }
+  })();
+  return assetsWarmupInFlight;
 };
 
 const filterAssetsInMemory = (assets, {
@@ -3100,40 +3179,48 @@ const handleAssetsApi = async (req, res, assetId) => {
     const decision = String(requestUrl.searchParams.get("decision") || "").trim();
     const lite = String(requestUrl.searchParams.get("lite") || "").trim() === "1";
 
-    const HEAVY_FIELDS = ["photos", "inventoryChangeHistory", "inventory_change_history", "transferHistory", "transfer_history", "writeOffHistory", "write_off_history", "employeeUsageHistory", "employee_usage_history"];
-    const stripHeavyFields = (items) => items.map((item) => {
-      const out = { ...item };
-      for (const key of HEAVY_FIELDS) {
-        if (key in out) {
-          if (key === "photos" || key === "inventoryChangeHistory" || key === "inventory_change_history") {
-            out[key] = Array.isArray(out[key]) ? out[key].length : 0;
-          } else {
-            delete out[key];
-          }
-        }
-      }
-      return out;
-    });
+    const HEAVY_FIELDS = ASSETS_HEAVY_FIELDS;
+    const stripHeavyFields = stripAssetsHeavyFields;
 
     const hasPaging = Boolean(pageRaw || pageSizeRaw);
     if (!hasPaging && !search && !locationName && !status && !category && !decision) {
-      const assets = await getAssetsDataCached(dbConfig);
-      const responseData = lite ? stripHeavyFields(assets) : assets;
+      // Fast path: serve from the response cache (pre-serialized JSON +
+      // pre-gzipped buffer). This skips DB read, JSON.stringify, and gzip
+      // for repeat requests within ASSETS_CACHE_TTL_MS.
+      const cached = await getAssetsResponseCached(dbConfig, { lite });
       logSlowAssetsGet({
         elapsedMs: Date.now() - startedAt,
         dbEngine: dbConfig.dbEngine,
         paged: false,
         page: 1,
-        pageSize: assets.length,
-        resultCount: assets.length,
-        total: assets.length,
+        pageSize: cached.count,
+        resultCount: cached.count,
+        total: cached.count,
         hasSearch: false,
         hasLocation: false,
         hasStatus: false,
         hasCategory: false,
         hasDecision: false,
       });
-      return sendJson(res, 200, { ok: true, data: responseData });
+      setCorsHeaders(res);
+      const acceptEncoding = String(req.headers?.["accept-encoding"] || "");
+      const supportsGzip = /\bgzip\b/i.test(acceptEncoding);
+      if (cached.gzipBuf && supportsGzip) {
+        res.writeHead(200, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Encoding": "gzip",
+          "Vary": "Accept-Encoding",
+          "Content-Length": cached.gzipBuf.length,
+        });
+        res.end(cached.gzipBuf);
+      } else {
+        res.writeHead(200, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Length": cached.jsonBuf.length,
+        });
+        res.end(cached.jsonBuf);
+      }
+      return;
     }
 
     const pagePayload = await getAssetsPageData(dbConfig, {
@@ -4124,6 +4211,12 @@ server.listen(PORT, HOST, () => {
   console.log(`Engine: ${ENGINE}`);
   console.log(`Health endpoint: http://${HOST}:${PORT}/health`);
   console.log(`Migration endpoint: http://${HOST}:${PORT}/migration/import`);
+
+  // Warm the /api/assets cache in the background so the very first user
+  // request hits a hot cache (no DB read, no JSON.stringify, no gzip).
+  setImmediate(() => {
+    scheduleAssetsCacheWarmup();
+  });
 
   if (PUBLIC_REGISTER_ENABLED) {
     console.warn(
