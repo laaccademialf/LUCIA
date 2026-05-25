@@ -911,6 +911,7 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
       const tableName = await resolveCollectionTableMySql(conn, collection);
+      const isFlatTable = String(tableName || "").endsWith("_flat");
       const existingColumns = await getMySqlColumns(conn, tableName);
       const hasPayloadColumn = existingColumns.has("payload");
       const shouldPersistPayload = hasPayloadColumn;
