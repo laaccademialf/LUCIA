@@ -13,6 +13,7 @@ import {
   listCollectionItemsApi,
   updateCollectionItemApi,
 } from "../api/collectionsApi";
+import { subscribeToAuthChanges } from "../firebase/auth";
 
 /**
  * Хук для роботи з ресторанами з Firestore
@@ -99,19 +100,53 @@ export const useRestaurants = (enableRealtime = true) => {
     const apiMode = isCollectionsApiEnabled();
 
     if (apiMode) {
+      let isStopped = false;
+      let lastAuthUserId = null;
       const fetchData = async () => {
         try {
           const data = await listCollectionItemsApi("restaurants");
+          if (isStopped) return;
+          // Do not wipe an already-populated list with an empty response from
+          // a request made without a valid session token (right after logout).
+          let hasToken = true;
+          try {
+            hasToken = Boolean(
+              typeof localStorage !== "undefined" &&
+                localStorage.getItem("lucia_auth_session_token")
+            );
+          } catch { /* noop */ }
+          if (!hasToken && Array.isArray(data) && data.length === 0) {
+            setLoading(false);
+            return;
+          }
           setRestaurants(dedupeRestaurants(data));
         } catch (err) {
           console.error("Помилка завантаження ресторанів через API:", err);
           setError(err);
         } finally {
-          setLoading(false);
+          if (!isStopped) setLoading(false);
         }
       };
       fetchData();
-      return () => {};
+
+      // Re-fetch when the user logs in so the restaurants list is populated
+      // immediately instead of waiting for the next user action.
+      let unsubscribeAuth = () => {};
+      try {
+        unsubscribeAuth = subscribeToAuthChanges((authUser) => {
+          const nextId = authUser?.uid || authUser?.id || null;
+          const prevId = lastAuthUserId;
+          lastAuthUserId = nextId;
+          if (nextId && nextId !== prevId) {
+            void fetchData();
+          }
+        });
+      } catch { /* noop */ }
+
+      return () => {
+        isStopped = true;
+        try { unsubscribeAuth(); } catch { /* noop */ }
+      };
     }
     
     if (enableRealtime) {

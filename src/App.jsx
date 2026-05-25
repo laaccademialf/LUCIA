@@ -1800,6 +1800,17 @@ function App() {
     return ids;
   }, [assets, assetInventorySession, isAssetInventorySessionActive, activeAssetInventorySessionsByScope, optimisticallyUnmarkedIds]);
 
+  // Stable callbacks for AssetTable so its heavy memoized filters/counters/columns
+  // do not rebuild on every parent render (only when the underlying Set changes).
+  const isAssetInventorizedInSession = useCallback(
+    (assetRow) => recentlyInventoriedAssetIds.has(String(assetRow?.id || "")),
+    [recentlyInventoriedAssetIds]
+  );
+  const getInventoryRowClassName = useCallback(
+    (assetRow) => (recentlyInventoriedAssetIds.has(String(assetRow?.id || "")) ? "bg-emerald-100/60" : ""),
+    [recentlyInventoriedAssetIds]
+  );
+
   const shouldShowInventoryStateFilter = user?.role === "admin"
     ? hasAnyActiveAssetInventorySession
     : isAnyAccessibleAssetInventorySessionActive;
@@ -4050,15 +4061,11 @@ function App() {
                   canEditAsset={canEditAssetRow}
                   editDisabledReason="Запустіть сесію інвентаризації, щоб редагувати активи"
                   getEditDisabledReason={getAssetEditDisabledReason}
-                  isAssetInventorizedInSession={(assetRow) => recentlyInventoriedAssetIds.has(String(assetRow?.id || ""))}
+                  isAssetInventorizedInSession={isAssetInventorizedInSession}
                   showInventoryStateFilter={shouldShowInventoryStateFilter}
                   inventoryStateFilterValue={assetTableInventoryStateFilter}
                   onInventoryStateFilterChange={setAssetTableInventoryStateFilter}
-                  getRowClassName={(assetRow) =>
-                    recentlyInventoriedAssetIds.has(String(assetRow?.id || ""))
-                      ? "bg-emerald-100/60"
-                      : ""
-                  }
+                  getRowClassName={getInventoryRowClassName}
                   onDelete={user?.role === 'admin' ? handleDeleteAsset : null}
                   onUnmarkInventorized={user?.role === 'admin' ? handleUnmarkInventorized : null}
                   filters={filters}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   getAssets,
   addAsset,
@@ -14,6 +14,7 @@ import {
   subscribeToAssetsEventsApi,
   updateAssetApi,
 } from "../api/assetsApi";
+import { subscribeToAuthChanges } from "../firebase/auth";
 
 /**
  * Хук для роботи з активами (основними засобами) з Firestore
@@ -31,6 +32,7 @@ export const useAssets = (enableRealtime = true) => {
     try { return !sessionStorage.getItem("lucia_assets_cache"); } catch { return true; }
   });
   const [error, setError] = useState(null);
+  const lastAssetsSignatureRef = useRef("");
   const apiPollIntervalMs = Math.max(
     1000,
     Number(import.meta.env.VITE_ASSETS_API_POLL_INTERVAL_MS || 1000) || 1000
@@ -130,8 +132,27 @@ export const useAssets = (enableRealtime = true) => {
 
   const normalizeAssets = (items) => (Array.isArray(items) ? items.map(normalizeAsset) : []);
 
+  // Lightweight signature to skip identical updates from polling/SSE.
+  // Significantly reduces re-renders of heavy memos (filters, counters, columns)
+  // in AssetTable when the server returns unchanged data.
+  const computeAssetsSignature = (items) => {
+    if (!Array.isArray(items) || items.length === 0) return `0:`;
+    let sig = `${items.length}:`;
+    for (let i = 0; i < items.length; i += 1) {
+      const it = items[i] || {};
+      sig += `${it.id || ""}|${it.updatedAt || it.updated_at || ""};`;
+    }
+    return sig;
+  };
+
   const setAssetsAndCache = (items) => {
     const normalized = normalizeAssets(items);
+    const nextSig = computeAssetsSignature(normalized);
+    if (nextSig === lastAssetsSignatureRef.current) {
+      // No structural change — skip state update to avoid downstream re-renders.
+      return;
+    }
+    lastAssetsSignatureRef.current = nextSig;
     setAssets(normalized);
     try {
       sessionStorage.setItem("lucia_assets_cache", JSON.stringify(normalized));
@@ -153,6 +174,8 @@ export const useAssets = (enableRealtime = true) => {
   useEffect(() => {
     let unsubscribe;
     let unsubscribeAssetsEvents;
+    let unsubscribeAuthForRefresh;
+    let lastAuthUserId = null;
     let pollTimer;
     let isStopped = false;
     let isRequestInFlight = false;
@@ -172,6 +195,21 @@ export const useAssets = (enableRealtime = true) => {
         try {
           const data = await getAssetsApi({ lite });
           if (isStopped) return;
+          // Do not wipe cached assets with an empty response that may come back
+          // from the server while the session token is missing (e.g. right after
+          // logout but before re-login completes).
+          const hasToken = (() => {
+            try {
+              return Boolean(
+                typeof localStorage !== "undefined" &&
+                  localStorage.getItem("lucia_auth_session_token")
+              );
+            } catch { return true; }
+          })();
+          if (!hasToken && Array.isArray(data) && data.length === 0) {
+            setLoading(false);
+            return;
+          }
           setAssetsAndCache(data);
           setError(null);
           setLoading(false);
@@ -185,11 +223,20 @@ export const useAssets = (enableRealtime = true) => {
         }
       };
 
-      // Fast initial load: lite first, then full in background
+      // Fast initial load: lite first, then full in background.
+      // The full fetch is deferred to an idle moment so the first paint after
+      // the lite payload is not blocked by a second heavy normalization pass.
       (async () => {
         await fetchViaApi({ lite: true });
-        if (!isStopped) {
-          await fetchViaApi({ lite: false });
+        if (isStopped) return;
+        const scheduleFullFetch = () => {
+          if (isStopped) return;
+          void fetchViaApi({ lite: false });
+        };
+        if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+          window.requestIdleCallback(scheduleFullFetch, { timeout: 2000 });
+        } else {
+          setTimeout(scheduleFullFetch, 200);
         }
       })();
 
@@ -208,12 +255,32 @@ export const useAssets = (enableRealtime = true) => {
         } else {
           startPollingFallback();
         }
+
+        // Re-fetch immediately when the user logs in (token becomes available).
+        // Without this, the list stays empty until the next poll cycle (~5s+)
+        // because the previous fetch was made with an empty token.
+        try {
+          unsubscribeAuthForRefresh = subscribeToAuthChanges((authUser) => {
+            const nextId = authUser?.uid || authUser?.id || null;
+            const prevId = lastAuthUserId;
+            lastAuthUserId = nextId;
+            if (nextId && nextId !== prevId) {
+              // Force a fresh signature so the change-detection bail-out does
+              // not swallow the first post-login response.
+              lastAssetsSignatureRef.current = "";
+              void fetchViaApi({ lite: true });
+            }
+          });
+        } catch { /* noop */ }
       }
 
       return () => {
         isStopped = true;
         if (unsubscribeAssetsEvents) {
           unsubscribeAssetsEvents();
+        }
+        if (unsubscribeAuthForRefresh) {
+          unsubscribeAuthForRefresh();
         }
         if (pollTimer) {
           clearInterval(pollTimer);

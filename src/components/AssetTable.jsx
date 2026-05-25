@@ -456,15 +456,27 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     });
   }, [visibleColumns]);
 
+  // Build filter options only for currently visible filterable columns to avoid
+  // scanning the entire dataset 17+ times on every render.
   const filterOptionsByKey = useMemo(() => {
     const optionsMap = {};
+    const keysToBuild = new Set(visibleFilterKeys);
+    if (keysToBuild.size === 0) return optionsMap;
 
-    for (const key of filterableColumnKeys) {
-      optionsMap[key] = Array.from(new Set(data.map((asset) => asset?.[key]).filter(Boolean)));
+    for (const key of keysToBuild) {
+      const seen = new Set();
+      const values = [];
+      for (let i = 0; i < data.length; i += 1) {
+        const value = data[i]?.[key];
+        if (value && !seen.has(value)) {
+          seen.add(value);
+          values.push(value);
+        }
+      }
+      optionsMap[key] = values;
     }
-
     return optionsMap;
-  }, [data]);
+  }, [data, visibleFilterKeys]);
 
   useEffect(() => {
     const allowedFilterKeys = new Set(
