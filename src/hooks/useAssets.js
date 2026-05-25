@@ -197,7 +197,13 @@ export const useAssets = (enableRealtime = true) => {
     let lastAuthUserId = null;
     let pollTimer;
     let isStopped = false;
-    let isRequestInFlight = false;
+    // Independent locks so an initial lite fetch and a parallel full fetch
+    // (or a polling refresh) don't block each other.
+    const inFlight = { lite: false, full: false };
+    // Once a full payload has been applied, ignore any later lite response
+    // (e.g. from a race during the initial parallel load) so we don't replace
+    // history-rich data with the stripped lite version.
+    let fullEverApplied = false;
     const apiMode = isAssetsApiEnabled();
 
     if (apiMode) {
@@ -209,8 +215,9 @@ export const useAssets = (enableRealtime = true) => {
       };
 
       const fetchViaApi = async ({ lite = false } = {}) => {
-        if (isStopped || isRequestInFlight) return;
-        isRequestInFlight = true;
+        const key = lite ? "lite" : "full";
+        if (isStopped || inFlight[key]) return;
+        inFlight[key] = true;
         try {
           const data = await getAssetsApi({ lite });
           if (isStopped) return;
@@ -229,7 +236,14 @@ export const useAssets = (enableRealtime = true) => {
             setLoading(false);
             return;
           }
+          // When the lite and full requests race, don't let a late lite
+          // response overwrite the richer full payload with stripped data.
+          if (lite && fullEverApplied) {
+            setLoading(false);
+            return;
+          }
           setAssetsAndCache(data);
+          if (!lite) fullEverApplied = true;
           setError(null);
           setLoading(false);
         } catch (err) {
@@ -238,25 +252,20 @@ export const useAssets = (enableRealtime = true) => {
           setError(err);
           setLoading(false);
         } finally {
-          isRequestInFlight = false;
+          inFlight[key] = false;
         }
       };
 
-      // Fast initial load: lite first, then full in background.
-      // The full fetch is deferred to an idle moment so the first paint after
-      // the lite payload is not blocked by a second heavy normalization pass.
+      // Fast initial load: lite first for instant first paint, full fetch
+      // started in parallel so the inventory-history-dependent UI (counters,
+      // "проінвентаризовані" filter) lights up as soon as possible.
       (async () => {
-        await fetchViaApi({ lite: true });
-        if (isStopped) return;
-        const scheduleFullFetch = () => {
-          if (isStopped) return;
-          void fetchViaApi({ lite: false });
-        };
-        if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
-          window.requestIdleCallback(scheduleFullFetch, { timeout: 400 });
-        } else {
-          setTimeout(scheduleFullFetch, 50);
-        }
+        const fullPromise = fetchViaApi({ lite: false });
+        try {
+          await fetchViaApi({ lite: true });
+        } catch { /* errors already logged by fetchViaApi */ }
+        // Ensure full fetch finishes / errors are awaited so cleanup is clean.
+        await fullPromise.catch(() => {});
       })();
 
       if (enableRealtime) {
