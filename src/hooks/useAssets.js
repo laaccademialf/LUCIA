@@ -140,7 +140,26 @@ export const useAssets = (enableRealtime = true) => {
     let sig = `${items.length}:`;
     for (let i = 0; i < items.length; i += 1) {
       const it = items[i] || {};
-      sig += `${it.id || ""}|${it.updatedAt || it.updated_at || ""};`;
+      // Include heavy-array lengths so the lite payload (which strips them)
+      // does not produce the same signature as the full payload — otherwise
+      // the full response would be silently deduped and history fields
+      // (e.g. inventoryChangeHistory) would never reach the UI.
+      const invLen = Array.isArray(it.inventoryChangeHistory)
+        ? it.inventoryChangeHistory.length
+        : Array.isArray(it.inventory_change_history)
+          ? it.inventory_change_history.length
+          : 0;
+      const trLen = Array.isArray(it.transferHistory)
+        ? it.transferHistory.length
+        : Array.isArray(it.transfer_history)
+          ? it.transfer_history.length
+          : 0;
+      const euLen = Array.isArray(it.employeeUsageHistory)
+        ? it.employeeUsageHistory.length
+        : Array.isArray(it.employee_usage_history)
+          ? it.employee_usage_history.length
+          : 0;
+      sig += `${it.id || ""}|${it.updatedAt || it.updated_at || ""}|${invLen}.${trLen}.${euLen};`;
     }
     return sig;
   };
