@@ -12,6 +12,10 @@ import {
 import { doc, setDoc, getDoc } from "firebase/firestore";
 import { auth, db } from "./config";
 import { getRuntimePlatformAdminEmails } from "../data/platformAdminSettings";
+import {
+  getCollectionItemApi,
+  listCollectionItemsApi,
+} from "./collectionsAdapter";
 
 const ENV_AUTH_API_BASE = String(
   import.meta.env.VITE_AUTH_API_BASE_URL || import.meta.env.VITE_DATA_API_BASE_URL || ""
@@ -51,6 +55,91 @@ const applyPlatformAdminOverride = (user) => {
     ...user,
     role: "admin",
     isPlatformAdmin: true,
+  };
+};
+
+// Парсимо поле restaurants з різних форматів (масив / JSON-рядок / CSV).
+const parseRestaurantsField = (raw) => {
+  if (Array.isArray(raw)) {
+    return Array.from(new Set(raw.map((v) => String(v || "").trim()).filter(Boolean)));
+  }
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (!text) return [];
+    if (text.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+          return Array.from(new Set(parsed.map((v) => String(v || "").trim()).filter(Boolean)));
+        }
+      } catch {
+        /* fallthrough */
+      }
+    }
+    return Array.from(new Set(text.split(",").map((v) => v.trim()).filter(Boolean)));
+  }
+  return [];
+};
+
+// Якщо /auth/login або /auth/me не повернули поле restaurants[] (наприклад, бекенд
+// застарілий і його ще не оновили), дочитуємо запис користувача напряму з таблиці
+// users і мерджимо restaurants. Це дає змогу одразу мати доступ до всіх закладів
+// користувача без очікування деплою нового server.js.
+const enrichUserWithRestaurants = async (user) => {
+  if (!user || typeof user !== "object") return user;
+
+  const existing = parseRestaurantsField(
+    user.restaurants ?? user.restaurant_ids ?? user.restaurantIds
+  );
+  if (existing.length > 0) {
+    return { ...user, restaurants: existing };
+  }
+
+  const uid = String(user.uid || user.id || "").trim();
+  const email = String(user.email || "").trim().toLowerCase();
+
+  let record = null;
+  if (uid) {
+    record = await getCollectionItemApi("users", uid).catch(() => null);
+  }
+  if (!record && email) {
+    try {
+      const all = await listCollectionItemsApi("users");
+      record = (Array.isArray(all) ? all : []).find(
+        (it) => String(it?.email || it?.user_email || "").trim().toLowerCase() === email
+      ) || null;
+    } catch {
+      record = null;
+    }
+  }
+
+  if (!record) return user;
+
+  const restaurantsArray = parseRestaurantsField(
+    record.restaurants ?? record.restaurant_ids ?? record.restaurantIds
+  );
+  const primary =
+    user.restaurant ||
+    record.restaurant ||
+    record.restaurant_id ||
+    record.restaurant_name ||
+    restaurantsArray[0] ||
+    "";
+
+  if (restaurantsArray.length === 0 && !primary) return user;
+
+  return {
+    ...user,
+    restaurant: primary || user.restaurant || "",
+    restaurants: restaurantsArray.length > 0
+      ? restaurantsArray
+      : (primary ? [String(primary).trim()] : []),
+    restaurantName:
+      user.restaurantName ||
+      record.restaurantName ||
+      record.restaurant_name ||
+      record.restaurant ||
+      "",
   };
 };
 
@@ -438,7 +527,10 @@ export const loginUser = async (email, password) => {
       // eslint-disable-next-line no-console
       console.log("[LUCIA-DEBUG] /auth/login user keys", Object.keys(payload?.user || {}));
     } catch { /* noop */ }
-    const user = applyPlatformAdminOverride(payload?.user || null);
+    let user = applyPlatformAdminOverride(payload?.user || null);
+    try {
+      user = await enrichUserWithRestaurants(user);
+    } catch { /* noop */ }
     notifyAuthApiSubscribers(user);
     return user;
   }
@@ -641,7 +733,10 @@ export const getCurrentUser = () => {
           // eslint-disable-next-line no-console
           console.log("[LUCIA-DEBUG] /auth/me user keys", Object.keys(payload?.user || {}));
         } catch { /* noop */ }
-        const user = applyPlatformAdminOverride(payload?.user || null);
+        let user = applyPlatformAdminOverride(payload?.user || null);
+        try {
+          user = await enrichUserWithRestaurants(user);
+        } catch { /* noop */ }
 
         // Деякі проксі можуть загубити нестандартний заголовок сесії на окремих запитах.
         // Якщо токен локально є, але /auth/me повернув user:null, зберігаємо поточну сесію.
