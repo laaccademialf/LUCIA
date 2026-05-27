@@ -5,6 +5,7 @@ import {
   exportCateringContactsToExcel,
   importCateringContactsFromExcel,
 } from "../../utils/cateringExcel";
+import DateRangePicker from "./DateRangePicker";
 
 const ORDER_STATUSES = [
   { id: "new", label: "Новий / Інтерес", tone: "border-slate-200 bg-slate-50 text-slate-700" },
@@ -240,6 +241,8 @@ const emptyOrder = {
   status: "new",
   notes: "",
   tags: "",
+  creationDate: "",
+  importantDates: [],
   newContactPhone: "",
   newContactEmail: "",
   newContactIndustry: "",
@@ -280,6 +283,7 @@ const emptyProposal = {
   companyName: "",
   managerName: "",
   status: "draft",
+  proposalDate: "",
   notes: "",
   items: [],
 };
@@ -377,6 +381,7 @@ const ORDER_TABLE_COLUMNS = [
   { id: "contactManager", label: "Менеджер контакту" },
   { id: "contactNotes", label: "Нотатки контакту" },
   { id: "eventDateTime", label: "Дата/час" },
+  { id: "creationDate", label: "Дата створення" },
   { id: "paymentType", label: "Тип оплати" },
   { id: "guestCount", label: "Гостей" },
   { id: "discountValue", label: "Знижка" },
@@ -389,6 +394,7 @@ const DEFAULT_ORDER_TABLE_COLUMN_IDS = [
   "status",
   "managerName",
   "serviceManagerName",
+  "creationDate",
   "eventDateTime",
   "paymentType",
   "guestCount",
@@ -430,6 +436,7 @@ export default function CateringCrmTab({
     ...emptyOrder,
     managerName: String(managerName || "").trim(),
     serviceManagerName: String(managerName || "").trim(),
+    creationDate: new Date().toISOString().slice(0, 10),
   });
 
   const [orderForm, setOrderForm] = useState(() => createDefaultOrder(currentUserName));
@@ -825,10 +832,17 @@ export default function CateringCrmTab({
 
   const openOrderEditor = (item) => {
     const normalizedDate = toDateInputValue(item?.eventDate);
+    const existingCreation = String(item?.creationDate || "").trim()
+      || String(item?.createdAt || "").slice(0, 10)
+      || new Date().toISOString().slice(0, 10);
     setOrderForm({
       ...createDefaultOrder(currentUserName),
       ...item,
       eventDate: normalizedDate,
+      creationDate: existingCreation,
+      importantDates: Array.isArray(item?.importantDates)
+        ? item.importantDates.map((row) => ({ date: String(row?.date || "").trim(), title: String(row?.title || "").trim() }))
+        : [],
       tags: Array.isArray(item?.tags) ? item.tags.join(", ") : String(item?.tags || ""),
     });
     setShowNewOrderModal(true);
@@ -867,6 +881,7 @@ export default function CateringCrmTab({
       companyName: String(proposal?.companyName || fallbackOrder?.companyName || "").trim(),
       managerName: String(proposal?.managerName || fallbackOrder?.managerName || currentUserName || "").trim(),
       status: String(proposal?.status || "draft").trim() || "draft",
+      proposalDate: String(proposal?.proposalDate || "").trim(),
       notes: String(proposal?.notes || "").trim(),
       items: Array.isArray(proposal?.items)
         ? proposal.items.map((item) => ({
@@ -878,6 +893,7 @@ export default function CateringCrmTab({
           unitPrice: Number(item?.unitPrice || 0),
           quantity: Number(item?.quantity || 0),
           amount: Number(item?.amount || Number(item?.unitPrice || 0) * Number(item?.quantity || 0)),
+          comment: String(item?.comment || "").trim(),
         }))
         : [],
     });
@@ -1305,6 +1321,14 @@ export default function CateringCrmTab({
         const datePart = endDate ? `${startDate} – ${endDate}` : startDate;
         return `${datePart}${timePart ? ` • ${timePart}` : ""}`;
       }
+      case "creationDate": {
+        const source = String(item?.creationDate || "").trim() || String(item?.createdAt || "");
+        const raw = source.slice(0, 10);
+        if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+          return `${raw.slice(8, 10)}.${raw.slice(5, 7)}.${raw.slice(0, 4)}`;
+        }
+        return raw || "—";
+      }
       case "paymentType":
         return item.paymentType || "—";
       case "guestCount":
@@ -1473,18 +1497,17 @@ export default function CateringCrmTab({
           <>
             {showNewOrderModal && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
-                <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-                  <h3 className="mb-4 text-lg font-semibold text-slate-900">{orderForm.id ? "Редагування CRM угоди" : "Нова CRM угода"}</h3>
-                  <div className="space-y-3 max-h-[70vh] overflow-y-auto">
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип клієнта</label>
-                      <select className={baseInput} value={orderForm.clientType} onChange={(event) => setOrderForm((prev) => ({ ...prev, clientType: event.target.value }))}>
-                        <option value="">Оберіть тип клієнта</option>
-                        {(clientTypeOptions.length > 0 ? clientTypeOptions : ["Постійний", "Новий"]).map((value) => <option key={value} value={value}>{value}</option>)}
-                      </select>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="w-full max-w-5xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+                  <h3 className="mb-3 text-lg font-semibold text-slate-900">{orderForm.id ? "Редагування CRM угоди" : "Нова CRM угода"}</h3>
+                  <div className="space-y-2.5 max-h-[88vh] overflow-y-auto pr-1">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип клієнта</label>
+                        <select className={baseInput} value={orderForm.clientType} onChange={(event) => setOrderForm((prev) => ({ ...prev, clientType: event.target.value }))}>
+                          <option value="">Оберіть тип клієнта</option>
+                          {(clientTypeOptions.length > 0 ? clientTypeOptions : ["Постійний", "Новий"]).map((value) => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                      </div>
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип заходу</label>
                         <select
@@ -1533,7 +1556,7 @@ export default function CateringCrmTab({
                     {String(orderForm.clientType || "").toLowerCase().includes("нов") && !orderForm.contactId && (
                       <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
                         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-emerald-700">Дані нового контакту (буде створено разом з угодою)</p>
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                           <div>
                             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">ПІБ / Назва</label>
                             <input className={baseInput} value={orderForm.customerName} onChange={(event) => setOrderForm((prev) => ({ ...prev, customerName: event.target.value, title: buildOrderTitle(prev.eventType, prev.companyName, event.target.value) }))} placeholder="Ім'я контактної особи" />
@@ -1567,7 +1590,7 @@ export default function CateringCrmTab({
                       <input className={`${baseInput} bg-slate-50`} value={buildOrderTitle(orderForm.eventType, orderForm.companyName, orderForm.customerName)} readOnly />
                     </div>
 
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Джерело ліда</label>
                         <select className={baseInput} value={orderForm.leadSource} onChange={(event) => setOrderForm((prev) => ({ ...prev, leadSource: event.target.value }))}>
@@ -1581,8 +1604,15 @@ export default function CateringCrmTab({
                           {ORDER_STATUSES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
                         </select>
                       </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип оплати</label>
+                        <select className={baseInput} value={orderForm.paymentType} onChange={(event) => setOrderForm((prev) => ({ ...prev, paymentType: event.target.value }))}>
+                          <option value="">Оберіть тип оплати</option>
+                          {paymentTypeOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+                        </select>
+                      </div>
                     </div>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Сума</label>
                         <input className={baseInput} value={orderForm.amount} onChange={(event) => setOrderForm((prev) => ({ ...prev, amount: event.target.value }))} placeholder="125000" />
@@ -1591,36 +1621,21 @@ export default function CateringCrmTab({
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Гостей</label>
                         <input className={baseInput} value={orderForm.guestCount} onChange={(event) => setOrderForm((prev) => ({ ...prev, guestCount: event.target.value }))} placeholder="80" />
                       </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Дата події (з)</label>
-                        <input
-                          type="date"
-                          className={baseInput}
-                          value={orderForm.eventDate}
-                          onFocus={openNativeDatePicker}
-                          onClick={openNativeDatePicker}
-                          onChange={(event) => setOrderForm((prev) => ({ ...prev, eventDate: event.target.value, eventEndDate: prev.eventEndDate && prev.eventEndDate < event.target.value ? event.target.value : prev.eventEndDate }))}
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Дата завершення (по)</label>
-                        <input
-                          type="date"
-                          className={baseInput}
-                          value={orderForm.eventEndDate}
-                          min={orderForm.eventDate || undefined}
-                          onFocus={openNativeDatePicker}
-                          onClick={openNativeDatePicker}
-                          onChange={(event) => setOrderForm((prev) => ({ ...prev, eventEndDate: event.target.value }))}
-                        />
-                        <p className="mt-1 text-[11px] text-slate-500">Залишіть порожнім, якщо захід триває один день</p>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Знижка грн/%</label>
+                        <input className={baseInput} value={orderForm.discountValue} onChange={(event) => setOrderForm((prev) => ({ ...prev, discountValue: event.target.value }))} placeholder="10% або 5000" />
                       </div>
                     </div>
 
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Дата події (діапазон)</label>
+                        <DateRangePicker
+                          startDate={orderForm.eventDate}
+                          endDate={orderForm.eventEndDate}
+                          onChange={({ start, end }) => setOrderForm((prev) => ({ ...prev, eventDate: start, eventEndDate: end }))}
+                        />
+                      </div>
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Час від</label>
                         <input
@@ -1643,27 +1658,9 @@ export default function CateringCrmTab({
                           onChange={(event) => setOrderForm((prev) => ({ ...prev, eventEndTime: event.target.value }))}
                         />
                       </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип оплати</label>
-                        <select className={baseInput} value={orderForm.paymentType} onChange={(event) => setOrderForm((prev) => ({ ...prev, paymentType: event.target.value }))}>
-                          <option value="">Оберіть тип оплати</option>
-                          {paymentTypeOptions.map((value) => <option key={value} value={value}>{value}</option>)}
-                        </select>
-                      </div>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Знижка грн/%</label>
-                        <input className={baseInput} value={orderForm.discountValue} onChange={(event) => setOrderForm((prev) => ({ ...prev, discountValue: event.target.value }))} placeholder="10% або 5000" />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Теги</label>
-                        <input className={baseInput} value={orderForm.tags} onChange={(event) => setOrderForm((prev) => ({ ...prev, tags: event.target.value }))} placeholder="Весілля, Foodbox" />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Менеджер</label>
                         <input className={baseInput} list="catering-sales-managers" value={orderForm.managerName} onChange={(event) => setOrderForm((prev) => ({ ...prev, managerName: event.target.value }))} placeholder="Прізвище менеджера" />
@@ -1672,11 +1669,93 @@ export default function CateringCrmTab({
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Сервіс менеджер</label>
                         <input className={baseInput} list="catering-sales-managers" value={orderForm.serviceManagerName} onChange={(event) => setOrderForm((prev) => ({ ...prev, serviceManagerName: event.target.value }))} placeholder="Відповідальний сервіс менеджер" />
                       </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Теги</label>
+                        <input className={baseInput} value={orderForm.tags} onChange={(event) => setOrderForm((prev) => ({ ...prev, tags: event.target.value }))} placeholder="Весілля, Foodbox" />
+                      </div>
                     </div>
 
                     <div>
                       <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Нотатки</label>
-                      <textarea className={`${baseInput} min-h-[96px]`} value={orderForm.notes} onChange={(event) => setOrderForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Короткий опис запиту, джерело ліда, деталі брифу" />
+                      <textarea className={`${baseInput} min-h-[80px]`} value={orderForm.notes} onChange={(event) => setOrderForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Короткий опис запиту, джерело ліда, деталі брифу" />
+                    </div>
+
+                    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+                      <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400"
+                          checked={Array.isArray(orderForm.importantDates) && orderForm.importantDates.length > 0}
+                          onChange={(event) => {
+                            const checked = event.target.checked;
+                            setOrderForm((prev) => ({
+                              ...prev,
+                              importantDates: checked
+                                ? (Array.isArray(prev.importantDates) && prev.importantDates.length > 0
+                                  ? prev.importantDates
+                                  : [{ date: "", title: "" }])
+                                : [],
+                            }));
+                          }}
+                        />
+                        Важливі дати (для сповіщень)
+                      </label>
+                      {Array.isArray(orderForm.importantDates) && orderForm.importantDates.length > 0 && (
+                        <div className="mt-3 space-y-2">
+                          {orderForm.importantDates.map((entry, index) => (
+                            <div key={index} className="flex flex-col gap-2 sm:flex-row">
+                              <input
+                                type="date"
+                                className={`${baseInput} sm:w-40`}
+                                value={entry?.date || ""}
+                                onFocus={openNativeDatePicker}
+                                onClick={openNativeDatePicker}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  setOrderForm((prev) => ({
+                                    ...prev,
+                                    importantDates: (prev.importantDates || []).map((row, i) => (i === index ? { ...row, date: value } : row)),
+                                  }));
+                                }}
+                              />
+                              <input
+                                type="text"
+                                className={`${baseInput} flex-1`}
+                                placeholder="Наприклад: дегустація, передоплата, звірка меню..."
+                                value={entry?.title || ""}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  setOrderForm((prev) => ({
+                                    ...prev,
+                                    importantDates: (prev.importantDates || []).map((row, i) => (i === index ? { ...row, title: value } : row)),
+                                  }));
+                                }}
+                              />
+                              <button
+                                type="button"
+                                className="rounded-md border border-rose-200 p-2 text-rose-600 hover:bg-rose-50"
+                                onClick={() => setOrderForm((prev) => ({
+                                  ...prev,
+                                  importantDates: (prev.importantDates || []).filter((_, i) => i !== index),
+                                }))}
+                                title="Видалити"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          ))}
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md border border-indigo-200 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50"
+                            onClick={() => setOrderForm((prev) => ({
+                              ...prev,
+                              importantDates: [...(prev.importantDates || []), { date: "", title: "" }],
+                            }))}
+                          >
+                            <Plus size={12} /> Додати дату
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="mt-6 flex flex-wrap gap-3 border-t border-slate-200 pt-4">
@@ -1975,15 +2054,22 @@ export default function CateringCrmTab({
                       <thead className="text-left text-slate-500">
                         <tr>
                           <th className="px-3 py-2">Назва</th>
+                          <th className="px-3 py-2">Дата КП</th>
                           <th className="px-3 py-2">Статус</th>
                           <th className="px-3 py-2">Сума</th>
                           <th className="px-3 py-2">Дії</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {selectedOrderProposals.map((proposal) => (
+                        {selectedOrderProposals.map((proposal) => {
+                          const pd = proposal.proposalDate || "";
+                          const pdFormatted = pd && /^\d{4}-\d{2}-\d{2}$/.test(pd)
+                            ? `${pd.slice(8, 10)}.${pd.slice(5, 7)}.${pd.slice(0, 4)}`
+                            : (pd || "—");
+                          return (
                           <tr key={proposal.id} className="border-t border-slate-200">
                             <td className="px-3 py-2 font-medium text-slate-900">{proposal.title || proposal.orderTitle || "КП"}</td>
+                            <td className="px-3 py-2 text-slate-700">{pdFormatted}</td>
                             <td className="px-3 py-2 text-slate-700">{PROPOSAL_STATUS_OPTIONS.find((row) => row.value === String(proposal.status || "draft").toLowerCase())?.label || proposal.status || "draft"}</td>
                             <td className="px-3 py-2 text-slate-700">{formatMoney(proposal.totalAmount)}</td>
                             <td className="px-3 py-2">
@@ -2018,7 +2104,8 @@ export default function CateringCrmTab({
                               </div>
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}
@@ -2038,6 +2125,7 @@ export default function CateringCrmTab({
               <thead className="text-left text-slate-500">
                 <tr>
                   <th className="px-3 py-2">Назва</th>
+                  <th className="px-3 py-2">Дата КП</th>
                   <th className="px-3 py-2">Клієнт</th>
                   <th className="px-3 py-2">Менеджер</th>
                   <th className="px-3 py-2">Статус</th>
@@ -2046,9 +2134,15 @@ export default function CateringCrmTab({
                 </tr>
               </thead>
               <tbody>
-                {proposalStats.active.map((item) => (
+                {proposalStats.active.map((item) => {
+                  const pd = String(item.proposalDate || "").trim();
+                  const pdLabel = pd && /^\d{4}-\d{2}-\d{2}$/.test(pd)
+                    ? `${pd.slice(8, 10)}.${pd.slice(5, 7)}.${pd.slice(0, 4)}`
+                    : (pd || "—");
+                  return (
                   <tr key={item.id} className="border-t border-slate-200">
                     <td className="px-3 py-3 font-medium text-slate-900">{item.title || item.orderTitle || "КП"}</td>
+                    <td className="px-3 py-3 text-slate-700">{pdLabel}</td>
                     <td className="px-3 py-3 text-slate-700">{[item.companyName, item.customerName].filter(Boolean).join(" — ") || "—"}</td>
                     <td className="px-3 py-3 text-slate-700">{item.managerName || "—"}</td>
                     <td className="px-3 py-3 text-slate-700">{PROPOSAL_STATUS_OPTIONS.find((row) => row.value === String(item.status || "draft").toLowerCase())?.label || item.status || "draft"}</td>
@@ -2085,10 +2179,11 @@ export default function CateringCrmTab({
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
                 {proposalStats.active.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-8 text-center text-slate-500">Ще немає активних комерційних пропозицій.</td>
+                    <td colSpan={7} className="px-3 py-8 text-center text-slate-500">Ще немає активних комерційних пропозицій.</td>
                   </tr>
                 )}
               </tbody>
@@ -2133,8 +2228,32 @@ export default function CateringCrmTab({
 
         {showProposalModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
-            <div className="flex max-h-[94vh] w-full max-w-[96vw] flex-col rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl xl:max-w-7xl 2xl:max-w-[1720px]">
-              <h3 className="mb-4 text-lg font-semibold text-slate-900">{proposalForm.id ? "Редагування комерційної пропозиції" : "Конструктор комерційної пропозиції"}</h3>
+            <div className="flex max-h-[96vh] w-full max-w-[96vw] flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl xl:max-w-7xl 2xl:max-w-[1720px]">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-500">{proposalForm.id ? "Редагування КП" : "Нова КП"}</span>
+                <input
+                  className={`${baseInput} h-9 flex-1 min-w-0 py-1.5 text-sm font-semibold`}
+                  value={proposalForm.title}
+                  onChange={(event) => setProposalForm((prev) => ({ ...prev, title: event.target.value }))}
+                  placeholder="Назва КП"
+                />
+                <input
+                  type="date"
+                  className="h-9 w-40 shrink-0 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                  value={proposalForm.proposalDate || ""}
+                  onFocus={openNativeDatePicker}
+                  onClick={openNativeDatePicker}
+                  onChange={(event) => setProposalForm((prev) => ({ ...prev, proposalDate: event.target.value }))}
+                  title="Дата КП"
+                />
+                <select
+                  className="h-9 w-44 shrink-0 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                  value={proposalForm.status}
+                  onChange={(event) => setProposalForm((prev) => ({ ...prev, status: event.target.value }))}
+                >
+                  {PROPOSAL_STATUS_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                </select>
+              </div>
               <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[390px_minmax(0,1fr)]">
                 <div className="flex min-h-0 flex-col rounded-xl border border-slate-200 p-3">
                   <div className="mb-2 text-sm font-semibold text-slate-900">Продукти з Керування асортиментом</div>
@@ -2198,11 +2317,13 @@ export default function CateringCrmTab({
                             <button
                               key={product.id}
                               type="button"
-                              className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-left text-xs hover:bg-slate-50"
+                              className="flex w-full items-center gap-2 rounded-lg border border-slate-200 px-2 py-1.5 text-left text-xs hover:bg-slate-50"
                               onClick={() => addProposalItem(product)}
+                              title={product.subcategory || ""}
                             >
-                              <div className="font-semibold text-slate-800">{product.productName}</div>
-                              <div className="text-slate-500">{product.subcategory || "—"} • {product.output || "—"} • {formatMoney(product.unitPrice)}</div>
+                              <span className="flex-1 truncate font-semibold text-slate-800">{product.productName}</span>
+                              <span className="shrink-0 text-[11px] text-slate-500">{product.output || "—"}</span>
+                              <span className="shrink-0 text-[11px] font-semibold text-slate-700">{formatMoney(product.unitPrice)}</span>
                             </button>
                           ))}
                         </div>
@@ -2217,49 +2338,51 @@ export default function CateringCrmTab({
                 </div>
 
                 <div className="flex min-h-0 flex-col rounded-xl border border-slate-200 p-3">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <input className={baseInput} value={proposalForm.title} onChange={(event) => setProposalForm((prev) => ({ ...prev, title: event.target.value }))} placeholder="Назва КП" />
-                    <select className={baseInput} value={proposalForm.status} onChange={(event) => setProposalForm((prev) => ({ ...prev, status: event.target.value }))}>
-                      {PROPOSAL_STATUS_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                    </select>
-                  </div>
-                  <textarea className={`${baseInput} mt-3 min-h-[72px]`} value={proposalForm.notes} onChange={(event) => setProposalForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Коментар до КП" />
-                  <div className="mt-2 text-xs text-slate-500">
+                  <div className="mb-2 text-[11px] text-slate-500">
                     Тип оплати: <span className="font-semibold text-slate-700">{proposalPaymentType || "не вказано"}</span>
                     {" • "}
                     ПДВ: <span className="font-semibold text-slate-700">{formatNumberUk(proposalVatPercent, 0)}%</span>
                   </div>
 
-                  <div className="mt-3 min-h-0 flex-1 overflow-auto">
-                    <table className="min-w-full text-sm">
-                      <thead className="text-left text-slate-500">
+                  <div className="min-h-0 flex-1 overflow-auto">
+                    <table className="min-w-full text-[11px]">
+                      <thead className="sticky top-0 bg-white text-left text-[10px] uppercase tracking-wide text-slate-500">
                         <tr>
-                          <th className="px-2 py-2">Позиція</th>
-                          <th className="px-2 py-2">Вихід</th>
-                          <th className="px-2 py-2">Ціна</th>
-                          <th className="px-2 py-2">К-сть</th>
-                          <th className="px-2 py-2">Сума</th>
-                          <th className="px-2 py-2"> </th>
+                          <th className="px-1.5 py-1">Позиція</th>
+                          <th className="px-1.5 py-1">Вихід</th>
+                          <th className="px-1.5 py-1">Ціна</th>
+                          <th className="px-1.5 py-1">К-сть</th>
+                          <th className="px-1.5 py-1">Сума</th>
+                          <th className="px-1.5 py-1">Коментар</th>
+                          <th className="px-1.5 py-1"> </th>
                         </tr>
                       </thead>
                       {proposalItemsByCategory.map((group) => (
                         <tbody key={`proposal_group_${group.category}`}>
                           <tr className="border-t border-slate-200 bg-slate-50/70">
-                            <td colSpan={6} className="px-2 py-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-600">{group.category}</td>
+                            <td colSpan={7} className="px-1.5 py-1 text-center text-[10px] font-semibold uppercase tracking-wide text-slate-600">{group.category}</td>
                           </tr>
                           {group.items.map((item) => (
                             <tr key={item.id} className="border-t border-slate-200">
-                              <td className="px-2 py-2 text-xs font-semibold">{item.productName}</td>
-                              <td className="px-2 py-2 text-xs">{item.output || "—"}</td>
-                              <td className="px-2 py-2">
-                                <input className="w-24 rounded border border-slate-300 px-2 py-1 text-xs" value={item.unitPrice} onChange={(event) => updateProposalItem(item.id, { unitPrice: Number(event.target.value || 0) })} />
+                              <td className="px-1.5 py-1 font-semibold text-slate-800">{item.productName}</td>
+                              <td className="px-1.5 py-1 text-slate-600">{item.output || "—"}</td>
+                              <td className="px-1.5 py-1">
+                                <input className="w-20 rounded border border-slate-300 px-1.5 py-0.5 text-[11px]" value={item.unitPrice} onChange={(event) => updateProposalItem(item.id, { unitPrice: Number(event.target.value || 0) })} />
                               </td>
-                              <td className="px-2 py-2">
-                                <input className="w-20 rounded border border-slate-300 px-2 py-1 text-xs" value={item.quantity} onChange={(event) => updateProposalItem(item.id, { quantity: Number(event.target.value || 0) })} />
+                              <td className="px-1.5 py-1">
+                                <input className="w-16 rounded border border-slate-300 px-1.5 py-0.5 text-[11px]" value={item.quantity} onChange={(event) => updateProposalItem(item.id, { quantity: Number(event.target.value || 0) })} />
                               </td>
-                              <td className="px-2 py-2 text-xs font-semibold">{formatMoney(item.amount)}</td>
-                              <td className="px-2 py-2">
-                                <button type="button" className="rounded border border-rose-200 p-1 text-rose-600 hover:bg-rose-50" onClick={() => removeProposalItem(item.id)}>
+                              <td className="px-1.5 py-1 font-semibold">{formatMoney(item.amount)}</td>
+                              <td className="px-1.5 py-1">
+                                <input
+                                  className="w-full min-w-[140px] rounded border border-slate-200 px-1.5 py-0.5 text-[11px]"
+                                  value={item.comment || ""}
+                                  onChange={(event) => updateProposalItem(item.id, { comment: event.target.value })}
+                                  placeholder="Коментар до позиції"
+                                />
+                              </td>
+                              <td className="px-1.5 py-1">
+                                <button type="button" className="rounded border border-rose-200 p-0.5 text-rose-600 hover:bg-rose-50" onClick={() => removeProposalItem(item.id)}>
                                   <Trash2 size={12} />
                                 </button>
                               </td>
@@ -2270,7 +2393,7 @@ export default function CateringCrmTab({
                       {proposalForm.items.length === 0 && (
                         <tbody>
                           <tr>
-                            <td colSpan={6} className="px-2 py-8 text-center text-xs text-slate-500">Додайте позиції зліва.</td>
+                            <td colSpan={7} className="px-2 py-8 text-center text-xs text-slate-500">Додайте позиції зліва.</td>
                           </tr>
                         </tbody>
                       )}

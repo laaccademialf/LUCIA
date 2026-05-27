@@ -45,7 +45,7 @@ const COLLECTIONS = {
 };
 
 const CRM_STATUS_OPTIONS = ["new", "brief", "proposal", "work", "tender", "confirmed", "cancelled"];
-const KITCHEN_STATUS_OPTIONS = ["queue", "preparing", "ready", "completed"];
+const KITCHEN_STATUS_OPTIONS = ["queue", "preparing", "ready", "completed", "archived"];
 
 const normalizeToken = (value) => String(value || "")
   .trim()
@@ -168,6 +168,15 @@ const normalizeOrder = (value = {}) => {
     kitchenStatus,
     notes: String(value?.notes || value?.comment || "").trim(),
     tags: Array.isArray(value?.tags) ? value.tags.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    creationDate: String(value?.creationDate || value?.creation_date || "").trim(),
+    importantDates: Array.isArray(value?.importantDates || value?.important_dates)
+      ? (value.importantDates || value.important_dates)
+        .map((item) => ({
+          date: String(item?.date || "").trim(),
+          title: String(item?.title || item?.label || "").trim(),
+        }))
+        .filter((item) => item.date || item.title)
+      : [],
     createdAt: String(value?.createdAt || ""),
     updatedAt: String(value?.updatedAt || ""),
   };
@@ -245,8 +254,10 @@ const normalizeProposal = (value = {}) => {
       unitPrice: toNumber(item?.unitPrice ?? item?.unit_price),
       quantity: toNumber(item?.quantity || 1),
       amount: toNumber(item?.amount),
+      comment: String(item?.comment || "").trim(),
     })),
     totalAmount: toNumber(value?.totalAmount ?? value?.total_amount),
+    proposalDate: String(value?.proposalDate || value?.proposal_date || "").trim(),
     createdAt: String(value?.createdAt || value?.created_at || ""),
     updatedAt: String(value?.updatedAt || value?.updated_at || ""),
   };
@@ -624,6 +635,7 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
         <CateringKitchenTab
           orders={orders}
           contacts={contacts}
+          proposals={commercialProposals}
           saving={saving}
           onSaveOrder={handleSaveOrder}
         />
