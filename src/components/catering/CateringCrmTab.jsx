@@ -232,12 +232,18 @@ const emptyOrder = {
   amount: "",
   guestCount: "",
   eventDate: "",
+  eventEndDate: "",
   eventTime: "",
+  eventEndTime: "",
   paymentType: "",
   discountValue: "",
   status: "new",
   notes: "",
   tags: "",
+  newContactPhone: "",
+  newContactEmail: "",
+  newContactIndustry: "",
+  newContactAddress: "",
 };
 
 const emptyContact = {
@@ -448,6 +454,8 @@ export default function CateringCrmTab({
   const [vatRulesDraft, setVatRulesDraft] = useState([]);
   const [showColumnsMenu, setShowColumnsMenu] = useState(false);
   const [draggedColumnId, setDraggedColumnId] = useState("");
+  const [orderDateFrom, setOrderDateFrom] = useState("");
+  const [orderDateTo, setOrderDateTo] = useState("");
   const [orderTableColumns, setOrderTableColumns] = useState(() => {
     const fallback = ORDER_TABLE_COLUMNS.map((column) => ({
       id: column.id,
@@ -506,7 +514,17 @@ export default function CateringCrmTab({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const boardOrders = useMemo(() => orders.filter((item) => item.status !== "cancelled"), [orders]);
+  const boardOrders = useMemo(() => {
+    const base = orders.filter((item) => item.status !== "cancelled");
+    if (!orderDateFrom && !orderDateTo) return base;
+    return base.filter((item) => {
+      const date = String(item.eventDate || "").slice(0, 10);
+      if (!date) return false;
+      if (orderDateFrom && date < orderDateFrom) return false;
+      if (orderDateTo && date > orderDateTo) return false;
+      return true;
+    });
+  }, [orders, orderDateFrom, orderDateTo]);
   const cancelledOrders = useMemo(() => orders.filter((item) => item.status === "cancelled"), [orders]);
   const wonAmount = useMemo(() => orders.filter((item) => item.status === "confirmed").reduce((sum, item) => sum + Number(item.amount || 0), 0), [orders]);
   const pipelineAmount = useMemo(() => orders.filter((item) => item.status !== "confirmed" && item.status !== "cancelled").reduce((sum, item) => sum + Number(item.amount || 0), 0), [orders]);
@@ -1278,8 +1296,15 @@ export default function CateringCrmTab({
         return relatedContact?.assignedManager || "—";
       case "contactNotes":
         return relatedContact?.notes || "—";
-      case "eventDateTime":
-        return `${formatDateUk(item.eventDate)}${item.eventTime ? ` • ${item.eventTime}` : ""}`;
+      case "eventDateTime": {
+        const startDate = formatDateUk(item.eventDate);
+        const endDate = item.eventEndDate && item.eventEndDate !== item.eventDate ? formatDateUk(item.eventEndDate) : "";
+        const timePart = item.eventTime
+          ? (item.eventEndTime ? `${item.eventTime}–${item.eventEndTime}` : item.eventTime)
+          : "";
+        const datePart = endDate ? `${startDate} – ${endDate}` : startDate;
+        return `${datePart}${timePart ? ` • ${timePart}` : ""}`;
+      }
       case "paymentType":
         return item.paymentType || "—";
       case "guestCount":
@@ -1355,6 +1380,36 @@ export default function CateringCrmTab({
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Дата</span>
+                <input
+                  type="date"
+                  className="h-7 w-[130px] rounded-md border border-slate-200 px-2 text-xs text-slate-700 outline-none focus:border-indigo-400"
+                  value={orderDateFrom}
+                  onFocus={openNativeDatePicker}
+                  onClick={openNativeDatePicker}
+                  onChange={(event) => setOrderDateFrom(event.target.value)}
+                />
+                <span className="text-xs text-slate-400">—</span>
+                <input
+                  type="date"
+                  className="h-7 w-[130px] rounded-md border border-slate-200 px-2 text-xs text-slate-700 outline-none focus:border-indigo-400"
+                  value={orderDateTo}
+                  onFocus={openNativeDatePicker}
+                  onClick={openNativeDatePicker}
+                  onChange={(event) => setOrderDateTo(event.target.value)}
+                />
+                {(orderDateFrom || orderDateTo) && (
+                  <button
+                    type="button"
+                    className="rounded-md border border-slate-200 px-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                    onClick={() => { setOrderDateFrom(""); setOrderDateTo(""); }}
+                    title="Скинути фільтр дат"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
               {ordersViewMode === "table" && (
                 <div className="relative" ref={columnsMenuRef}>
                   <button
@@ -1421,6 +1476,14 @@ export default function CateringCrmTab({
                 <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
                   <h3 className="mb-4 text-lg font-semibold text-slate-900">{orderForm.id ? "Редагування CRM угоди" : "Нова CRM угода"}</h3>
                   <div className="space-y-3 max-h-[70vh] overflow-y-auto">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип клієнта</label>
+                      <select className={baseInput} value={orderForm.clientType} onChange={(event) => setOrderForm((prev) => ({ ...prev, clientType: event.target.value }))}>
+                        <option value="">Оберіть тип клієнта</option>
+                        {(clientTypeOptions.length > 0 ? clientTypeOptions : ["Постійний", "Новий"]).map((value) => <option key={value} value={value}>{value}</option>)}
+                      </select>
+                    </div>
+
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип заходу</label>
@@ -1467,30 +1530,44 @@ export default function CateringCrmTab({
                       </div>
                     </div>
 
+                    {String(orderForm.clientType || "").toLowerCase().includes("нов") && !orderForm.contactId && (
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-emerald-700">Дані нового контакту (буде створено разом з угодою)</p>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">ПІБ / Назва</label>
+                            <input className={baseInput} value={orderForm.customerName} onChange={(event) => setOrderForm((prev) => ({ ...prev, customerName: event.target.value, title: buildOrderTitle(prev.eventType, prev.companyName, event.target.value) }))} placeholder="Ім'я контактної особи" />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Компанія</label>
+                            <input className={baseInput} value={orderForm.companyName} onChange={(event) => setOrderForm((prev) => ({ ...prev, companyName: event.target.value, title: buildOrderTitle(prev.eventType, event.target.value, prev.customerName) }))} placeholder="Назва компанії" />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Телефон</label>
+                            <input className={baseInput} value={orderForm.newContactPhone} onChange={(event) => setOrderForm((prev) => ({ ...prev, newContactPhone: event.target.value }))} placeholder="+380..." />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Email</label>
+                            <input className={baseInput} value={orderForm.newContactEmail} onChange={(event) => setOrderForm((prev) => ({ ...prev, newContactEmail: event.target.value }))} placeholder="email@company.com" />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Сфера / Промисловість</label>
+                            <input className={baseInput} value={orderForm.newContactIndustry} onChange={(event) => setOrderForm((prev) => ({ ...prev, newContactIndustry: event.target.value }))} placeholder="IT, Фарма, Ритейл..." />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Адреса</label>
+                            <input className={baseInput} value={orderForm.newContactAddress} onChange={(event) => setOrderForm((prev) => ({ ...prev, newContactAddress: event.target.value }))} placeholder="Місто, вулиця" />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     <div>
                       <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Назва угоди (генерується автоматично)</label>
                       <input className={`${baseInput} bg-slate-50`} value={buildOrderTitle(orderForm.eventType, orderForm.companyName, orderForm.customerName)} readOnly />
                     </div>
 
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Менеджер</label>
-                        <input className={baseInput} list="catering-sales-managers" value={orderForm.managerName} onChange={(event) => setOrderForm((prev) => ({ ...prev, managerName: event.target.value }))} placeholder="Прізвище менеджера" />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Сервіс менеджер</label>
-                        <input className={baseInput} list="catering-sales-managers" value={orderForm.serviceManagerName} onChange={(event) => setOrderForm((prev) => ({ ...prev, serviceManagerName: event.target.value }))} placeholder="Відповідальний сервіс менеджер" />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип клієнта</label>
-                        <select className={baseInput} value={orderForm.clientType} onChange={(event) => setOrderForm((prev) => ({ ...prev, clientType: event.target.value }))}>
-                          <option value="">Оберіть тип клієнта</option>
-                          {(clientTypeOptions.length > 0 ? clientTypeOptions : ["Постійний", "Новий"]).map((value) => <option key={value} value={value}>{value}</option>)}
-                        </select>
-                      </div>
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Джерело ліда</label>
                         <select className={baseInput} value={orderForm.leadSource} onChange={(event) => setOrderForm((prev) => ({ ...prev, leadSource: event.target.value }))}>
@@ -1511,21 +1588,41 @@ export default function CateringCrmTab({
                         <input className={baseInput} value={orderForm.amount} onChange={(event) => setOrderForm((prev) => ({ ...prev, amount: event.target.value }))} placeholder="125000" />
                       </div>
                       <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Дата події</label>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Гостей</label>
+                        <input className={baseInput} value={orderForm.guestCount} onChange={(event) => setOrderForm((prev) => ({ ...prev, guestCount: event.target.value }))} placeholder="80" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Дата події (з)</label>
                         <input
                           type="date"
                           className={baseInput}
                           value={orderForm.eventDate}
                           onFocus={openNativeDatePicker}
                           onClick={openNativeDatePicker}
-                          onChange={(event) => setOrderForm((prev) => ({ ...prev, eventDate: event.target.value }))}
+                          onChange={(event) => setOrderForm((prev) => ({ ...prev, eventDate: event.target.value, eventEndDate: prev.eventEndDate && prev.eventEndDate < event.target.value ? event.target.value : prev.eventEndDate }))}
                         />
-                        <p className="mt-1 text-[11px] text-slate-500">Формат відображення в картках: dd.mm.yyyy</p>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Дата завершення (по)</label>
+                        <input
+                          type="date"
+                          className={baseInput}
+                          value={orderForm.eventEndDate}
+                          min={orderForm.eventDate || undefined}
+                          onFocus={openNativeDatePicker}
+                          onClick={openNativeDatePicker}
+                          onChange={(event) => setOrderForm((prev) => ({ ...prev, eventEndDate: event.target.value }))}
+                        />
+                        <p className="mt-1 text-[11px] text-slate-500">Залишіть порожнім, якщо захід триває один день</p>
                       </div>
                     </div>
+
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                       <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Час проведення</label>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Час від</label>
                         <input
                           type="time"
                           className={baseInput}
@@ -1536,27 +1633,47 @@ export default function CateringCrmTab({
                         />
                       </div>
                       <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Час до</label>
+                        <input
+                          type="time"
+                          className={baseInput}
+                          value={orderForm.eventEndTime}
+                          onFocus={openNativeDatePicker}
+                          onClick={openNativeDatePicker}
+                          onChange={(event) => setOrderForm((prev) => ({ ...prev, eventEndTime: event.target.value }))}
+                        />
+                      </div>
+                      <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Тип оплати</label>
                         <select className={baseInput} value={orderForm.paymentType} onChange={(event) => setOrderForm((prev) => ({ ...prev, paymentType: event.target.value }))}>
                           <option value="">Оберіть тип оплати</option>
                           {paymentTypeOptions.map((value) => <option key={value} value={value}>{value}</option>)}
                         </select>
                       </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Знижка грн/%</label>
                         <input className={baseInput} value={orderForm.discountValue} onChange={(event) => setOrderForm((prev) => ({ ...prev, discountValue: event.target.value }))} placeholder="10% або 5000" />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Гостей</label>
-                        <input className={baseInput} value={orderForm.guestCount} onChange={(event) => setOrderForm((prev) => ({ ...prev, guestCount: event.target.value }))} placeholder="80" />
                       </div>
                       <div>
                         <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Теги</label>
                         <input className={baseInput} value={orderForm.tags} onChange={(event) => setOrderForm((prev) => ({ ...prev, tags: event.target.value }))} placeholder="Весілля, Foodbox" />
                       </div>
                     </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Менеджер</label>
+                        <input className={baseInput} list="catering-sales-managers" value={orderForm.managerName} onChange={(event) => setOrderForm((prev) => ({ ...prev, managerName: event.target.value }))} placeholder="Прізвище менеджера" />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Сервіс менеджер</label>
+                        <input className={baseInput} list="catering-sales-managers" value={orderForm.serviceManagerName} onChange={(event) => setOrderForm((prev) => ({ ...prev, serviceManagerName: event.target.value }))} placeholder="Відповідальний сервіс менеджер" />
+                      </div>
+                    </div>
+
                     <div>
                       <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Нотатки</label>
                       <textarea className={`${baseInput} min-h-[96px]`} value={orderForm.notes} onChange={(event) => setOrderForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Короткий опис запиту, джерело ліда, деталі брифу" />
@@ -1568,8 +1685,29 @@ export default function CateringCrmTab({
                       className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
                       disabled={saving || !orderForm.customerName.trim() || !orderForm.eventType.trim()}
                       onClick={async () => {
+                        let contactId = orderForm.contactId;
+                        const isNewClient = String(orderForm.clientType || "").toLowerCase().includes("нов");
+                        if (isNewClient && !contactId && orderForm.customerName.trim()) {
+                          const contactDraft = {
+                            ...emptyContact,
+                            name: orderForm.customerName.trim(),
+                            company: orderForm.companyName.trim(),
+                            phone: orderForm.newContactPhone.trim(),
+                            email: orderForm.newContactEmail.trim(),
+                            industry: orderForm.newContactIndustry.trim(),
+                            address: orderForm.newContactAddress.trim(),
+                            assignedManager: orderForm.managerName.trim(),
+                            leadSource: orderForm.leadSource,
+                          };
+                          const contactResult = await onSaveContact(contactDraft);
+                          if (!contactResult?.success) return;
+                          contactId = contactResult.contact?.id || "";
+                        }
+
+                        const { newContactPhone, newContactEmail, newContactIndustry, newContactAddress, ...orderRest } = orderForm;
                         const payload = {
-                          ...orderForm,
+                          ...orderRest,
+                          contactId,
                           title: buildOrderTitle(orderForm.eventType, orderForm.companyName, orderForm.customerName),
                         };
                         const result = await onSaveOrder(payload);

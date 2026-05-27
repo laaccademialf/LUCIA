@@ -420,7 +420,7 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
     try {
       const saved = normalizeContact(await saveRecord(COLLECTIONS.contacts, draft));
       setContacts((prev) => [saved, ...prev.filter((item) => String(item.id) !== String(saved.id))].sort((left, right) => left.name.localeCompare(right.name, "uk")));
-      return { success: true };
+      return { success: true, contact: saved };
     } catch (saveError) {
       console.error("Помилка збереження контакту:", saveError);
       alert("Не вдалося зберегти контакт.");
