@@ -4114,6 +4114,26 @@ const server = http.createServer(async (req, res) => {
     return handleDeleteRuntimeSettings(req, res);
   }
 
+  if (pathname === "/api/energocenter/consumption" && method === "GET") {
+    if (!isAuthorized(req)) {
+      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+    }
+    try {
+      const { fetchEnergoCenterConsumption } = await import("../energocenter.js");
+      const debug = requestUrl.searchParams.get("debug") === "1";
+      const result = await fetchEnergoCenterConsumption({ debug });
+      const status = result?.ok ? 200 : 502;
+      return sendJson(res, status, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        fetchedAt: new Date().toISOString(),
+        rows: [],
+        error: `EnergoCenter error: ${error?.message || error}`,
+      });
+    }
+  }
+
   if (pathname === "/api/assets/batch" && method === "POST") {
     if (!isAuthorized(req)) {
       return sendJson(res, 401, { ok: false, error: "Unauthorized" });

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import ElectricityForm from "./ElectricityForm";
+import EnergoCenterMetersPanel from "./EnergoCenterMetersPanel";
 import {
   createCollectionItemApi,
   isCollectionsApiEnabled,
@@ -130,6 +131,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         </div>
       )}
       {status && <p className="text-sm text-slate-600">{status}</p>}
+      <EnergoCenterMetersPanel />
       <ElectricityForm
         meters={electricityMeters.map(m => ({
           id: m.id,
