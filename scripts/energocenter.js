@@ -150,9 +150,10 @@ const selectTreeNode = async (page, treeText) => {
   const needle = normalize(raw);
 
   // Шукаємо посилання вузла дерева, що містить потрібний текст (нормалізовано),
-  // або — у режимі autoPick — перший лист дерева (не ToggleNode).
-  const findLink = async () =>
-    page.evaluate((n, auto) => {
+  // або — у режимі autoPick — найглибший лист дерева. Параметр skip — список
+  // вже спробуваних текстів вузлів (щоб не клацати одне й те саме повторно).
+  const findLink = async (skip = []) =>
+    page.evaluate((n, auto, skipList) => {
       const norm = (s) =>
         String(s || "")
           .toLowerCase()
@@ -160,18 +161,22 @@ const selectTreeNode = async (page, treeText) => {
           .replace(/\s+/g, " ")
           .trim();
       const links = Array.from(document.querySelectorAll("a"));
+      const skipSet = new Set((skipList || []).map(norm));
       let node = null;
       if (auto) {
-        node = links.find((a) => {
+        // Усі кандидати: __doPostBack, не Toggle, не службові, не серед skip.
+        const candidates = links.filter((a) => {
           const href = String(a.getAttribute("href") || "");
           if (!href.includes("__doPostBack")) return false;
           if (href.includes("TreeView_ToggleNode")) return false;
           const txt = (a.textContent || "").trim();
           if (!txt) return false;
-          // Виключаємо службові пункти меню.
           if (/^(вихід|exit|logout)$/i.test(txt)) return false;
+          if (skipSet.has(norm(txt))) return false;
           return true;
         });
+        // Беремо останнього (найглибший лист зазвичай йде далі по DOM).
+        node = candidates[candidates.length - 1] || null;
       } else {
         node = links.find((a) => norm(a.textContent || "").includes(n));
       }
@@ -182,7 +187,7 @@ const selectTreeNode = async (page, treeText) => {
         href: node.getAttribute("href") || "",
         id: node.id || "",
       };
-    }, needle, autoPick).catch(() => null);
+    }, needle, autoPick, skip).catch(() => null);
 
   // Розгортає всі знайдені toggle-посилання (ASP.NET TreeView_ToggleNode).
   const expandToggles = async () => {
