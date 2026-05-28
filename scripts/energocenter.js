@@ -136,6 +136,10 @@ const ignoreContextDestroyed = (err) => {
 
 const selectTreeNode = async (page, treeText) => {
   const raw = String(treeText || "").trim();
+  // Якщо treeText не вказано — взагалі НЕ клацаємо в дереві.
+  // Звіт повертає дані для контексту акаунта без додаткового вибору вузла.
+  if (!raw) return false;
+
   // Нормалізація: lowercase, прибираємо всі типи лапок та зайвої пунктуації,
   // схлопуємо пробіли. Так "Ресторан «Кувшин»" і `Ресторан "Кувшин"` збігаються.
   const normalize = (s) =>
@@ -145,13 +149,10 @@ const selectTreeNode = async (page, treeText) => {
       .replace(/\s+/g, " ")
       .trim();
   const needle = normalize(raw);
-  // Якщо treeText не вказано — авто-вибір єдиного (або першого) листа дерева.
-  const autoPick = !needle;
 
-  // Шукаємо посилання вузла дерева, що містить потрібний текст (нормалізовано),
-  // або — у режимі autoPick — перший лист (не ToggleNode).
+  // Шукаємо посилання вузла дерева, що містить потрібний текст (нормалізовано).
   const findLink = async () =>
-    page.evaluate((n, auto) => {
+    page.evaluate((n) => {
       const norm = (s) =>
         String(s || "")
           .toLowerCase()
@@ -159,19 +160,7 @@ const selectTreeNode = async (page, treeText) => {
           .replace(/\s+/g, " ")
           .trim();
       const links = Array.from(document.querySelectorAll("a"));
-      let node = null;
-      if (auto) {
-        // Лист дерева — анкор з __doPostBack, який НЕ є ToggleNode.
-        node = links.find((a) => {
-          const href = String(a.getAttribute("href") || "");
-          if (!href.includes("__doPostBack")) return false;
-          if (href.includes("TreeView_ToggleNode")) return false;
-          const txt = (a.textContent || "").trim();
-          return txt.length > 0;
-        });
-      } else {
-        node = links.find((a) => norm(a.textContent || "").includes(n));
-      }
+      const node = links.find((a) => norm(a.textContent || "").includes(n));
       if (!node) return null;
       node.setAttribute("data-pw-tree-target", "1");
       return {
@@ -179,7 +168,7 @@ const selectTreeNode = async (page, treeText) => {
         href: node.getAttribute("href") || "",
         id: node.id || "",
       };
-    }, needle, autoPick).catch(() => null);
+    }, needle).catch(() => null);
 
   // Розгортає всі знайдені toggle-посилання (ASP.NET TreeView_ToggleNode).
   const expandToggles = async () => {
@@ -210,7 +199,8 @@ const selectTreeNode = async (page, treeText) => {
   }
 
   if (!info) {
-    // Збираємо всі доступні листи дерева для діагностики.
+    // Не знайшли — НЕ валимось. Просто фіксуємо у лог і продовжуємо
+    // без клацання, бо звіт зазвичай повертає дані й без вибору вузла.
     const leaves = await page.evaluate(() => {
       const links = Array.from(document.querySelectorAll("a"));
       return links
@@ -221,14 +211,11 @@ const selectTreeNode = async (page, treeText) => {
         .map((a) => (a.textContent || "").trim())
         .filter(Boolean);
     }).catch(() => []);
-    const hint = leaves.length
-      ? ` Доступні вузли: ${leaves.map((l) => `"${l}"`).join(", ")}.`
-      : "";
-    throw new Error(
-      autoPick
-        ? `Не знайдено жодного об'єкта в дереві (порожній акаунт?).${hint}`
-        : `Вузол "${treeText}" не знайдено у дереві об'єктів.${hint}`
+    console.warn(
+      `[energocenter] tree node "${treeText}" not found; proceeding without selection.` +
+        (leaves.length ? ` Available: ${leaves.map((l) => `"${l}"`).join(", ")}.` : "")
     );
+    return false;
   }
 
   // Клікаємо позначене посилання. Це викличе __doPostBack — чекаємо на навігацію.
