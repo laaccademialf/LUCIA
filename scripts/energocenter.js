@@ -336,6 +336,104 @@ const mapTableToRows = ({ headers, rows }) => {
   return out;
 };
 
+// ---- Сесійний кеш ----
+// Тримаємо браузер + сторінку залогінену та з обраним вузлом дерева у пам'яті,
+// щоб не платити вартість login + tree-select на кожному запиті.
+const SESSION_TTL_MS = 10 * 60 * 1000; // 10 хвилин
+let warmSession = null; // { browser, context, page, expiresAt }
+let sessionPromise = null;
+
+export const destroySession = async () => {
+  const s = warmSession;
+  warmSession = null;
+  sessionPromise = null;
+  if (!s) return;
+  try { await s.browser.close(); } catch {}
+};
+
+const isSessionAlive = (s) => {
+  if (!s) return false;
+  if (Date.now() > s.expiresAt) return false;
+  try {
+    if (s.page?.isClosed?.()) return false;
+  } catch { return false; }
+  return true;
+};
+
+const createSession = async (cfg) => {
+  const { chromium } = await loadPlaywright();
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+  try {
+    const context = await browser.newContext({
+      ignoreHTTPSErrors: true,
+      userAgent:
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    });
+    context.setDefaultTimeout(ACTION_TIMEOUT_MS);
+    context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+    const page = await context.newPage();
+
+    await page.goto(cfg.loginUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    await fillLogin(page, { user: cfg.user, password: cfg.password });
+
+    await page.goto(cfg.viewUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+
+    await selectTreeNode(page, cfg.treeText);
+
+    return { browser, context, page, expiresAt: Date.now() + SESSION_TTL_MS };
+  } catch (err) {
+    try { await browser.close(); } catch {}
+    throw err;
+  }
+};
+
+const getOrCreateSession = async (cfg) => {
+  if (isSessionAlive(warmSession)) return warmSession;
+  if (sessionPromise) return sessionPromise;
+  sessionPromise = (async () => {
+    try {
+      warmSession = await createSession(cfg);
+      return warmSession;
+    } finally {
+      sessionPromise = null;
+    }
+  })();
+  return sessionPromise;
+};
+
+// Чекає, поки після postback у таблиці зʼявиться хоча б 1 рядок даних
+// АБО повідомлення про відсутність даних. Не кидає виключення.
+const waitForTableReady = async (page) => {
+  await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+  try {
+    await page.waitForFunction(
+      () => {
+        const table = document.querySelector("#MainContent_GrdConsumption");
+        if (table) {
+          const dataRows = table.querySelectorAll("tr").length - 1;
+          if (dataRows > 0) return true;
+        }
+        const text = (document.body?.innerText || "").toLowerCase();
+        const markers = [
+          "нема доступних звітів",
+          "немає даних",
+          "немає доступних",
+          "no data available",
+        ];
+        return markers.some((m) => text.includes(m));
+      },
+      { timeout: 15_000, polling: 300 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const fetchEnergoCenterConsumption = async ({ debug = false, date } = {}) => {
   const cfg = getConfig();
   const fetchedAt = new Date().toISOString();
@@ -353,15 +451,9 @@ export const fetchEnergoCenterConsumption = async ({ debug = false, date } = {})
     };
   }
 
-  const { chromium } = await loadPlaywright();
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-
   let step = "init";
   const shot = async (page, label) => {
-    if (!debug) return;
+    if (!debug || !page) return;
     try {
       const p = `/tmp/energocenter-${Date.now()}-${label}.png`;
       await page.screenshot({ path: p, fullPage: true });
@@ -371,106 +463,112 @@ export const fetchEnergoCenterConsumption = async ({ debug = false, date } = {})
     }
   };
 
-  try {
-    const context = await browser.newContext({
-      ignoreHTTPSErrors: true,
-      userAgent:
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    });
-    context.setDefaultTimeout(ACTION_TIMEOUT_MS);
-    context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+  // Виконуємо до 2-х спроб (на випадок гонки/протермінованої сесії).
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    let session;
+    try {
+      step = `session-attempt-${attempt}`;
+      session = await getOrCreateSession(cfg);
+      const page = session.page;
 
-    const page = await context.newPage();
+      step = "check-directions";
+      await enableDirectionCheckboxes(page);
 
-    step = "goto-login";
-    await page.goto(cfg.loginUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
-    await shot(page, "1-login");
-    step = "fill-login";
-    await fillLogin(page, { user: cfg.user, password: cfg.password });
-    await shot(page, "2-after-login");
+      step = "set-date";
+      await setReportDate(page, reportDateDdMmYyyy);
+      await shot(page, `${attempt}-6-date`);
 
-    step = "goto-view";
-    await page.goto(cfg.viewUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
-    await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});
-    await shot(page, "3-view");
+      step = "click-refresh";
+      await clickRefresh(page);
 
-    step = "select-tree";
-    await selectTreeNode(page, cfg.treeText);
-    await shot(page, "4-tree");
-    step = "check-directions";
-    await enableDirectionCheckboxes(page);
-    await shot(page, "5-checkboxes");
-    step = "set-date";
-    await setReportDate(page, reportDateDdMmYyyy);
-    await shot(page, "6-date");
-    step = "click-refresh";
-    await clickRefresh(page);
-    await shot(page, "7-refresh");
+      step = "wait-table";
+      const tableReady = await waitForTableReady(page);
+      await shot(page, `${attempt}-7-refresh`);
 
-    step = "parse";
-    const emptyMsg = await detectEmptyMessage(page);
-    const table = await parseTable(page);
+      step = "parse";
+      const emptyMsg = await detectEmptyMessage(page);
+      const table = await parseTable(page);
 
-    if (debug) {
-      debugInfo.pageUrl = page.url();
-      try {
-        debugInfo.htmlSnippet = (await page.content()).slice(0, 20_000);
-        debugInfo.bodyText = (await page.evaluate(() => document.body?.innerText || "")).slice(0, 5000);
-      } catch {}
-    }
+      if (debug) {
+        debugInfo.pageUrl = page.url();
+        try {
+          debugInfo.htmlSnippet = (await page.content()).slice(0, 20_000);
+          debugInfo.bodyText = (await page.evaluate(() => document.body?.innerText || "")).slice(0, 5000);
+        } catch {}
+        debugInfo.tableReady = tableReady;
+        debugInfo.attempt = attempt;
+      }
 
-    if (!table.found) {
+      if (!table.found || (table.rows.length === 0 && !emptyMsg)) {
+        // Сторінка ще не догенерувала таблицю — спробуємо ще раз з холодною сесією.
+        if (attempt < 2) {
+          await destroySession();
+          continue;
+        }
+        return {
+          ok: false,
+          fetchedAt,
+          reportDate: reportDateIso,
+          sourceUrl: cfg.viewUrl,
+          rows: [],
+          error: emptyMsg
+            ? `Зовнішня система: ${emptyMsg}`
+            : "Таблицю MainContent_GrdConsumption не знайдено",
+          ...(debug ? { debug: debugInfo } : {}),
+        };
+      }
+
+      const rows = mapTableToRows(table);
+
+      if (rows.length === 0) {
+        return {
+          ok: emptyMsg ? false : true,
+          fetchedAt,
+          reportDate: reportDateIso,
+          sourceUrl: cfg.viewUrl,
+          rows: [],
+          error: emptyMsg ? `Зовнішня система: ${emptyMsg}` : undefined,
+          ...(debug ? { debug: debugInfo } : {}),
+        };
+      }
+
+      // успіх — подовжимо TTL сесії
+      session.expiresAt = Date.now() + SESSION_TTL_MS;
+
+      return {
+        ok: true,
+        fetchedAt,
+        reportDate: reportDateIso,
+        sourceUrl: cfg.viewUrl,
+        rows,
+        ...(debug ? { debug: debugInfo } : {}),
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      // Сесія могла протухнути — спробуємо ще раз чистою
+      if (attempt < 2) {
+        await destroySession();
+        continue;
+      }
       return {
         ok: false,
         fetchedAt,
         reportDate: reportDateIso,
         sourceUrl: cfg.viewUrl,
         rows: [],
-        error: emptyMsg
-          ? `Зовнішня система: ${emptyMsg}`
-          : "Таблицю MainContent_GrdConsumption не знайдено",
+        error: `[${step}] ${msg}`,
         ...(debug ? { debug: debugInfo } : {}),
       };
-    }
-
-    const rows = mapTableToRows(table);
-
-    if (rows.length === 0) {
-      return {
-        ok: emptyMsg ? false : true,
-        fetchedAt,
-        reportDate: reportDateIso,
-        sourceUrl: cfg.viewUrl,
-        rows: [],
-        error: emptyMsg ? `Зовнішня система: ${emptyMsg}` : undefined,
-        ...(debug ? { debug: debugInfo } : {}),
-      };
-    }
-
-    return {
-      ok: true,
-      fetchedAt,
-      reportDate: reportDateIso,
-      sourceUrl: cfg.viewUrl,
-      rows,
-      ...(debug ? { debug: debugInfo } : {}),
-    };
-  } catch (err) {
-    const msg = err?.message || String(err);
-    return {
-      ok: false,
-      fetchedAt,
-      reportDate: reportDateIso,
-      sourceUrl: cfg.viewUrl,
-      rows: [],
-      error: `[${step}] ${msg}`,
-      ...(debug ? { debug: debugInfo } : {}),
-    };
-  } finally {
-    try {
-      await browser.close();
-    } catch {
-      // ignore
     }
   }
+
+  return {
+    ok: false,
+    fetchedAt,
+    reportDate: reportDateIso,
+    sourceUrl: cfg.viewUrl,
+    rows: [],
+    error: `[${step}] unknown`,
+    ...(debug ? { debug: debugInfo } : {}),
+  };
 };

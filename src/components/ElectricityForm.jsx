@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Zap, Thermometer, Users, User, CalendarDays } from "lucide-react";
+import { Zap } from "lucide-react";
 
 // Компонент для введення та перегляду історії показників електроенергії
 const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = "" }) => {
@@ -48,36 +48,6 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
   return (
     <div className="space-y-8">
       {/* Заголовок */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-2">
-        <div className="flex items-center gap-3">
-          <Zap size={32} className="text-yellow-400" />
-          <div>
-            <h2 className="text-2xl font-bold text-slate-900">Введення показників електроенергії</h2>
-            <p className="text-slate-500 text-sm">Внесіть дані за поточний день для всіх лічильників</p>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-4">
-          <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-1">
-            <CalendarDays size={18} className="text-indigo-500" />
-            <input type="date" className="bg-transparent outline-none font-semibold" value={date} onChange={e => setDate(e.target.value)} required />
-          </div>
-          <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-1">
-            <Thermometer size={18} className="text-sky-500" />
-            <input type="number" className="bg-transparent outline-none w-12 text-right font-semibold" value={temperature} onChange={e => setTemperature(e.target.value)} placeholder="°C" />
-            <span className="text-xs text-slate-500">°C</span>
-          </div>
-          <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-1">
-            <Users size={18} className="text-emerald-500" />
-            <input type="number" className="bg-transparent outline-none w-12 text-right font-semibold" value={guests} onChange={e => setGuests(e.target.value)} placeholder="Гості" />
-            <span className="text-xs text-slate-500">гостей</span>
-          </div>
-          <div className="flex items-center gap-2 bg-slate-100 rounded-lg px-3 py-1">
-            <User size={18} className="text-indigo-500" />
-            <span className="font-semibold text-slate-700">{responsible}</span>
-          </div>
-        </div>
-      </div>
-
       {/* Лічильники */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {meterValues.map((m, idx) => (
