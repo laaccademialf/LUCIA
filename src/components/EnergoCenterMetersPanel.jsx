@@ -100,11 +100,20 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     }
   }, [apiEnabled, reportDate, hasCreds, credentials?.login, credentials?.password, credentials?.treeText]);
 
-  // Автопідвантаження при зміні дати/облікових даних.
+  // Автопідвантаження тільки при зміні дати (не при зміні закладу).
+  // При зміні облікових даних — лише очищаємо стан, користувач має натиснути "Оновити дані".
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reportDate, credentials?.login, credentials?.password, credentials?.treeText]);
+  }, [reportDate]);
+
+  // При зміні закладу — скидаємо дані й помилку, чекаємо ручного оновлення.
+  useEffect(() => {
+    setData(null);
+    setError("");
+    if (onDataChangeRef.current) onDataChangeRef.current(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [credentials?.login, credentials?.password, credentials?.treeText]);
 
   useEffect(() => {
     return () => {

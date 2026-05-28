@@ -312,11 +312,29 @@ const setReportDate = async (page, dateStr) => {
 
 const parseTable = async (page) => {
   return await page.evaluate(() => {
-    const table = document.querySelector("#MainContent_GrdConsumption");
-    if (!table) return { found: false, headers: [], rows: [] };
+    // 1) Стандартне id.
+    let table = document.querySelector("#MainContent_GrdConsumption");
+    // 2) Будь-яка таблиця з id, що містить Grd/Consumption.
+    if (!table) {
+      const cands = Array.from(document.querySelectorAll('table[id*="Grd"], table[id*="Consumption"], table[id*="grd"]'));
+      table = cands.find((t) => t.querySelectorAll("tr").length > 0) || null;
+    }
+    // 3) Перша таблиця, у заголовку якої є слова "напрям"/"спожив"/"точк".
+    if (!table) {
+      const tables = Array.from(document.querySelectorAll("table"));
+      table = tables.find((t) => {
+        const tr = t.querySelector("tr");
+        if (!tr) return false;
+        const head = Array.from(tr.querySelectorAll("th, td"))
+          .map((c) => (c.textContent || "").toLowerCase())
+          .join(" | ");
+        return /напрям|спожив|точк|consumption|direction|point/.test(head);
+      }) || null;
+    }
+    if (!table) return { found: false, headers: [], rows: [], tableId: null };
 
     const trs = Array.from(table.querySelectorAll("tr"));
-    if (!trs.length) return { found: true, headers: [], rows: [] };
+    if (!trs.length) return { found: true, headers: [], rows: [], tableId: table.id || null };
 
     const headerCells = Array.from(trs[0].querySelectorAll("th, td")).map((c) =>
       (c.textContent || "").trim()
@@ -327,10 +345,10 @@ const parseTable = async (page) => {
       if (cells.length === 0) continue;
       rows.push(cells);
     }
-    return { found: true, headers: headerCells, rows };
+    return { found: true, headers: headerCells, rows, tableId: table.id || null };
   }).catch((err) => {
     if (String(err?.message || "").includes("Execution context was destroyed")) {
-      return { found: false, headers: [], rows: [] };
+      return { found: false, headers: [], rows: [], tableId: null };
     }
     throw err;
   });
@@ -474,7 +492,23 @@ const waitForTableReady = async (page) => {
   try {
     await page.waitForFunction(
       () => {
-        const table = document.querySelector("#MainContent_GrdConsumption");
+        const findTable = () => {
+          let t = document.querySelector("#MainContent_GrdConsumption");
+          if (t) return t;
+          const cands = Array.from(document.querySelectorAll('table[id*="Grd"], table[id*="Consumption"], table[id*="grd"]'));
+          t = cands.find((x) => x.querySelectorAll("tr").length > 0);
+          if (t) return t;
+          const tables = Array.from(document.querySelectorAll("table"));
+          return tables.find((x) => {
+            const tr = x.querySelector("tr");
+            if (!tr) return false;
+            const head = Array.from(tr.querySelectorAll("th, td"))
+              .map((c) => (c.textContent || "").toLowerCase())
+              .join(" | ");
+            return /напрям|спожив|точк|consumption|direction|point/.test(head);
+          });
+        };
+        const table = findTable();
         if (table) {
           const dataRows = table.querySelectorAll("tr").length - 1;
           if (dataRows > 0) return true;
@@ -612,6 +646,12 @@ export const fetchEnergoCenterConsumption = async ({ debug = false, date, force 
           await destroySession(credKey(cfg));
           continue;
         }
+        // Зберемо id всіх таблиць для діагностики.
+        const tableIds = await page.evaluate(() => {
+          return Array.from(document.querySelectorAll("table"))
+            .map((t) => t.id || "(без id)")
+            .filter(Boolean);
+        }).catch(() => []);
         return {
           ok: false,
           fetchedAt,
@@ -620,7 +660,7 @@ export const fetchEnergoCenterConsumption = async ({ debug = false, date, force 
           rows: [],
           error: emptyMsg
             ? `Зовнішня система: ${emptyMsg}`
-            : "Таблицю MainContent_GrdConsumption не знайдено",
+            : `Таблицю звіту не знайдено. Таблиці на сторінці: ${tableIds.join(", ") || "немає"}`,
           ...(debug ? { debug: debugInfo } : {}),
         };
       }
