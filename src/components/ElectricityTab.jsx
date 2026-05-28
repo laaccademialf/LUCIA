@@ -13,6 +13,11 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
   const [electricityHistory, setElectricityHistory] = useState([]);
   const [status, setStatus] = useState("");
   const [localFallbackHistory, setLocalFallbackHistory] = useState([]);
+  const [reportDate, setReportDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  });
 
   // Скидання вибору ресторану при зміні списку ресторанів
   useEffect(() => {
@@ -131,7 +136,10 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         </div>
       )}
       {status && <p className="text-sm text-slate-600">{status}</p>}
-      <EnergoCenterMetersPanel />
+      <EnergoCenterMetersPanel
+        reportDate={reportDate}
+        onReportDateChange={setReportDate}
+      />
       <ElectricityForm
         meters={electricityMeters.map(m => ({
           id: m.id,
@@ -141,6 +149,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         history={filteredHistory}
         onSubmit={handleElectricitySubmit}
         responsible={user?.displayName || user?.fullName || ""}
+        reportDate={reportDate}
       />
     </div>
   );

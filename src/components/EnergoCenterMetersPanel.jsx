@@ -42,11 +42,16 @@ const formatDateUk = (iso) => {
   return `${d}.${m}.${y}`;
 };
 
-const EnergoCenterMetersPanel = ({ autoLoad = false } = {}) => {
+const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange } = {}) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
-  const [reportDate, setReportDate] = useState(getYesterdayIso());
+  const [internalDate, setInternalDate] = useState(getYesterdayIso());
+  const reportDate = reportDateProp ?? internalDate;
+  const setReportDate = (iso) => {
+    if (onReportDateChange) onReportDateChange(iso);
+    if (reportDateProp === undefined) setInternalDate(iso);
+  };
   const abortRef = useRef(null);
 
   const apiEnabled = isEnergoCenterApiEnabled();
