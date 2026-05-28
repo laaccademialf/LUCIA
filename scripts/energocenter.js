@@ -136,9 +136,8 @@ const ignoreContextDestroyed = (err) => {
 
 const selectTreeNode = async (page, treeText) => {
   const raw = String(treeText || "").trim();
-  // Якщо treeText не вказано — взагалі НЕ клацаємо в дереві.
-  // Звіт повертає дані для контексту акаунта без додаткового вибору вузла.
-  if (!raw) return false;
+  // autoPick: якщо текст не вказано — оберемо перший лист дерева автоматично.
+  const autoPick = !raw;
 
   // Нормалізація: lowercase, прибираємо всі типи лапок та зайвої пунктуації,
   // схлопуємо пробіли. Так "Ресторан «Кувшин»" і `Ресторан "Кувшин"` збігаються.
@@ -150,9 +149,10 @@ const selectTreeNode = async (page, treeText) => {
       .trim();
   const needle = normalize(raw);
 
-  // Шукаємо посилання вузла дерева, що містить потрібний текст (нормалізовано).
+  // Шукаємо посилання вузла дерева, що містить потрібний текст (нормалізовано),
+  // або — у режимі autoPick — перший лист дерева (не ToggleNode).
   const findLink = async () =>
-    page.evaluate((n) => {
+    page.evaluate((n, auto) => {
       const norm = (s) =>
         String(s || "")
           .toLowerCase()
@@ -160,7 +160,21 @@ const selectTreeNode = async (page, treeText) => {
           .replace(/\s+/g, " ")
           .trim();
       const links = Array.from(document.querySelectorAll("a"));
-      const node = links.find((a) => norm(a.textContent || "").includes(n));
+      let node = null;
+      if (auto) {
+        node = links.find((a) => {
+          const href = String(a.getAttribute("href") || "");
+          if (!href.includes("__doPostBack")) return false;
+          if (href.includes("TreeView_ToggleNode")) return false;
+          const txt = (a.textContent || "").trim();
+          if (!txt) return false;
+          // Виключаємо службові пункти меню.
+          if (/^(вихід|exit|logout)$/i.test(txt)) return false;
+          return true;
+        });
+      } else {
+        node = links.find((a) => norm(a.textContent || "").includes(n));
+      }
       if (!node) return null;
       node.setAttribute("data-pw-tree-target", "1");
       return {
@@ -168,7 +182,7 @@ const selectTreeNode = async (page, treeText) => {
         href: node.getAttribute("href") || "",
         id: node.id || "",
       };
-    }, needle).catch(() => null);
+    }, needle, autoPick).catch(() => null);
 
   // Розгортає всі знайдені toggle-посилання (ASP.NET TreeView_ToggleNode).
   const expandToggles = async () => {
@@ -190,7 +204,8 @@ const selectTreeNode = async (page, treeText) => {
     return n;
   };
 
-  // До 5 ітерацій: спробувати знайти, інакше розгорнути все ще раз.
+  // Спочатку розгортаємо все дерево, потім шукаємо.
+  await expandToggles();
   let info = await findLink();
   for (let i = 0; i < 5 && !info; i += 1) {
     const expanded = await expandToggles();
@@ -200,7 +215,7 @@ const selectTreeNode = async (page, treeText) => {
 
   if (!info) {
     // Не знайшли — НЕ валимось. Просто фіксуємо у лог і продовжуємо
-    // без клацання, бо звіт зазвичай повертає дані й без вибору вузла.
+    // без клацання, бо звіт інколи повертає дані й без вибору вузла.
     const leaves = await page.evaluate(() => {
       const links = Array.from(document.querySelectorAll("a"));
       return links
@@ -212,7 +227,7 @@ const selectTreeNode = async (page, treeText) => {
         .filter(Boolean);
     }).catch(() => []);
     console.warn(
-      `[energocenter] tree node "${treeText}" not found; proceeding without selection.` +
+      `[energocenter] tree node ${autoPick ? "(auto-pick leaf)" : `"${treeText}"`} not found; proceeding without selection.` +
         (leaves.length ? ` Available: ${leaves.map((l) => `"${l}"`).join(", ")}.` : "")
     );
     return false;
@@ -228,6 +243,7 @@ const selectTreeNode = async (page, treeText) => {
       a.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
     }).catch(ignoreContextDestroyed),
   ]);
+  return true;
 };
 
 const enableDirectionCheckboxes = async (page) => {
@@ -641,6 +657,42 @@ export const fetchEnergoCenterConsumption = async ({ debug = false, date, force 
       }
 
       if (!table.found || (table.rows.length === 0 && !emptyMsg)) {
+        // Спершу — спробуємо клікнути перший лист дерева (раптом контекст без обраного об'єкта).
+        if (attempt === 1) {
+          try {
+            const clicked = await selectTreeNode(page, "");
+            if (clicked) {
+              await enableDirectionCheckboxes(page);
+              await setReportDate(page, reportDateDdMmYyyy);
+              await clickRefresh(page);
+              await waitForTableReady(page);
+              const emptyMsg2 = await detectEmptyMessage(page);
+              const table2 = await parseTable(page);
+              if (table2.found && (table2.rows.length > 0 || emptyMsg2)) {
+                const rows2 = mapTableToRows(table2);
+                if (rows2.length > 0) {
+                  session.expiresAt = Date.now() + SESSION_TTL_MS;
+                  const totals2 = aggregateConsumption(rows2);
+                  const payload2 = {
+                    ok: true,
+                    fetchedAt,
+                    reportDate: reportDateIso,
+                    sourceUrl: cfg.viewUrl,
+                    headers: table2.headers,
+                    rows: rows2,
+                    totals: totals2,
+                    ...(debug ? { debug: debugInfo } : {}),
+                  };
+                  setCached(cfg, reportDateIso, payload2);
+                  return payload2;
+                }
+              }
+            }
+          } catch (e) {
+            console.warn(`[energocenter] auto-pick fallback failed: ${e?.message || e}`);
+          }
+        }
+
         // Сторінка ще не догенерувала таблицю — спробуємо ще раз з холодною сесією.
         if (attempt < 2) {
           await destroySession(credKey(cfg));
