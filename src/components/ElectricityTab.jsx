@@ -3,6 +3,7 @@ import ElectricityForm from "./ElectricityForm";
 import EnergoCenterMetersPanel from "./EnergoCenterMetersPanel";
 import {
   createCollectionItemApi,
+  deleteCollectionItemApi,
   isCollectionsApiEnabled,
   listCollectionItemsApi,
 } from "../api/collectionsApi";
@@ -138,6 +139,22 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
     }
   };
 
+  const handleDeleteHistory = async (id) => {
+    if (!id) return;
+    if (!window.confirm("Видалити запис із історії показників?")) return;
+    try {
+      if (isCollectionsApiEnabled() && !String(id).startsWith("local_")) {
+        await deleteCollectionItemApi("electricityReadings", id);
+        setElectricityHistory((prev) => prev.filter((row) => String(row?.id) !== String(id)));
+      } else {
+        setLocalFallbackHistory((prev) => prev.filter((row) => String(row?.id) !== String(id)));
+      }
+      setStatus("Запис видалено.");
+    } catch (error) {
+      setStatus(`Помилка видалення: ${error?.message || error}`);
+    }
+  };
+
   return (
     <div className="grid grid-cols-1 gap-4">
       {user?.role === "admin" && (
@@ -172,6 +189,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         responsible={user?.displayName || user?.fullName || ""}
         reportDate={reportDate}
         energoRows={Array.isArray(energoData?.rows) ? energoData.rows : []}
+        onDeleteHistory={handleDeleteHistory}
       />
     </div>
   );

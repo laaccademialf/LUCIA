@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Zap } from "lucide-react";
 
 // Компонент для введення та перегляду історії показників електроенергії
-const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = "", reportDate = "", energoRows = [] }) => {
+const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = "", reportDate = "", energoRows = [], onDeleteHistory }) => {
   const [meterValues, setMeterValues] = useState(
     meters.map(m => ({
       meterId: m.id,
@@ -116,21 +116,52 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
                   <th className="px-4 py-2">Поточні</th>
                   <th className="px-4 py-2">Споживання</th>
                   <th className="px-4 py-2">Відповідальний</th>
+                  {onDeleteHistory && <th className="px-4 py-2"></th>}
                 </tr>
               </thead>
               <tbody>
-                {history.map((row, idx) => (
-                  row.meters.map((m, mIdx) => (
-                    <tr key={idx + "-" + m.meterId}>
+                {history.map((row, idx) => {
+                  const ms = Array.isArray(row?.meters) ? row.meters : [];
+                  if (ms.length === 0) {
+                    return (
+                      <tr key={`${row?.id || idx}-empty`} className="text-slate-400 italic">
+                        <td className="px-4 py-2">{row?.date || ""}</td>
+                        <td className="px-4 py-2" colSpan={4}>порожній запис (немає показників)</td>
+                        <td className="px-4 py-2">{row?.responsible || ""}</td>
+                        {onDeleteHistory && (
+                          <td className="px-4 py-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() => onDeleteHistory(row?.id)}
+                              className="text-rose-600 hover:text-rose-800 text-xs font-semibold"
+                            >Видалити</button>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  }
+                  return ms.map((m, mIdx) => (
+                    <tr key={(row?.id || idx) + "-" + (m.meterId || mIdx)}>
                       <td className="px-4 py-2">{row.date}</td>
                       <td className="px-4 py-2">{m.meterNumber}</td>
                       <td className="px-4 py-2">{m.prevValue}</td>
                       <td className="px-4 py-2">{m.currValue}</td>
                       <td className="px-4 py-2">{m.consumption}</td>
                       <td className="px-4 py-2">{row.responsible}</td>
+                      {onDeleteHistory && (
+                        <td className="px-4 py-2 text-right">
+                          {mIdx === 0 && (
+                            <button
+                              type="button"
+                              onClick={() => onDeleteHistory(row?.id)}
+                              className="text-rose-600 hover:text-rose-800 text-xs font-semibold"
+                            >Видалити</button>
+                          )}
+                        </td>
+                      )}
                     </tr>
-                  ))
-                ))}
+                  ));
+                })}
               </tbody>
             </table>
           </div>
