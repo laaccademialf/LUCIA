@@ -228,6 +228,48 @@ const clickRefresh = async (page) => {
   ]);
 };
 
+// Конвертує "YYYY-MM-DD" або Date у формат "dd.mm.yyyy".
+const toDdMmYyyy = (value) => {
+  let d;
+  if (value instanceof Date) {
+    d = value;
+  } else if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [y, m, day] = value.split("-").map(Number);
+    d = new Date(Date.UTC(y, m - 1, day));
+  } else {
+    d = new Date();
+  }
+  if (Number.isNaN(d.getTime())) d = new Date();
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  return `${dd}.${mm}.${yyyy}`;
+};
+
+export const getYesterdayIso = () => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+
+// Заповнює обидва поля дат (Begin/End) однаковим значенням "dd.mm.yyyy".
+const setReportDate = async (page, dateStr) => {
+  await Promise.all([
+    page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {}),
+    page.evaluate((d) => {
+      const ids = ["MainContent_DateCont_TxtBeginDate", "MainContent_DateCont_TxtEndDate"];
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.value = d;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.dispatchEvent(new Event("blur", { bubbles: true }));
+      }
+    }, dateStr).catch(ignoreContextDestroyed),
+  ]);
+};
+
 const parseTable = async (page) => {
   return await page.evaluate(() => {
     const table = document.querySelector("#MainContent_GrdConsumption");
@@ -294,9 +336,11 @@ const mapTableToRows = ({ headers, rows }) => {
   return out;
 };
 
-export const fetchEnergoCenterConsumption = async ({ debug = false } = {}) => {
+export const fetchEnergoCenterConsumption = async ({ debug = false, date } = {}) => {
   const cfg = getConfig();
   const fetchedAt = new Date().toISOString();
+  const reportDateIso = (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : getYesterdayIso();
+  const reportDateDdMmYyyy = toDdMmYyyy(reportDateIso);
   const debugInfo = debug ? { screenshots: [], pageUrl: null, htmlSnippet: null, bodyText: null } : null;
 
   if (!cfg.user || !cfg.password) {
@@ -356,9 +400,12 @@ export const fetchEnergoCenterConsumption = async ({ debug = false } = {}) => {
     step = "check-directions";
     await enableDirectionCheckboxes(page);
     await shot(page, "5-checkboxes");
+    step = "set-date";
+    await setReportDate(page, reportDateDdMmYyyy);
+    await shot(page, "6-date");
     step = "click-refresh";
     await clickRefresh(page);
-    await shot(page, "6-refresh");
+    await shot(page, "7-refresh");
 
     step = "parse";
     const emptyMsg = await detectEmptyMessage(page);
@@ -376,6 +423,7 @@ export const fetchEnergoCenterConsumption = async ({ debug = false } = {}) => {
       return {
         ok: false,
         fetchedAt,
+        reportDate: reportDateIso,
         sourceUrl: cfg.viewUrl,
         rows: [],
         error: emptyMsg
@@ -391,6 +439,7 @@ export const fetchEnergoCenterConsumption = async ({ debug = false } = {}) => {
       return {
         ok: emptyMsg ? false : true,
         fetchedAt,
+        reportDate: reportDateIso,
         sourceUrl: cfg.viewUrl,
         rows: [],
         error: emptyMsg ? `Зовнішня система: ${emptyMsg}` : undefined,
@@ -401,6 +450,7 @@ export const fetchEnergoCenterConsumption = async ({ debug = false } = {}) => {
     return {
       ok: true,
       fetchedAt,
+      reportDate: reportDateIso,
       sourceUrl: cfg.viewUrl,
       rows,
       ...(debug ? { debug: debugInfo } : {}),
@@ -410,6 +460,7 @@ export const fetchEnergoCenterConsumption = async ({ debug = false } = {}) => {
     return {
       ok: false,
       fetchedAt,
+      reportDate: reportDateIso,
       sourceUrl: cfg.viewUrl,
       rows: [],
       error: `[${step}] ${msg}`,

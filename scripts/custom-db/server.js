@@ -4121,7 +4121,9 @@ const server = http.createServer(async (req, res) => {
     try {
       const { fetchEnergoCenterConsumption } = await import("../energocenter.js");
       const debug = requestUrl.searchParams.get("debug") === "1";
-      const result = await fetchEnergoCenterConsumption({ debug });
+      const dateParam = String(requestUrl.searchParams.get("date") || "").trim();
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : undefined;
+      const result = await fetchEnergoCenterConsumption({ debug, date });
       const status = result?.ok ? 200 : 502;
       return sendJson(res, status, result);
     } catch (error) {

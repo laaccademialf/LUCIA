@@ -29,10 +29,23 @@ const DIRECTION_COLORS = {
   "R-": "bg-rose-50 border-rose-200 text-rose-800",
 };
 
+const getYesterdayIso = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+
+const formatDateUk = (iso) => {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso || "";
+  const [y, m, d] = iso.split("-");
+  return `${d}.${m}.${y}`;
+};
+
 const EnergoCenterMetersPanel = ({ autoLoad = false } = {}) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
+  const [reportDate, setReportDate] = useState(getYesterdayIso());
   const abortRef = useRef(null);
 
   const apiEnabled = isEnergoCenterApiEnabled();
@@ -49,7 +62,7 @@ const EnergoCenterMetersPanel = ({ autoLoad = false } = {}) => {
     setLoading(true);
     setError("");
     try {
-      const result = await fetchEnergoCenterConsumption({ signal: controller.signal });
+      const result = await fetchEnergoCenterConsumption({ signal: controller.signal, date: reportDate });
       setData(result);
       if (!result?.ok) {
         setError(result?.error || "Не вдалося отримати дані");
@@ -62,7 +75,7 @@ const EnergoCenterMetersPanel = ({ autoLoad = false } = {}) => {
       if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
     }
-  }, [apiEnabled]);
+  }, [apiEnabled, reportDate]);
 
   useEffect(() => {
     if (autoLoad) void load();
@@ -83,18 +96,31 @@ const EnergoCenterMetersPanel = ({ autoLoad = false } = {}) => {
           {data?.fetchedAt && (
             <p className="text-xs text-slate-500">
               Останнє оновлення: {formatDateTime(data.fetchedAt)}
+              {data?.reportDate ? ` · дані за ${formatDateUk(data.reportDate)}` : ""}
               {data?.sourceUrl ? ` · ${data.sourceUrl}` : ""}
             </p>
           )}
         </div>
-        <button
-          type="button"
-          onClick={load}
-          disabled={loading}
-          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-400 transition"
-        >
-          {loading ? "Оновлюю..." : "Оновити дані"}
-        </button>
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-slate-600">
+            Дата:
+            <input
+              type="date"
+              value={reportDate}
+              max={getYesterdayIso()}
+              onChange={(e) => setReportDate(e.target.value)}
+              className="ml-2 rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm text-slate-800"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={load}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-400 transition"
+          >
+            {loading ? "Оновлюю..." : "Оновити дані"}
+          </button>
+        </div>
       </header>
 
       {error && (

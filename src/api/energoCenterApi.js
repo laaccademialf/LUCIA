@@ -25,7 +25,7 @@ const getApiToken = () => {
 
 export const isEnergoCenterApiEnabled = () => Boolean(getApiBase());
 
-export const fetchEnergoCenterConsumption = async ({ signal } = {}) => {
+export const fetchEnergoCenterConsumption = async ({ signal, date } = {}) => {
   const base = getApiBase();
   if (!base) {
     throw new Error("API не налаштовано. Встановіть VITE_DATA_API_BASE_URL");
@@ -39,7 +39,11 @@ export const fetchEnergoCenterConsumption = async ({ signal } = {}) => {
       : "";
   if (sessionToken) headers["x-session-token"] = sessionToken;
 
-  const response = await fetch(`${base}/api/energocenter/consumption`, {
+  const qs = new URLSearchParams();
+  if (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) qs.set("date", date);
+  const url = `${base}/api/energocenter/consumption${qs.toString() ? `?${qs.toString()}` : ""}`;
+
+  const response = await fetch(url, {
     method: "GET",
     headers,
     signal,
