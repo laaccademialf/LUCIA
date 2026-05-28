@@ -135,14 +135,29 @@ const ignoreContextDestroyed = (err) => {
 };
 
 const selectTreeNode = async (page, treeText) => {
-  const needle = String(treeText || "").trim().toLowerCase();
+  const raw = String(treeText || "").trim();
+  // Нормалізація: lowercase, прибираємо всі типи лапок та зайвої пунктуації,
+  // схлопуємо пробіли. Так "Ресторан «Кувшин»" і `Ресторан "Кувшин"` збігаються.
+  const normalize = (s) =>
+    String(s || "")
+      .toLowerCase()
+      .replace(/[«»""''`„“”‚‘’]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  const needle = normalize(raw);
   // Якщо treeText не вказано — авто-вибір єдиного (або першого) листа дерева.
   const autoPick = !needle;
 
-  // Шукаємо посилання вузла дерева, що містить потрібний текст,
+  // Шукаємо посилання вузла дерева, що містить потрібний текст (нормалізовано),
   // або — у режимі autoPick — перший лист (не ToggleNode).
   const findLink = async () =>
     page.evaluate((n, auto) => {
+      const norm = (s) =>
+        String(s || "")
+          .toLowerCase()
+          .replace(/[«»""''`„“”‚‘’]/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
       const links = Array.from(document.querySelectorAll("a"));
       let node = null;
       if (auto) {
@@ -155,7 +170,7 @@ const selectTreeNode = async (page, treeText) => {
           return txt.length > 0;
         });
       } else {
-        node = links.find((a) => (a.textContent || "").trim().toLowerCase().includes(n));
+        node = links.find((a) => norm(a.textContent || "").includes(n));
       }
       if (!node) return null;
       node.setAttribute("data-pw-tree-target", "1");
@@ -195,10 +210,24 @@ const selectTreeNode = async (page, treeText) => {
   }
 
   if (!info) {
+    // Збираємо всі доступні листи дерева для діагностики.
+    const leaves = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll("a"));
+      return links
+        .filter((a) => {
+          const href = String(a.getAttribute("href") || "");
+          return href.includes("__doPostBack") && !href.includes("TreeView_ToggleNode");
+        })
+        .map((a) => (a.textContent || "").trim())
+        .filter(Boolean);
+    }).catch(() => []);
+    const hint = leaves.length
+      ? ` Доступні вузли: ${leaves.map((l) => `"${l}"`).join(", ")}.`
+      : "";
     throw new Error(
       autoPick
-        ? "Не знайдено жодного об'єкта в дереві (порожній акаунт?)"
-        : `Вузол "${treeText}" не знайдено у дереві об'єктів`
+        ? `Не знайдено жодного об'єкта в дереві (порожній акаунт?).${hint}`
+        : `Вузол "${treeText}" не знайдено у дереві об'єктів.${hint}`
     );
   }
 
