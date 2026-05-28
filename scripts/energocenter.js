@@ -136,8 +136,9 @@ const ignoreContextDestroyed = (err) => {
 
 const selectTreeNode = async (page, treeText) => {
   const raw = String(treeText || "").trim();
-  // autoPick: якщо текст не вказано — оберемо перший лист дерева автоматично.
-  const autoPick = !raw;
+  // Якщо текст не вказано — за дефолтом шукаємо універсальний листок "La Famiglia",
+  // який існує у дереві обох ресторанів і саме він наповнює звіт даними.
+  const effective = raw || "La Famiglia";
 
   // Нормалізація: lowercase, прибираємо всі типи лапок та зайвої пунктуації,
   // схлопуємо пробіли. Так "Ресторан «Кувшин»" і `Ресторан "Кувшин"` збігаються.
@@ -147,13 +148,11 @@ const selectTreeNode = async (page, treeText) => {
       .replace(/[«»""''`„“”‚‘’]/g, "")
       .replace(/\s+/g, " ")
       .trim();
-  const needle = normalize(raw);
+  const needle = normalize(effective);
 
-  // Шукаємо посилання вузла дерева, що містить потрібний текст (нормалізовано),
-  // або — у режимі autoPick — найглибший лист дерева. Параметр skip — список
-  // вже спробуваних текстів вузлів (щоб не клацати одне й те саме повторно).
-  const findLink = async (skip = []) =>
-    page.evaluate((n, auto, skipList) => {
+  // Шукаємо посилання вузла дерева, що містить потрібний текст (нормалізовано).
+  const findLink = async () =>
+    page.evaluate((n) => {
       const norm = (s) =>
         String(s || "")
           .toLowerCase()
@@ -161,25 +160,12 @@ const selectTreeNode = async (page, treeText) => {
           .replace(/\s+/g, " ")
           .trim();
       const links = Array.from(document.querySelectorAll("a"));
-      const skipSet = new Set((skipList || []).map(norm));
-      let node = null;
-      if (auto) {
-        // Усі кандидати: __doPostBack, не Toggle, не службові, не серед skip.
-        const candidates = links.filter((a) => {
-          const href = String(a.getAttribute("href") || "");
-          if (!href.includes("__doPostBack")) return false;
-          if (href.includes("TreeView_ToggleNode")) return false;
-          const txt = (a.textContent || "").trim();
-          if (!txt) return false;
-          if (/^(вихід|exit|logout)$/i.test(txt)) return false;
-          if (skipSet.has(norm(txt))) return false;
-          return true;
-        });
-        // Беремо останнього (найглибший лист зазвичай йде далі по DOM).
-        node = candidates[candidates.length - 1] || null;
-      } else {
-        node = links.find((a) => norm(a.textContent || "").includes(n));
-      }
+      const node = links.find((a) => {
+        const href = String(a.getAttribute("href") || "");
+        if (!href.includes("__doPostBack")) return false;
+        if (href.includes("TreeView_ToggleNode")) return false;
+        return norm(a.textContent || "").includes(n);
+      });
       if (!node) return null;
       node.setAttribute("data-pw-tree-target", "1");
       return {
@@ -187,7 +173,7 @@ const selectTreeNode = async (page, treeText) => {
         href: node.getAttribute("href") || "",
         id: node.id || "",
       };
-    }, needle, autoPick, skip).catch(() => null);
+    }, needle).catch(() => null);
 
   // Розгортає всі знайдені toggle-посилання (ASP.NET TreeView_ToggleNode).
   const expandToggles = async () => {
@@ -209,21 +195,13 @@ const selectTreeNode = async (page, treeText) => {
     return n;
   };
 
-  // Стратегія залежить від режиму:
-  // - autoPick: розгортаємо все дерево, щоб обрати найглибший лист.
-  // - named: спершу пробуємо без розгортання (бо кожен toggle = postback);
-  //   розгортаємо лише якщо не знайшли.
-  let info;
-  if (autoPick) {
-    await expandToggles();
+  // Спершу пробуємо знайти без розгортання (бо кожен toggle = postback).
+  // Якщо не знайшли — розгортаємо й пробуємо ще раз (до 5 ітерацій).
+  let info = await findLink();
+  for (let i = 0; i < 5 && !info; i += 1) {
+    const expanded = await expandToggles();
+    if (expanded === 0) break;
     info = await findLink();
-  } else {
-    info = await findLink();
-    for (let i = 0; i < 5 && !info; i += 1) {
-      const expanded = await expandToggles();
-      if (expanded === 0) break;
-      info = await findLink();
-    }
   }
 
   if (!info) {
@@ -240,7 +218,7 @@ const selectTreeNode = async (page, treeText) => {
         .filter(Boolean);
     }).catch(() => []);
     console.warn(
-      `[energocenter] tree node ${autoPick ? "(auto-pick leaf)" : `"${treeText}"`} not found; proceeding without selection.` +
+      `[energocenter] tree node "${effective}" not found; proceeding without selection.` +
         (leaves.length ? ` Available: ${leaves.map((l) => `"${l}"`).join(", ")}.` : "")
     );
     return false;
