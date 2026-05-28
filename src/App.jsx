@@ -3610,14 +3610,16 @@ function App() {
                     />
                   </div>
                   <div>
-                    <label className="text-sm font-semibold text-slate-800">Назва точки в дереві</label>
+                    <label className="text-sm font-semibold text-slate-800">
+                      Назва точки в дереві <span className="text-slate-400 font-normal">(необов'язково)</span>
+                    </label>
                     <input
                       className={baseInput}
                       value={selectedRestaurant.energoCenterTreeText || ""}
                       onChange={(e) =>
                         setSelectedRestaurant((p) => ({ ...p, energoCenterTreeText: e.target.value }))
                       }
-                      placeholder='напр. Ресторан "Кувшин"'
+                      placeholder="якщо порожньо — буде взято єдиний об'єкт акаунту"
                     />
                   </div>
                 </div>

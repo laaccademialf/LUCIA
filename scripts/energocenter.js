@@ -10,7 +10,6 @@
 
 const DEFAULT_LOGIN_URL = "http://www.seraskoe.tech/Login.aspx";
 const DEFAULT_VIEW_URL = "http://www.seraskoe.tech/ViewDataConsumption.aspx";
-const DEFAULT_TREE_TEXT = 'Ресторан "Кувшин"';
 
 const DIRECTIONS = ["A+", "A-", "R+", "R-"];
 
@@ -20,7 +19,7 @@ const ACTION_TIMEOUT_MS = 20_000;
 const getConfig = (overrides = {}) => {
   const user = String(overrides.user ?? process.env.SERASKOE_USER ?? "").trim();
   const password = String(overrides.password ?? process.env.SERASKOE_PASSWORD ?? "");
-  const treeText = String(overrides.treeText ?? process.env.SERASKOE_TREE_TEXT ?? DEFAULT_TREE_TEXT).trim();
+  const treeText = String(overrides.treeText ?? process.env.SERASKOE_TREE_TEXT ?? "").trim();
   return {
     loginUrl: String(process.env.SERASKOE_LOGIN_URL || DEFAULT_LOGIN_URL).trim(),
     viewUrl: String(process.env.SERASKOE_VIEW_URL || DEFAULT_VIEW_URL).trim(),
@@ -30,7 +29,7 @@ const getConfig = (overrides = {}) => {
   };
 };
 
-const credKey = (cfg) => `${cfg.user}|${cfg.treeText}`;
+const credKey = (cfg) => `${cfg.user}|${cfg.treeText || "*"}`;
 
 // Парсинг числа з рядків типу "1 234,56" / "1,234.56" / "1234".
 export const parseConsumptionNumber = (raw) => {
@@ -137,13 +136,27 @@ const ignoreContextDestroyed = (err) => {
 
 const selectTreeNode = async (page, treeText) => {
   const needle = String(treeText || "").trim().toLowerCase();
-  if (!needle) throw new Error("Порожній SERASKOE_TREE_TEXT");
+  // Якщо treeText не вказано — авто-вибір єдиного (або першого) листа дерева.
+  const autoPick = !needle;
 
-  // Шукаємо посилання вузла дерева, що містить потрібний текст.
+  // Шукаємо посилання вузла дерева, що містить потрібний текст,
+  // або — у режимі autoPick — перший лист (не ToggleNode).
   const findLink = async () =>
-    page.evaluate((n) => {
+    page.evaluate((n, auto) => {
       const links = Array.from(document.querySelectorAll("a"));
-      const node = links.find((a) => (a.textContent || "").trim().toLowerCase().includes(n));
+      let node = null;
+      if (auto) {
+        // Лист дерева — анкор з __doPostBack, який НЕ є ToggleNode.
+        node = links.find((a) => {
+          const href = String(a.getAttribute("href") || "");
+          if (!href.includes("__doPostBack")) return false;
+          if (href.includes("TreeView_ToggleNode")) return false;
+          const txt = (a.textContent || "").trim();
+          return txt.length > 0;
+        });
+      } else {
+        node = links.find((a) => (a.textContent || "").trim().toLowerCase().includes(n));
+      }
       if (!node) return null;
       node.setAttribute("data-pw-tree-target", "1");
       return {
@@ -151,7 +164,7 @@ const selectTreeNode = async (page, treeText) => {
         href: node.getAttribute("href") || "",
         id: node.id || "",
       };
-    }, needle).catch(() => null);
+    }, needle, autoPick).catch(() => null);
 
   // Розгортає всі знайдені toggle-посилання (ASP.NET TreeView_ToggleNode).
   const expandToggles = async () => {
@@ -182,7 +195,11 @@ const selectTreeNode = async (page, treeText) => {
   }
 
   if (!info) {
-    throw new Error(`Вузол "${treeText}" не знайдено у дереві об'єктів`);
+    throw new Error(
+      autoPick
+        ? "Не знайдено жодного об'єкта в дереві (порожній акаунт?)"
+        : `Вузол "${treeText}" не знайдено у дереві об'єктів`
+    );
   }
 
   // Клікаємо позначене посилання. Це викличе __doPostBack — чекаємо на навігацію.

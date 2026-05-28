@@ -199,6 +199,12 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         onReportDateChange={setReportDate}
         onDataChange={setEnergoData}
         credentials={energoCredentials}
+        onSave={() => handleElectricitySubmit({
+          date: reportDate,
+          meters: [],
+          responsible: user?.displayName || user?.fullName || "",
+        })}
+        canSave={!user || user.role !== "admin" || Boolean(currentRestaurantId)}
       />
       <ElectricityForm
         meters={electricityMeters.map(m => ({

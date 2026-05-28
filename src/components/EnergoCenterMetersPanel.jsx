@@ -42,7 +42,7 @@ const formatDateUk = (iso) => {
   return `${d}.${m}.${y}`;
 };
 
-const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange, credentials } = {}) => {
+const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange, credentials, onSave, saveLabel = "Зберегти показники", canSave = true } = {}) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
@@ -143,6 +143,16 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
           >
             {loading ? "Оновлюю..." : "Оновити дані"}
           </button>
+          {onSave && (
+            <button
+              type="button"
+              onClick={() => onSave({ rows, reportDate, data })}
+              disabled={!canSave || loading || rows.length === 0}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-400 transition"
+            >
+              {saveLabel}
+            </button>
+          )}
         </div>
       </header>
 

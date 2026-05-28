@@ -51,12 +51,6 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
         </p>
       )}
 
-      {meterValues.length === 0 && energoRows.length > 0 && (
-        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900">
-          Натисніть «Зберегти показники», щоб записати в історію {energoRows.length} рядків EnergoCenter за {reportDate}.
-        </div>
-      )}
-
       {meterValues.length === 0 && energoRows.length === 0 && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
           Немає даних для збереження: спершу отримайте показники з EnergoCenter або налаштуйте лічильники в розділі «Управління утилітами».
@@ -96,11 +90,13 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
         ))}
       </div>
 
-      <div className="flex justify-end mt-6">
-        <button type="button" onClick={handleSubmit} className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-lg shadow-lg transition">
-          Зберегти показники
-        </button>
-      </div>
+      {meterValues.length > 0 && (
+        <div className="flex justify-end mt-6">
+          <button type="button" onClick={handleSubmit} className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-lg shadow-lg transition">
+            Зберегти показники
+          </button>
+        </div>
+      )}
 
       {/* Історія */}
       {history.length > 0 ? (() => {
