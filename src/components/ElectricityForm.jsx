@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { Zap } from "lucide-react";
+import DatePickerPopover from "./DatePickerPopover";
+
+const getTodayIso = () => new Date().toISOString().slice(0, 10);
 
 // Компонент для введення та перегляду історії показників електроенергії
 const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = "" }) => {
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(getTodayIso);
   const [temperature, setTemperature] = useState("");
   const [guests, setGuests] = useState("");
   const [meterValues, setMeterValues] = useState(
@@ -34,6 +37,7 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
   // Відправка форми
   const handleSubmit = (e) => {
     e.preventDefault();
+    if (!date) return;
     if (onSubmit) {
       onSubmit({
         date,
@@ -45,9 +49,47 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
     }
   };
 
+  const existingForDate = history.find((row) => String(row?.date || "") === date);
+
   return (
     <div className="space-y-8">
-      {/* Заголовок */}
+      {/* Параметри запису */}
+      <div className="flex flex-wrap items-end gap-4 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+        <DatePickerPopover
+          value={date}
+          max={getTodayIso()}
+          onChange={(iso) => setDate(iso)}
+          label="Дата показників:"
+        />
+        <div className="flex flex-col">
+          <label htmlFor="el-temp" className="text-xs text-slate-500 mb-1">Температура, °C</label>
+          <input
+            id="el-temp"
+            type="number"
+            value={temperature}
+            onChange={(e) => setTemperature(e.target.value)}
+            className="w-28 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            placeholder="—"
+          />
+        </div>
+        <div className="flex flex-col">
+          <label htmlFor="el-guests" className="text-xs text-slate-500 mb-1">Кількість гостей</label>
+          <input
+            id="el-guests"
+            type="number"
+            value={guests}
+            onChange={(e) => setGuests(e.target.value)}
+            className="w-32 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            placeholder="—"
+          />
+        </div>
+        {existingForDate && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            Для дати {date} вже існує запис в історії. Збереження створить ще один.
+          </p>
+        )}
+      </div>
+
       {/* Лічильники */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {meterValues.map((m, idx) => (
