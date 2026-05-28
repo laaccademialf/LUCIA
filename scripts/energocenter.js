@@ -374,6 +374,16 @@ const createSession = async (cfg) => {
     });
     context.setDefaultTimeout(ACTION_TIMEOUT_MS);
     context.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+
+    // Блокуємо непотрібні для скрапінгу ресурси — пришвидшує завантаження.
+    await context.route("**/*", (route) => {
+      const type = route.request().resourceType();
+      if (type === "image" || type === "font" || type === "media") {
+        return route.abort();
+      }
+      return route.continue();
+    });
+
     const page = await context.newPage();
 
     await page.goto(cfg.loginUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
@@ -434,7 +444,41 @@ const waitForTableReady = async (page) => {
   }
 };
 
-export const fetchEnergoCenterConsumption = async ({ debug = false, date } = {}) => {
+// ---- Кеш результатів за датою ----
+const RESULT_TTL_MS = 5 * 60 * 1000; // 5 хвилин
+const resultCache = new Map(); // key: reportDateIso -> { expiresAt, payload }
+
+const getCached = (key) => {
+  const hit = resultCache.get(key);
+  if (!hit) return null;
+  if (Date.now() > hit.expiresAt) {
+    resultCache.delete(key);
+    return null;
+  }
+  return hit.payload;
+};
+
+const setCached = (key, payload) => {
+  resultCache.set(key, { expiresAt: Date.now() + RESULT_TTL_MS, payload });
+};
+
+export const invalidateEnergoCenterCache = () => {
+  resultCache.clear();
+};
+
+// Прогріває сесію (логін + дерево) в фоні, щоб перший запит користувача був теплий.
+export const warmUpEnergoCenter = async () => {
+  try {
+    const cfg = getConfig();
+    if (!cfg.user || !cfg.password) return false;
+    await getOrCreateSession(cfg);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const fetchEnergoCenterConsumption = async ({ debug = false, date, force = false } = {}) => {
   const cfg = getConfig();
   const fetchedAt = new Date().toISOString();
   const reportDateIso = (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : getYesterdayIso();
@@ -449,6 +493,14 @@ export const fetchEnergoCenterConsumption = async ({ debug = false, date } = {})
       rows: [],
       error: "Не задано SERASKOE_USER / SERASKOE_PASSWORD у змінних оточення",
     };
+  }
+
+  // Швидкий шлях: кеш
+  if (!force && !debug) {
+    const cached = getCached(reportDateIso);
+    if (cached) {
+      return { ...cached, fromCache: true };
+    }
   }
 
   let step = "init";
@@ -535,7 +587,7 @@ export const fetchEnergoCenterConsumption = async ({ debug = false, date } = {})
       // успіх — подовжимо TTL сесії
       session.expiresAt = Date.now() + SESSION_TTL_MS;
 
-      return {
+      const payload = {
         ok: true,
         fetchedAt,
         reportDate: reportDateIso,
@@ -543,6 +595,8 @@ export const fetchEnergoCenterConsumption = async ({ debug = false, date } = {})
         rows,
         ...(debug ? { debug: debugInfo } : {}),
       };
+      if (!debug) setCached(reportDateIso, payload);
+      return payload;
     } catch (err) {
       const msg = err?.message || String(err);
       // Сесія могла протухнути — спробуємо ще раз чистою

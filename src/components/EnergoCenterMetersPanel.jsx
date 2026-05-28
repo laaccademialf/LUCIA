@@ -5,6 +5,7 @@ import {
   isEnergoCenterApiEnabled,
   summarizeRowsByDirection,
 } from "../api/energoCenterApi";
+import DatePickerPopover from "./DatePickerPopover";
 
 const formatNumber = (value) => {
   if (value == null) return "—";
@@ -50,7 +51,7 @@ const EnergoCenterMetersPanel = ({ autoLoad = false } = {}) => {
 
   const apiEnabled = isEnergoCenterApiEnabled();
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({ force = false } = {}) => {
     if (!apiEnabled) {
       setError("API не налаштовано (VITE_DATA_API_BASE_URL).");
       return;
@@ -62,7 +63,7 @@ const EnergoCenterMetersPanel = ({ autoLoad = false } = {}) => {
     setLoading(true);
     setError("");
     try {
-      const result = await fetchEnergoCenterConsumption({ signal: controller.signal, date: reportDate });
+      const result = await fetchEnergoCenterConsumption({ signal: controller.signal, date: reportDate, force });
       setData(result);
       if (!result?.ok) {
         setError(result?.error || "Не вдалося отримати дані");
@@ -77,12 +78,17 @@ const EnergoCenterMetersPanel = ({ autoLoad = false } = {}) => {
     }
   }, [apiEnabled, reportDate]);
 
+  // Автопідвантаження при зміні дати — бере з кешу (миттєво якщо є).
   useEffect(() => {
-    if (autoLoad) void load();
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportDate]);
+
+  useEffect(() => {
     return () => {
       if (abortRef.current) abortRef.current.abort();
     };
-  }, [autoLoad, load]);
+  }, []);
 
   const rows = Array.isArray(data?.rows) ? data.rows : [];
   const totals = summarizeRowsByDirection(rows);
@@ -102,19 +108,14 @@ const EnergoCenterMetersPanel = ({ autoLoad = false } = {}) => {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <label className="text-sm text-slate-600">
-            Дата:
-            <input
-              type="date"
-              value={reportDate}
-              max={getYesterdayIso()}
-              onChange={(e) => setReportDate(e.target.value)}
-              className="ml-2 rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm text-slate-800"
-            />
-          </label>
+          <DatePickerPopover
+            value={reportDate}
+            max={getYesterdayIso()}
+            onChange={(iso) => setReportDate(iso)}
+          />
           <button
             type="button"
-            onClick={load}
+            onClick={() => load({ force: true })}
             disabled={loading}
             className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-400 transition"
           >

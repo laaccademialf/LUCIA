@@ -4121,9 +4121,10 @@ const server = http.createServer(async (req, res) => {
     try {
       const { fetchEnergoCenterConsumption } = await import("../energocenter.js");
       const debug = requestUrl.searchParams.get("debug") === "1";
+      const force = requestUrl.searchParams.get("force") === "1";
       const dateParam = String(requestUrl.searchParams.get("date") || "").trim();
       const date = /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : undefined;
-      const result = await fetchEnergoCenterConsumption({ debug, date });
+      const result = await fetchEnergoCenterConsumption({ debug, date, force });
       const status = result?.ok ? 200 : 502;
       return sendJson(res, status, result);
     } catch (error) {
@@ -4285,6 +4286,20 @@ server.listen(PORT, HOST, () => {
   setImmediate(() => {
     scheduleAssetsCacheWarmup();
   });
+
+  // Warm EnergoCenter Playwright session in the background, so the first
+  // user click on "Оновити дані" is fast (login + tree-select already done).
+  if (process.env.SERASKOE_USER && process.env.SERASKOE_PASSWORD) {
+    setImmediate(async () => {
+      try {
+        const { warmUpEnergoCenter } = await import("../energocenter.js");
+        const ok = await warmUpEnergoCenter();
+        console.log(`[energocenter] warm-up ${ok ? "ok" : "skipped/failed"}`);
+      } catch (e) {
+        console.warn(`[energocenter] warm-up error: ${e?.message || e}`);
+      }
+    });
+  }
 
   if (PUBLIC_REGISTER_ENABLED) {
     console.warn(
