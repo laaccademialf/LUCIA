@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Zap } from "lucide-react";
 
 // Компонент для введення та перегляду історії показників електроенергії
-const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = "", reportDate = "" }) => {
+const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = "", reportDate = "", energoRows = [] }) => {
   const [meterValues, setMeterValues] = useState(
     meters.map(m => ({
       meterId: m.id,
@@ -51,10 +51,21 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
         </p>
       )}
 
+      {meterValues.length === 0 && energoRows.length > 0 && (
+        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900">
+          Натисніть «Зберегти показники», щоб записати в історію {energoRows.length} рядків EnergoCenter за {reportDate}.
+        </div>
+      )}
+
+      {meterValues.length === 0 && energoRows.length === 0 && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          Немає даних для збереження: спершу отримайте показники з EnergoCenter або налаштуйте лічильники в розділі «Управління утилітами».
+        </div>
+      )}
+
       {/* Лічильники */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {meterValues.map((m, idx) => (
-          <div key={m.meterId} className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col gap-4">
+        {meterValues.map((m, idx) => (          <div key={m.meterId} className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col gap-4">
             <div className="flex items-center gap-3 mb-2">
               <Zap size={22} className="text-yellow-400" />
               <span className="font-semibold text-slate-800 text-lg">Лічильник {m.meterNumber}</span>

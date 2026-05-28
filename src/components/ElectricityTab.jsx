@@ -18,6 +18,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
     d.setDate(d.getDate() - 1);
     return d.toISOString().slice(0, 10);
   });
+  const [energoData, setEnergoData] = useState(null);
 
   // Скидання вибору ресторану при зміні списку ресторанів
   useEffect(() => {
@@ -91,16 +92,35 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
 
   const handleElectricitySubmit = async (data) => {
     const restaurantId = String(currentRestaurantId || "").trim();
-    if (!restaurantId) {
-      setStatus("Оберіть заклад перед збереженням показників.");
+    const restaurant = restaurants.find((item) => String(item?.id || "") === restaurantId);
+
+    // Якщо форма не передала лічильники (немає налаштованих utilityMeters),
+    // беремо рядки з EnergoCenter як показники.
+    let meters = Array.isArray(data?.meters) ? data.meters.filter((m) => m && (m.currValue !== "" || m.consumption)) : [];
+    if (meters.length === 0) {
+      const rows = Array.isArray(energoData?.rows) ? energoData.rows : [];
+      meters = rows.map((row, idx) => ({
+        meterId: `energo:${row.point}|${row.direction}|${idx}`,
+        meterNumber: `${row.point || ""} ${row.direction || ""}`.trim(),
+        prevValue: "",
+        currValue: row.consumption,
+        consumption: row.consumption,
+        source: "energocenter",
+      }));
+    }
+
+    if (meters.length === 0) {
+      setStatus("Немає даних для збереження. Отримайте показники EnergoCenter або введіть значення вручну.");
       return;
     }
 
-    const restaurant = restaurants.find((item) => String(item?.id || "") === restaurantId);
     const payload = {
       restaurantId,
       restaurantName: String(restaurant?.name || ""),
-      ...data,
+      date: data?.date || reportDate,
+      meters,
+      responsible: data?.responsible || "",
+      source: meters.some((m) => m.source === "energocenter") ? "energocenter" : "manual",
       createdAt: new Date().toISOString(),
     };
 
@@ -112,7 +132,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         const id = `local_${Date.now()}`;
         setLocalFallbackHistory((prev) => [{ id, ...payload }, ...prev]);
       }
-      setStatus("Показники електроенергії збережено.");
+      setStatus(`Показники збережено за ${payload.date}.`);
     } catch (error) {
       setStatus(`Помилка збереження: ${error?.message || error}`);
     }
@@ -139,6 +159,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
       <EnergoCenterMetersPanel
         reportDate={reportDate}
         onReportDateChange={setReportDate}
+        onDataChange={setEnergoData}
       />
       <ElectricityForm
         meters={electricityMeters.map(m => ({
@@ -150,6 +171,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         onSubmit={handleElectricitySubmit}
         responsible={user?.displayName || user?.fullName || ""}
         reportDate={reportDate}
+        energoRows={Array.isArray(energoData?.rows) ? energoData.rows : []}
       />
     </div>
   );

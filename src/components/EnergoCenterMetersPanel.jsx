@@ -42,7 +42,7 @@ const formatDateUk = (iso) => {
   return `${d}.${m}.${y}`;
 };
 
-const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange } = {}) => {
+const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange } = {}) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
@@ -53,6 +53,8 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     if (reportDateProp === undefined) setInternalDate(iso);
   };
   const abortRef = useRef(null);
+  const onDataChangeRef = useRef(onDataChange);
+  useEffect(() => { onDataChangeRef.current = onDataChange; }, [onDataChange]);
 
   const apiEnabled = isEnergoCenterApiEnabled();
 
@@ -70,6 +72,7 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     try {
       const result = await fetchEnergoCenterConsumption({ signal: controller.signal, date: reportDate, force });
       setData(result);
+      if (onDataChangeRef.current) onDataChangeRef.current(result);
       if (!result?.ok) {
         setError(result?.error || "Не вдалося отримати дані");
       }
