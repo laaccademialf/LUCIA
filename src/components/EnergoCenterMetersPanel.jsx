@@ -42,7 +42,7 @@ const formatDateUk = (iso) => {
   return `${d}.${m}.${y}`;
 };
 
-const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange } = {}) => {
+const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange, credentials } = {}) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
@@ -57,10 +57,17 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
   useEffect(() => { onDataChangeRef.current = onDataChange; }, [onDataChange]);
 
   const apiEnabled = isEnergoCenterApiEnabled();
+  const hasCreds = Boolean(credentials?.login && credentials?.password);
 
   const load = useCallback(async ({ force = false } = {}) => {
     if (!apiEnabled) {
       setError("API не налаштовано (VITE_DATA_API_BASE_URL).");
+      return;
+    }
+    if (!hasCreds) {
+      setError("Не задано облікові дані EnergoCenter. Додайте логін/пароль у картці закладу.");
+      setData(null);
+      if (onDataChangeRef.current) onDataChangeRef.current(null);
       return;
     }
     if (abortRef.current) abortRef.current.abort();
@@ -70,7 +77,14 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     setLoading(true);
     setError("");
     try {
-      const result = await fetchEnergoCenterConsumption({ signal: controller.signal, date: reportDate, force });
+      const result = await fetchEnergoCenterConsumption({
+        signal: controller.signal,
+        date: reportDate,
+        force,
+        login: credentials?.login,
+        password: credentials?.password,
+        treeText: credentials?.treeText,
+      });
       setData(result);
       if (onDataChangeRef.current) onDataChangeRef.current(result);
       if (!result?.ok) {
@@ -84,13 +98,13 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
       if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
     }
-  }, [apiEnabled, reportDate]);
+  }, [apiEnabled, reportDate, hasCreds, credentials?.login, credentials?.password, credentials?.treeText]);
 
-  // Автопідвантаження при зміні дати — бере з кешу (миттєво якщо є).
+  // Автопідвантаження при зміні дати/облікових даних.
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reportDate]);
+  }, [reportDate, credentials?.login, credentials?.password, credentials?.treeText]);
 
   useEffect(() => {
     return () => {

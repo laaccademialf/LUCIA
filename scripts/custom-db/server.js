@@ -88,7 +88,7 @@ const setCorsHeaders = (res) => {
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, x-api-token, x-session-token"
+    "Content-Type, Authorization, x-api-token, x-session-token, x-energo-login, x-energo-password, x-energo-tree"
   );
 };
 
@@ -4124,7 +4124,31 @@ const server = http.createServer(async (req, res) => {
       const force = requestUrl.searchParams.get("force") === "1";
       const dateParam = String(requestUrl.searchParams.get("date") || "").trim();
       const date = /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : undefined;
-      const result = await fetchEnergoCenterConsumption({ debug, date, force });
+      // Облікові дані можна передати: 1) у заголовках, 2) у query.
+      const hdr = (name) => {
+        const v = req.headers[name];
+        return Array.isArray(v) ? v[0] : v;
+      };
+      const decodeMaybeB64 = (v) => {
+        const s = String(v || "");
+        if (!s) return "";
+        try {
+          // Підтримка значення з префіксом "b64:" (на випадок символів у заголовку)
+          if (s.startsWith("b64:")) return Buffer.from(s.slice(4), "base64").toString("utf8");
+          return s;
+        } catch { return s; }
+      };
+      const user = decodeMaybeB64(hdr("x-energo-login") || requestUrl.searchParams.get("login") || "").trim();
+      const password = decodeMaybeB64(hdr("x-energo-password") || requestUrl.searchParams.get("password") || "");
+      const treeText = decodeMaybeB64(hdr("x-energo-tree") || requestUrl.searchParams.get("tree") || "").trim();
+      const result = await fetchEnergoCenterConsumption({
+        debug,
+        date,
+        force,
+        user: user || undefined,
+        password: password || undefined,
+        treeText: treeText || undefined,
+      });
       const status = result?.ok ? 200 : 502;
       return sendJson(res, status, result);
     } catch (error) {

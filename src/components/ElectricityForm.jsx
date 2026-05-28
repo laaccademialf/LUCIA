@@ -106,8 +106,9 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
       {history.length > 0 ? (() => {
         const fmtDate = (v) => {
           const s = String(v || "");
-          if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return s.slice(0, 10);
-          return s;
+          const iso = /^\d{4}-\d{2}-\d{2}T/.test(s) ? s.slice(0, 10) : s;
+          const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+          return m ? `${m[3]}.${m[2]}.${m[1]}` : iso;
         };
 
         const isGenerator = (label = "") => /генератор/i.test(String(label));

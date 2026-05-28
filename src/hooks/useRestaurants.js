@@ -46,6 +46,9 @@ export const useRestaurants = (enableRealtime = true) => {
       notes: String(item.notes || item.note || "").trim(),
       printerIp: String(item.printerIp || item.printer_ip || "").trim(),
       printerPort: String(item.printerPort || item.printer_port || "").trim(),
+      energoCenterLogin: String(item.energoCenterLogin || item.energo_center_login || "").trim(),
+      energoCenterPassword: String(item.energoCenterPassword || item.energo_center_password || ""),
+      energoCenterTreeText: String(item.energoCenterTreeText || item.energo_center_tree_text || "").trim(),
       createdAt: item.createdAt || item.created_at || "",
       updatedAt: item.updatedAt || item.updated_at || "",
     };

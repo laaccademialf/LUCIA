@@ -17,13 +17,20 @@ const DIRECTIONS = ["A+", "A-", "R+", "R-"];
 const NAV_TIMEOUT_MS = 45_000;
 const ACTION_TIMEOUT_MS = 20_000;
 
-const getConfig = () => ({
-  loginUrl: String(process.env.SERASKOE_LOGIN_URL || DEFAULT_LOGIN_URL).trim(),
-  viewUrl: String(process.env.SERASKOE_VIEW_URL || DEFAULT_VIEW_URL).trim(),
-  user: String(process.env.SERASKOE_USER || "").trim(),
-  password: String(process.env.SERASKOE_PASSWORD || ""),
-  treeText: String(process.env.SERASKOE_TREE_TEXT || DEFAULT_TREE_TEXT).trim(),
-});
+const getConfig = (overrides = {}) => {
+  const user = String(overrides.user ?? process.env.SERASKOE_USER ?? "").trim();
+  const password = String(overrides.password ?? process.env.SERASKOE_PASSWORD ?? "");
+  const treeText = String(overrides.treeText ?? process.env.SERASKOE_TREE_TEXT ?? DEFAULT_TREE_TEXT).trim();
+  return {
+    loginUrl: String(process.env.SERASKOE_LOGIN_URL || DEFAULT_LOGIN_URL).trim(),
+    viewUrl: String(process.env.SERASKOE_VIEW_URL || DEFAULT_VIEW_URL).trim(),
+    user,
+    password,
+    treeText,
+  };
+};
+
+const credKey = (cfg) => `${cfg.user}|${cfg.treeText}`;
 
 // Парсинг числа з рядків типу "1 234,56" / "1,234.56" / "1234".
 export const parseConsumptionNumber = (raw) => {
@@ -339,14 +346,21 @@ const mapTableToRows = ({ headers, rows }) => {
 // ---- Сесійний кеш ----
 // Тримаємо браузер + сторінку залогінену та з обраним вузлом дерева у пам'яті,
 // щоб не платити вартість login + tree-select на кожному запиті.
+// Сесії розділені за обліковими даними (різні ресторани = різні логіни).
 const SESSION_TTL_MS = 10 * 60 * 1000; // 10 хвилин
-let warmSession = null; // { browser, context, page, expiresAt }
-let sessionPromise = null;
+const warmSessions = new Map(); // credKey -> { browser, context, page, expiresAt }
+const sessionPromises = new Map(); // credKey -> Promise
 
-export const destroySession = async () => {
-  const s = warmSession;
-  warmSession = null;
-  sessionPromise = null;
+export const destroySession = async (key) => {
+  if (key === undefined) {
+    // Закрити всі
+    const keys = [...warmSessions.keys()];
+    for (const k of keys) await destroySession(k);
+    return;
+  }
+  const s = warmSessions.get(key);
+  warmSessions.delete(key);
+  sessionPromises.delete(key);
   if (!s) return;
   try { await s.browser.close(); } catch {}
 };
@@ -402,17 +416,22 @@ const createSession = async (cfg) => {
 };
 
 const getOrCreateSession = async (cfg) => {
-  if (isSessionAlive(warmSession)) return warmSession;
-  if (sessionPromise) return sessionPromise;
-  sessionPromise = (async () => {
+  const key = credKey(cfg);
+  const existing = warmSessions.get(key);
+  if (isSessionAlive(existing)) return existing;
+  const pending = sessionPromises.get(key);
+  if (pending) return pending;
+  const p = (async () => {
     try {
-      warmSession = await createSession(cfg);
-      return warmSession;
+      const sess = await createSession(cfg);
+      warmSessions.set(key, sess);
+      return sess;
     } finally {
-      sessionPromise = null;
+      sessionPromises.delete(key);
     }
   })();
-  return sessionPromise;
+  sessionPromises.set(key, p);
+  return p;
 };
 
 // Чекає, поки після postback у таблиці зʼявиться хоча б 1 рядок даних
@@ -444,11 +463,14 @@ const waitForTableReady = async (page) => {
   }
 };
 
-// ---- Кеш результатів за датою ----
+// ---- Кеш результатів за датою + обліковими даними ----
 const RESULT_TTL_MS = 5 * 60 * 1000; // 5 хвилин
-const resultCache = new Map(); // key: reportDateIso -> { expiresAt, payload }
+const resultCache = new Map(); // key: `${credKey}::${reportDateIso}` -> { expiresAt, payload }
 
-const getCached = (key) => {
+const cacheKey = (cfg, reportDateIso) => `${credKey(cfg)}::${reportDateIso}`;
+
+const getCached = (cfg, reportDateIso) => {
+  const key = cacheKey(cfg, reportDateIso);
   const hit = resultCache.get(key);
   if (!hit) return null;
   if (Date.now() > hit.expiresAt) {
@@ -458,8 +480,8 @@ const getCached = (key) => {
   return hit.payload;
 };
 
-const setCached = (key, payload) => {
-  resultCache.set(key, { expiresAt: Date.now() + RESULT_TTL_MS, payload });
+const setCached = (cfg, reportDateIso, payload) => {
+  resultCache.set(cacheKey(cfg, reportDateIso), { expiresAt: Date.now() + RESULT_TTL_MS, payload });
 };
 
 export const invalidateEnergoCenterCache = () => {
@@ -467,9 +489,9 @@ export const invalidateEnergoCenterCache = () => {
 };
 
 // Прогріває сесію (логін + дерево) в фоні, щоб перший запит користувача був теплий.
-export const warmUpEnergoCenter = async () => {
+export const warmUpEnergoCenter = async (overrides = {}) => {
   try {
-    const cfg = getConfig();
+    const cfg = getConfig(overrides);
     if (!cfg.user || !cfg.password) return false;
     await getOrCreateSession(cfg);
     return true;
@@ -478,8 +500,8 @@ export const warmUpEnergoCenter = async () => {
   }
 };
 
-export const fetchEnergoCenterConsumption = async ({ debug = false, date, force = false } = {}) => {
-  const cfg = getConfig();
+export const fetchEnergoCenterConsumption = async ({ debug = false, date, force = false, user, password, treeText } = {}) => {
+  const cfg = getConfig({ user, password, treeText });
   const fetchedAt = new Date().toISOString();
   const reportDateIso = (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : getYesterdayIso();
   const reportDateDdMmYyyy = toDdMmYyyy(reportDateIso);
@@ -497,7 +519,7 @@ export const fetchEnergoCenterConsumption = async ({ debug = false, date, force 
 
   // Швидкий шлях: кеш
   if (!force && !debug) {
-    const cached = getCached(reportDateIso);
+    const cached = getCached(cfg, reportDateIso);
     if (cached) {
       return { ...cached, fromCache: true };
     }
@@ -554,7 +576,7 @@ export const fetchEnergoCenterConsumption = async ({ debug = false, date, force 
       if (!table.found || (table.rows.length === 0 && !emptyMsg)) {
         // Сторінка ще не догенерувала таблицю — спробуємо ще раз з холодною сесією.
         if (attempt < 2) {
-          await destroySession();
+          await destroySession(credKey(cfg));
           continue;
         }
         return {
@@ -595,13 +617,13 @@ export const fetchEnergoCenterConsumption = async ({ debug = false, date, force 
         rows,
         ...(debug ? { debug: debugInfo } : {}),
       };
-      if (!debug) setCached(reportDateIso, payload);
+      if (!debug) setCached(cfg, reportDateIso, payload);
       return payload;
     } catch (err) {
       const msg = err?.message || String(err);
       // Сесія могла протухнути — спробуємо ще раз чистою
       if (attempt < 2) {
-        await destroySession();
+        await destroySession(credKey(cfg));
         continue;
       }
       return {

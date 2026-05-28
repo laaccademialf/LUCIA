@@ -3581,6 +3581,51 @@ function App() {
                 </div>
               </div>
 
+              <div className="space-y-3">
+                <p className="text-sm font-semibold text-slate-700">⚡ EnergoCenter (seraskoe.tech)</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Логін</label>
+                    <input
+                      className={baseInput}
+                      autoComplete="off"
+                      value={selectedRestaurant.energoCenterLogin || ""}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, energoCenterLogin: e.target.value }))
+                      }
+                      placeholder="напр. kuvshin"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Пароль</label>
+                    <input
+                      type="password"
+                      className={baseInput}
+                      autoComplete="new-password"
+                      value={selectedRestaurant.energoCenterPassword || ""}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, energoCenterPassword: e.target.value }))
+                      }
+                      placeholder="пароль до seraskoe.tech"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-800">Назва точки в дереві</label>
+                    <input
+                      className={baseInput}
+                      value={selectedRestaurant.energoCenterTreeText || ""}
+                      onChange={(e) =>
+                        setSelectedRestaurant((p) => ({ ...p, energoCenterTreeText: e.target.value }))
+                      }
+                      placeholder='напр. Ресторан "Кувшин"'
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Дані зберігаються в картці закладу і використовуються при отриманні показників лічильників.
+                </p>
+              </div>
+
               <div className="flex justify-end gap-3">
                 <button
                   type="button"

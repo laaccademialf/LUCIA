@@ -66,6 +66,12 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
   const restaurantOptions = user?.role === "admin" ? restaurants : restaurants.filter(r => r.id === user?.restaurant);
   // Вибраний ресторан: для адміна — з селектора, для керуючого — його ресторан
   const currentRestaurantId = user?.role === "admin" ? selectedRestaurant : user?.restaurant;
+  const currentRestaurant = restaurants.find((r) => String(r?.id || "") === String(currentRestaurantId || ""));
+  const energoCredentials = currentRestaurant ? {
+    login: currentRestaurant.energoCenterLogin || "",
+    password: currentRestaurant.energoCenterPassword || "",
+    treeText: currentRestaurant.energoCenterTreeText || "",
+  } : null;
 
   // Фільтруємо лічильники електроенергії для поточного ресторану
   const electricityMeters = utilityMeters.filter(m => {
@@ -100,14 +106,19 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
     let meters = Array.isArray(data?.meters) ? data.meters.filter((m) => m && (m.currValue !== "" || m.consumption)) : [];
     if (meters.length === 0) {
       const rows = Array.isArray(energoData?.rows) ? energoData.rows : [];
-      meters = rows.map((row, idx) => ({
-        meterId: `energo:${row.point}|${row.direction}|${idx}`,
-        meterNumber: `${row.point || ""} ${row.direction || ""}`.trim(),
-        prevValue: "",
-        currValue: row.consumption,
-        consumption: row.consumption,
-        source: "energocenter",
-      }));
+      meters = rows
+        .filter((row) => {
+          const n = Number(row?.consumption);
+          return Number.isFinite(n) && n !== 0;
+        })
+        .map((row, idx) => ({
+          meterId: `energo:${row.point}|${row.direction}|${idx}`,
+          meterNumber: `${row.point || ""} ${row.direction || ""}`.trim(),
+          prevValue: "",
+          currValue: row.consumption,
+          consumption: row.consumption,
+          source: "energocenter",
+        }));
     }
 
     if (meters.length === 0) {
@@ -173,10 +184,21 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         </div>
       )}
       {status && <p className="text-sm text-slate-600">{status}</p>}
+      {user?.role === "admin" && !currentRestaurantId && (
+        <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          Оберіть заклад, щоб завантажити показники з його облікового запису EnergoCenter.
+        </p>
+      )}
+      {currentRestaurantId && !energoCredentials?.login && (
+        <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          У картці закладу не задано логін/пароль EnergoCenter. Додайте їх у «Управління ресторанами».
+        </p>
+      )}
       <EnergoCenterMetersPanel
         reportDate={reportDate}
         onReportDateChange={setReportDate}
         onDataChange={setEnergoData}
+        credentials={energoCredentials}
       />
       <ElectricityForm
         meters={electricityMeters.map(m => ({
