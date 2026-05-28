@@ -105,31 +105,67 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
       {/* Історія */}
       <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 mt-8">
         <h4 className="font-semibold text-slate-800 mb-4 text-lg flex items-center gap-2"><Zap size={18} className="text-yellow-400" /> Історія показників</h4>
-        {history.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-100 border-b border-slate-200">
-                <tr>
-                  <th className="px-4 py-2">Дата</th>
-                  <th className="px-4 py-2">№ лічильника</th>
-                  <th className="px-4 py-2">Попередні</th>
-                  <th className="px-4 py-2">Поточні</th>
-                  <th className="px-4 py-2">Споживання</th>
-                  <th className="px-4 py-2">Відповідальний</th>
-                  {onDeleteHistory && <th className="px-4 py-2"></th>}
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((row, idx) => {
-                  const ms = Array.isArray(row?.meters) ? row.meters : [];
-                  if (ms.length === 0) {
+        {history.length > 0 ? (() => {
+          // Збираємо унікальні стовпці (точка + напрямок) за всіма записами,
+          // зберігаючи порядок першої появи.
+          const columns = [];
+          const seen = new Set();
+          for (const row of history) {
+            const ms = Array.isArray(row?.meters) ? row.meters : [];
+            for (const m of ms) {
+              const key = String(m?.meterNumber || m?.meterId || "");
+              if (!key || seen.has(key)) continue;
+              seen.add(key);
+              columns.push(key);
+            }
+          }
+
+          const fmtDate = (v) => {
+            const s = String(v || "");
+            if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return s.slice(0, 10);
+            return s;
+          };
+
+          return (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-100 border-b border-slate-200">
+                  <tr>
+                    <th className="px-3 py-2 text-left whitespace-nowrap">Дата</th>
+                    {columns.map((c) => (
+                      <th key={c} className="px-3 py-2 text-right whitespace-nowrap">{c}</th>
+                    ))}
+                    <th className="px-3 py-2 text-left whitespace-nowrap">Відповідальний</th>
+                    {onDeleteHistory && <th className="px-3 py-2"></th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((row, idx) => {
+                    const ms = Array.isArray(row?.meters) ? row.meters : [];
+                    const byCol = new Map();
+                    for (const m of ms) {
+                      const key = String(m?.meterNumber || m?.meterId || "");
+                      if (!key) continue;
+                      byCol.set(key, m);
+                    }
+                    const isEmpty = ms.length === 0;
                     return (
-                      <tr key={`${row?.id || idx}-empty`} className="text-slate-400 italic">
-                        <td className="px-4 py-2">{row?.date || ""}</td>
-                        <td className="px-4 py-2" colSpan={4}>порожній запис (немає показників)</td>
-                        <td className="px-4 py-2">{row?.responsible || ""}</td>
+                      <tr
+                        key={row?.id || idx}
+                        className={`border-t border-slate-100 ${isEmpty ? "text-slate-400 italic" : ""}`}
+                      >
+                        <td className="px-3 py-2 whitespace-nowrap">{fmtDate(row?.date)}</td>
+                        {columns.map((c) => {
+                          const m = byCol.get(c);
+                          return (
+                            <td key={c} className="px-3 py-2 text-right tabular-nums">
+                              {m ? (m.consumption ?? m.currValue ?? "—") : "—"}
+                            </td>
+                          );
+                        })}
+                        <td className="px-3 py-2 whitespace-nowrap">{row?.responsible || ""}</td>
                         {onDeleteHistory && (
-                          <td className="px-4 py-2 text-right">
+                          <td className="px-3 py-2 text-right">
                             <button
                               type="button"
                               onClick={() => onDeleteHistory(row?.id)}
@@ -139,33 +175,12 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
                         )}
                       </tr>
                     );
-                  }
-                  return ms.map((m, mIdx) => (
-                    <tr key={(row?.id || idx) + "-" + (m.meterId || mIdx)}>
-                      <td className="px-4 py-2">{row.date}</td>
-                      <td className="px-4 py-2">{m.meterNumber}</td>
-                      <td className="px-4 py-2">{m.prevValue}</td>
-                      <td className="px-4 py-2">{m.currValue}</td>
-                      <td className="px-4 py-2">{m.consumption}</td>
-                      <td className="px-4 py-2">{row.responsible}</td>
-                      {onDeleteHistory && (
-                        <td className="px-4 py-2 text-right">
-                          {mIdx === 0 && (
-                            <button
-                              type="button"
-                              onClick={() => onDeleteHistory(row?.id)}
-                              className="text-rose-600 hover:text-rose-800 text-xs font-semibold"
-                            >Видалити</button>
-                          )}
-                        </td>
-                      )}
-                    </tr>
-                  ));
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
+                  })}
+                </tbody>
+              </table>
+            </div>
+          );
+        })() : (
           <p className="text-slate-500">Немає даних</p>
         )}
       </div>
