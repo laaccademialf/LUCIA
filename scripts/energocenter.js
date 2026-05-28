@@ -209,13 +209,21 @@ const selectTreeNode = async (page, treeText) => {
     return n;
   };
 
-  // Спочатку розгортаємо все дерево, потім шукаємо.
-  await expandToggles();
-  let info = await findLink();
-  for (let i = 0; i < 5 && !info; i += 1) {
-    const expanded = await expandToggles();
-    if (expanded === 0) break;
+  // Стратегія залежить від режиму:
+  // - autoPick: розгортаємо все дерево, щоб обрати найглибший лист.
+  // - named: спершу пробуємо без розгортання (бо кожен toggle = postback);
+  //   розгортаємо лише якщо не знайшли.
+  let info;
+  if (autoPick) {
+    await expandToggles();
     info = await findLink();
+  } else {
+    info = await findLink();
+    for (let i = 0; i < 5 && !info; i += 1) {
+      const expanded = await expandToggles();
+      if (expanded === 0) break;
+      info = await findLink();
+    }
   }
 
   if (!info) {
