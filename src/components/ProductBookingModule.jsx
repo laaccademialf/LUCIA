@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Package, ShoppingCart, ClipboardCheck, Trash2, Download, Upload, FileDown, X, Printer, Calculator, BarChart2, Plus } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
+import MetroVendorParserTab from "./MetroVendorParserTab";
 import {
   endProductInventorySession,
   getActiveProductInventorySession,
@@ -12,8 +13,17 @@ import { getUsers } from "../firebase/users";
 const loadProductInventoryExcel = () => import("../utils/productInventoryExcel");
 const loadInventoryListExcel = () => import("../utils/inventoryListExcel");
 
-const normalizeTabKind = (tabId = "") => {
-  const value = String(tabId).toLowerCase();
+const normalizeTabKind = (tabId = "", tabLabel = "") => {
+  const idValue = String(tabId).toLowerCase();
+  const labelValue = String(tabLabel).toLowerCase();
+  const value = `${idValue} ${labelValue}`;
+  if (
+    value.includes("vendorpriceparser") ||
+    value.includes("supplierpriceparser") ||
+    value.includes("metroparser") ||
+    value.includes("parser") && (value.includes("vendor") || value.includes("supplier") || value.includes("постач")) ||
+    value.includes("парсер")
+  ) return "vendorPriceParser";
   if (
     (value.includes("order") && (value.includes("supplier") || value.includes("suplayer") || value.includes("vendor") || value.includes("постач"))) ||
     value.includes("supplierportal") ||
@@ -9776,7 +9786,7 @@ function OrderPurchaseReportTab({ orders, suppliers, restaurants }) {
   );
 }
 
-export default function ProductBookingModule({ topTab, restaurants = [], user }) {
+export default function ProductBookingModule({ topTab, topTabLabel = "", restaurants = [], user }) {
   const {
     products,
     inventoryListProducts,
@@ -9829,7 +9839,7 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
     };
   }, []);
 
-  const tabKind = normalizeTabKind(topTab);
+  const tabKind = normalizeTabKind(topTab, topTabLabel);
   const canManageProducts = hasProcurementAccess(user);
   const canManageOrders = hasProcurementAccess(user);
   const aplAssignments = useMemo(
@@ -9993,6 +10003,16 @@ export default function ProductBookingModule({ topTab, restaurants = [], user })
         createSupplier={createSupplier}
         updateSupplier={updateSupplier}
         removeSupplier={removeSupplier}
+      />
+    );
+  }
+
+  if (tabKind === "vendorPriceParser") {
+    return (
+      <MetroVendorParserTab
+        products={normalizedProducts}
+        updateProduct={updateProduct}
+        user={user}
       />
     );
   }

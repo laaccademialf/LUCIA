@@ -3808,24 +3808,31 @@ function App() {
 
     const activeNavKey = String(activeNav || "").toLowerCase();
     const topTabKey = String(topTab || "").toLowerCase();
-    const isCateringNav =
+    const isProductBookingNav =
+      activeNavKey.includes("productbooking") ||
+      activeNavKey.includes("inventory-products");
+    const isCateringActiveNav =
       activeNavKey.includes("catering") ||
       activeNavKey.includes("cattering") ||
       activeNavKey.includes("crmcatering") ||
       activeNavKey.includes("kitchencatering") ||
-      activeNavKey.includes("reportcatering") ||
-      topTabKey.includes("catering") ||
-      topTabKey.includes("cattering") ||
-      topTabKey.includes("chefmonitor") ||
-      topTabKey.includes("salescateringreport") ||
-      topTabKey.includes("managmentpnl") ||
-      topTabKey.includes("managementpnl") ||
-      topTabKey.includes("ordercrm") ||
-      topTabKey.includes("contactcrm") ||
-      topTabKey.includes("typycalform") ||
-      topTabKey.includes("typicalform") ||
-      topTabKey.includes("rolesettings") ||
-      topTabKey.includes("cateringrolesettings");
+      activeNavKey.includes("reportcatering");
+    const isCateringNav =
+      !isProductBookingNav && (
+        isCateringActiveNav ||
+        topTabKey.includes("catering") ||
+        topTabKey.includes("cattering") ||
+        topTabKey.includes("chefmonitor") ||
+        topTabKey.includes("salescateringreport") ||
+        topTabKey.includes("managmentpnl") ||
+        topTabKey.includes("managementpnl") ||
+        topTabKey.includes("ordercrm") ||
+        topTabKey.includes("contactcrm") ||
+        topTabKey.includes("typycalform") ||
+        topTabKey.includes("typicalform") ||
+        topTabKey.includes("rolesettings") ||
+        topTabKey.includes("cateringrolesettings")
+      );
 
     if (isCateringNav) {
       return (
@@ -3860,9 +3867,13 @@ function App() {
       activeNav.includes("productbooking") ||
       isSupplierPortalNav
     ) {
+      const currentTopTabLabel = (() => {
+        const match = topTabs.find((tab) => tab?.id === topTab);
+        return String(match?.label || "").trim();
+      })();
       return (
         <div className="grid grid-cols-1">
-          <ProductBookingModule topTab={topTab} restaurants={restaurants} user={user} />
+          <ProductBookingModule topTab={topTab} topTabLabel={currentTopTabLabel} restaurants={restaurants} user={user} />
         </div>
       );
     }

@@ -4137,6 +4137,36 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+
+  if (pathname === "/api/metro/search" && method === "POST") {
+    if (!isAuthorized(req)) {
+      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+    }
+    try {
+      const body = await parseJsonBody(req);
+      const { fetchMetroProducts } = await import("../metro.js");
+      const result = await fetchMetroProducts({
+        email: body?.email,
+        password: body?.password,
+        query: body?.query,
+        limit: body?.limit,
+        manual: body?.manual === true,
+      });
+      const status = result?.ok ? 200 : 502;
+      return sendJson(res, status, result);
+    } catch (error) {
+      return sendJson(res, 500, {
+        ok: false,
+        fetchedAt: new Date().toISOString(),
+        rows: [],
+        error: `Metro parser error: ${error?.message || error}`,
+        diagnostics: {
+          stage: "server_exception",
+          reason: String(error?.message || error),
+        },
+      });
+    }
+  }
   if (pathname === "/api/assets/batch" && method === "POST") {
     if (!isAuthorized(req)) {
       return sendJson(res, 401, { ok: false, error: "Unauthorized" });
