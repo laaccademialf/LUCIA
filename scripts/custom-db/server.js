@@ -77,14 +77,43 @@ const writeSettingsFile = async (settings) => {
   await fs.writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf-8");
 };
 
-const CORS_ORIGIN = process.env.RUNTIME_SETTINGS_CORS_ORIGIN || "*";
+// CORS origin policy:
+//  - Default is the production frontend (https://luci.lafamiglia.ua). Capacitor
+//    Android/iOS apps don't send a real Origin and aren't blocked by CORS, so
+//    the mobile app keeps working.
+//  - To override, set RUNTIME_SETTINGS_CORS_ORIGIN in env. Supports either a
+//    single value, a comma-separated list (e.g. prod + staging + localhost),
+//    or "*" to fully disable the allowlist (NOT recommended in production).
+//  - When a list is configured, the server echoes the matching request Origin
+//    back, which is what browsers require for cross-origin requests.
+const CORS_ORIGIN_RAW = String(
+  process.env.RUNTIME_SETTINGS_CORS_ORIGIN || "https://luci.lafamiglia.ua"
+).trim();
+const CORS_ALLOWED_ORIGINS = CORS_ORIGIN_RAW === "*"
+  ? null
+  : CORS_ORIGIN_RAW.split(",").map((value) => value.trim()).filter(Boolean);
 const ASSETS_API_SLOW_MS = Math.max(
   50,
   Number.parseInt(String(process.env.ASSETS_API_SLOW_MS || "500"), 10) || 500
 );
 
+const resolveAllowedOrigin = (req) => {
+  if (!CORS_ALLOWED_ORIGINS) return "*";
+  const requestOrigin = String(req?.headers?.origin || "").trim();
+  if (requestOrigin && CORS_ALLOWED_ORIGINS.includes(requestOrigin)) {
+    return requestOrigin;
+  }
+  // Fallback to first whitelisted origin (browser will still block mismatched
+  // origins; this keeps non-browser clients like curl/native apps working).
+  return CORS_ALLOWED_ORIGINS[0] || "*";
+};
+
 const setCorsHeaders = (res) => {
-  res.setHeader("Access-Control-Allow-Origin", CORS_ORIGIN);
+  const req = res?.req;
+  res.setHeader("Access-Control-Allow-Origin", resolveAllowedOrigin(req));
+  if (CORS_ALLOWED_ORIGINS) {
+    res.setHeader("Vary", "Origin");
+  }
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
@@ -264,8 +293,17 @@ const parseJsonBody = async (req, maxSize = 20 * 1024 * 1024) => {
   return JSON.parse(raw);
 };
 
+// Security gate for /api/* and other privileged routes.
+//   - If CUSTOM_MIGRATION_TOKEN is set, the request must present it.
+//   - If CUSTOM_MIGRATION_TOKEN is NOT set, the API is wide open to the
+//     public internet. We refuse such requests by default. Operator can
+//     temporarily re-enable open mode with LUCIA_ALLOW_OPEN_API=true
+//     (NOT recommended outside local dev).
+const ALLOW_OPEN_API =
+  String(process.env.LUCIA_ALLOW_OPEN_API || "").trim().toLowerCase() === "true";
+
 const isAuthorized = (req) => {
-  if (!TOKEN) return true;
+  if (!TOKEN) return ALLOW_OPEN_API;
   const authHeader = String(req.headers.authorization || "");
   const apiTokenHeader = String(req.headers["x-api-token"] || "");
   const expected = `Bearer ${TOKEN}`;
@@ -522,16 +560,21 @@ const BOOTSTRAP_ADMIN_ID =
   String(process.env.LUCIA_BOOTSTRAP_ADMIN_ID || "bootstrap_admin").trim() || "bootstrap_admin";
 const BOOTSTRAP_ADMIN_EMAIL =
   normalizeEmail(process.env.LUCIA_BOOTSTRAP_ADMIN_EMAIL || "admin@lucia.local");
+// Bootstrap admin password MUST be supplied via env. Previously a hard-coded
+// default ("Admin123!") was used, which is a known credential and a critical
+// security risk. With no default, ensureBootstrapAdminUser() will short-circuit
+// (length < 6 check below) and refuse to create the initial admin until the
+// operator sets LUCIA_BOOTSTRAP_ADMIN_PASSWORD explicitly. Existing admins
+// already stored in the DB are unaffected.
 const BOOTSTRAP_ADMIN_PASSWORD =
-  String(process.env.LUCIA_BOOTSTRAP_ADMIN_PASSWORD || "Admin123!").trim();
+  String(process.env.LUCIA_BOOTSTRAP_ADMIN_PASSWORD || "").trim();
 const BOOTSTRAP_ADMIN_DISPLAY_NAME =
   String(process.env.LUCIA_BOOTSTRAP_ADMIN_DISPLAY_NAME || "Platform Admin").trim() || "Platform Admin";
 const BOOTSTRAP_MENU_ENABLED =
   String(process.env.LUCIA_BOOTSTRAP_MENU_ENABLED || "true").trim().toLowerCase() !== "false";
 const PUBLIC_REGISTER_ENABLED =
   String(process.env.LUCIA_AUTH_PUBLIC_REGISTER_ENABLED || "true").trim().toLowerCase() !== "false";
-const DEFAULT_BOOTSTRAP_PASSWORD_IN_USE =
-  BOOTSTRAP_ADMIN_PASSWORD === "Admin123!";
+const BOOTSTRAP_PASSWORD_MISSING = BOOTSTRAP_ADMIN_PASSWORD.length < 6;
 
 let bootstrapAdminPromise = null;
 
@@ -3419,9 +3462,23 @@ const handleServiceRequestsApi = async (req, res, requestId) => {
   return sendJson(res, 405, { ok: false, error: "Method not allowed" });
 };
 
+// Sensitive collections must never be exposed over the public collections API.
+//   - authUsers: contains password hashes + salts (offline brute-force target)
+//   - authSessions: contains live session tokens (account takeover target)
+// Internal code paths (auth handlers, bootstrap, migrations) read these via
+// getCollectionItemsData() directly and are unaffected.
+const SENSITIVE_COLLECTIONS = new Set(["authUsers", "authSessions"]);
+
 const handleCollectionsApi = async (req, res, collectionName, itemId) => {
   if (!isAuthorized(req)) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+  }
+
+  if (SENSITIVE_COLLECTIONS.has(String(collectionName || ""))) {
+    return sendJson(res, 403, {
+      ok: false,
+      error: "Forbidden: this collection is not accessible via the public API",
+    });
   }
 
   const dbConfig = getAssetsRuntimeConfig();
@@ -4361,9 +4418,38 @@ server.listen(PORT, HOST, () => {
     );
   }
 
-  if (BOOTSTRAP_ADMIN_ENABLED && DEFAULT_BOOTSTRAP_PASSWORD_IN_USE) {
+  if (BOOTSTRAP_ADMIN_ENABLED && BOOTSTRAP_PASSWORD_MISSING) {
     console.warn(
-      "[security] Bootstrap admin uses the default password. Set LUCIA_BOOTSTRAP_ADMIN_PASSWORD and disable bootstrap after initial setup."
+      "[security] LUCIA_BOOTSTRAP_ADMIN_PASSWORD is not set (or too short). First-run admin auto-creation is DISABLED. Set the env var to a strong password (min 6 chars) on a fresh install; ignore this if an admin already exists."
     );
   }
+
+  // --- Security self-audit (printed once at startup) ---
+  console.log("");
+  console.log("========== LUCIA SECURITY STATUS ==========");
+  if (!TOKEN) {
+    if (ALLOW_OPEN_API) {
+      console.warn(
+        "[security] CRITICAL: CUSTOM_MIGRATION_TOKEN is NOT set and LUCIA_ALLOW_OPEN_API=true. The /api/* surface is open to the public internet. Set CUSTOM_MIGRATION_TOKEN to a long random string and remove LUCIA_ALLOW_OPEN_API as soon as possible."
+      );
+    } else {
+      console.error(
+        "[security] CUSTOM_MIGRATION_TOKEN is NOT set. All /api/* requests will be rejected with 401. Set CUSTOM_MIGRATION_TOKEN (a long random string) in your env and make sure clients send 'Authorization: Bearer <token>'."
+      );
+    }
+  } else {
+    console.log("[security] API token: configured.");
+  }
+  if (CORS_ALLOWED_ORIGINS) {
+    console.log(`[security] CORS allowed origins: ${CORS_ALLOWED_ORIGINS.join(", ")}`);
+  } else {
+    console.warn(
+      "[security] CORS is wide open (Access-Control-Allow-Origin: *). For production set RUNTIME_SETTINGS_CORS_ORIGIN to your frontend URL (comma-separated for multiple)."
+    );
+  }
+  console.log(
+    "[security] Sensitive collections (authUsers, authSessions) are not exposed via /api/collections."
+  );
+  console.log("===========================================");
+  console.log("");
 });
