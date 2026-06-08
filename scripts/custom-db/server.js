@@ -136,10 +136,35 @@ const ASSETS_API_SLOW_MS = Math.max(
   Number.parseInt(String(process.env.ASSETS_API_SLOW_MS || "500"), 10) || 500
 );
 
+// Чи дозволяти dev-origins (localhost / 127.0.0.1 / *.app.github.dev / *.github.dev),
+// які не входять у фіксований CORS-allowlist. За замовчуванням увімкнено.
+const ALLOW_DEV_ORIGINS =
+  String(process.env.LUCIA_ALLOW_DEV_ORIGINS || "true").trim().toLowerCase() !== "false";
+
+const isDevOrigin = (origin) => {
+  try {
+    const { hostname } = new URL(origin);
+    if (hostname === "localhost" || hostname === "127.0.0.1") return true;
+    if (hostname.endsWith(".app.github.dev")) return true;
+    if (hostname.endsWith(".github.dev")) return true;
+    if (hostname.endsWith(".gitpod.io")) return true;
+    return false;
+  } catch {
+    return false;
+  }
+};
+
 const resolveAllowedOrigin = (req) => {
   if (!CORS_ALLOWED_ORIGINS) return "*";
   const requestOrigin = String(req?.headers?.origin || "").trim();
   if (requestOrigin && CORS_ALLOWED_ORIGINS.includes(requestOrigin)) {
+    return requestOrigin;
+  }
+  // Dev-friendly: автоматично дозволяємо локальну розробку та GitHub Codespaces,
+  // origin яких змінюється щосесії. Вмикається/вимикається через
+  // LUCIA_ALLOW_DEV_ORIGINS (default true). API і так захищений bearer-токеном,
+  // тож це не послаблює авторизацію. Вимкни на проді, якщо не потрібно.
+  if (requestOrigin && ALLOW_DEV_ORIGINS && isDevOrigin(requestOrigin)) {
     return requestOrigin;
   }
   // Fallback to first whitelisted origin (browser will still block mismatched
