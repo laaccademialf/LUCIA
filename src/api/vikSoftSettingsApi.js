@@ -16,6 +16,23 @@ const getApiBase = () => {
   const runtimeBase = String(runtime?.apiBaseUrl || "").trim().replace(/\/+$/, "");
   return runtimeBase || ENV_BASE;
 };
+
+export const getVikSoftApiClientContext = () => {
+  const runtime = readRuntime();
+  const runtimeBase = String(runtime?.apiBaseUrl || "").trim().replace(/\/+$/, "");
+  const envBase = String(ENV_BASE || "").trim().replace(/\/+$/, "");
+  const resolvedBase = runtimeBase || envBase;
+  return {
+    resolvedBase,
+    source: runtimeBase ? "runtime" : "env",
+    hasRuntimeOverride: Boolean(runtimeBase),
+    hasSessionToken: Boolean(
+      typeof window !== "undefined" && typeof localStorage !== "undefined"
+        ? String(localStorage.getItem("lucia_auth_session_token") || "").trim()
+        : ""
+    ),
+  };
+};
 const getApiToken = () => {
   const runtime = readRuntime();
   return String(runtime?.token || "").trim() || ENV_TOKEN;
@@ -41,10 +58,14 @@ const requireBase = () => {
 
 const formatRouteError = (status, error, route) => {
   const baseError = String(error || `HTTP ${status}`).trim();
+  const ctx = getVikSoftApiClientContext();
+  const suffix = ctx.resolvedBase
+    ? ` [backend: ${ctx.resolvedBase}, source: ${ctx.source}]`
+    : "";
   if (status === 404 || /^not found$/i.test(baseError)) {
-    return `${baseError} (ендпоінт ${route} відсутній на бекенді — онови і перезапусти migration-сервер)`;
+    return `${baseError} (ендпоінт ${route} відсутній на бекенді — онови і перезапусти migration-сервер)${suffix}`;
   }
-  return baseError;
+  return `${baseError}${suffix}`;
 };
 
 export const getVikSoftSettings = async () => {
@@ -90,6 +111,7 @@ export const testVikSoftConnection = async (override) => {
       ok: false,
       stage: "backend_route",
       error: formatRouteError(r.status, json?.error, "/api/settings/viksoft/test"),
+      client: getVikSoftApiClientContext(),
     };
   }
   return json; // { ok, tokenPreview?, error?, apiBase?, user? }

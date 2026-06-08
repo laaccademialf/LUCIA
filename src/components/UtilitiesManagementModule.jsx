@@ -5,6 +5,7 @@ import {
   saveVikSoftSettings,
   testVikSoftConnection,
   getVikSoftDebug,
+  getVikSoftApiClientContext,
 } from "../api/vikSoftSettingsApi";
 
 const baseInput =
@@ -71,10 +72,12 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
   const [saveMsg, setSaveMsg] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [clientCtx, setClientCtx] = useState(() => getVikSoftApiClientContext());
 
   const loadSettings = useCallback(async () => {
     setLoadingSettings(true);
     setSettingsError("");
+    setClientCtx(getVikSoftApiClientContext());
     try {
       const data = await getVikSoftSettings();
       setSavedInfo(data.saved || null);
@@ -119,6 +122,7 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
   const handleTest = async (useFormValues) => {
     setTesting(true);
     setTestResult(null);
+    setClientCtx(getVikSoftApiClientContext());
     try {
       // Якщо useFormValues=true і пароль введено → тестуємо те, що в формі.
       // Інакше — тестуємо те, що збережено на сервері.
@@ -233,6 +237,11 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
           <>
             <div className="mb-3 flex flex-wrap items-center gap-2">
               {sourceLabel}
+              {clientCtx?.resolvedBase ? (
+                <span className="text-xs text-slate-500">
+                  Backend API: {clientCtx.resolvedBase} ({clientCtx.source})
+                </span>
+              ) : null}
               {savedInfo?.updatedAt ? (
                 <span className="text-xs text-slate-500">
                   Збережено: {new Date(savedInfo.updatedAt).toLocaleString("uk-UA")}
