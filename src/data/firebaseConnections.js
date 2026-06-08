@@ -98,10 +98,20 @@ const customHeaders = (token) => {
   return next;
 };
 
+const readRuntimeCustomToken = () => {
+  if (!isBrowser()) return "";
+  const raw = localStorage.getItem(RUNTIME_CUSTOM_CONFIG_KEY);
+  if (!raw) return "";
+  const parsed = safeParse(raw, null);
+  const token = String(parsed?.token || "").trim();
+  return token;
+};
+
 const settingsHeaders = () => {
   const headers = { "Content-Type": "application/json" };
-  if (SETTINGS_API_TOKEN) {
-    headers.Authorization = `Bearer ${SETTINGS_API_TOKEN}`;
+  const token = SETTINGS_API_TOKEN || readRuntimeCustomToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
   return headers;
 };
@@ -152,7 +162,7 @@ export const syncRuntimeConfigFromServer = async () => {
   try {
     const response = await fetch(endpoint, {
       method: "GET",
-      headers: SETTINGS_API_TOKEN ? { Authorization: `Bearer ${SETTINGS_API_TOKEN}` } : undefined,
+      headers: settingsHeaders(),
     });
 
     if (!response.ok) {

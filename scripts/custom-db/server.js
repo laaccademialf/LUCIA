@@ -4066,7 +4066,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Enforce the global token gate for every non-public route.
-  if (!PUBLIC_PATHS.has(pathname) && !isAuthorized(req)) {
+  const queryToken = String(requestUrl.searchParams.get("token") || "").trim();
+  const hasQueryTokenAccess = Boolean(TOKEN) && queryToken === TOKEN;
+  if (!PUBLIC_PATHS.has(pathname) && !isAuthorized(req) && !hasQueryTokenAccess) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
   }
 
