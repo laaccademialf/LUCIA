@@ -225,15 +225,38 @@ const extractToken = (raw) => {
   return String(raw).trim();
 };
 
-// Vik-Soft login: пробуємо GET (так показано в доці-скрінах), якщо не виходить — POST.
-// Повертаємо token + діагностику першої вдалої спроби.
+// Витягнути читабельне повідомлення помилки з тіла відповіді Vik-Soft.
+// Формат: {"errors":[{"status":"401","title":"Unauthorized","detail":"Incorrect password"}]}
+const extractApiError = (json, body) => {
+  if (json && typeof json === "object") {
+    const errs = json.errors || json.Errors;
+    if (Array.isArray(errs) && errs.length) {
+      const e = errs[0];
+      const detail = e?.detail || e?.Detail || e?.title || e?.Title || "";
+      const status = e?.status || e?.Status || "";
+      return [status, detail].filter(Boolean).join(" ");
+    }
+    if (json.error || json.Error || json.message || json.Message) {
+      return String(json.error || json.Error || json.message || json.Message);
+    }
+  }
+  return String(body || "").slice(0, 200);
+};
+
+// Vik-Soft login. Підтверджено робочим запитом:
+//   POST /api/v1/login?user=X&pass=Y  з порожнім тілом (Content-Length: 0)
+//   → 200 { "Token": "....=" }  |  401 {"errors":[{"detail":"Incorrect password"}]}
+// POST — основний метод; GET лишаємо як фолбек на випадок змін API.
 const login = async (cfg) => {
   const qs = `user=${encodeURIComponent(cfg.user)}&pass=${encodeURIComponent(cfg.password)}`;
   const url = `${cfg.apiBase}/api/v1/login?${qs}`;
 
   const attempts = [];
-  for (const method of ["GET", "POST"]) {
-    const res = await tryRequest(url, { method });
+  for (const method of ["POST", "GET"]) {
+    const init = method === "POST"
+      ? { method: "POST", headers: { "Content-Length": "0" } }
+      : { method: "GET" };
+    const res = await tryRequest(url, init);
     attempts.push({ method, status: res.status, ct: res.ct, body: (res.body || "").slice(0, 200), error: res.error });
     if (res.ok) {
       const token = extractToken(res.json !== null ? res.json : res.body);
@@ -241,8 +264,13 @@ const login = async (cfg) => {
         return { token, raw: res.json !== null ? res.json : res.body, ct: res.ct, status: res.status, method };
       }
     }
+    // Якщо це явна помилка авторизації (невірний пароль) — далі пробувати інший
+    // метод немає сенсу, одразу повертаємо зрозумілу помилку.
+    if (res.status === 401 || res.status === 403) {
+      const msg = extractApiError(res.json, res.body);
+      throw new Error(`Vik-Soft: ${msg || "Unauthorized"} (логін «${cfg.user}»)`);
+    }
   }
-  // Зібрали всі спроби — формуємо корисну помилку.
   const detail = attempts
     .map((a) => `${a.method} → ${a.status || "ERR"}${a.error ? ` (${a.error})` : ""}${a.body ? ` body:${a.body}` : ""}`)
     .join(" || ");
