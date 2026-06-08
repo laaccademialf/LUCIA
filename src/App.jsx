@@ -35,6 +35,7 @@ import { AddUserForm } from "./components/AddUserForm";
 import { LoginModal } from "./components/LoginModal";
 import { UsersTable } from "./components/UsersTable";
 import UtilityMetersManager from "./components/UtilityMetersManager";
+import UtilitiesManagementModule from "./components/UtilitiesManagementModule";
 import ElectricityTab from "./components/ElectricityTab";
 import { MaterialResponsibilityManager } from "./components/MaterialResponsibilityManager";
 import AssetTransferWriteoffManager from "./components/AssetTransferWriteoffManager";
@@ -3015,7 +3016,8 @@ function App() {
         }
 
         // Вкладка управління утилітами
-        if (activeNav === "inventory-utilities" && topTab === "utilityservice") {
+        // Підтримуємо обидва написання: `utilityservice` (правильне) та `utilytyservice` (типова друкарська помилка в збереженому меню).
+        if (activeNav === "inventory-utilities" && (topTab === "utilityservice" || topTab === "utilytyservice")) {
           const handleAddMeter = async (meter) => {
             await addUtilityMeter(meter);
             // Оновити список після додавання
@@ -3039,14 +3041,20 @@ function App() {
             setUtilityMeters((prev) => prev.filter(m => m.id !== id));
           };
           return (
-            <div className="p-4">
-              <UtilityMetersManager
+            <div className="space-y-4">
+              <UtilitiesManagementModule
                 restaurants={restaurants}
-                meters={utilityMeters}
-                onAddMeter={handleAddMeter}
-                onUpdateMeter={handleUpdateMeter}
-                onDeleteMeter={handleDeleteMeter}
+                onUpdateRestaurant={updateRestaurantInFirebase}
               />
+              <div className="p-4">
+                <UtilityMetersManager
+                  restaurants={restaurants}
+                  meters={utilityMeters}
+                  onAddMeter={handleAddMeter}
+                  onUpdateMeter={handleUpdateMeter}
+                  onDeleteMeter={handleDeleteMeter}
+                />
+              </div>
             </div>
           );
         }

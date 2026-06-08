@@ -4171,6 +4171,107 @@ const server = http.createServer(async (req, res) => {
     return handleDeleteRuntimeSettings(req, res);
   }
 
+  // ---- Vik-Soft API settings (керування через UI «Управління утилітами») ----
+  // Зберігаємо в тому ж runtime-settings.json під ключем `viksoft`.
+  // GET повертає apiBase + user + hasPassword (БЕЗ пароля).
+  if (pathname === "/api/settings/viksoft" && method === "GET") {
+    if (!isAuthorized(req)) {
+      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+    }
+    try {
+      const settings = await readSettingsFile();
+      const saved = (settings && settings.viksoft) || {};
+      const { getVikSoftPublicConfig } = await import("../vikSoftApi.js");
+      const effective = getVikSoftPublicConfig();
+      return sendJson(res, 200, {
+        ok: true,
+        saved: {
+          apiBase: String(saved.apiBase || ""),
+          user: String(saved.user || ""),
+          hasPassword: Boolean(saved.password),
+          updatedAt: saved.updatedAt || null,
+        },
+        effective, // що реально використає сервер зараз (env або runtime)
+      });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
+    }
+  }
+
+  if (pathname === "/api/settings/viksoft" && method === "PUT") {
+    if (!isAuthorized(req)) {
+      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+    }
+    let payload;
+    try {
+      payload = await parseJsonBody(req);
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+    }
+    const apiBase = String(payload?.apiBase || "").trim().replace(/\/+$/, "");
+    const user = String(payload?.user || "").trim();
+    // Якщо `password` НЕ передано (undefined) — лишаємо попередній.
+    // Якщо передано порожній рядок — стираємо.
+    const passwordProvided = Object.prototype.hasOwnProperty.call(payload || {}, "password");
+    const newPassword = passwordProvided ? String(payload.password || "") : null;
+
+    if (!apiBase) return sendJson(res, 400, { ok: false, error: "apiBase обовʼязковий" });
+    if (!user) return sendJson(res, 400, { ok: false, error: "user обовʼязковий" });
+
+    const settings = await readSettingsFile();
+    const prev = (settings && settings.viksoft) || {};
+    const nextViksoft = {
+      apiBase,
+      user,
+      password: newPassword !== null ? newPassword : (prev.password || ""),
+      updatedAt: new Date().toISOString(),
+    };
+    await writeSettingsFile({
+      ...settings,
+      viksoft: nextViksoft,
+      updatedAt: new Date().toISOString(),
+    });
+    // Застосовуємо рантайм-конфіг до vikSoftApi (інвалідовує токен і кеш).
+    try {
+      const { setVikSoftRuntimeConfig } = await import("../vikSoftApi.js");
+      setVikSoftRuntimeConfig({
+        apiBase: nextViksoft.apiBase,
+        user: nextViksoft.user,
+        password: nextViksoft.password,
+      });
+    } catch (e) {
+      console.warn(`[viksoft] runtime apply failed: ${e?.message || e}`);
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      saved: { apiBase: nextViksoft.apiBase, user: nextViksoft.user, hasPassword: Boolean(nextViksoft.password), updatedAt: nextViksoft.updatedAt },
+    });
+  }
+
+  if (pathname === "/api/settings/viksoft/test" && method === "POST") {
+    if (!isAuthorized(req)) {
+      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+    }
+    let payload = {};
+    try {
+      payload = await parseJsonBody(req);
+    } catch {
+      payload = {};
+    }
+    try {
+      const { testVikSoftLogin } = await import("../vikSoftApi.js");
+      // Якщо в тілі передали override (apiBase/user/password) — тест саме з ним.
+      const override = (payload && (payload.user || payload.password || payload.apiBase))
+        ? { apiBase: payload.apiBase, user: payload.user, password: payload.password }
+        : undefined;
+      const result = await testVikSoftLogin(override);
+      const status = result?.ok ? 200 : 502;
+      return sendJson(res, status, result);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
+    }
+  }
+
   if (pathname === "/api/energocenter/consumption" && method === "GET") {
     if (!isAuthorized(req)) {
       return sendJson(res, 401, { ok: false, error: "Unauthorized" });
@@ -4415,17 +4516,38 @@ server.listen(PORT, HOST, () => {
 
   // Warm Vik-Soft API token in the background, so the first
   // user click on "Оновити дані" is fast (login already done).
-  if (process.env.VIKSOFT_USER && process.env.VIKSOFT_PASSWORD) {
-    setImmediate(async () => {
-      try {
-        const { warmUpEnergoCenter } = await import("../vikSoftApi.js");
-        const ok = await warmUpEnergoCenter();
-        console.log(`[viksoft] warm-up ${ok ? "ok" : "skipped/failed"}`);
-      } catch (e) {
-        console.warn(`[viksoft] warm-up error: ${e?.message || e}`);
+  // 1) Спершу підвантажуємо збережений конфіг з runtime-settings.json (UI),
+  //    тоді — fallback на env (VIKSOFT_USER / VIKSOFT_PASSWORD).
+  setImmediate(async () => {
+    try {
+      const settings = await readSettingsFile();
+      const saved = settings && settings.viksoft;
+      if (saved && (saved.user || saved.password || saved.apiBase)) {
+        const { setVikSoftRuntimeConfig } = await import("../vikSoftApi.js");
+        setVikSoftRuntimeConfig({
+          apiBase: saved.apiBase,
+          user: saved.user,
+          password: saved.password,
+        });
+        console.log("[viksoft] runtime config loaded from settings file");
       }
-    });
-  }
+    } catch (e) {
+      console.warn(`[viksoft] load runtime config failed: ${e?.message || e}`);
+    }
+    // Прогрів — пробуємо логін якщо є будь-які credentials (runtime або env).
+    try {
+      const { warmUpEnergoCenter, getVikSoftPublicConfig } = await import("../vikSoftApi.js");
+      const cfg = getVikSoftPublicConfig();
+      if (cfg.user && cfg.hasPassword) {
+        const ok = await warmUpEnergoCenter();
+        console.log(`[viksoft] warm-up ${ok ? "ok" : "skipped/failed"} (source=${cfg.source})`);
+      } else {
+        console.log("[viksoft] no credentials configured — skipped warm-up");
+      }
+    } catch (e) {
+      console.warn(`[viksoft] warm-up error: ${e?.message || e}`);
+    }
+  });
 
   if (PUBLIC_REGISTER_ENABLED) {
     console.warn(

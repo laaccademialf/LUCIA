@@ -28,11 +28,73 @@ const POINT_FIELDS = ["name", "Name", "point", "Point", "eic_name", "EIC_Name", 
 
 const DIRECTIONS = ["A+", "A-", "R+", "R-"];
 
-const getConfig = () => ({
-  apiBase: String(process.env.VIKSOFT_API_BASE || DEFAULT_API_BASE).replace(/\/+$/, ""),
-  user: String(process.env.VIKSOFT_USER || "").trim(),
-  password: String(process.env.VIKSOFT_PASSWORD || "").trim(),
-});
+// Runtime override (вмикається через UI «Управління утилітами» → /api/settings/viksoft).
+// Якщо встановлено — має пріоритет над змінними оточення.
+let runtimeOverride = null;
+
+export const setVikSoftRuntimeConfig = (cfg) => {
+  if (!cfg || typeof cfg !== "object") {
+    runtimeOverride = null;
+  } else {
+    runtimeOverride = {
+      apiBase: cfg.apiBase ? String(cfg.apiBase).trim().replace(/\/+$/, "") : "",
+      user: cfg.user ? String(cfg.user).trim() : "",
+      password: typeof cfg.password === "string" ? cfg.password : "",
+    };
+  }
+  // Будь-яка зміна credentials інвалідовує токен і кеш результатів.
+  cachedToken = null;
+  if (typeof resultCache !== "undefined" && resultCache && typeof resultCache.clear === "function") {
+    resultCache.clear();
+  }
+};
+
+const getConfig = () => {
+  const ro = runtimeOverride || {};
+  return {
+    apiBase: String(ro.apiBase || process.env.VIKSOFT_API_BASE || DEFAULT_API_BASE).replace(/\/+$/, ""),
+    user: String(ro.user || process.env.VIKSOFT_USER || "").trim(),
+    password: String(ro.password || process.env.VIKSOFT_PASSWORD || "").trim(),
+  };
+};
+
+// Безпечне читання поточної конфігурації для UI (БЕЗ розкриття пароля).
+export const getVikSoftPublicConfig = () => {
+  const c = getConfig();
+  return {
+    apiBase: c.apiBase,
+    user: c.user,
+    hasPassword: Boolean(c.password),
+    source: runtimeOverride && (runtimeOverride.user || runtimeOverride.password)
+      ? "runtime"
+      : (process.env.VIKSOFT_USER ? "env" : "none"),
+  };
+};
+
+// Окремий метод тестування з опційним override'ом (не змінює збережений стан).
+export const testVikSoftLogin = async (override) => {
+  const cfg = override && (override.user || override.password)
+    ? {
+        apiBase: String(override.apiBase || runtimeOverride?.apiBase || process.env.VIKSOFT_API_BASE || DEFAULT_API_BASE).replace(/\/+$/, ""),
+        user: String(override.user || "").trim(),
+        password: String(override.password || "").trim(),
+      }
+    : getConfig();
+  if (!cfg.user || !cfg.password) {
+    return { ok: false, error: "Логін або пароль не задано" };
+  }
+  try {
+    const token = await login(cfg);
+    return {
+      ok: true,
+      tokenPreview: `${String(token).slice(0, 12)}…`,
+      apiBase: cfg.apiBase,
+      user: cfg.user,
+    };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e), apiBase: cfg.apiBase, user: cfg.user };
+  }
+};
 
 // ---- Token cache ----
 const TOKEN_TTL_MS = 10 * 60 * 1000; // 10 хвилин (сервер обіцяє 10-15)
