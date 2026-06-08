@@ -1,0 +1,50 @@
+# LUCIA custom-db migration server — systemd unit
+#
+# ВСТАНОВЛЕННЯ (на сервері, від root):
+#   1. Скопіювати цей файл:
+#        sudo cp scripts/custom-db/lucia-db.service /etc/systemd/system/lucia-db.service
+#   2. Створити env-файл з реальними значеннями (НЕ комітити в git):
+#        sudo cp scripts/custom-db/.env.example /etc/lucia/db.env
+#        sudo nano /etc/lucia/db.env        # заповнити MYSQL_* та CUSTOM_MIGRATION_TOKEN
+#        sudo chmod 600 /etc/lucia/db.env
+#   3. Підправити WorkingDirectory / User / шлях до node нижче під свій сервер.
+#   4. Активувати:
+#        sudo systemctl daemon-reload
+#        sudo systemctl enable --now lucia-db
+#   5. Перевірити:
+#        systemctl status lucia-db
+#        curl -s http://127.0.0.1:8787/health   # engine має бути "mysql"
+#
+# Чому це робить проблему незламною:
+#   - EnvironmentFile гарантує, що MYSQL_* завантажуються при КОЖНОМУ старті/рестарті.
+#   - MIGRATION_DB_REQUIRE_ENGINE=mysql у db.env змушує сервер ВПАСТИ (а не тихо
+#     перейти у file-режим), якщо БД раптом не підключилась.
+#   - Restart=on-failure + StartLimit роблять збій помітним (сервіс не "зелений"),
+#     замість порожнього застосунку з виглядом "усе працює".
+
+[Unit]
+Description=LUCIA custom-db migration server (MariaDB API on :8787)
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Підправ під свій сервер:
+WorkingDirectory=/var/www/luci.lafamiglia.ua/app
+User=www-data
+Group=www-data
+# Усі секрети та конфіг БД — лише тут (поза git):
+EnvironmentFile=/etc/lucia/db.env
+# Якщо node не в /usr/bin — заміни на повний шлях (which node):
+ExecStart=/usr/bin/node scripts/custom-db/server.js
+Restart=on-failure
+RestartSec=3
+# Якщо падає 5 разів за 60с — зупинитись і світити failed (видно в моніторингу):
+StartLimitIntervalSec=60
+StartLimitBurst=5
+# Логи йдуть у journald: journalctl -u lucia-db -f
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

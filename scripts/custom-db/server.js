@@ -17,6 +17,11 @@ const _hasMySqlCreds = Boolean(
   String(process.env.MYSQL_DATABASE || "").trim()
 );
 const ENGINE = _explicitEngine || (_hasMySqlCreds ? "mysql" : "file");
+// Fail-fast guard: коли оператор ЗНАЄ, що БД має бути MariaDB/Postgres, він
+// виставляє MIGRATION_DB_REQUIRE_ENGINE=mysql (або postgres). Якщо при старті
+// env не підвантажився і ENGINE впав у "file" — сервер відмовляється стартувати
+// з гучною помилкою, замість того щоб тихо віддавати порожні дані з ./tmp.
+const REQUIRED_ENGINE = String(process.env.MIGRATION_DB_REQUIRE_ENGINE || "").trim().toLowerCase();
 const DATA_DIR = process.env.CUSTOM_MIGRATION_DATA_DIR || "./tmp/custom-db";
 const SETTINGS_FILE = process.env.RUNTIME_SETTINGS_FILE || "./tmp/custom-db/runtime-settings.json";
 const POSTGRES_URL = String(process.env.POSTGRES_URL || "").trim();
@@ -30,6 +35,40 @@ const MYSQL_CONFIG = {
   password: String(process.env.MYSQL_PASSWORD || "").trim(),
   database: String(process.env.MYSQL_DATABASE || "").trim(),
 };
+
+// --- Fail-fast БД guard (запобігає тихому fallback у file-режим) ---
+// Якщо MIGRATION_DB_REQUIRE_ENGINE задано, фактичний ENGINE мусить збігатися.
+// Інакше — НЕ стартуємо взагалі. Це гарантує, що "сервіс не піднявся" замість
+// "сервіс віддає порожні дані". Під systemd Restart=always процес ретраїтиметься,
+// і адмін одразу побачить, що щось не так, а не порожній застосунок.
+if (REQUIRED_ENGINE) {
+  const problems = [];
+  if (!new Set(["file", "mysql", "postgres"]).has(REQUIRED_ENGINE)) {
+    problems.push(`MIGRATION_DB_REQUIRE_ENGINE="${REQUIRED_ENGINE}" не входить у дозволені: file, mysql, postgres`);
+  }
+  if (REQUIRED_ENGINE !== ENGINE) {
+    problems.push(`очікувався engine="${REQUIRED_ENGINE}", але фактичний engine="${ENGINE}" (env БД не підвантажився?)`);
+  }
+  if (REQUIRED_ENGINE === "mysql") {
+    if (!MYSQL_CONFIG.host) problems.push("MYSQL_HOST порожній");
+    if (!MYSQL_CONFIG.user) problems.push("MYSQL_USER порожній");
+    if (!MYSQL_CONFIG.database) problems.push("MYSQL_DATABASE порожній");
+  }
+  if (REQUIRED_ENGINE === "postgres" && !String(process.env.POSTGRES_URL || "").trim()) {
+    problems.push("POSTGRES_URL порожній");
+  }
+  if (problems.length > 0) {
+    console.error("");
+    console.error("==================== FATAL: DB ENGINE MISMATCH ====================");
+    console.error(`[fatal] MIGRATION_DB_REQUIRE_ENGINE=${REQUIRED_ENGINE}, але сервер не може його забезпечити:`);
+    for (const p of problems) console.error(`   - ${p}`);
+    console.error("[fatal] Сервер НЕ стартує, щоб не віддавати порожні дані з file-режиму.");
+    console.error("[fatal] Перевір, що процес запущено з env-змінними MariaDB (.env / systemd EnvironmentFile / pm2 ecosystem).");
+    console.error("==================================================================");
+    console.error("");
+    process.exit(1);
+  }
+}
 
 const parseTargetDbConfig = (target) => {
   const dbEngineRaw = String(target?.dbEngine || ENGINE || "").trim().toLowerCase();
@@ -4085,6 +4124,8 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       service: "custom-db-migration-server",
       engine: ENGINE,
+      requiredEngine: REQUIRED_ENGINE || null,
+      mysqlConfigured: Boolean(MYSQL_CONFIG.host && MYSQL_CONFIG.user && MYSQL_CONFIG.database),
       tokenProtected: Boolean(TOKEN),
       now: new Date().toISOString(),
     });
