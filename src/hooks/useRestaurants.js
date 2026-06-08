@@ -49,6 +49,7 @@ export const useRestaurants = (enableRealtime = true) => {
       energoCenterLogin: String(item.energoCenterLogin || item.energo_center_login || "").trim(),
       energoCenterPassword: String(item.energoCenterPassword || item.energo_center_password || ""),
       energoCenterTreeText: String(item.energoCenterTreeText || item.energo_center_tree_text || "").trim(),
+      vikSoftEics: String(item.vikSoftEics || item.vik_soft_eics || item.eics || "").trim(),
       createdAt: item.createdAt || item.created_at || "",
       updatedAt: item.updatedAt || item.updated_at || "",
     };

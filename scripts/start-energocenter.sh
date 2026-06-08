@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Піднімає migration-сервер з env для EnergoCenter та робить порт публічним.
+# Піднімає migration-сервер з env для Vik-Soft API та робить порт публічним.
 # Запускати ОДИН раз після перезапуску Codespace:
 #   bash scripts/start-energocenter.sh
 set -e
 cd "$(dirname "$0")/.."
 
 if [ ! -f .env.energocenter ]; then
-  echo "[!] .env.energocenter не знайдено. Створи його з SERASKOE_USER/PASSWORD/TREE_TEXT."
+  echo "[!] .env.energocenter не знайдено. Створи його з:"
+  echo "    VIKSOFT_API_BASE=http://194.183.165.59:8765"
+  echo "    VIKSOFT_USER=<login>"
+  echo "    VIKSOFT_PASSWORD=<password>"
   exit 1
 fi
 

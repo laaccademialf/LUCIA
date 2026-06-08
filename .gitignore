@@ -28,3 +28,6 @@ dist-ssr
 *.sln
 *.sw?
 .env.energocenter
+
+# local custom-db storage
+tmp/

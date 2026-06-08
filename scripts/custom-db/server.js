@@ -117,7 +117,7 @@ const setCorsHeaders = (res) => {
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, x-api-token, x-session-token, x-energo-login, x-energo-password, x-energo-tree"
+    "Content-Type, Authorization, x-api-token, x-session-token, x-viksoft-eics"
   );
 };
 
@@ -4176,12 +4176,10 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 401, { ok: false, error: "Unauthorized" });
     }
     try {
-      const { fetchEnergoCenterConsumption } = await import("../energocenter.js");
-      const debug = requestUrl.searchParams.get("debug") === "1";
+      const { fetchEnergoCenterConsumption } = await import("../vikSoftApi.js");
       const force = requestUrl.searchParams.get("force") === "1";
       const dateParam = String(requestUrl.searchParams.get("date") || "").trim();
       const date = /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : undefined;
-      // Облікові дані можна передати: 1) у заголовках, 2) у query.
       const hdr = (name) => {
         const v = req.headers[name];
         return Array.isArray(v) ? v[0] : v;
@@ -4190,21 +4188,21 @@ const server = http.createServer(async (req, res) => {
         const s = String(v || "");
         if (!s) return "";
         try {
-          // Підтримка значення з префіксом "b64:" (на випадок символів у заголовку)
           if (s.startsWith("b64:")) return Buffer.from(s.slice(4), "base64").toString("utf8");
           return s;
         } catch { return s; }
       };
-      const user = decodeMaybeB64(hdr("x-energo-login") || requestUrl.searchParams.get("login") || "").trim();
-      const password = decodeMaybeB64(hdr("x-energo-password") || requestUrl.searchParams.get("password") || "");
-      const treeText = decodeMaybeB64(hdr("x-energo-tree") || requestUrl.searchParams.get("tree") || "").trim();
+      // EIC коди ресторану. Підтримуємо: заголовок x-viksoft-eics, query ?eics=
+      // Формат: рядок через кому/пробіл/крапку з комою.
+      const eicsRaw = decodeMaybeB64(hdr("x-viksoft-eics") || requestUrl.searchParams.get("eics") || "");
+      const eics = String(eicsRaw)
+        .split(/[,\s;]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
       const result = await fetchEnergoCenterConsumption({
-        debug,
         date,
         force,
-        user: user || undefined,
-        password: password || undefined,
-        treeText: treeText || undefined,
+        eics,
       });
       const status = result?.ok ? 200 : 502;
       return sendJson(res, status, result);
@@ -4213,8 +4211,25 @@ const server = http.createServer(async (req, res) => {
         ok: false,
         fetchedAt: new Date().toISOString(),
         rows: [],
-        error: `EnergoCenter error: ${error?.message || error}`,
+        error: `Vik-Soft API error: ${error?.message || error}`,
       });
+    }
+  }
+
+  // Діагностичний ендпоінт: повертає raw payload з Vik-Soft API
+  // для перевірки структури відповіді (login/tree/maket).
+  if (pathname === "/api/energocenter/debug" && method === "GET") {
+    if (!isAuthorized(req)) {
+      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+    }
+    try {
+      const { debugVikSoft } = await import("../vikSoftApi.js");
+      const eic = String(requestUrl.searchParams.get("eic") || "").trim() || undefined;
+      const date = String(requestUrl.searchParams.get("date") || "").trim() || undefined;
+      const out = await debugVikSoft({ eic, date });
+      return sendJson(res, 200, out);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
     }
   }
 
@@ -4398,16 +4413,16 @@ server.listen(PORT, HOST, () => {
     scheduleAssetsCacheWarmup();
   });
 
-  // Warm EnergoCenter Playwright session in the background, so the first
-  // user click on "Оновити дані" is fast (login + tree-select already done).
-  if (process.env.SERASKOE_USER && process.env.SERASKOE_PASSWORD) {
+  // Warm Vik-Soft API token in the background, so the first
+  // user click on "Оновити дані" is fast (login already done).
+  if (process.env.VIKSOFT_USER && process.env.VIKSOFT_PASSWORD) {
     setImmediate(async () => {
       try {
-        const { warmUpEnergoCenter } = await import("../energocenter.js");
+        const { warmUpEnergoCenter } = await import("../vikSoftApi.js");
         const ok = await warmUpEnergoCenter();
-        console.log(`[energocenter] warm-up ${ok ? "ok" : "skipped/failed"}`);
+        console.log(`[viksoft] warm-up ${ok ? "ok" : "skipped/failed"}`);
       } catch (e) {
-        console.warn(`[energocenter] warm-up error: ${e?.message || e}`);
+        console.warn(`[viksoft] warm-up error: ${e?.message || e}`);
       }
     });
   }

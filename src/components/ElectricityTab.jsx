@@ -67,11 +67,12 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
   // Вибраний ресторан: для адміна — з селектора, для керуючого — його ресторан
   const currentRestaurantId = user?.role === "admin" ? selectedRestaurant : user?.restaurant;
   const currentRestaurant = restaurants.find((r) => String(r?.id || "") === String(currentRestaurantId || ""));
-  const energoCredentials = currentRestaurant ? {
-    login: currentRestaurant.energoCenterLogin || "",
-    password: currentRestaurant.energoCenterPassword || "",
-    treeText: currentRestaurant.energoCenterTreeText || "",
-  } : null;
+  const energoEics = currentRestaurant
+    ? String(currentRestaurant.vikSoftEics || "")
+        .split(/[,\s;]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
 
   // Фільтруємо лічильники електроенергії для поточного ресторану
   const electricityMeters = utilityMeters.filter(m => {
@@ -189,16 +190,16 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
           Оберіть заклад, щоб завантажити показники з його облікового запису EnergoCenter.
         </p>
       )}
-      {currentRestaurantId && !energoCredentials?.login && (
+      {currentRestaurantId && energoEics.length === 0 && (
         <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          У картці закладу не задано логін/пароль EnergoCenter. Додайте їх у «Управління ресторанами».
+          У картці закладу не задано EIC коди лічильників. Додайте їх у «Управління ресторанами».
         </p>
       )}
       <EnergoCenterMetersPanel
         reportDate={reportDate}
         onReportDateChange={setReportDate}
         onDataChange={setEnergoData}
-        credentials={energoCredentials}
+        eics={energoEics}
         onSave={() => handleElectricitySubmit({
           date: reportDate,
           meters: [],

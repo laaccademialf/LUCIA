@@ -42,7 +42,7 @@ const formatDateUk = (iso) => {
   return `${d}.${m}.${y}`;
 };
 
-const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange, credentials, onSave, saveLabel = "Зберегти показники", canSave = true } = {}) => {
+const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange, eics, onSave, saveLabel = "Зберегти показники", canSave = true } = {}) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
@@ -57,15 +57,23 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
   useEffect(() => { onDataChangeRef.current = onDataChange; }, [onDataChange]);
 
   const apiEnabled = isEnergoCenterApiEnabled();
-  const hasCreds = Boolean(credentials?.login && credentials?.password);
+  // Нормалізуємо EIC: масив, або CSV-рядок з картки ресторану.
+  const eicsList = (() => {
+    let arr = [];
+    if (Array.isArray(eics)) arr = eics;
+    else if (typeof eics === "string") arr = eics.split(/[,\s;]+/);
+    return arr.map((s) => String(s || "").trim()).filter(Boolean);
+  })();
+  const eicsKey = eicsList.join("|");
+  const hasEics = eicsList.length > 0;
 
   const load = useCallback(async ({ force = false } = {}) => {
     if (!apiEnabled) {
       setError("API не налаштовано (VITE_DATA_API_BASE_URL).");
       return;
     }
-    if (!hasCreds) {
-      setError("Не задано облікові дані EnergoCenter. Додайте логін/пароль у картці закладу.");
+    if (!hasEics) {
+      setError("Не задано EIC коди лічильників. Додайте їх у картці закладу.");
       setData(null);
       if (onDataChangeRef.current) onDataChangeRef.current(null);
       return;
@@ -81,9 +89,7 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
         signal: controller.signal,
         date: reportDate,
         force,
-        login: credentials?.login,
-        password: credentials?.password,
-        treeText: credentials?.treeText,
+        eics: eicsList,
       });
       setData(result);
       if (onDataChangeRef.current) onDataChangeRef.current(result);
@@ -98,22 +104,21 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
       if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
     }
-  }, [apiEnabled, reportDate, hasCreds, credentials?.login, credentials?.password, credentials?.treeText]);
+  }, [apiEnabled, reportDate, hasEics, eicsKey]);
 
   // Автопідвантаження тільки при зміні дати (не при зміні закладу).
-  // При зміні облікових даних — лише очищаємо стан, користувач має натиснути "Оновити дані".
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportDate]);
 
-  // При зміні закладу — скидаємо дані й помилку, чекаємо ручного оновлення.
+  // При зміні закладу (зміні EIC) — скидаємо дані, чекаємо ручного оновлення.
   useEffect(() => {
     setData(null);
     setError("");
     if (onDataChangeRef.current) onDataChangeRef.current(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [credentials?.login, credentials?.password, credentials?.treeText]);
+  }, [eicsKey]);
 
   useEffect(() => {
     return () => {

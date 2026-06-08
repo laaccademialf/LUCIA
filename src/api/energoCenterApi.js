@@ -25,7 +25,7 @@ const getApiToken = () => {
 
 export const isEnergoCenterApiEnabled = () => Boolean(getApiBase());
 
-export const fetchEnergoCenterConsumption = async ({ signal, date, force, login, password, treeText } = {}) => {
+export const fetchEnergoCenterConsumption = async ({ signal, date, force, eics } = {}) => {
   const base = getApiBase();
   if (!base) {
     throw new Error("API не налаштовано. Встановіть VITE_DATA_API_BASE_URL");
@@ -39,22 +39,12 @@ export const fetchEnergoCenterConsumption = async ({ signal, date, force, login,
       : "";
   if (sessionToken) headers["x-session-token"] = sessionToken;
 
-  // Облікові дані ресторану. Кодуємо у base64, бо логін/пароль/назва
-  // можуть містити кирилицю або символи, недопустимі у HTTP-заголовках.
-  const enc = (v) => {
-    const s = String(v ?? "").trim();
-    if (!s) return "";
-    if (typeof btoa === "function") {
-      try { return `b64:${btoa(unescape(encodeURIComponent(s)))}`; } catch { /* fallthrough */ }
-    }
-    return s;
-  };
-  const loginEnc = enc(login);
-  const passEnc = password ? `b64:${typeof btoa === "function" ? btoa(unescape(encodeURIComponent(String(password)))) : String(password)}` : "";
-  const treeEnc = enc(treeText);
-  if (loginEnc) headers["x-energo-login"] = loginEnc;
-  if (passEnc) headers["x-energo-password"] = passEnc;
-  if (treeEnc) headers["x-energo-tree"] = treeEnc;
+  // EIC коди лічильників ресторану. Передаємо через кому в заголовку.
+  let eicsList = [];
+  if (Array.isArray(eics)) eicsList = eics;
+  else if (typeof eics === "string") eicsList = eics.split(/[,\s;]+/);
+  eicsList = eicsList.map((s) => String(s || "").trim()).filter(Boolean);
+  if (eicsList.length) headers["x-viksoft-eics"] = eicsList.join(",");
 
   const qs = new URLSearchParams();
   if (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) qs.set("date", date);
