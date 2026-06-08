@@ -14,7 +14,9 @@ const PRIMARY_ID_KEY = "lucia_primary_connection_id";
 const RUNTIME_CONFIG_KEY = "lucia_runtime_firebase_config";
 const RUNTIME_CUSTOM_CONFIG_KEY = "lucia_runtime_custom_config";
 const SETTINGS_API_BASE_URL = String(import.meta.env.VITE_RUNTIME_SETTINGS_API_BASE_URL || "").trim().replace(/\/+$/, "");
-const SETTINGS_API_TOKEN = String(import.meta.env.VITE_RUNTIME_SETTINGS_API_TOKEN || "").trim();
+const SETTINGS_API_TOKEN = String(
+  import.meta.env.VITE_RUNTIME_SETTINGS_API_TOKEN || import.meta.env.VITE_DATA_API_TOKEN || ""
+).trim();
 
 const REQUIRED_KEYS = ["apiKey", "authDomain", "projectId", "appId"];
 
