@@ -83,17 +83,58 @@ export const testVikSoftLogin = async (override) => {
   if (!cfg.user || !cfg.password) {
     return { ok: false, error: "Логін або пароль не задано" };
   }
+  // 1) Логін.
+  let loginRes;
   try {
-    const token = await login(cfg);
+    loginRes = await login(cfg);
+  } catch (e) {
     return {
-      ok: true,
-      tokenPreview: `${String(token).slice(0, 12)}…`,
+      ok: false,
+      stage: "login",
       apiBase: cfg.apiBase,
       user: cfg.user,
+      error: e?.message || String(e),
     };
-  } catch (e) {
-    return { ok: false, error: e?.message || String(e), apiBase: cfg.apiBase, user: cfg.user };
   }
+  // 2) vviewtree — щоб одразу зрозуміти, який транспорт токена приймає API.
+  const treeProbe = [];
+  let workingTransport = null;
+  let treeJson = null;
+  for (const t of TOKEN_TRANSPORTS) {
+    const req = buildRequest(cfg, "/api/v1/vviewtree", { eType: 1, sId: 0 }, loginRes.token, t);
+    // eslint-disable-next-line no-await-in-loop
+    const res = await tryRequest(req.url, { headers: req.headers });
+    treeProbe.push({
+      transport: t.name,
+      status: res.status,
+      ct: res.ct,
+      bodyPreview: (res.body || "").slice(0, 120),
+    });
+    const looksAuthErr = res.status === 401 || res.status === 403 || /unauthorized|invalid\s*(token|session)|access\s*denied/i.test(res.body || "");
+    if (res.ok && !looksAuthErr) {
+      workingTransport = t.name;
+      treeJson = res.json !== null ? res.json : res.body;
+      break;
+    }
+  }
+  return {
+    ok: Boolean(workingTransport),
+    apiBase: cfg.apiBase,
+    user: cfg.user,
+    tokenPreview: `${String(loginRes.token).slice(0, 16)}…`,
+    tokenLength: String(loginRes.token).length,
+    loginMethod: loginRes.method,
+    loginStatus: loginRes.status,
+    loginContentType: loginRes.ct,
+    tokenTransport: workingTransport,
+    treeProbe,
+    treePreview: treeJson
+      ? (typeof treeJson === "string" ? treeJson.slice(0, 500) : JSON.stringify(treeJson).slice(0, 500))
+      : null,
+    error: workingTransport
+      ? undefined
+      : `Логін успішний, але жоден транспорт токена не прийнятий vviewtree. Деталі у полі treeProbe.`,
+  };
 };
 
 // ---- Token cache ----
@@ -114,21 +155,82 @@ const fetchJson = async (url, init = {}) => {
   try { return JSON.parse(text); } catch { return text; }
 };
 
-// POST /api/v1/login?user=...&pass=...
-// Повертає токен (може бути plain text або JSON {token: "..."} — обробляємо обидва).
-const login = async (cfg) => {
-  const url = `${cfg.apiBase}/api/v1/login?user=${encodeURIComponent(cfg.user)}&pass=${encodeURIComponent(cfg.password)}`;
-  const raw = await fetchJson(url, { method: "POST" });
-  let token = "";
+// Спробувати «сирий» запит, повернути детальний звіт для логіну/діагностики.
+// Сюди НЕ кидаємо виключення — повертаємо { ok, status, body, json, ct, url, error }.
+const tryRequest = async (url, init = {}) => {
+  try {
+    const r = await fetch(url, init);
+    const ct = String(r.headers.get("content-type") || "").toLowerCase();
+    let text = "";
+    try { text = await r.text(); } catch {}
+    let json = null;
+    if (text) {
+      try { json = JSON.parse(text); } catch { json = null; }
+    }
+    return {
+      ok: r.ok,
+      status: r.status,
+      ct,
+      url,
+      body: text.slice(0, 1000),
+      json,
+    };
+  } catch (e) {
+    return { ok: false, status: 0, url, error: e?.message || String(e) };
+  }
+};
+
+const extractToken = (raw) => {
+  if (raw === null || raw === undefined) return "";
   if (typeof raw === "string") {
-    token = raw.trim();
-  } else if (raw && typeof raw === "object") {
-    token = String(
-      raw.token || raw.Token || raw.access_token || raw.accessToken || raw.value || ""
+    const s = raw.trim().replace(/^"|"$/g, "");
+    // Якщо це не схоже на JSON — повертаємо як токен (буває plain-text).
+    return s;
+  }
+  if (typeof raw === "object") {
+    return String(
+      raw.token ||
+      raw.Token ||
+      raw.access_token ||
+      raw.accessToken ||
+      raw.session ||
+      raw.Session ||
+      raw.sid ||
+      raw.SID ||
+      raw.key ||
+      raw.Key ||
+      raw.value ||
+      raw.Value ||
+      raw.result ||
+      raw.Result ||
+      ""
     ).trim();
   }
-  if (!token) throw new Error(`Login OK, але токен порожній. Raw: ${JSON.stringify(raw).slice(0, 200)}`);
-  return token;
+  return String(raw).trim();
+};
+
+// Vik-Soft login: пробуємо GET (так показано в доці-скрінах), якщо не виходить — POST.
+// Повертаємо token + діагностику першої вдалої спроби.
+const login = async (cfg) => {
+  const qs = `user=${encodeURIComponent(cfg.user)}&pass=${encodeURIComponent(cfg.password)}`;
+  const url = `${cfg.apiBase}/api/v1/login?${qs}`;
+
+  const attempts = [];
+  for (const method of ["GET", "POST"]) {
+    const res = await tryRequest(url, { method });
+    attempts.push({ method, status: res.status, ct: res.ct, body: (res.body || "").slice(0, 200), error: res.error });
+    if (res.ok) {
+      const token = extractToken(res.json !== null ? res.json : res.body);
+      if (token) {
+        return { token, raw: res.json !== null ? res.json : res.body, ct: res.ct, status: res.status, method };
+      }
+    }
+  }
+  // Зібрали всі спроби — формуємо корисну помилку.
+  const detail = attempts
+    .map((a) => `${a.method} → ${a.status || "ERR"}${a.error ? ` (${a.error})` : ""}${a.body ? ` body:${a.body}` : ""}`)
+    .join(" || ");
+  throw new Error(`Vik-Soft login невдалий. Спроби: ${detail}`);
 };
 
 const getToken = async () => {
@@ -140,9 +242,9 @@ const getToken = async () => {
   if (loginPromise) return loginPromise;
   loginPromise = (async () => {
     try {
-      const value = await login(cfg);
-      cachedToken = { value, expiresAt: Date.now() + TOKEN_TTL_MS };
-      return value;
+      const { token, method } = await login(cfg);
+      cachedToken = { value: token, expiresAt: Date.now() + TOKEN_TTL_MS, loginMethod: method };
+      return token;
     } finally {
       loginPromise = null;
     }
@@ -152,41 +254,86 @@ const getToken = async () => {
 
 export const invalidateVikSoftToken = () => {
   cachedToken = null;
+  tokenTransport = null;
 };
 
-// Викликає GET ендпоінт, додаючи токен. Якщо 401/403 — оновлює токен і повторює.
+// ---- Auto-detect транспорту токена ----
+// Vik-Soft документація не уточнює — спершу пробуємо найімовірніші варіанти,
+// запам'ятовуємо який спрацював і використовуємо його далі.
+const TOKEN_TRANSPORTS = [
+  { name: "query:token", apply: (u, h, t) => { u.searchParams.set("token", t); } },
+  { name: "query:session", apply: (u, h, t) => { u.searchParams.set("session", t); } },
+  { name: "query:sid", apply: (u, h, t) => { u.searchParams.set("sid", t); } },
+  { name: "query:key", apply: (u, h, t) => { u.searchParams.set("key", t); } },
+  { name: "header:bearer", apply: (u, h, t) => { h.Authorization = `Bearer ${t}`; } },
+  { name: "header:token", apply: (u, h, t) => { h.Token = t; } },
+  { name: "header:x-token", apply: (u, h, t) => { h["X-Token"] = t; } },
+];
+let tokenTransport = null; // запам'ятовуємо вдалий варіант
+
+const buildRequest = (cfg, path, params, token, transport) => {
+  const u = new URL(`${cfg.apiBase}${path}`);
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "") continue;
+    u.searchParams.set(k, String(v));
+  }
+  const headers = {};
+  transport.apply(u, headers, token);
+  return { url: u.toString(), headers };
+};
+
+// Викликає GET ендпоінт, додаючи токен. Перебирає транспорти, поки не отримає
+// успіх (200 + контент, який виглядає як корисний JSON чи не-порожній текст без помилки авторизації).
 const apiGet = async (path, params = {}) => {
   const cfg = getConfig();
-  const buildUrl = (token) => {
-    const u = new URL(`${cfg.apiBase}${path}`);
-    for (const [k, v] of Object.entries(params)) {
-      if (v === undefined || v === null || v === "") continue;
-      u.searchParams.set(k, String(v));
-    }
-    // Vik-Soft може приймати токен як query (?token=) або як header.
-    if (token) u.searchParams.set("token", token);
-    return u.toString();
-  };
   let token = await getToken();
-  let url = buildUrl(token);
-  let r = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (r.status === 401 || r.status === 403) {
-    invalidateVikSoftToken();
-    token = await getToken();
-    url = buildUrl(token);
-    r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+
+  const looksLikeAuthError = (res) => {
+    if (res.status === 401 || res.status === 403) return true;
+    const body = String(res.body || "").toLowerCase();
+    if (!body) return false;
+    return /unauthorized|not\s*logged|invalid\s*(token|session)|access\s*denied|forbidden|wrong\s*token/.test(body);
+  };
+
+  const tryTransport = async (transport) => {
+    const req = buildRequest(cfg, path, params, token, transport);
+    const res = await tryRequest(req.url, { headers: req.headers });
+    return { transport, res };
+  };
+
+  // 1) Якщо вже знаємо вдалий транспорт — спробуємо його першим.
+  const order = tokenTransport
+    ? [tokenTransport, ...TOKEN_TRANSPORTS.filter((t) => t !== tokenTransport)]
+    : TOKEN_TRANSPORTS;
+
+  const tried = [];
+  for (const t of order) {
+    const { res } = await tryTransport(t);
+    tried.push({ name: t.name, status: res.status, body: (res.body || "").slice(0, 120) });
+    if (res.ok && !looksLikeAuthError(res)) {
+      tokenTransport = t;
+      return res.json !== null ? res.json : res.body;
+    }
+    // Якщо просто auth error — пробуємо інший транспорт.
+    if (!looksLikeAuthError(res)) {
+      // Інша помилка (500, 400 і т.п.) — далі пробувати немає сенсу, повертаємо її.
+      throw new Error(`HTTP ${res.status} ${path} :: ${(res.body || "").slice(0, 500)}`);
+    }
   }
-  const ct = String(r.headers.get("content-type") || "").toLowerCase();
-  if (!r.ok) {
-    let body = "";
-    try { body = (await r.text()).slice(0, 500); } catch {}
-    throw new Error(`HTTP ${r.status} ${path} :: ${body}`);
+
+  // 2) Усі транспорти повернули auth-error — можливо токен застарів. Оновимо й повторимо один раз.
+  invalidateVikSoftToken();
+  token = await getToken();
+  for (const t of TOKEN_TRANSPORTS) {
+    const { res } = await tryTransport(t);
+    tried.push({ name: t.name + "+retry", status: res.status, body: (res.body || "").slice(0, 120) });
+    if (res.ok && !looksLikeAuthError(res)) {
+      tokenTransport = t;
+      return res.json !== null ? res.json : res.body;
+    }
   }
-  if (ct.includes("application/json")) return r.json();
-  const text = await r.text();
-  try { return JSON.parse(text); } catch { return text; }
+  const detail = tried.map((x) => `${x.name}→${x.status}${x.body ? ` (${x.body})` : ""}`).join(" || ");
+  throw new Error(`Vik-Soft ${path}: жоден транспорт токена не спрацював. Спроби: ${detail}`);
 };
 
 // GET /api/v1/vviewtree?eType=1&sId=0 → дерево/список EIC кодів.

@@ -315,14 +315,25 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
                   <>
                     <CheckCircle2 size={16} className="mr-1 inline" />
                     Підключення успішне. Токен: <code className="font-mono">{testResult.tokenPreview}</code>
-                    {testResult.apiBase ? <> · <span className="text-xs text-emerald-600/80">{testResult.apiBase}</span></> : null}
+                    {testResult.tokenTransport ? (
+                      <> · транспорт: <code className="font-mono">{testResult.tokenTransport}</code></>
+                    ) : null}
+                    {testResult.loginMethod ? (
+                      <> · логін: <code className="font-mono">{testResult.loginMethod}</code></>
+                    ) : null}
                   </>
                 ) : (
                   <>
                     <XCircle size={16} className="mr-1 inline" />
-                    Не вдалося підключитись: {testResult.error}
+                    Не вдалося підключитись{testResult.stage ? ` (етап: ${testResult.stage})` : ""}: {testResult.error}
                   </>
                 )}
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-xs opacity-80 hover:opacity-100">Деталі діагностики</summary>
+                  <pre className="mt-2 max-h-72 overflow-auto rounded bg-slate-900 p-2 text-xs text-emerald-200">
+{JSON.stringify(testResult, null, 2)}
+                  </pre>
+                </details>
               </div>
             ) : null}
           </>
