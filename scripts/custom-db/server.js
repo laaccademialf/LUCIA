@@ -4040,6 +4040,18 @@ const handleDeleteRuntimeSettings = async (req, res) => {
   return sendJson(res, 200, { ok: true });
 };
 
+// Global token gate (Level A): every request except a small public allowlist
+// must carry the API token. The legitimate web/mobile frontend always sends
+// `x-api-token` (or `Authorization: Bearer <token>`) — including on
+// /auth/login — so this does not break normal sign-in. It does block
+// token-less bots, scanners and direct curl probing of /auth/* and /api/*.
+//
+// Public paths (reachable without a token):
+//   - /health  : uptime monitoring / load balancers
+// OPTIONS preflight is always allowed (handled before this gate) so browsers
+// can complete CORS negotiation.
+const PUBLIC_PATHS = new Set(["/health"]);
+
 const server = http.createServer(async (req, res) => {
   const method = req.method || "GET";
   const url = req.url || "/";
@@ -4051,6 +4063,11 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204);
     res.end();
     return;
+  }
+
+  // Enforce the global token gate for every non-public route.
+  if (!PUBLIC_PATHS.has(pathname) && !isAuthorized(req)) {
+    return sendJson(res, 401, { ok: false, error: "Unauthorized" });
   }
 
   if (method === "GET" && pathname === "/health") {
