@@ -4208,7 +4208,16 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
     }
-    const apiBase = String(payload?.apiBase || "").trim().replace(/\/+$/, "");
+    const apiBaseRaw = String(payload?.apiBase || "").trim();
+    // Нормалізуємо: користувач міг вставити повний URL логіну — лишаємо тільки origin.
+    let apiBase = apiBaseRaw;
+    try {
+      const withScheme = /^https?:\/\//i.test(apiBaseRaw) ? apiBaseRaw : `http://${apiBaseRaw}`;
+      const u = new URL(withScheme);
+      apiBase = `${u.protocol}//${u.host}`;
+    } catch {
+      apiBase = apiBaseRaw.replace(/\/+api\/.*$/i, "").replace(/[?#].*$/, "").replace(/\/+$/, "");
+    }
     const user = String(payload?.user || "").trim();
     // Якщо `password` НЕ передано (undefined) — лишаємо попередній.
     // Якщо передано порожній рядок — стираємо.

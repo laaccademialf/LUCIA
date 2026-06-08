@@ -18,6 +18,22 @@
 const DEFAULT_API_BASE = "http://194.183.165.59:8765";
 const DEFAULT_DR = "1,2,3,4"; // A+, A-, R+, R-
 
+// Нормалізує базу API: приймає як чисту базу, так і випадково вставлений повний URL
+// (напр. ".../api/v1/login?user=...&pass=...") — лишає тільки origin (scheme+host+port).
+const normalizeApiBase = (raw) => {
+  let s = String(raw || "").trim();
+  if (!s) return "";
+  // Якщо немає схеми — додаємо http:// щоб URL() розпарсив.
+  if (!/^https?:\/\//i.test(s)) s = `http://${s}`;
+  try {
+    const u = new URL(s);
+    return `${u.protocol}//${u.host}`.replace(/\/+$/, "");
+  } catch {
+    // Фолбек: відрізаємо все після першого "/api" та query.
+    return s.replace(/\/+api\/.*$/i, "").replace(/[?#].*$/, "").replace(/\/+$/, "");
+  }
+};
+
 // Мапа dr → людська назва напрямку.
 const DIRECTION_BY_DR = { 1: "A+", 2: "A-", 3: "R+", 4: "R-" };
 // Звичайні поля у JSON, які зустрічаються в маркетах getsqlmaket.
@@ -37,7 +53,7 @@ export const setVikSoftRuntimeConfig = (cfg) => {
     runtimeOverride = null;
   } else {
     runtimeOverride = {
-      apiBase: cfg.apiBase ? String(cfg.apiBase).trim().replace(/\/+$/, "") : "",
+      apiBase: cfg.apiBase ? normalizeApiBase(cfg.apiBase) : "",
       user: cfg.user ? String(cfg.user).trim() : "",
       password: typeof cfg.password === "string" ? cfg.password : "",
     };
@@ -52,7 +68,7 @@ export const setVikSoftRuntimeConfig = (cfg) => {
 const getConfig = () => {
   const ro = runtimeOverride || {};
   return {
-    apiBase: String(ro.apiBase || process.env.VIKSOFT_API_BASE || DEFAULT_API_BASE).replace(/\/+$/, ""),
+    apiBase: normalizeApiBase(ro.apiBase || process.env.VIKSOFT_API_BASE || DEFAULT_API_BASE),
     user: String(ro.user || process.env.VIKSOFT_USER || "").trim(),
     password: String(ro.password || process.env.VIKSOFT_PASSWORD || "").trim(),
   };
@@ -75,7 +91,7 @@ export const getVikSoftPublicConfig = () => {
 export const testVikSoftLogin = async (override) => {
   const cfg = override && (override.user || override.password)
     ? {
-        apiBase: String(override.apiBase || runtimeOverride?.apiBase || process.env.VIKSOFT_API_BASE || DEFAULT_API_BASE).replace(/\/+$/, ""),
+        apiBase: normalizeApiBase(override.apiBase || runtimeOverride?.apiBase || process.env.VIKSOFT_API_BASE || DEFAULT_API_BASE),
         user: String(override.user || "").trim(),
         password: String(override.password || "").trim(),
       }

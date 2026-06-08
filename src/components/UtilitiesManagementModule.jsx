@@ -14,6 +14,19 @@ const btnPrimary =
 const btnGhost =
   "inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition";
 
+// Лишає тільки origin (scheme+host+port), якщо вставили повний URL логіну.
+const normalizeApiBase = (raw) => {
+  let s = String(raw || "").trim();
+  if (!s) return "";
+  if (!/^https?:\/\//i.test(s)) s = `http://${s}`;
+  try {
+    const u = new URL(s);
+    return `${u.protocol}//${u.host}`.replace(/\/+$/, "");
+  } catch {
+    return s.replace(/\/+api\/.*$/i, "").replace(/[?#].*$/, "").replace(/\/+$/, "");
+  }
+};
+
 const Section = ({ icon, title, subtitle, children }) => (
   <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
     <header className="mb-3 flex items-start gap-3">
@@ -241,9 +254,13 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
                   type="text"
                   value={apiBase}
                   onChange={(e) => setApiBase(e.target.value)}
+                  onBlur={(e) => setApiBase(normalizeApiBase(e.target.value))}
                   placeholder="http://194.183.165.59:8765"
                   spellCheck={false}
                 />
+                <span className="mt-1 block text-xs text-slate-400">
+                  Лише адреса сервера (без /api/v1/login та параметрів).
+                </span>
               </label>
               <label className="block text-sm">
                 <span className="mb-1 block font-medium text-slate-700">Логін</span>
