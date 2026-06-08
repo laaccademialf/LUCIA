@@ -342,7 +342,9 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
                 ) : (
                   <>
                     <XCircle size={16} className="mr-1 inline" />
-                    Не вдалося підключитись{testResult.stage ? ` (етап: ${testResult.stage})` : ""}: {testResult.error}
+                    {testResult.stage === "backend_route"
+                      ? `Бекенд платформи ще не оновлено: ${testResult.error}`
+                      : `Не вдалося підключитись${testResult.stage ? ` (етап: ${testResult.stage})` : ""}: ${testResult.error}`}
                   </>
                 )}
                 <details className="mt-2">

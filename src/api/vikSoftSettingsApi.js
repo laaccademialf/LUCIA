@@ -39,12 +39,20 @@ const requireBase = () => {
   return base;
 };
 
+const formatRouteError = (status, error, route) => {
+  const baseError = String(error || `HTTP ${status}`).trim();
+  if (status === 404 || /^not found$/i.test(baseError)) {
+    return `${baseError} (ендпоінт ${route} відсутній на бекенді — онови і перезапусти migration-сервер)`;
+  }
+  return baseError;
+};
+
 export const getVikSoftSettings = async () => {
   const base = requireBase();
   const r = await fetch(`${base}/api/settings/viksoft`, { headers: buildHeaders() });
   const json = await r.json().catch(() => null);
   if (!r.ok || !json?.ok) {
-    throw new Error(json?.error || `HTTP ${r.status}`);
+    throw new Error(formatRouteError(r.status, json?.error, "/api/settings/viksoft"));
   }
   return json;
 };
@@ -61,7 +69,7 @@ export const saveVikSoftSettings = async ({ apiBase, user, password }) => {
   });
   const json = await r.json().catch(() => null);
   if (!r.ok || !json?.ok) {
-    throw new Error(json?.error || `HTTP ${r.status}`);
+    throw new Error(formatRouteError(r.status, json?.error, "/api/settings/viksoft"));
   }
   return json;
 };
@@ -77,6 +85,13 @@ export const testVikSoftConnection = async (override) => {
   if (!json || typeof json !== "object") {
     throw new Error(`HTTP ${r.status}: невалідна відповідь`);
   }
+  if (r.status === 404 || /^not found$/i.test(String(json?.error || "").trim())) {
+    return {
+      ok: false,
+      stage: "backend_route",
+      error: formatRouteError(r.status, json?.error, "/api/settings/viksoft/test"),
+    };
+  }
   return json; // { ok, tokenPreview?, error?, apiBase?, user? }
 };
 
@@ -89,7 +104,7 @@ export const getVikSoftDebug = async ({ eic, date } = {}) => {
   const r = await fetch(url, { headers: buildHeaders() });
   const json = await r.json().catch(() => null);
   if (!r.ok) {
-    throw new Error(json?.error || `HTTP ${r.status}`);
+    throw new Error(formatRouteError(r.status, json?.error, "/api/energocenter/debug"));
   }
   return json;
 };
