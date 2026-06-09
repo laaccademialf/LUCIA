@@ -65,6 +65,8 @@ import { useServiceRequests } from "./hooks/useServiceRequests";
 import { logAuditEvent } from "./firebase/audit";
 import { isCollectionsApiEnabled, getCollectionItemApi } from "./api/collectionsApi";
 import { batchImportAssetsApi, isAssetsApiEnabled } from "./api/assetsApi";
+import { getLegalNotificationsApi, isLegalApiEnabled } from "./api/legalTasksApi";
+import { isLegalUser, LEGAL_NAV_ID } from "./data/legalConstants";
 
 
 const loadExcelHelpers = () => import("./utils/excelHelpers");
@@ -88,6 +90,7 @@ const ProductBookingModule = lazy(() => import("./components/ProductBookingModul
 const CateringOperationsModule = lazy(() => import("./components/CateringOperationsModule"));
 const TechnologicalCardModule = lazy(() => import("./components/TechnologicalCardModule"));
 const ServiceRequestsModule = lazy(() => import("./components/ServiceRequestsModule"));
+const LegalModule = lazy(() => import("./components/LegalModule"));
 const ChecklistModule = lazy(() => import("./components/ChecklistModule"));
 const TeamHiringModule = lazy(() => import("./components/TeamHiringModule"));
 const SecurityAuditModule = lazy(() => import("./components/SecurityAuditModule"));
@@ -668,6 +671,7 @@ function App() {
   const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
   const [externalNotificationTick, setExternalNotificationTick] = useState(0);
   const [checklistReminderTick, setChecklistReminderTick] = useState(0);
+  const [legalCenterNotifications, setLegalCenterNotifications] = useState([]);
   const seenMissedChecklistKeysRef = useRef(new Set());
   const seenNotificationKeysRef = useRef(new Set());
   const notificationSoundInitializedRef = useRef(false);
@@ -834,6 +838,66 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
+  // Юридичні сповіщення (центр сповіщень): polling серверної колекції legalNotifications,
+  // фільтрація за поточним користувачем (особисто або як співробітник юр.відділу).
+  useEffect(() => {
+    if (!user || !isLegalApiEnabled()) {
+      setLegalCenterNotifications([]);
+      return;
+    }
+
+    const currentUserId = String(user?.uid || user?.id || user?.userId || user?.email || "").trim();
+    const userIsLegal = isLegalUser(user);
+    let cancelled = false;
+
+    const loadLegal = async () => {
+      try {
+        const items = await getLegalNotificationsApi();
+        if (cancelled) return;
+        const mapped = (Array.isArray(items) ? items : [])
+          .filter((item) => {
+            if (String(item?.source || "") !== "legal") return false;
+            if (String(item?.actorUserId || "") && String(item.actorUserId) === currentUserId) return false;
+            const targetUserId = String(item?.targetUserId || "");
+            const targetRole = String(item?.targetRole || "");
+            if (targetUserId && targetUserId === currentUserId) return true;
+            if (targetRole === "legal" && userIsLegal) return true;
+            return false;
+          })
+          .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+          .slice(0, 50)
+          .map((item) => {
+            const key = `legal_${String(item.id || item.createdAt || Math.random().toString(36).slice(2))}`;
+            return {
+              key,
+              id: key,
+              type: "legal",
+              title: String(item.title || "Юридична задача"),
+              time: item.createdAt
+                ? new Date(item.createdAt).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })
+                : "щойно",
+              body: String(item.body || ""),
+              createdAt: String(item.createdAt || ""),
+              read: false,
+              actionUrl: LEGAL_NAV_ID,
+              actionTab: String(item.actionTab || "legalrequest"),
+              priority: "normal",
+            };
+          });
+        setLegalCenterNotifications(mapped);
+      } catch (error) {
+        if (!cancelled) console.warn("Не вдалося завантажити юридичні сповіщення:", error);
+      }
+    };
+
+    loadLegal();
+    const timer = setInterval(loadLegal, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [user]);
+
   useEffect(() => {
     if (!user || !Array.isArray(restaurants) || restaurants.length === 0) {
       setNotifications([]);
@@ -920,7 +984,7 @@ function App() {
       actionUrl: "checklists",
       priority: "high",
     }));
-    const nextNotifications = [...paymentNotifications, ...checklistNotifications]
+    const nextNotifications = [...paymentNotifications, ...checklistNotifications, ...legalCenterNotifications]
       .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
       .slice(0, 50);
     setNotifications(nextNotifications);
@@ -949,6 +1013,7 @@ function App() {
     checklistExecutions,
     checklistReminderTick,
     externalNotificationTick,
+    legalCenterNotifications,
   ]);
 
   // ...існуючий код App...
@@ -3819,6 +3884,14 @@ function App() {
     }
 
     if (activeNav === "ops-maintenance" || activeNav.includes("ops-maintenance")) {
+      const legalTabKey = String(topTab || "").toLowerCase();
+      if (legalTabKey.includes("legal")) {
+        return (
+          <div className="grid grid-cols-1">
+            <LegalModule topTab={topTab} restaurants={restaurants} user={user} />
+          </div>
+        );
+      }
       return (
         <div className="grid grid-cols-1">
           <ServiceRequestsModule topTab={topTab} restaurants={restaurants} user={user} />
@@ -4887,6 +4960,9 @@ function App() {
           // Обробка дій сповіщень
           if (notification.actionUrl) {
             handleActiveNavChange(notification.actionUrl);
+            if (notification.actionTab) {
+              handleTopTabChange(notification.actionTab);
+            }
           }
           // Закрити панель при кліцінні
           setNotificationPanelOpen(false);
