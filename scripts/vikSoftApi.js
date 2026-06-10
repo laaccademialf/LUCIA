@@ -127,7 +127,7 @@ export const testVikSoftLogin = async (override) => {
       bodyPreview: (res.body || "").slice(0, 120),
     });
     const looksAuthErr = res.status === 401 || res.status === 403 || /unauthorized|invalid\s*(token|session)|access\s*denied/i.test(res.body || "");
-    if (res.ok && !looksAuthErr) {
+    if (res.ok && !looksAuthErr && !hasEmbeddedApiError(res)) {
       workingTransport = t.name;
       treeJson = res.json !== null ? res.json : res.body;
       break;
@@ -194,6 +194,27 @@ const tryRequest = async (url, init = {}) => {
   } catch (e) {
     return { ok: false, status: 0, url, error: e?.message || String(e) };
   }
+};
+
+// Деякі інсталяції Vik-Soft повертають HTTP 200, але фактичну помилку в errors[].
+// Таку відповідь не можна вважати успішною.
+const hasEmbeddedApiError = (res) => {
+  const json = res?.json;
+  if (json && typeof json === "object") {
+    const errs = json.errors || json.Errors;
+    if (Array.isArray(errs) && errs.length > 0) {
+      const first = errs[0] || {};
+      const st = Number(first.status || first.Status || 0);
+      if (Number.isFinite(st) && st >= 400) return true;
+      const title = String(first.title || first.Title || "").toLowerCase();
+      const detail = String(first.detail || first.Detail || "").toLowerCase();
+      if (/unauthorized|forbidden|bad\s*request|invalid|error/.test(`${title} ${detail}`)) {
+        return true;
+      }
+    }
+  }
+  const body = String(res?.body || "").toLowerCase();
+  return /"errors"\s*:\s*\[/.test(body) && /"status"\s*:\s*"?4\d\d"?/.test(body);
 };
 
 const extractToken = (raw) => {
@@ -307,6 +328,7 @@ export const invalidateVikSoftToken = () => {
 const TOKEN_TRANSPORTS = [
   { name: "query:token", apply: (u, h, t) => { u.searchParams.set("token", t); } },
   { name: "query:session", apply: (u, h, t) => { u.searchParams.set("session", t); } },
+  { name: "query:sId", apply: (u, h, t) => { u.searchParams.set("sId", t); } },
   { name: "query:sid", apply: (u, h, t) => { u.searchParams.set("sid", t); } },
   { name: "query:key", apply: (u, h, t) => { u.searchParams.set("key", t); } },
   { name: "header:bearer", apply: (u, h, t) => { h.Authorization = `Bearer ${t}`; } },
@@ -354,7 +376,7 @@ const apiGet = async (path, params = {}) => {
   for (const t of order) {
     const { res } = await tryTransport(t);
     tried.push({ name: t.name, status: res.status, body: (res.body || "").slice(0, 120) });
-    if (res.ok && !looksLikeAuthError(res)) {
+    if (res.ok && !looksLikeAuthError(res) && !hasEmbeddedApiError(res)) {
       tokenTransport = t;
       return res.json !== null ? res.json : res.body;
     }
@@ -371,7 +393,7 @@ const apiGet = async (path, params = {}) => {
   for (const t of TOKEN_TRANSPORTS) {
     const { res } = await tryTransport(t);
     tried.push({ name: t.name + "+retry", status: res.status, body: (res.body || "").slice(0, 120) });
-    if (res.ok && !looksLikeAuthError(res)) {
+    if (res.ok && !looksLikeAuthError(res) && !hasEmbeddedApiError(res)) {
       tokenTransport = t;
       return res.json !== null ? res.json : res.body;
     }
