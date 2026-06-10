@@ -5,6 +5,7 @@ const path = require('path');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const ENV_FILE = path.join(ROOT_DIR, '.env.local');
+const BACKEND_PACKAGE_FILE = path.join(ROOT_DIR, 'scripts', 'custom-db', 'package.json');
 const APP_BASE_VERSION = '1.0.3';
 const BEGIN_MARKER = '# >>> LUCIA GIT META >>>';
 const END_MARKER = '# <<< LUCIA GIT META <<<';
@@ -56,6 +57,17 @@ const nextContent = blockPattern.test(existing)
   : `${existing.replace(/\s*$/, '')}${existing.trim() ? '\n\n' : ''}${metaLines.join('\n')}\n`;
 
 fs.writeFileSync(ENV_FILE, nextContent);
+
+try {
+  const backendPackage = JSON.parse(fs.readFileSync(BACKEND_PACKAGE_FILE, 'utf8'));
+  backendPackage.version = version;
+  backendPackage.private = true;
+  backendPackage.type = 'module';
+  fs.writeFileSync(BACKEND_PACKAGE_FILE, `${JSON.stringify(backendPackage, null, 2)}\n`);
+} catch {
+  // Ignore missing backend package metadata during local bootstrap.
+}
+
 console.log(`Git meta written to ${path.relative(ROOT_DIR, ENV_FILE)}:`, {
   version,
   branch,

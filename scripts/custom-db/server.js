@@ -52,8 +52,17 @@ const SETTINGS_FILE = process.env.RUNTIME_SETTINGS_FILE || "./tmp/custom-db/runt
 const POSTGRES_URL = String(process.env.POSTGRES_URL || "").trim();
 const ASSET_IMAGE_DIR = String(process.env.ASSET_IMAGE_DIR || "/var/www/luci.lafamiglia.ua/app/img").trim();
 const ASSET_IMAGE_PUBLIC_BASE = String(process.env.ASSET_IMAGE_PUBLIC_BASE || "/app/img").trim().replace(/\/+$/, "");
+const BACKEND_PACKAGE_PATH = new URL("./package.json", import.meta.url);
+const readBackendPackageVersion = () => {
+  try {
+    const packageJson = JSON.parse(readFileSync(BACKEND_PACKAGE_PATH, "utf8"));
+    return String(packageJson.version || "").trim();
+  } catch {
+    return "";
+  }
+};
 const BACKEND_VERSION = String(
-  process.env.BACKEND_VERSION || process.env.VITE_APP_VERSION || "1.0.3+local"
+  process.env.BACKEND_VERSION || process.env.VITE_APP_VERSION || readBackendPackageVersion() || "1.0.3+local"
 ).trim();
 
 const MYSQL_CONFIG = {
