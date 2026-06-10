@@ -4614,12 +4614,67 @@ const server = http.createServer(async (req, res) => {
       payload = {};
     }
     try {
-      const { testVikSoftLogin } = await import("../vikSoftApi.js");
+      const { testVikSoftLogin, fetchEnergoCenterConsumption } = await import("../vikSoftApi.js");
       // Якщо в тілі передали override (apiBase/user/password) — тест саме з ним.
       const override = (payload && (payload.user || payload.password || payload.apiBase))
         ? { apiBase: payload.apiBase, user: payload.user, password: payload.password }
         : undefined;
       const result = await testVikSoftLogin(override);
+
+      // Якщо vviewtree не пройшов, пробуємо практичний сценарій з getsqlmaket
+      // (по EIC з payload або першому EIC у колекції ресторанів).
+      if (!result?.ok && Number(result?.loginStatus || 0) === 200) {
+        let probeEic = String(payload?.eic || payload?.probeEic || "").trim();
+        if (!probeEic) {
+          try {
+            const dbConfig = getAssetsRuntimeConfig();
+            const restaurants = await getCollectionItemsData("restaurants", dbConfig);
+            for (const r of Array.isArray(restaurants) ? restaurants : []) {
+              const list = parseEics(r?.vikSoftEics || r?.vik_soft_eics || r?.eics);
+              if (list.length > 0) {
+                probeEic = list[0];
+                break;
+              }
+            }
+          } catch {
+            // ignore restaurants lookup errors in test endpoint
+          }
+        }
+
+        if (probeEic) {
+          const probe = await fetchEnergoCenterConsumption({
+            date: getYesterdayIso(),
+            force: true,
+            eics: [probeEic],
+          });
+
+          if (probe?.ok) {
+            return sendJson(res, 200, {
+              ...result,
+              ok: true,
+              partial: true,
+              warning: "vviewtree не пройшов, але getsqlmaket по EIC працює — робочий режим підтверджено.",
+              probeEic,
+              consumptionProbe: {
+                ok: true,
+                reportDate: probe.reportDate,
+                rowsCount: Array.isArray(probe.rows) ? probe.rows.length : 0,
+                warnings: probe.warnings || undefined,
+              },
+            });
+          }
+
+          return sendJson(res, 502, {
+            ...result,
+            probeEic,
+            consumptionProbe: {
+              ok: false,
+              error: probe?.error || "getsqlmaket probe failed",
+            },
+          });
+        }
+      }
+
       const status = result?.ok ? 200 : 502;
       return sendJson(res, status, result);
     } catch (error) {
