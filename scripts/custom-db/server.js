@@ -4664,7 +4664,7 @@ const server = http.createServer(async (req, res) => {
             });
           }
 
-          return sendJson(res, 502, {
+          return sendJson(res, 200, {
             ...result,
             probeEic,
             consumptionProbe: {
@@ -4675,8 +4675,7 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      const status = result?.ok ? 200 : 502;
-      return sendJson(res, status, result);
+      return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
     }
