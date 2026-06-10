@@ -1,10 +1,35 @@
 import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import zlib from "node:zlib";
 import { DEFAULT_MENU_STRUCTURE } from "../../src/data/defaultMenuStructure.js";
+
+const loadEnvFile = (filePath) => {
+  try {
+    const content = readFileSync(filePath, "utf8");
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = String(rawLine || "").trim();
+      if (!line || line.startsWith("#")) continue;
+      const separatorIndex = line.indexOf("=");
+      if (separatorIndex < 1) continue;
+      const key = line.slice(0, separatorIndex).trim();
+      if (!key || Object.prototype.hasOwnProperty.call(process.env, key)) continue;
+      let value = line.slice(separatorIndex + 1);
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      process.env[key] = value;
+    }
+  } catch {
+    // Ignore missing local env files.
+  }
+};
+
+loadEnvFile(".env.local");
+loadEnvFile(".env");
 
 const PORT = Number(process.env.MIGRATION_PORT || 8787);
 const HOST = process.env.MIGRATION_HOST || "0.0.0.0";
@@ -27,6 +52,9 @@ const SETTINGS_FILE = process.env.RUNTIME_SETTINGS_FILE || "./tmp/custom-db/runt
 const POSTGRES_URL = String(process.env.POSTGRES_URL || "").trim();
 const ASSET_IMAGE_DIR = String(process.env.ASSET_IMAGE_DIR || "/var/www/luci.lafamiglia.ua/app/img").trim();
 const ASSET_IMAGE_PUBLIC_BASE = String(process.env.ASSET_IMAGE_PUBLIC_BASE || "/app/img").trim().replace(/\/+$/, "");
+const BACKEND_VERSION = String(
+  process.env.BACKEND_VERSION || process.env.VITE_APP_VERSION || "1.0.3+local"
+).trim();
 
 const MYSQL_CONFIG = {
   host: String(process.env.MYSQL_HOST || "").trim(),
@@ -4148,6 +4176,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, {
       ok: true,
       service: "custom-db-migration-server",
+      version: BACKEND_VERSION,
       engine: ENGINE,
       requiredEngine: REQUIRED_ENGINE || null,
       mysqlConfigured: Boolean(MYSQL_CONFIG.host && MYSQL_CONFIG.user && MYSQL_CONFIG.database),
@@ -4598,6 +4627,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Custom migration server is running on http://${HOST}:${PORT}`);
+  console.log(`Version: ${BACKEND_VERSION}`);
   console.log(`Engine: ${ENGINE}`);
   console.log(`Health endpoint: http://${HOST}:${PORT}/health`);
   console.log(`Migration endpoint: http://${HOST}:${PORT}/migration/import`);

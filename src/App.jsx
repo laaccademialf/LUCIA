@@ -100,7 +100,7 @@ const DatabaseConnectionsManager = lazy(() => import("./components/DatabaseConne
 const ProfileSettingsModal = lazy(() => import("./components/ProfileSettingsModal"));
 
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
-const APP_VERSION = "1.0.3";
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || "1.0.3";
 const LOGIN_AUDIT_MARKER_KEY = "lucia_login_audit_marker";
 const ADMIN_ONLY_NAV_IDS = new Set(["settings-permissions", "menu-admin", "security-audit"]);
 const NAV_ICON_MAP = {

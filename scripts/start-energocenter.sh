@@ -17,6 +17,9 @@ fi
 pkill -9 -f "node scripts/custom-db/server" 2>/dev/null || true
 sleep 1
 
+# Оновлюємо git-метадані для поточного codespace перед запуском.
+node scripts/git-meta.cjs
+
 # Стартуємо у фоні
 set -a; . ./.env.energocenter; set +a
 nohup node scripts/custom-db/server.js > /tmp/migration-server.log 2>&1 &
