@@ -175,6 +175,16 @@ const ASSETS_API_SLOW_MS = Math.max(
   Number.parseInt(String(process.env.ASSETS_API_SLOW_MS || "500"), 10) || 500
 );
 
+// Auto-sync Vik-Soft -> electricityReadings (server-side background job).
+const VIKSOFT_AUTO_SYNC_ENABLED =
+  String(process.env.LUCIA_VIKSOFT_AUTO_SYNC_ENABLED || "false").trim().toLowerCase() === "true";
+const VIKSOFT_AUTO_SYNC_INTERVAL_MS = Math.max(
+  5 * 60 * 1000,
+  Number.parseInt(String(process.env.LUCIA_VIKSOFT_AUTO_SYNC_INTERVAL_MINUTES || "30"), 10) * 60 * 1000 || 30 * 60 * 1000
+);
+const VIKSOFT_AUTO_SYNC_FORCE =
+  String(process.env.LUCIA_VIKSOFT_AUTO_SYNC_FORCE || "false").trim().toLowerCase() === "true";
+
 // Чи дозволяти dev-origins (localhost / 127.0.0.1 / *.app.github.dev / *.github.dev),
 // які не входять у фіксований CORS-allowlist. За замовчуванням увімкнено.
 const ALLOW_DEV_ORIGINS =
@@ -1377,6 +1387,116 @@ const getAssetsRuntimeConfig = () => {
     return { ...targetDb, dbEngine: "file" };
   }
   return targetDb;
+};
+
+const getYesterdayIso = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+
+const parseEics = (raw) => {
+  if (Array.isArray(raw)) {
+    return [...new Set(raw.map((s) => String(s || "").trim()).filter(Boolean))];
+  }
+  return [...new Set(String(raw || "").split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean))];
+};
+
+const toAutoMeters = (rows = []) => {
+  return rows
+    .filter((row) => {
+      const v = Number(row?.consumption);
+      return Number.isFinite(v) && v !== 0;
+    })
+    .map((row, idx) => ({
+      meterId: `energo:${row.point || "point"}|${row.direction || "dir"}|${idx}`,
+      meterNumber: `${row.point || ""} ${row.direction || ""}`.trim(),
+      prevValue: "",
+      currValue: row.consumption,
+      consumption: row.consumption,
+      source: "energocenter",
+    }));
+};
+
+let viksoftAutoSyncRunning = false;
+const runVikSoftAutoSync = async ({ date, force } = {}) => {
+  if (viksoftAutoSyncRunning) {
+    console.log("[viksoft:auto] skipped: previous run still in progress");
+    return;
+  }
+  viksoftAutoSyncRunning = true;
+  try {
+    const dbConfig = getAssetsRuntimeConfig();
+    const restaurants = await getCollectionItemsData("restaurants", dbConfig);
+    const reportDate = (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : getYesterdayIso();
+
+    const targets = (Array.isArray(restaurants) ? restaurants : [])
+      .map((r) => {
+        const id = String(r?.id || "").trim();
+        const name = String(r?.name || r?.restaurantName || id || "").trim();
+        const eics = parseEics(r?.vikSoftEics || r?.vik_soft_eics || r?.eics);
+        return { id, name, eics };
+      })
+      .filter((r) => r.id && r.eics.length > 0);
+
+    if (!targets.length) {
+      console.log("[viksoft:auto] no restaurants with vikSoftEics configured");
+      return;
+    }
+
+    const { fetchEnergoCenterConsumption } = await import("../vikSoftApi.js");
+    let okCount = 0;
+    let errCount = 0;
+
+    for (const restaurant of targets) {
+      try {
+        const result = await fetchEnergoCenterConsumption({
+          date: reportDate,
+          force: Boolean(force),
+          eics: restaurant.eics,
+        });
+        if (!result?.ok) {
+          errCount += 1;
+          console.warn(`[viksoft:auto] ${restaurant.name}: ${result?.error || "unknown error"}`);
+          continue;
+        }
+
+        const meters = toAutoMeters(Array.isArray(result.rows) ? result.rows : []);
+        if (!meters.length) {
+          console.log(`[viksoft:auto] ${restaurant.name}: no non-zero readings for ${reportDate}`);
+          continue;
+        }
+
+        await createCollectionItemData(
+          "electricityReadings",
+          {
+            id: `auto-viksoft:${restaurant.id}:${reportDate}`,
+            restaurantId: restaurant.id,
+            restaurantName: restaurant.name,
+            date: reportDate,
+            meters,
+            source: "energocenter-auto",
+            createdBy: "viksoft-auto-sync",
+            responsible: "auto",
+            fetchedAt: result.fetchedAt || new Date().toISOString(),
+            totals: result.totals || null,
+            warnings: Array.isArray(result.warnings) ? result.warnings : undefined,
+          },
+          dbConfig
+        );
+        okCount += 1;
+      } catch (e) {
+        errCount += 1;
+        console.warn(`[viksoft:auto] ${restaurant.name}: ${e?.message || e}`);
+      }
+    }
+
+    console.log(`[viksoft:auto] done for ${reportDate}: ok=${okCount}, errors=${errCount}, total=${targets.length}`);
+  } catch (e) {
+    console.warn(`[viksoft:auto] fatal: ${e?.message || e}`);
+  } finally {
+    viksoftAutoSyncRunning = false;
+  }
 };
 
 const mysqlPoolCache = new Map();
@@ -4792,6 +4912,23 @@ server.listen(PORT, HOST, () => {
       console.warn(`[viksoft] warm-up error: ${e?.message || e}`);
     }
   });
+
+  // Автоматичний серверний імпорт даних лічильників з Vik-Soft.
+  // Вмикається env: LUCIA_VIKSOFT_AUTO_SYNC_ENABLED=true
+  // Розклад: LUCIA_VIKSOFT_AUTO_SYNC_INTERVAL_MINUTES (default 30 хв)
+  if (VIKSOFT_AUTO_SYNC_ENABLED) {
+    console.log(
+      `[viksoft:auto] enabled (interval=${Math.round(VIKSOFT_AUTO_SYNC_INTERVAL_MS / 60000)}m, force=${VIKSOFT_AUTO_SYNC_FORCE})`
+    );
+    setImmediate(() => {
+      void runVikSoftAutoSync({ force: VIKSOFT_AUTO_SYNC_FORCE });
+    });
+    setInterval(() => {
+      void runVikSoftAutoSync({ force: VIKSOFT_AUTO_SYNC_FORCE });
+    }, VIKSOFT_AUTO_SYNC_INTERVAL_MS);
+  } else {
+    console.log("[viksoft:auto] disabled (set LUCIA_VIKSOFT_AUTO_SYNC_ENABLED=true to enable)");
+  }
 
   if (PUBLIC_REGISTER_ENABLED) {
     console.warn(
