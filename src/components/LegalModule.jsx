@@ -736,12 +736,13 @@ function KanbanBoard({ tasks, onOpen, onDrop, onDragStart, dragOverStatus, setDr
 }
 
 function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = false }) {
-  const { moveTaskStatus, removeTask, updateTask, addTaskComment } = legal;
+  const { moveTaskStatus, removeTask, addTaskComment, updateTaskDeadline } = legal;
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const [deadlineDraft, setDeadlineDraft] = useState(task?.preferredDeadline || "");
   const deadlineInputRef = useRef(null);
   const [messageDraft, setMessageDraft] = useState("");
+  const [replyTarget, setReplyTarget] = useState(null);
 
   if (!task) return null;
 
@@ -767,21 +768,13 @@ function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = fa
   const handleDeadlineSave = async (nextDeadline) => {
     setBusy(true);
     const valueToSave = nextDeadline ?? deadlineDraft;
-    await updateTask(task.id, {
-      ...task,
-      preferredDeadline: valueToSave || "",
-      statusHistory: [
-        ...(Array.isArray(task.statusHistory) ? task.statusHistory : []),
-        {
-          status: task.archived ? LEGAL_ARCHIVED_STATUS.value : task.status,
-          by: "Юрист",
-          byId: "",
-          at: new Date().toISOString(),
-          comment: valueToSave ? `Оновлено дедлайн: ${formatLegalDate(valueToSave)}` : "Дедлайн очищено",
-        },
-      ],
+    const result = await updateTaskDeadline(task, valueToSave, {
+      historyComment: valueToSave ? `Оновлено дедлайн: ${formatLegalDate(valueToSave)}` : "Дедлайн очищено",
     });
     setBusy(false);
+    if (!result?.success) {
+      alert("Не вдалося оновити дедлайн.");
+    }
   };
 
   const openDeadlinePicker = () => {
@@ -805,16 +798,22 @@ function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = fa
     const text = String(messageDraft || "").trim();
     if (!text) return;
     setBusy(true);
+    const notifyUserId = canManage ? String(task.createdById || "") : "";
+    const notifyRole = canManage ? "" : "legal";
+    const actionTab = canManage ? LEGAL_REQUEST_TAB : LEGAL_PROCESS_TAB;
     const result = await addTaskComment(task, text, {
-      notifyRole: "legal",
-      actionTab: LEGAL_PROCESS_TAB,
+      notifyRole,
+      notifyUserId,
+      actionTab,
+      replyTo: replyTarget,
     });
     setBusy(false);
     if (!result.success) {
-      alert("Не вдалося надіслати повідомлення юристу.");
+      alert("Не вдалося надіслати повідомлення.");
       return;
     }
     setMessageDraft("");
+    setReplyTarget(null);
   };
 
   return (
@@ -888,25 +887,61 @@ function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = fa
               ) : (
                 (task.threadMessages || []).map((entry) => (
                   <div key={entry.id || `${entry.at}_${entry.by}`} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                    {entry.replyToId ? (
+                      <div className="mb-1.5 rounded-md border border-indigo-100 bg-indigo-50 px-2 py-1">
+                        <p className="line-clamp-1 text-[11px] font-medium text-indigo-600">↪ {entry.replyToBy || "Користувач"}</p>
+                        <p className="line-clamp-2 text-[11px] text-indigo-500">{entry.replyToText || "Відповідь на повідомлення"}</p>
+                      </div>
+                    ) : null}
                     <p className="text-sm text-slate-700">{entry.text}</p>
-                    <p className="mt-1 text-[11px] text-slate-400">
-                      {entry.by || "Користувач"} · {formatLegalDateTime(entry.at)}
-                    </p>
+                    <div className="mt-1 flex items-center justify-between gap-3">
+                      <p className="text-[11px] text-slate-400">
+                        {entry.by || "Користувач"} · {formatLegalDateTime(entry.at)}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setReplyTarget({
+                            id: entry.id,
+                            text: entry.text,
+                            by: entry.by,
+                          })
+                        }
+                        className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-700"
+                      >
+                        Відповісти
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
             </div>
           </div>
 
-          {canMessageLegal && !canManage ? (
+          {canMessageLegal || canManage ? (
             <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-500">Написати юристу</p>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-500">
+                {canManage ? "Відповісти замовнику" : "Написати юристу"}
+              </p>
+              {replyTarget?.id ? (
+                <div className="mb-2 rounded-lg border border-indigo-200 bg-white/80 px-2.5 py-2">
+                  <p className="text-[11px] font-semibold text-indigo-600">Відповідь: {replyTarget.by || "Користувач"}</p>
+                  <p className="line-clamp-2 text-xs text-slate-600">{replyTarget.text}</p>
+                  <button
+                    type="button"
+                    onClick={() => setReplyTarget(null)}
+                    className="mt-1 text-[11px] font-semibold text-slate-500 hover:text-slate-700"
+                  >
+                    Скасувати відповідь
+                  </button>
+                </div>
+              ) : null}
               <textarea
                 className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                 rows={3}
                 value={messageDraft}
                 onChange={(e) => setMessageDraft(e.target.value)}
-                placeholder="Додайте уточнення або коментар до задачі"
+                placeholder={canManage ? "Напишіть відповідь замовнику" : "Додайте уточнення або коментар до задачі"}
               />
               <div className="mt-2 flex justify-end">
                 <button
@@ -915,7 +950,7 @@ function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = fa
                   onClick={handleSendMessageToLegal}
                   className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
                 >
-                  Надіслати юристу
+                  {canManage ? "Надіслати замовнику" : "Надіслати юристу"}
                 </button>
               </div>
             </div>

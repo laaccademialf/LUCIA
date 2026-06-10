@@ -245,8 +245,16 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
               });
             } catch (uploadError) {
               // Fallback: do not block task creation if filesystem upload is not available yet.
+              // IMPORTANT: never keep huge base64 in DB payload for legalTasks.
+              // Store only metadata, otherwise MySQL _flat TEXT columns can overflow.
               console.warn("Legal attachment upload failed, fallback to inline payload:", uploadError);
-              return file;
+              return {
+                name: String(file?.name || "file"),
+                size: Number(file?.size || 0),
+                type: String(file?.type || ""),
+                url: "",
+                uploadFailed: true,
+              };
             }
           })
         );
@@ -320,7 +328,7 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
     async (
       task,
       text,
-      { notifyRole = "", notifyUserId = "", actionTab = LEGAL_REQUEST_TAB } = {}
+      { notifyRole = "", notifyUserId = "", actionTab = LEGAL_REQUEST_TAB, replyTo = null } = {}
     ) => {
       if (!isLegalApiEnabled() || !task?.id) return { success: false };
       const message = String(text || "").trim();
@@ -333,6 +341,11 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
         by: actorLabel(user),
         byId: actorId(user),
         at: nowIso,
+        replyToId: String(replyTo?.id || "").trim(),
+        replyToText: String(replyTo?.text || "")
+          .trim()
+          .slice(0, 160),
+        replyToBy: String(replyTo?.by || "").trim(),
       };
 
       const patch = {
@@ -370,6 +383,55 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
       }
     },
     [user, reload, resolveNotificationTargets]
+  );
+
+  const updateTaskDeadline = useCallback(
+    async (task, nextDeadline, { historyComment = "" } = {}) => {
+      if (!isLegalApiEnabled() || !task?.id) return { success: false };
+
+      const nowIso = new Date().toISOString();
+      const normalizedDeadline = String(nextDeadline || "").trim();
+      const patch = {
+        ...task,
+        preferredDeadline: normalizedDeadline,
+        updatedAt: nowIso,
+        statusHistory: [
+          ...(Array.isArray(task.statusHistory) ? task.statusHistory : []),
+          {
+            status: task.archived ? LEGAL_ARCHIVED_STATUS.value : task.status,
+            by: actorLabel(user),
+            byId: actorId(user),
+            at: nowIso,
+            comment: historyComment || (normalizedDeadline ? "Оновлено дедлайн" : "Дедлайн очищено"),
+          },
+        ],
+      };
+
+      try {
+        await updateLegalTaskApi(task.id, patch);
+
+        if (task.createdById) {
+          await pushLegalNotification({
+            task,
+            title: "Оновлено дедлайн юридичної задачі",
+            body: normalizedDeadline
+              ? `${task.title} — новий дедлайн: ${normalizedDeadline}`
+              : `${task.title} — дедлайн прибрано`,
+            targetUserId: task.createdById,
+            actorUserId: actorId(user),
+            actionTab: LEGAL_REQUEST_TAB,
+          });
+        }
+
+        await reload();
+        return { success: true };
+      } catch (err) {
+        console.error("Помилка оновлення дедлайну юридичної задачі:", err);
+        setError(err);
+        return { success: false, error: err };
+      }
+    },
+    [user, reload]
   );
 
   // Зміна статусу задачі юристом (канбан / таблиця / архів).
@@ -445,5 +507,6 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
     removeTask,
     moveTaskStatus,
     addTaskComment,
+    updateTaskDeadline,
   };
 };
