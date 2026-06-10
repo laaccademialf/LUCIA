@@ -571,6 +571,11 @@ const saveLegalAttachment = async ({ fileName, dataUrl, size, type }) => {
   };
 };
 
+const isRecoverableLegalAttachmentStorageError = (error) => {
+  const code = String(error?.code || "").trim().toUpperCase();
+  return code === "EACCES" || code === "EPERM" || code === "EROFS";
+};
+
 const nowIso = () => new Date().toISOString();
 
 const hashPassword = (password, salt = crypto.randomBytes(16).toString("hex")) => {
@@ -3600,6 +3605,18 @@ const handleLegalAttachmentUploadApi = async (req, res) => {
     });
     return sendJson(res, 200, { ok: true, ...saved });
   } catch (error) {
+    if (isRecoverableLegalAttachmentStorageError(error)) {
+      console.warn("Legal attachment upload fallback: filesystem unavailable", error);
+      return sendJson(res, 200, {
+        ok: true,
+        name: String(payload?.fileName || "file"),
+        url: "",
+        size: Number(payload?.size || 0),
+        type: String(payload?.type || ""),
+        uploadFailed: true,
+        warning: error.message || "Legal attachment stored without file upload",
+      });
+    }
     return sendJson(res, 400, { ok: false, error: error.message || "Legal attachment upload failed" });
   }
 };
