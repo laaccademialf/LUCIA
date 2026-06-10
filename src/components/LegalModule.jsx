@@ -116,8 +116,10 @@ function AttachmentChips({ attachments }) {
       {attachments.map((file, idx) => (
         <a
           key={`${file.name}-${idx}`}
-          href={file.dataUrl}
+          href={file.url || file.dataUrl || "#"}
           download={file.name}
+          target={file.url ? "_blank" : undefined}
+          rel={file.url ? "noreferrer" : undefined}
           className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-200"
           title={file.name}
         >
@@ -743,8 +745,30 @@ function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = fa
   const [busy, setBusy] = useState(false);
   const [deadlineDraft, setDeadlineDraft] = useState(task?.preferredDeadline || "");
   const deadlineInputRef = useRef(null);
+  const commentFilesInputRef = useRef(null);
   const [messageDraft, setMessageDraft] = useState("");
+  const [messageFiles, setMessageFiles] = useState([]);
   const [replyTarget, setReplyTarget] = useState(null);
+
+  const orderedThreadMessages = useMemo(
+    () =>
+      (Array.isArray(task?.threadMessages) ? task.threadMessages : [])
+        .slice()
+        .sort((a, b) => String(a?.at || "").localeCompare(String(b?.at || ""))),
+    [task?.threadMessages]
+  );
+
+  const threadChildrenByParent = useMemo(() => {
+    const ids = new Set(orderedThreadMessages.map((entry) => String(entry?.id || "").trim()).filter(Boolean));
+    const grouped = new Map();
+    orderedThreadMessages.forEach((entry) => {
+      const parentId = String(entry?.replyToId || "").trim();
+      const bucket = parentId && ids.has(parentId) ? parentId : "__root__";
+      if (!grouped.has(bucket)) grouped.set(bucket, []);
+      grouped.get(bucket).push(entry);
+    });
+    return grouped;
+  }, [orderedThreadMessages]);
 
   if (!task) return null;
 
@@ -798,7 +822,7 @@ function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = fa
 
   const handleSendMessageToLegal = async () => {
     const text = String(messageDraft || "").trim();
-    if (!text) return;
+    if (!text && messageFiles.length === 0) return;
     setBusy(true);
     const notifyUserId = canManage ? String(task.createdById || "") : "";
     const notifyRole = canManage ? "" : "legal";
@@ -808,6 +832,7 @@ function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = fa
       notifyUserId,
       actionTab,
       replyTo: replyTarget,
+      attachments: messageFiles,
     });
     setBusy(false);
     if (!result.success) {
@@ -815,7 +840,92 @@ function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = fa
       return;
     }
     setMessageDraft("");
+    setMessageFiles([]);
     setReplyTarget(null);
+  };
+
+  const handlePickMessageFiles = async (event) => {
+    const picked = Array.from(event.target.files || []);
+    if (!picked.length) return;
+    const room = Math.max(0, MAX_FILES - messageFiles.length);
+    const limited = picked.slice(0, room);
+    if (!limited.length) {
+      alert(`Можна додати максимум ${MAX_FILES} файлів до одного коментаря.`);
+      event.target.value = "";
+      return;
+    }
+
+    const tooLarge = limited.find((file) => file.size > MAX_FILE_SIZE);
+    if (tooLarge) {
+      alert(`Кожен файл має бути до ${formatBytes(MAX_FILE_SIZE)}.`);
+      event.target.value = "";
+      return;
+    }
+
+    try {
+      const encoded = await Promise.all(
+        limited.map(async (file) => ({
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          dataUrl: await toDataUrl(file),
+        }))
+      );
+      setMessageFiles((prev) => [...prev, ...encoded]);
+      event.target.value = "";
+    } catch (err) {
+      console.error("Помилка обробки файлів коментаря:", err);
+      alert("Не вдалося додати файли до коментаря.");
+    }
+  };
+
+  const renderThreadNode = (entry, depth = 0) => {
+    const entryId = String(entry?.id || "").trim();
+    const children = threadChildrenByParent.get(entryId) || [];
+    return (
+      <div key={entry.id || `${entry.at}_${entry.by}_${depth}`} className={depth > 0 ? "mt-2 border-l border-indigo-100 pl-3" : ""}>
+        <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+          {entry.replyToId ? (
+            <div className="mb-1.5 rounded-md border border-indigo-100 bg-indigo-50 px-2 py-1">
+              <p className="line-clamp-1 text-[11px] font-medium text-indigo-600">↪ {entry.replyToBy || "Користувач"}</p>
+              <p className="line-clamp-2 text-[11px] text-indigo-500">{entry.replyToText || "Відповідь на повідомлення"}</p>
+            </div>
+          ) : null}
+
+          {String(entry?.text || "").trim() ? (
+            <p className="text-sm text-slate-700">{entry.text}</p>
+          ) : (
+            <p className="text-xs italic text-slate-500">Вкладення до коментаря</p>
+          )}
+
+          {Array.isArray(entry?.attachments) && entry.attachments.length > 0 ? (
+            <div className="mt-2">
+              <AttachmentChips attachments={entry.attachments} />
+            </div>
+          ) : null}
+
+          <div className="mt-1 flex items-center justify-between gap-3">
+            <p className="text-[11px] text-slate-400">
+              {entry.by || "Користувач"} · {formatLegalDateTime(entry.at)}
+            </p>
+            <button
+              type="button"
+              onClick={() =>
+                setReplyTarget({
+                  id: entry.id,
+                  text: entry.text,
+                  by: entry.by,
+                })
+              }
+              className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-700"
+            >
+              Відповісти
+            </button>
+          </div>
+        </div>
+        {children.length > 0 ? <div className="mt-2 space-y-2">{children.map((child) => renderThreadNode(child, depth + 1))}</div> : null}
+      </div>
+    );
   };
 
   return (
@@ -884,38 +994,10 @@ function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = fa
           <div>
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Коментарі</p>
             <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-              {(Array.isArray(task.threadMessages) ? task.threadMessages : []).length === 0 ? (
+              {orderedThreadMessages.length === 0 ? (
                 <p className="text-xs text-slate-400">Повідомлень поки немає.</p>
               ) : (
-                (task.threadMessages || []).map((entry) => (
-                  <div key={entry.id || `${entry.at}_${entry.by}`} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
-                    {entry.replyToId ? (
-                      <div className="mb-1.5 rounded-md border border-indigo-100 bg-indigo-50 px-2 py-1">
-                        <p className="line-clamp-1 text-[11px] font-medium text-indigo-600">↪ {entry.replyToBy || "Користувач"}</p>
-                        <p className="line-clamp-2 text-[11px] text-indigo-500">{entry.replyToText || "Відповідь на повідомлення"}</p>
-                      </div>
-                    ) : null}
-                    <p className="text-sm text-slate-700">{entry.text}</p>
-                    <div className="mt-1 flex items-center justify-between gap-3">
-                      <p className="text-[11px] text-slate-400">
-                        {entry.by || "Користувач"} · {formatLegalDateTime(entry.at)}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setReplyTarget({
-                            id: entry.id,
-                            text: entry.text,
-                            by: entry.by,
-                          })
-                        }
-                        className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-700"
-                      >
-                        Відповісти
-                      </button>
-                    </div>
-                  </div>
-                ))
+                (threadChildrenByParent.get("__root__") || []).map((entry) => renderThreadNode(entry, 0))
               )}
             </div>
           </div>
@@ -945,10 +1027,48 @@ function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = fa
                 onChange={(e) => setMessageDraft(e.target.value)}
                 placeholder={canManage ? "Напишіть відповідь замовнику" : "Додайте уточнення або коментар до задачі"}
               />
+              <div className="mt-2">
+                <input
+                  ref={commentFilesInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={handlePickMessageFiles}
+                />
+                <button
+                  type="button"
+                  disabled={busy || messageFiles.length >= MAX_FILES}
+                  onClick={() => commentFilesInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:border-indigo-300 hover:text-indigo-600 disabled:opacity-60"
+                >
+                  <Paperclip size={12} />
+                  Додати файли
+                </button>
+              </div>
+
+              {messageFiles.length > 0 ? (
+                <div className="mt-2 space-y-1.5 rounded-lg border border-indigo-100 bg-white/70 p-2">
+                  {messageFiles.map((file, idx) => (
+                    <div key={`${file.name}_${idx}`} className="flex items-center justify-between gap-2 rounded-md bg-slate-50 px-2 py-1.5 text-xs">
+                      <span className="truncate text-slate-700">
+                        {file.name} · {formatBytes(file.size)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setMessageFiles((prev) => prev.filter((_, i) => i !== idx))}
+                        className="text-slate-400 hover:text-rose-500"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
               <div className="mt-2 flex justify-end">
                 <button
                   type="button"
-                  disabled={busy || !String(messageDraft || "").trim()}
+                  disabled={busy || (!String(messageDraft || "").trim() && messageFiles.length === 0)}
                   onClick={handleSendMessageToLegal}
                   className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
                 >

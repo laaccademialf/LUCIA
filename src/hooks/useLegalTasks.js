@@ -328,19 +328,54 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
     async (
       task,
       text,
-      { notifyRole = "", notifyUserId = "", actionTab = LEGAL_REQUEST_TAB, replyTo = null } = {}
+      { notifyRole = "", notifyUserId = "", actionTab = LEGAL_REQUEST_TAB, replyTo = null, attachments = [] } = {}
     ) => {
       if (!isLegalApiEnabled() || !task?.id) return { success: false };
       const message = String(text || "").trim();
-      if (!message) return { success: false, error: new Error("Message is empty") };
+      const rawAttachments = Array.isArray(attachments) ? attachments : [];
+      if (!message && rawAttachments.length === 0) return { success: false, error: new Error("Message is empty") };
 
       const nowIso = new Date().toISOString();
+      const uploadedAttachments = await Promise.all(
+        rawAttachments.map(async (file) => {
+          const hasDataUrl = typeof file?.dataUrl === "string" && file.dataUrl.startsWith("data:");
+          if (!hasDataUrl) {
+            return {
+              name: String(file?.name || "file"),
+              size: Number(file?.size || 0),
+              type: String(file?.type || ""),
+              url: String(file?.url || ""),
+              uploadFailed: Boolean(file?.uploadFailed),
+            };
+          }
+
+          try {
+            return await uploadLegalAttachmentApi({
+              fileName: String(file?.name || "file"),
+              dataUrl: file.dataUrl,
+              size: Number(file?.size || 0),
+              type: String(file?.type || ""),
+            });
+          } catch (uploadError) {
+            console.warn("Legal comment attachment upload failed, fallback to metadata:", uploadError);
+            return {
+              name: String(file?.name || "file"),
+              size: Number(file?.size || 0),
+              type: String(file?.type || ""),
+              url: "",
+              uploadFailed: true,
+            };
+          }
+        })
+      );
+
       const entry = {
         id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         text: message,
         by: actorLabel(user),
         byId: actorId(user),
         at: nowIso,
+        attachments: uploadedAttachments,
         replyToId: String(replyTo?.id || "").trim(),
         replyToText: String(replyTo?.text || "")
           .trim()
@@ -364,7 +399,10 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
               pushLegalNotification({
                 task,
                 title: "Нове повідомлення по юридичній задачі",
-                body: `${task.title}: ${message.slice(0, 160)}`,
+                body:
+                  message
+                    ? `${task.title}: ${message.slice(0, 160)}`
+                    : `${task.title}: Додано вкладення до коментаря`,
                 targetUserId: target.targetUserId,
                 targetRole: target.targetRole,
                 actorUserId: actorId(user),
