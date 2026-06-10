@@ -153,23 +153,13 @@ export const saveLegalModuleSettingsApi = async (settings = {}) => {
     updatedAt: new Date().toISOString(),
   };
 
-  const response = await fetch(
-    endpoint(`/api/collections/${encodeURIComponent(LEGAL_SETTINGS_COLLECTION)}/${encodeURIComponent(LEGAL_SETTINGS_ID)}`),
-    {
-      method: "PUT",
-      headers: headers(),
-      body: JSON.stringify(payload),
-    }
-  );
-
-  if (response.status === 404) {
-    await fetch(endpoint(`/api/collections/${encodeURIComponent(LEGAL_SETTINGS_COLLECTION)}`), {
-      method: "POST",
-      headers: headers(),
-      body: JSON.stringify({ id: LEGAL_SETTINGS_ID, ...payload }),
-    });
-    return;
-  }
+  // Use POST upsert with fixed id. The backend createCollectionItemData()
+  // performs insert-or-update for same id on MySQL and replace semantics on file engine.
+  const response = await fetch(endpoint(`/api/collections/${encodeURIComponent(LEGAL_SETTINGS_COLLECTION)}`), {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ id: LEGAL_SETTINGS_ID, ...payload }),
+  });
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");

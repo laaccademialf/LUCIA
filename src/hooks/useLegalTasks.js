@@ -236,12 +236,18 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
           (Array.isArray(payload.attachments) ? payload.attachments : []).map(async (file) => {
             const hasDataUrl = typeof file?.dataUrl === "string" && file.dataUrl.startsWith("data:");
             if (!hasDataUrl) return file;
-            return uploadLegalAttachmentApi({
-              fileName: String(file?.name || "file"),
-              dataUrl: file.dataUrl,
-              size: Number(file?.size || 0),
-              type: String(file?.type || ""),
-            });
+            try {
+              return await uploadLegalAttachmentApi({
+                fileName: String(file?.name || "file"),
+                dataUrl: file.dataUrl,
+                size: Number(file?.size || 0),
+                type: String(file?.type || ""),
+              });
+            } catch (uploadError) {
+              // Fallback: do not block task creation if filesystem upload is not available yet.
+              console.warn("Legal attachment upload failed, fallback to inline payload:", uploadError);
+              return file;
+            }
           })
         );
 
