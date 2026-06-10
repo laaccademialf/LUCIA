@@ -9,6 +9,8 @@ const ENV_API_TOKEN = String(import.meta.env.VITE_DATA_API_TOKEN || "").trim();
 
 const LEGAL_TASKS_COLLECTION = "legalTasks";
 const LEGAL_NOTIFICATIONS_COLLECTION = "legalNotifications";
+const LEGAL_SETTINGS_COLLECTION = "legalModuleSettings";
+const LEGAL_SETTINGS_ID = "main";
 
 const readRuntimeCustomConfig = () => {
   if (typeof window === "undefined" || typeof localStorage === "undefined") return null;
@@ -52,6 +54,12 @@ const headers = () => {
 const endpoint = (path) => `${getApiBase()}${path}`;
 
 export const isLegalApiEnabled = () => Boolean(getApiBase());
+
+const assertEnabled = () => {
+  if (!getApiBase()) {
+    throw new Error("Legal API is not enabled. Set VITE_DATA_API_BASE_URL");
+  }
+};
 
 const listCollection = async (collectionName) => {
   const response = await fetch(endpoint(`/api/collections/${encodeURIComponent(collectionName)}`), {
@@ -119,3 +127,76 @@ export const deleteLegalTaskApi = (id) => deleteFromCollection(LEGAL_TASKS_COLLE
 export const getLegalNotificationsApi = () => listCollection(LEGAL_NOTIFICATIONS_COLLECTION);
 export const addLegalNotificationApi = (data) => createInCollection(LEGAL_NOTIFICATIONS_COLLECTION, data);
 export const deleteLegalNotificationApi = (id) => deleteFromCollection(LEGAL_NOTIFICATIONS_COLLECTION, id);
+
+// ─── Legal module settings ───
+export const getLegalModuleSettingsApi = async () => {
+  try {
+    const response = await fetch(
+      endpoint(`/api/collections/${encodeURIComponent(LEGAL_SETTINGS_COLLECTION)}/${encodeURIComponent(LEGAL_SETTINGS_ID)}`),
+      {
+        method: "GET",
+        headers: headers(),
+      }
+    );
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return payload?.data || null;
+  } catch {
+    return null;
+  }
+};
+
+export const saveLegalModuleSettingsApi = async (settings = {}) => {
+  assertEnabled();
+  const payload = {
+    ...(settings || {}),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const response = await fetch(
+    endpoint(`/api/collections/${encodeURIComponent(LEGAL_SETTINGS_COLLECTION)}/${encodeURIComponent(LEGAL_SETTINGS_ID)}`),
+    {
+      method: "PUT",
+      headers: headers(),
+      body: JSON.stringify(payload),
+    }
+  );
+
+  if (response.status === 404) {
+    await fetch(endpoint(`/api/collections/${encodeURIComponent(LEGAL_SETTINGS_COLLECTION)}`), {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ id: LEGAL_SETTINGS_ID, ...payload }),
+    });
+    return;
+  }
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Save legal settings failed (${response.status}): ${body || "no body"}`);
+  }
+};
+
+// ─── Legal attachments upload ───
+export const uploadLegalAttachmentApi = async ({ fileName, dataUrl, size = 0, type = "" }) => {
+  assertEnabled();
+  const response = await fetch(endpoint("/api/legal/attachments"), {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ fileName, dataUrl, size, type }),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Upload legal attachment failed (${response.status}): ${body || "no body"}`);
+  }
+  const payload = await response.json();
+  if (!payload?.ok) {
+    throw new Error(String(payload?.error || "Upload failed"));
+  }
+  return {
+    name: String(payload.name || fileName || "file"),
+    url: String(payload.url || ""),
+    size: Number(payload.size || size || 0),
+    type: String(payload.type || type || ""),
+  };
+};

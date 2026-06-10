@@ -3,8 +3,11 @@ import {
   addLegalNotificationApi,
   addLegalTaskApi,
   deleteLegalTaskApi,
+  getLegalModuleSettingsApi,
   getLegalTasksApi,
   isLegalApiEnabled,
+  saveLegalModuleSettingsApi,
+  uploadLegalAttachmentApi,
   updateLegalTaskApi,
 } from "../api/legalTasksApi";
 import {
@@ -16,14 +19,45 @@ import {
 } from "../data/legalConstants";
 
 const DEFAULT_POLL_INTERVAL_MS = 8000;
+const DEFAULT_LEGAL_SETTINGS = {
+  lawyerUserIds: [],
+  updatedAt: "",
+};
 
 const actorLabel = (user) => user?.displayName || user?.fullName || user?.name || user?.email || "Користувач";
 const actorId = (user) => String(user?.uid || user?.id || user?.userId || user?.email || "").trim();
+
+const pushLocalCenterNotification = ({ title, body, targetUserId, targetRole, actorUserId, actionTab }) => {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") return;
+  try {
+    const key = `lnotify_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const payload = {
+      key,
+      title,
+      body,
+      createdAt: new Date().toISOString(),
+      source: "legal",
+      targetUserId: String(targetUserId || ""),
+      targetRole: String(targetRole || ""),
+      actorUserId: String(actorUserId || ""),
+      actionUrl: "ops-maintenance",
+      actionTab: String(actionTab || LEGAL_REQUEST_TAB),
+    };
+    const storageKey = "lucia_center_notifications";
+    const current = JSON.parse(localStorage.getItem(storageKey) || "[]");
+    const next = [payload, ...(Array.isArray(current) ? current : [])].slice(0, 200);
+    localStorage.setItem(storageKey, JSON.stringify(next));
+  } catch {
+    // ignore local storage notification errors
+  }
+};
 
 // Створення запису сповіщення у власній БД (для центру сповіщень інших користувачів).
 const pushLegalNotification = async ({ task, title, body, targetUserId, targetRole, actionTab, actorUserId }) => {
   if (!isLegalApiEnabled()) return;
   try {
+    pushLocalCenterNotification({ title, body, targetUserId, targetRole, actorUserId, actionTab });
+
     await addLegalNotificationApi({
       taskId: String(task?.id || ""),
       taskTitle: String(task?.title || ""),
@@ -36,6 +70,9 @@ const pushLegalNotification = async ({ task, title, body, targetUserId, targetRo
       source: "legal",
       createdAt: new Date().toISOString(),
     });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("lucia:notifications-updated"));
+    }
   } catch (error) {
     console.warn("Не вдалося створити юридичне сповіщення:", error);
   }
@@ -43,9 +80,36 @@ const pushLegalNotification = async ({ task, title, body, targetUserId, targetRo
 
 export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS } = {}) => {
   const [tasks, setTasks] = useState([]);
+  const [settings, setSettings] = useState(DEFAULT_LEGAL_SETTINGS);
+  const [settingsLoading, setSettingsLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const isMountedRef = useRef(true);
+
+  const reloadSettings = useCallback(async () => {
+    if (!isLegalApiEnabled()) {
+      setSettings(DEFAULT_LEGAL_SETTINGS);
+      setSettingsLoading(false);
+      return DEFAULT_LEGAL_SETTINGS;
+    }
+    try {
+      const doc = await getLegalModuleSettingsApi();
+      const normalized = {
+        ...DEFAULT_LEGAL_SETTINGS,
+        ...(doc || {}),
+        lawyerUserIds: Array.isArray(doc?.lawyerUserIds)
+          ? doc.lawyerUserIds.map((id) => String(id || "").trim()).filter(Boolean)
+          : [],
+      };
+      if (isMountedRef.current) setSettings(normalized);
+      return normalized;
+    } catch (err) {
+      if (isMountedRef.current) setSettings(DEFAULT_LEGAL_SETTINGS);
+      return DEFAULT_LEGAL_SETTINGS;
+    } finally {
+      if (isMountedRef.current) setSettingsLoading(false);
+    }
+  }, []);
 
   const reload = useCallback(async () => {
     if (!isLegalApiEnabled()) {
@@ -70,6 +134,7 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
 
   useEffect(() => {
     isMountedRef.current = true;
+    reloadSettings();
     reload();
     if (!isLegalApiEnabled() || !pollIntervalMs) {
       return () => {
@@ -83,7 +148,52 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
       isMountedRef.current = false;
       clearInterval(timer);
     };
-  }, [reload, pollIntervalMs]);
+  }, [reload, reloadSettings, pollIntervalMs]);
+
+  const saveSettings = useCallback(async (nextSettings = {}) => {
+    if (!isLegalApiEnabled()) return { success: false };
+    const payload = {
+      ...DEFAULT_LEGAL_SETTINGS,
+      ...settings,
+      ...nextSettings,
+      lawyerUserIds: Array.isArray(nextSettings?.lawyerUserIds)
+        ? nextSettings.lawyerUserIds.map((id) => String(id || "").trim()).filter(Boolean)
+        : Array.isArray(settings?.lawyerUserIds)
+          ? settings.lawyerUserIds
+          : [],
+    };
+
+    try {
+      await saveLegalModuleSettingsApi(payload);
+      if (isMountedRef.current) setSettings(payload);
+      return { success: true };
+    } catch (err) {
+      setError(err);
+      return { success: false, error: err };
+    }
+  }, [settings]);
+
+  const resolveNotificationTargets = useCallback((notifyRole, notifyUserId) => {
+    const userId = String(notifyUserId || "").trim();
+    if (userId) {
+      return [{ targetUserId: userId, targetRole: "" }];
+    }
+
+    const role = String(notifyRole || "").trim();
+    if (role !== "legal") {
+      return role ? [{ targetUserId: "", targetRole: role }] : [];
+    }
+
+    const selectedLawyers = Array.isArray(settings?.lawyerUserIds)
+      ? settings.lawyerUserIds.map((id) => String(id || "").trim()).filter(Boolean)
+      : [];
+
+    if (selectedLawyers.length > 0) {
+      return selectedLawyers.map((id) => ({ targetUserId: id, targetRole: "" }));
+    }
+
+    return [{ targetUserId: "", targetRole: "legal" }];
+  }, [settings?.lawyerUserIds]);
 
   // Створення задачі користувачем (вкладка "Запит до Юриста").
   const createTask = useCallback(
@@ -122,16 +232,41 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
       };
 
       try {
-        const id = await addLegalTaskApi(payload);
-        const created = { ...payload, id };
-        await pushLegalNotification({
-          task: created,
-          title: "Нова юридична задача",
-          body: `${payload.title} — від ${payload.createdByName}`,
-          targetRole: "legal",
-          actorUserId: actorId(user),
-          actionTab: LEGAL_PROCESS_TAB,
-        });
+        const uploadedAttachments = await Promise.all(
+          (Array.isArray(payload.attachments) ? payload.attachments : []).map(async (file) => {
+            const hasDataUrl = typeof file?.dataUrl === "string" && file.dataUrl.startsWith("data:");
+            if (!hasDataUrl) return file;
+            return uploadLegalAttachmentApi({
+              fileName: String(file?.name || "file"),
+              dataUrl: file.dataUrl,
+              size: Number(file?.size || 0),
+              type: String(file?.type || ""),
+            });
+          })
+        );
+
+        const payloadWithUploadedFiles = {
+          ...payload,
+          attachments: uploadedAttachments,
+        };
+
+        const id = await addLegalTaskApi(payloadWithUploadedFiles);
+        const created = { ...payloadWithUploadedFiles, id };
+
+        const targets = resolveNotificationTargets("legal", "");
+        await Promise.all(
+          targets.map((target) =>
+            pushLegalNotification({
+              task: created,
+              title: "Нова юридична задача",
+              body: `${payload.title} — від ${payload.createdByName}`,
+              targetUserId: target.targetUserId,
+              targetRole: target.targetRole,
+              actorUserId: actorId(user),
+              actionTab: LEGAL_PROCESS_TAB,
+            })
+          )
+        );
         await reload();
         return { success: true, id };
       } catch (err) {
@@ -173,6 +308,62 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
       }
     },
     [reload]
+  );
+
+  const addTaskComment = useCallback(
+    async (
+      task,
+      text,
+      { notifyRole = "", notifyUserId = "", actionTab = LEGAL_REQUEST_TAB } = {}
+    ) => {
+      if (!isLegalApiEnabled() || !task?.id) return { success: false };
+      const message = String(text || "").trim();
+      if (!message) return { success: false, error: new Error("Message is empty") };
+
+      const nowIso = new Date().toISOString();
+      const entry = {
+        id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        text: message,
+        by: actorLabel(user),
+        byId: actorId(user),
+        at: nowIso,
+      };
+
+      const patch = {
+        ...task,
+        updatedAt: nowIso,
+        threadMessages: [...(Array.isArray(task.threadMessages) ? task.threadMessages : []), entry],
+      };
+
+      try {
+        await updateLegalTaskApi(task.id, patch);
+
+        if (notifyRole || notifyUserId) {
+          const targets = resolveNotificationTargets(notifyRole, notifyUserId);
+          await Promise.all(
+            targets.map((target) =>
+              pushLegalNotification({
+                task,
+                title: "Нове повідомлення по юридичній задачі",
+                body: `${task.title}: ${message.slice(0, 160)}`,
+                targetUserId: target.targetUserId,
+                targetRole: target.targetRole,
+                actorUserId: actorId(user),
+                actionTab,
+              })
+            )
+          );
+        }
+
+        await reload();
+        return { success: true };
+      } catch (err) {
+        console.error("Помилка додавання коментаря до юридичної задачі:", err);
+        setError(err);
+        return { success: false, error: err };
+      }
+    },
+    [user, reload, resolveNotificationTargets]
   );
 
   // Зміна статусу задачі юристом (канбан / таблиця / архів).
@@ -236,12 +427,17 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
 
   return {
     tasks,
+    settings,
+    settingsLoading,
     loading,
     error,
     reload,
+    reloadSettings,
+    saveSettings,
     createTask,
     updateTask,
     removeTask,
     moveTaskStatus,
+    addTaskComment,
   };
 };

@@ -1,11 +1,10 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Scale,
   FileText,
   Paperclip,
   Trash2,
   CalendarClock,
-  Clock,
   Send,
   LayoutGrid,
   Table2,
@@ -13,14 +12,17 @@ import {
   ArchiveRestore,
   X,
   History,
-  AlertTriangle,
-  CheckCircle2,
   User2,
   Search,
   Download,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useLegalTasks } from "../hooks/useLegalTasks";
 import {
+  LEGAL_PROCESS_TAB,
+  LEGAL_REQUEST_TAB,
   LEGAL_STATUSES,
   LEGAL_ARCHIVED_STATUS,
   LEGAL_PRIORITIES,
@@ -32,6 +34,7 @@ import {
   getDeadlineDaysLeft,
 } from "../data/legalConstants";
 import { isLegalApiEnabled } from "../api/legalTasksApi";
+import { getUsers } from "../firebase/users";
 
 const cardClass = "rounded-2xl bg-white border border-slate-200 text-slate-900 shadow-sm";
 const inputClass =
@@ -39,6 +42,7 @@ const inputClass =
 
 const MAX_FILES = 6;
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const PAGE_SIZE = 10;
 
 const actorId = (user) => String(user?.uid || user?.id || user?.userId || user?.email || "").trim();
 
@@ -58,23 +62,26 @@ const formatBytes = (bytes) => {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-// ─── Дрібні UI-елементи ───
-function StatusBadge({ status, archived }) {
+function StatusBadge({ status, archived, compact = false }) {
   const meta = getLegalStatusMeta(archived ? LEGAL_ARCHIVED_STATUS.value : status);
+  const sizeClass = compact
+    ? "px-2 py-0.5 text-[11px] gap-1"
+    : "px-2.5 py-1 text-xs gap-1.5";
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${meta.color}`}>
+    <span className={`inline-flex items-center rounded-full border font-semibold ${sizeClass} ${meta.color}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
       {meta.label}
     </span>
   );
 }
 
-function PriorityBadge({ priority }) {
+function PriorityBadge({ priority, compact = false }) {
   const meta = getLegalPriorityMeta(priority);
-  return <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${meta.color}`}>{meta.label}</span>;
+  const sizeClass = compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]";
+  return <span className={`rounded-full font-semibold ${sizeClass} ${meta.color}`}>{meta.label}</span>;
 }
 
-function DeadlinePill({ value }) {
+function DeadlinePill({ value, compact = false }) {
   if (!value) return null;
   const daysLeft = getDeadlineDaysLeft(value);
   let tone = "bg-slate-100 text-slate-600";
@@ -91,9 +98,10 @@ function DeadlinePill({ value }) {
         : daysLeft === 0
           ? "Сьогодні"
           : `${daysLeft} дн.`;
+  const sizeClass = compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]";
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${tone}`}>
-      <CalendarClock size={12} />
+    <span className={`inline-flex items-center gap-1 rounded-full font-semibold ${sizeClass} ${tone}`}>
+      <CalendarClock size={compact ? 11 : 12} />
       {label}
     </span>
   );
@@ -120,6 +128,35 @@ function AttachmentChips({ attachments }) {
   );
 }
 
+function DateInputField({ value, onChange, placeholder = "дд.мм.рррр", className = inputClass }) {
+  const inputRef = useRef(null);
+
+  const openPicker = () => {
+    const input = inputRef.current;
+    if (!input) return;
+    if (typeof input.showPicker === "function") {
+      input.showPicker();
+      return;
+    }
+    input.focus();
+    input.click();
+  };
+
+  return (
+    <div className="relative">
+      <input ref={inputRef} type="date" className={className} value={value} onChange={onChange} placeholder={placeholder} />
+      <button
+        type="button"
+        onClick={openPicker}
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:text-indigo-600"
+        title="Відкрити календар"
+      >
+        <CalendarDays size={16} />
+      </button>
+    </div>
+  );
+}
+
 function FilePicker({ files, setFiles }) {
   const handleSelect = async (event) => {
     const picked = Array.from(event.target.files || []);
@@ -131,6 +168,7 @@ function FilePicker({ files, setFiles }) {
       alert(`Кожен файл має бути до ${formatBytes(MAX_FILE_SIZE)}.`);
       return;
     }
+
     try {
       const encoded = await Promise.all(
         limited.map(async (file) => ({
@@ -179,7 +217,107 @@ function FilePicker({ files, setFiles }) {
   );
 }
 
-// ─── Вкладка "Запит до Юриста" ───
+function PaginationControls({ page, totalPages, onChange }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-2.5 text-xs text-slate-500">
+      <button
+        type="button"
+        onClick={() => onChange(Math.max(1, page - 1))}
+        disabled={page <= 1}
+        className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 disabled:opacity-40"
+      >
+        <ChevronLeft size={14} /> Назад
+      </button>
+      <span>
+        Сторінка {page} / {totalPages}
+      </span>
+      <button
+        type="button"
+        onClick={() => onChange(Math.min(totalPages, page + 1))}
+        disabled={page >= totalPages}
+        className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 disabled:opacity-40"
+      >
+        Далі <ChevronRight size={14} />
+      </button>
+    </div>
+  );
+}
+
+function TaskRowsTable({
+  title,
+  tasks,
+  emptyLabel,
+  onRowClick,
+  draggable = false,
+  onDragStart = () => {},
+  rowTone = "hover:bg-indigo-50/40",
+}) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(tasks.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paged = tasks.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  if (tasks.length === 0) {
+    return <div className={`${cardClass} px-6 py-12 text-center text-sm text-slate-400`}>{emptyLabel}</div>;
+  }
+
+  return (
+    <div className={`${cardClass} overflow-hidden`}>
+      <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2">
+        <p className="text-sm font-semibold text-slate-700">{title}</p>
+        <p className="text-xs text-slate-400">Показано {paged.length} з {tasks.length}</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+              <th className="px-4 py-2 font-semibold">Задача</th>
+              <th className="px-4 py-2 font-semibold">Замовник</th>
+              <th className="px-4 py-2 font-semibold">Статус</th>
+              <th className="px-4 py-2 font-semibold">Пріоритет</th>
+              <th className="px-4 py-2 font-semibold">Дедлайн</th>
+              <th className="px-4 py-2 font-semibold">Оновлено</th>
+            </tr>
+          </thead>
+          <tbody>
+            {paged.map((task) => (
+              <tr
+                key={task.id}
+                draggable={draggable}
+                onDragStart={(e) => onDragStart(e, task)}
+                onClick={() => onRowClick(task)}
+                className={`cursor-pointer border-b border-slate-100 transition last:border-b-0 ${rowTone}`}
+              >
+                <td className="px-4 py-2 align-top">
+                  <p className="font-semibold text-slate-900">{task.title}</p>
+                  {Array.isArray(task.attachments) && task.attachments.length > 0 ? (
+                    <p className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-slate-400">
+                      <Paperclip size={11} /> {task.attachments.length} файлів
+                    </p>
+                  ) : null}
+                </td>
+                <td className="px-4 py-2 text-slate-600 align-top">{task.createdByName || "—"}</td>
+                <td className="px-4 py-2 align-top">
+                  <StatusBadge status={task.status} archived={task.archived} compact />
+                </td>
+                <td className="px-4 py-2 align-top">
+                  <PriorityBadge priority={task.priority} compact />
+                </td>
+                <td className="px-4 py-2 align-top">
+                  <DeadlinePill value={task.preferredDeadline} compact />
+                </td>
+                <td className="px-4 py-2 whitespace-nowrap align-top text-xs text-slate-400">{formatLegalDateTime(task.updatedAt || task.createdAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <PaginationControls page={safePage} totalPages={totalPages} onChange={setPage} />
+    </div>
+  );
+}
+
 function RequestView({ user, restaurants, legal }) {
   const { tasks, createTask } = legal;
   const [form, setForm] = useState({
@@ -192,6 +330,8 @@ function RequestView({ user, restaurants, legal }) {
   });
   const [files, setFiles] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+  const [showArchive, setShowArchive] = useState(false);
+  const [selectedTask, setSelectedTask] = useState(null);
 
   const currentUserId = actorId(user);
   const myTasks = useMemo(
@@ -201,6 +341,9 @@ function RequestView({ user, restaurants, legal }) {
         .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))),
     [tasks, currentUserId]
   );
+
+  const myActiveTasks = useMemo(() => myTasks.filter((task) => !task.archived), [myTasks]);
+  const myArchivedTasks = useMemo(() => myTasks.filter((task) => task.archived), [myTasks]);
 
   const selectedRestaurant = useMemo(
     () => (restaurants || []).find((item) => String(item.id) === String(form.restaurantId)),
@@ -213,6 +356,7 @@ function RequestView({ user, restaurants, legal }) {
       alert("Заповніть тему задачі та опис.");
       return;
     }
+
     setSubmitting(true);
     const result = await createTask({
       ...form,
@@ -222,10 +366,12 @@ function RequestView({ user, restaurants, legal }) {
       restaurantName: selectedRestaurant?.name || "",
     });
     setSubmitting(false);
+
     if (!result.success) {
       alert("Не вдалося надіслати задачу. Спробуйте ще раз.");
       return;
     }
+
     setForm({
       title: "",
       description: "",
@@ -238,9 +384,8 @@ function RequestView({ user, restaurants, legal }) {
   };
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
-      {/* Форма */}
-      <form onSubmit={handleSubmit} className={`${cardClass} col-span-1 overflow-hidden lg:col-span-2`}>
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-5 lg:items-start">
+      <form onSubmit={handleSubmit} className={`${cardClass} col-span-1 self-start overflow-hidden lg:col-span-2`}>
         <div className="bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-4 text-white">
           <div className="flex items-center gap-2">
             <Scale size={20} />
@@ -273,9 +418,7 @@ function RequestView({ user, restaurants, legal }) {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="text-sm font-semibold text-slate-800">Бажаний дедлайн</label>
-              <input
-                type="date"
-                className={inputClass}
+              <DateInputField
                 value={form.preferredDeadline}
                 onChange={(e) => setForm((p) => ({ ...p, preferredDeadline: e.target.value }))}
               />
@@ -341,121 +484,205 @@ function RequestView({ user, restaurants, legal }) {
         </div>
       </form>
 
-      {/* Мої заявки */}
-      <div className="col-span-1 lg:col-span-3">
-        <div className="mb-3 flex items-center gap-2">
-          <History size={18} className="text-indigo-600" />
-          <h3 className="text-base font-semibold text-slate-800">Мої заявки</h3>
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{myTasks.length}</span>
+      <div className="col-span-1 space-y-4 lg:col-span-3">
+        <TaskRowsTable
+          title={`Мої заявки (активні) · ${myActiveTasks.length}`}
+          tasks={myActiveTasks}
+          emptyLabel="У вас немає активних юридичних заявок."
+          onRowClick={setSelectedTask}
+        />
+
+        <div className={`${cardClass} overflow-hidden`}>
+          <button
+            type="button"
+            onClick={() => setShowArchive((prev) => !prev)}
+            className="flex w-full items-center justify-between bg-slate-50 px-4 py-3 text-left"
+          >
+            <span className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <Archive size={16} /> Архів моїх заявок ({myArchivedTasks.length})
+            </span>
+            <span className="text-xs text-slate-400">{showArchive ? "сховати" : "показати"}</span>
+          </button>
+          {showArchive ? (
+            <div className="p-3">
+              <TaskRowsTable
+                title="Архів"
+                tasks={myArchivedTasks}
+                emptyLabel="В архіві поки немає заявок."
+                onRowClick={setSelectedTask}
+                rowTone="hover:bg-slate-50"
+              />
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {selectedTask ? (
+        <TaskDetailModal
+          task={tasks.find((t) => t.id === selectedTask.id) || selectedTask}
+          onClose={() => setSelectedTask(null)}
+          legal={legal}
+          canManage={false}
+          canMessageLegal
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function LegalSettingsView({ user, legal }) {
+  const { settings, saveSettings, settingsLoading } = legal;
+  const [users, setUsers] = useState([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [lawyerUserIdsDraft, setLawyerUserIdsDraft] = useState(() =>
+    Array.isArray(settings?.lawyerUserIds) ? settings.lawyerUserIds : []
+  );
+
+  const canEdit = String(user?.role || "") === "admin" || isLegalUser(user);
+
+  useEffect(() => {
+    let mounted = true;
+    const run = async () => {
+      try {
+        const data = await getUsers();
+        if (!mounted) return;
+        setUsers(Array.isArray(data) ? data : []);
+      } finally {
+        if (mounted) setLoadingUsers(false);
+      }
+    };
+    run();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    setLawyerUserIdsDraft(Array.isArray(settings?.lawyerUserIds) ? settings.lawyerUserIds : []);
+  }, [settings?.lawyerUserIds]);
+
+  const toggleLawyer = (id) => {
+    const normalizedId = String(id || "").trim();
+    if (!normalizedId) return;
+    setLawyerUserIdsDraft((prev) => {
+      const exists = prev.includes(normalizedId);
+      if (exists) return prev.filter((item) => item !== normalizedId);
+      return [...prev, normalizedId];
+    });
+  };
+
+  const save = async () => {
+    setSaving(true);
+    const result = await saveSettings({ lawyerUserIds: lawyerUserIdsDraft });
+    setSaving(false);
+    if (!result.success) {
+      alert("Не вдалося зберегти налаштування юридичного модуля.");
+      return;
+    }
+    alert("Налаштування збережено.");
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className={`${cardClass} overflow-hidden`}>
+        <div className="bg-gradient-to-r from-indigo-600 to-violet-600 px-5 py-4 text-white">
+          <div className="flex items-center gap-2">
+            <Scale size={20} />
+            <h2 className="text-lg font-semibold">Базові налаштування юридичного модуля</h2>
+          </div>
+          <p className="mt-1 text-sm text-indigo-100">
+            Оберіть акаунти юристів: їм приходитимуть сповіщення і вони матимуть доступ до Legal TODO.
+          </p>
         </div>
 
-        {myTasks.length === 0 ? (
-          <div className={`${cardClass} flex flex-col items-center justify-center gap-2 px-6 py-12 text-center text-slate-400`}>
-            <FileText size={32} />
-            <p className="text-sm">Ви ще не створили жодної заявки до юриста.</p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {myTasks.map((task) => {
-              const meta = getLegalStatusMeta(task.archived ? LEGAL_ARCHIVED_STATUS.value : task.status);
-              return (
-                <div key={task.id} className={`${cardClass} overflow-hidden`}>
-                  <div className={`border-t-4 ${meta.accent} p-4`}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold text-slate-900">{task.title}</p>
-                        <p className="mt-0.5 line-clamp-2 text-sm text-slate-500">{task.description}</p>
-                      </div>
-                      <StatusBadge status={task.status} archived={task.archived} />
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <PriorityBadge priority={task.priority} />
-                      <DeadlinePill value={task.preferredDeadline} />
-                      <span className="inline-flex items-center gap-1 text-xs text-slate-400">
-                        <Clock size={12} />
-                        {formatLegalDateTime(task.createdAt)}
-                      </span>
-                    </div>
-
-                    <AttachmentsRow attachments={task.attachments} />
-
-                    <RequestTimeline history={task.statusHistory} />
-                  </div>
+        <div className="space-y-4 p-5">
+          {settingsLoading || loadingUsers ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-400">
+              Завантаження налаштувань...
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {users.length === 0 ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-400">
+                  Не знайдено жодного акаунту.
                 </div>
-              );
-            })}
+              ) : (
+                users.map((account) => {
+                  const id = String(account?.id || account?.uid || "").trim();
+                  const checked = lawyerUserIdsDraft.includes(id);
+                  return (
+                    <label
+                      key={id || Math.random().toString(36).slice(2)}
+                      className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 hover:border-indigo-300"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-800">
+                          {account?.displayName || account?.name || account?.email || "Без імені"}
+                        </p>
+                        <p className="truncate text-xs text-slate-500">{account?.email || "—"}</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleLawyer(id)}
+                        disabled={!canEdit || !id}
+                        className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            Обрано юристів: {lawyerUserIdsDraft.length}
           </div>
-        )}
+
+          <button
+            type="button"
+            onClick={save}
+            disabled={!canEdit || saving}
+            className="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+          >
+            {saving ? "Збереження..." : "Зберегти налаштування"}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-function AttachmentsRow({ attachments }) {
-  if (!Array.isArray(attachments) || attachments.length === 0) return null;
-  return (
-    <div className="mt-3">
-      <AttachmentChips attachments={attachments} />
-    </div>
-  );
-}
-
-function RequestTimeline({ history }) {
-  const items = Array.isArray(history) ? history : [];
-  if (items.length === 0) return null;
-  const lastTwo = items.slice(-3);
-  return (
-    <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-3">
-      {lastTwo.map((entry, idx) => {
-        const meta = getLegalStatusMeta(entry.status);
-        return (
-          <div key={idx} className="flex items-center gap-2 text-xs text-slate-500">
-            <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
-            <span className="font-medium text-slate-600">{meta.short}</span>
-            {entry.comment ? <span className="truncate text-slate-400">· {entry.comment}</span> : null}
-            <span className="ml-auto whitespace-nowrap text-slate-400">{formatLegalDateTime(entry.at)}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── Картка задачі в канбані ───
 function KanbanCard({ task, onOpen, onDragStart }) {
-  const overdue = getDeadlineDaysLeft(task.preferredDeadline);
   return (
     <div
       draggable
       onDragStart={(e) => onDragStart(e, task)}
       onClick={() => onOpen(task)}
-      className="group cursor-pointer rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-md active:cursor-grabbing"
+      className="group cursor-pointer rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-md active:cursor-grabbing"
     >
       <div className="flex items-start justify-between gap-2">
-        <p className="line-clamp-2 text-sm font-semibold text-slate-900">{task.title}</p>
-        <PriorityBadge priority={task.priority} />
+        <p className="line-clamp-2 text-[13px] font-semibold text-slate-900">{task.title}</p>
+        <PriorityBadge priority={task.priority} compact />
       </div>
-      {task.description ? <p className="mt-1 line-clamp-2 text-xs text-slate-500">{task.description}</p> : null}
-      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-        <DeadlinePill value={task.preferredDeadline} />
+      <div className="mt-2 flex flex-wrap items-center gap-1">
+        <DeadlinePill value={task.preferredDeadline} compact />
         {Array.isArray(task.attachments) && task.attachments.length > 0 ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500">
-            <Paperclip size={11} />
+          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
+            <Paperclip size={10} />
             {task.attachments.length}
           </span>
         ) : null}
-        {overdue !== null && overdue < 0 ? <AlertTriangle size={13} className="text-rose-500" /> : null}
       </div>
-      <div className="mt-2 flex items-center gap-1.5 border-t border-slate-100 pt-2 text-[11px] text-slate-400">
-        <User2 size={12} />
+      <div className="mt-1.5 flex items-center gap-1 border-t border-slate-100 pt-1.5 text-[10px] text-slate-400">
+        <User2 size={11} />
         <span className="truncate">{task.createdByName || "—"}</span>
       </div>
     </div>
   );
 }
 
-// ─── Канбан-дошка ───
 function KanbanBoard({ tasks, onOpen, onDrop, onDragStart, dragOverStatus, setDragOverStatus }) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -464,6 +691,7 @@ function KanbanBoard({ tasks, onOpen, onDrop, onDragStart, dragOverStatus, setDr
           .filter((task) => !task.archived && task.status === column.value)
           .sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
         const isOver = dragOverStatus === column.value;
+
         return (
           <div
             key={column.value}
@@ -488,6 +716,7 @@ function KanbanBoard({ tasks, onOpen, onDrop, onDragStart, dragOverStatus, setDr
               </div>
               <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-500">{columnTasks.length}</span>
             </div>
+
             <div className="flex-1 space-y-2.5 p-2.5">
               {columnTasks.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-400">
@@ -506,65 +735,14 @@ function KanbanBoard({ tasks, onOpen, onDrop, onDragStart, dragOverStatus, setDr
   );
 }
 
-// ─── Табличний вигляд ───
-function TableView({ tasks, onOpen, onDragStart }) {
-  if (tasks.length === 0) {
-    return (
-      <div className={`${cardClass} px-6 py-12 text-center text-sm text-slate-400`}>Немає активних задач.</div>
-    );
-  }
-  return (
-    <div className={`${cardClass} overflow-hidden`}>
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-              <th className="px-4 py-3 font-semibold">Задача</th>
-              <th className="px-4 py-3 font-semibold">Замовник</th>
-              <th className="px-4 py-3 font-semibold">Статус</th>
-              <th className="px-4 py-3 font-semibold">Пріоритет</th>
-              <th className="px-4 py-3 font-semibold">Дедлайн</th>
-              <th className="px-4 py-3 font-semibold">Оновлено</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tasks.map((task) => (
-              <tr
-                key={task.id}
-                draggable
-                onDragStart={(e) => onDragStart(e, task)}
-                onClick={() => onOpen(task)}
-                className="cursor-pointer border-b border-slate-100 transition hover:bg-indigo-50/50"
-              >
-                <td className="px-4 py-3">
-                  <p className="font-semibold text-slate-900">{task.title}</p>
-                  <p className="line-clamp-1 text-xs text-slate-400">{task.description}</p>
-                </td>
-                <td className="px-4 py-3 text-slate-600">{task.createdByName || "—"}</td>
-                <td className="px-4 py-3">
-                  <StatusBadge status={task.status} archived={task.archived} />
-                </td>
-                <td className="px-4 py-3">
-                  <PriorityBadge priority={task.priority} />
-                </td>
-                <td className="px-4 py-3">
-                  <DeadlinePill value={task.preferredDeadline} />
-                </td>
-                <td className="px-4 py-3 whitespace-nowrap text-xs text-slate-400">{formatLegalDateTime(task.updatedAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ─── Модальне вікно задачі (для юриста) ───
-function TaskDetailModal({ task, onClose, legal, canManage }) {
-  const { moveTaskStatus, removeTask } = legal;
+function TaskDetailModal({ task, onClose, legal, canManage, canMessageLegal = false }) {
+  const { moveTaskStatus, removeTask, updateTask, addTaskComment } = legal;
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
+  const [deadlineDraft, setDeadlineDraft] = useState(task?.preferredDeadline || "");
+  const deadlineInputRef = useRef(null);
+  const [messageDraft, setMessageDraft] = useState("");
+
   if (!task) return null;
 
   const isArchived = Boolean(task.archived);
@@ -584,6 +762,59 @@ function TaskDetailModal({ task, onClose, legal, canManage }) {
     await removeTask(task.id);
     setBusy(false);
     onClose();
+  };
+
+  const handleDeadlineSave = async (nextDeadline) => {
+    setBusy(true);
+    const valueToSave = nextDeadline ?? deadlineDraft;
+    await updateTask(task.id, {
+      ...task,
+      preferredDeadline: valueToSave || "",
+      statusHistory: [
+        ...(Array.isArray(task.statusHistory) ? task.statusHistory : []),
+        {
+          status: task.archived ? LEGAL_ARCHIVED_STATUS.value : task.status,
+          by: "Юрист",
+          byId: "",
+          at: new Date().toISOString(),
+          comment: valueToSave ? `Оновлено дедлайн: ${formatLegalDate(valueToSave)}` : "Дедлайн очищено",
+        },
+      ],
+    });
+    setBusy(false);
+  };
+
+  const openDeadlinePicker = () => {
+    const input = deadlineInputRef.current;
+    if (!input || !canManage || busy) return;
+    if (typeof input.showPicker === "function") {
+      input.showPicker();
+      return;
+    }
+    input.focus();
+    input.click();
+  };
+
+  const handleDeadlineChange = async (event) => {
+    const nextValue = String(event?.target?.value || "");
+    setDeadlineDraft(nextValue);
+    await handleDeadlineSave(nextValue);
+  };
+
+  const handleSendMessageToLegal = async () => {
+    const text = String(messageDraft || "").trim();
+    if (!text) return;
+    setBusy(true);
+    const result = await addTaskComment(task, text, {
+      notifyRole: "legal",
+      actionTab: LEGAL_PROCESS_TAB,
+    });
+    setBusy(false);
+    if (!result.success) {
+      alert("Не вдалося надіслати повідомлення юристу.");
+      return;
+    }
+    setMessageDraft("");
   };
 
   return (
@@ -611,7 +842,27 @@ function TaskDetailModal({ task, onClose, legal, canManage }) {
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge status={task.status} archived={task.archived} />
             <PriorityBadge priority={task.priority} />
-            <DeadlinePill value={task.preferredDeadline} />
+            <DeadlinePill value={deadlineDraft || task.preferredDeadline} />
+            {canManage ? (
+              <>
+                <input
+                  ref={deadlineInputRef}
+                  type="date"
+                  className="sr-only"
+                  value={deadlineDraft || ""}
+                  onChange={handleDeadlineChange}
+                />
+                <button
+                  type="button"
+                  onClick={openDeadlinePicker}
+                  disabled={busy}
+                  className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white p-1.5 text-slate-500 transition hover:border-indigo-300 hover:text-indigo-600 disabled:opacity-50"
+                  title="Змінити дедлайн"
+                >
+                  <CalendarDays size={14} />
+                </button>
+              </>
+            ) : null}
             {task.restaurantName ? (
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">{task.restaurantName}</span>
             ) : null}
@@ -626,6 +877,47 @@ function TaskDetailModal({ task, onClose, legal, canManage }) {
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Контакт</p>
               <p className="mt-1 text-sm text-slate-700">{task.contact}</p>
+            </div>
+          ) : null}
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Коментарі</p>
+            <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              {(Array.isArray(task.threadMessages) ? task.threadMessages : []).length === 0 ? (
+                <p className="text-xs text-slate-400">Повідомлень поки немає.</p>
+              ) : (
+                (task.threadMessages || []).map((entry) => (
+                  <div key={entry.id || `${entry.at}_${entry.by}`} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                    <p className="text-sm text-slate-700">{entry.text}</p>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      {entry.by || "Користувач"} · {formatLegalDateTime(entry.at)}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {canMessageLegal && !canManage ? (
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-3">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-500">Написати юристу</p>
+              <textarea
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                rows={3}
+                value={messageDraft}
+                onChange={(e) => setMessageDraft(e.target.value)}
+                placeholder="Додайте уточнення або коментар до задачі"
+              />
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  disabled={busy || !String(messageDraft || "").trim()}
+                  onClick={handleSendMessageToLegal}
+                  className="rounded-xl bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+                >
+                  Надіслати юристу
+                </button>
+              </div>
             </div>
           ) : null}
 
@@ -723,9 +1015,8 @@ function TaskDetailModal({ task, onClose, legal, canManage }) {
   );
 }
 
-// ─── Вкладка "Legal TODO" (юрист) ───
 function TodoView({ user, legal }) {
-  const { tasks, loading } = legal;
+  const { tasks, loading, settings } = legal;
   const [view, setView] = useState("kanban");
   const [search, setSearch] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
@@ -735,7 +1026,11 @@ function TodoView({ user, legal }) {
   const [archiveDragOver, setArchiveDragOver] = useState(false);
   const draggedTaskRef = useRef(null);
 
-  const canManage = isLegalUser(user);
+  const currentUserId = String(user?.uid || user?.id || user?.userId || user?.email || "").trim();
+  const selectedLawyerIds = Array.isArray(settings?.lawyerUserIds)
+    ? settings.lawyerUserIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  const canManage = isLegalUser(user) || selectedLawyerIds.includes(currentUserId);
 
   const filteredActive = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -765,7 +1060,7 @@ function TodoView({ user, legal }) {
     try {
       event.dataTransfer.setData("text/plain", String(task.id));
     } catch {
-      // ignore — деякі браузери блокують setData у onDragStart
+      // ignore
     }
   };
 
@@ -797,7 +1092,6 @@ function TodoView({ user, legal }) {
 
   return (
     <div className="space-y-5">
-      {/* Шапка */}
       <div className={`${cardClass} overflow-hidden`}>
         <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
@@ -836,7 +1130,6 @@ function TodoView({ user, legal }) {
           </div>
         </div>
 
-        {/* Статистика + фільтри */}
         <div className="flex flex-col gap-3 border-t border-slate-100 px-5 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap gap-2">
             {LEGAL_STATUSES.map((status) => (
@@ -893,10 +1186,16 @@ function TodoView({ user, legal }) {
           setDragOverStatus={setDragOverStatus}
         />
       ) : (
-        <TableView tasks={filteredActive} onOpen={setSelectedTask} onDragStart={handleDragStart} />
+        <TaskRowsTable
+          title="Активні задачі"
+          tasks={filteredActive}
+          emptyLabel="Немає активних задач."
+          onRowClick={setSelectedTask}
+          draggable={canManage}
+          onDragStart={handleDragStart}
+        />
       )}
 
-      {/* Зона архіву (drag&drop) */}
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -920,23 +1219,14 @@ function TodoView({ user, legal }) {
         <span className="hidden text-xs text-slate-400 sm:block">Перетягніть задачу сюди, щоб архівувати</span>
       </div>
 
-      {showArchive && archivedTasks.length > 0 ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {archivedTasks.map((task) => (
-            <div
-              key={task.id}
-              onClick={() => setSelectedTask(task)}
-              className="cursor-pointer rounded-xl border border-slate-200 bg-white p-3 opacity-80 shadow-sm transition hover:opacity-100"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <p className="line-clamp-1 text-sm font-semibold text-slate-700">{task.title}</p>
-                <CheckCircle2 size={15} className="text-emerald-500" />
-              </div>
-              <p className="mt-1 line-clamp-1 text-xs text-slate-400">{task.createdByName}</p>
-              <p className="mt-1 text-[11px] text-slate-400">{formatLegalDateTime(task.updatedAt)}</p>
-            </div>
-          ))}
-        </div>
+      {showArchive ? (
+        <TaskRowsTable
+          title="Архівні задачі"
+          tasks={archivedTasks}
+          emptyLabel="В архіві задач поки немає."
+          onRowClick={setSelectedTask}
+          rowTone="hover:bg-slate-50"
+        />
       ) : null}
 
       {selectedTask ? (
@@ -966,6 +1256,9 @@ export default function LegalModule({ topTab, restaurants = [], user }) {
   }
 
   const tabKey = String(topTab || "").toLowerCase();
+  if (tabKey.includes("settingslegal") || tabKey.includes("modulemainsettingslegal")) {
+    return <LegalSettingsView user={user} legal={legal} />;
+  }
   if (tabKey.includes("process") || tabKey.includes("todo")) {
     return <TodoView user={user} legal={legal} />;
   }

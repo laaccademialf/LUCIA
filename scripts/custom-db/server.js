@@ -52,6 +52,8 @@ const SETTINGS_FILE = process.env.RUNTIME_SETTINGS_FILE || "./tmp/custom-db/runt
 const POSTGRES_URL = String(process.env.POSTGRES_URL || "").trim();
 const ASSET_IMAGE_DIR = String(process.env.ASSET_IMAGE_DIR || "/var/www/luci.lafamiglia.ua/app/img").trim();
 const ASSET_IMAGE_PUBLIC_BASE = String(process.env.ASSET_IMAGE_PUBLIC_BASE || "/app/img").trim().replace(/\/+$/, "");
+const LEGAL_ATTACHMENT_DIR = String(process.env.LEGAL_ATTACHMENT_DIR || `${ASSET_IMAGE_DIR}/legal`).trim();
+const LEGAL_ATTACHMENT_PUBLIC_BASE = String(process.env.LEGAL_ATTACHMENT_PUBLIC_BASE || `${ASSET_IMAGE_PUBLIC_BASE}/legal`).trim().replace(/\/+$/, "");
 const BACKEND_PACKAGE_PATH = new URL("./package.json", import.meta.url);
 const readBackendPackageVersion = () => {
   try {
@@ -507,6 +509,65 @@ const saveAssetPhoto = async ({ fileName, dataUrl }) => {
   return {
     name: String(fileName || "photo"),
     url: `${ASSET_IMAGE_PUBLIC_BASE}/${uniqueName}`,
+  };
+};
+
+const decodeDataUrlFile = (dataUrl) => {
+  const source = String(dataUrl || "").trim();
+  const match = source.match(/^data:([^;,]+);base64,(.+)$/i);
+  if (!match) {
+    throw new Error("Invalid file data URL");
+  }
+
+  const mimeType = String(match[1] || "").toLowerCase();
+  const base64Payload = String(match[2] || "");
+  const buffer = Buffer.from(base64Payload, "base64");
+  if (!buffer.length) {
+    throw new Error("Empty file payload");
+  }
+
+  return { mimeType, buffer };
+};
+
+const LEGAL_EXT_BY_MIME = {
+  "application/pdf": "pdf",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.ms-excel": "xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/vnd.ms-powerpoint": "ppt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+  "text/plain": "txt",
+  "text/csv": "csv",
+  "application/zip": "zip",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+const guessFileExt = (mimeType, fileName = "") => {
+  const byMime = LEGAL_EXT_BY_MIME[String(mimeType || "").toLowerCase()];
+  if (byMime) return byMime;
+  const byName = String(fileName || "").trim().toLowerCase().match(/\.([a-z0-9]{1,8})$/i)?.[1] || "";
+  if (byName) return byName;
+  return "bin";
+};
+
+const saveLegalAttachment = async ({ fileName, dataUrl, size, type }) => {
+  const { mimeType, buffer } = decodeDataUrlFile(dataUrl);
+  const ext = guessFileExt(mimeType || type, fileName);
+  const safeName = sanitizeFileBaseName(fileName || "file");
+  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}_${safeName}.${ext}`;
+
+  await ensureDir(LEGAL_ATTACHMENT_DIR);
+  const absolutePath = path.join(LEGAL_ATTACHMENT_DIR, uniqueName);
+  await fs.writeFile(absolutePath, buffer);
+
+  return {
+    name: String(fileName || "file"),
+    url: `${LEGAL_ATTACHMENT_PUBLIC_BASE}/${uniqueName}`,
+    size: Number(size || buffer.length || 0),
+    type: String(type || mimeType || ""),
   };
 };
 
@@ -3518,6 +3579,31 @@ const handleAssetPhotoUploadApi = async (req, res) => {
   }
 };
 
+const handleLegalAttachmentUploadApi = async (req, res) => {
+  if (!isAuthorized(req)) {
+    return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+  }
+
+  let payload;
+  try {
+    payload = await parseJsonBody(req, 50 * 1024 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  try {
+    const saved = await saveLegalAttachment({
+      fileName: payload?.fileName,
+      dataUrl: payload?.dataUrl,
+      size: payload?.size,
+      type: payload?.type,
+    });
+    return sendJson(res, 200, { ok: true, ...saved });
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: error.message || "Legal attachment upload failed" });
+  }
+};
+
 const handleServiceRequestsApi = async (req, res, requestId) => {
   if (!isAuthorized(req)) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
@@ -4530,6 +4616,14 @@ const server = http.createServer(async (req, res) => {
   if (pathname === "/api/assets/photos") {
     try {
       return await handleAssetPhotoUploadApi(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  if (pathname === "/api/legal/attachments" && method === "POST") {
+    try {
+      return await handleLegalAttachmentUploadApi(req, res);
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
     }

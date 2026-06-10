@@ -856,8 +856,8 @@ function App() {
         if (cancelled) return;
         const mapped = (Array.isArray(items) ? items : [])
           .filter((item) => {
-            if (String(item?.source || "") !== "legal") return false;
-            if (String(item?.actorUserId || "") && String(item.actorUserId) === currentUserId) return false;
+            const source = String(item?.source || "").trim();
+            if (source && source !== "legal") return false;
             const targetUserId = String(item?.targetUserId || "");
             const targetRole = String(item?.targetRole || "");
             if (targetUserId && targetUserId === currentUserId) return true;
@@ -891,15 +891,17 @@ function App() {
     };
 
     loadLegal();
+    window.addEventListener("lucia:notifications-updated", loadLegal);
     const timer = setInterval(loadLegal, 20000);
     return () => {
       cancelled = true;
+      window.removeEventListener("lucia:notifications-updated", loadLegal);
       clearInterval(timer);
     };
   }, [user]);
 
   useEffect(() => {
-    if (!user || !Array.isArray(restaurants) || restaurants.length === 0) {
+    if (!user) {
       setNotifications([]);
       setNotificationUnreadCount(0);
       seenMissedChecklistKeysRef.current = new Set();
@@ -908,12 +910,17 @@ function App() {
       return;
     }
 
+    const currentUserId = String(user?.uid || user?.id || user?.userId || user?.email || "").trim();
+    const userIsLegal = isLegalUser(user);
+
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
     const dayKey = dayKeys[new Date(`${today}T00:00:00`).getDay()];
     const missedItems = [];
 
-    for (const restaurant of restaurants) {
+    const safeRestaurants = Array.isArray(restaurants) ? restaurants : [];
+
+    for (const restaurant of safeRestaurants) {
       const restaurantTemplates = (checklistTemplates || []).filter((template) => {
         if (template?.isActive === false) return false;
         if (!Array.isArray(template?.items) || template.items.length === 0) return false;
@@ -953,22 +960,36 @@ function App() {
       }
     }
 
-    const paymentNotifications = (() => {
+    const centerStorageNotifications = (() => {
       try {
         const raw = JSON.parse(localStorage.getItem("lucia_center_notifications") || "[]");
         if (!Array.isArray(raw)) return [];
-        return raw.slice(0, 50).map((item) => ({
-          key: String(item.key || `p_${Math.random().toString(36).slice(2)}`),
-          id: String(item.id || item.key || `p_${Math.random().toString(36).slice(2)}`),
-          type: "payment",
-          title: String(item.title || "Платіжне сповіщення"),
-          time: item.createdAt ? new Date(item.createdAt).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" }) : "щойно",
-          body: String(item.body || ""),
-          createdAt: String(item.createdAt || ""),
-          read: false,
-          actionUrl: "payments-registry",
-          priority: item.priority || "normal",
-        }));
+        return raw
+          .slice(0, 100)
+          .filter((item) => {
+            const targetUserId = String(item?.targetUserId || "");
+            const targetRole = String(item?.targetRole || "");
+            if (targetUserId && targetUserId !== currentUserId) return false;
+            if (targetRole === "legal" && !userIsLegal) return false;
+            return true;
+          })
+          .map((item) => {
+            const source = String(item?.source || "payment").trim() || "payment";
+            const fallbackTitle = source === "legal" ? "Юридична задача" : "Платіжне сповіщення";
+            return {
+              key: String(item.key || `${source}_${Math.random().toString(36).slice(2)}`),
+              id: String(item.id || item.key || `${source}_${Math.random().toString(36).slice(2)}`),
+              type: source,
+              title: String(item.title || fallbackTitle),
+              time: item.createdAt ? new Date(item.createdAt).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" }) : "щойно",
+              body: String(item.body || ""),
+              createdAt: String(item.createdAt || ""),
+              read: false,
+              actionUrl: String(item.actionUrl || (source === "legal" ? LEGAL_NAV_ID : "payments-registry")),
+              actionTab: String(item.actionTab || (source === "legal" ? "legalrequest" : "")),
+              priority: item.priority || "normal",
+            };
+          });
       } catch {
         return [];
       }
@@ -984,7 +1005,16 @@ function App() {
       actionUrl: "checklists",
       priority: "high",
     }));
-    const nextNotifications = [...paymentNotifications, ...checklistNotifications, ...legalCenterNotifications]
+    const dedupedByIdentity = [];
+    const seen = new Set();
+    for (const item of [...centerStorageNotifications, ...checklistNotifications, ...legalCenterNotifications]) {
+      const identity = `${String(item.type || "")}|${String(item.title || "")}|${String(item.body || "")}|${String(item.createdAt || "")}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      dedupedByIdentity.push(item);
+    }
+
+    const nextNotifications = dedupedByIdentity
       .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
       .slice(0, 50);
     setNotifications(nextNotifications);
