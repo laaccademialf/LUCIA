@@ -29,6 +29,8 @@ import {
   getLegalStatusMeta,
   getLegalPriorityMeta,
   isLegalUser,
+  getLegalUserIdentityKeys,
+  normalizeLegalIdentity,
   formatLegalDateTime,
   formatLegalDate,
   getDeadlineDaysLeft,
@@ -333,13 +335,13 @@ function RequestView({ user, restaurants, legal }) {
   const [showArchive, setShowArchive] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
 
-  const currentUserId = actorId(user);
+  const currentUserIdentityKeys = getLegalUserIdentityKeys(user);
   const myTasks = useMemo(
     () =>
       tasks
-        .filter((task) => String(task.createdById || "") === currentUserId)
+        .filter((task) => currentUserIdentityKeys.includes(normalizeLegalIdentity(task.createdById)))
         .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))),
-    [tasks, currentUserId]
+    [tasks, currentUserIdentityKeys]
   );
 
   const myActiveTasks = useMemo(() => myTasks.filter((task) => !task.archived), [myTasks]);
@@ -1061,11 +1063,11 @@ function TodoView({ user, legal }) {
   const [archiveDragOver, setArchiveDragOver] = useState(false);
   const draggedTaskRef = useRef(null);
 
-  const currentUserId = String(user?.uid || user?.id || user?.userId || user?.email || "").trim();
+  const currentUserIdentityKeys = getLegalUserIdentityKeys(user);
   const selectedLawyerIds = Array.isArray(settings?.lawyerUserIds)
-    ? settings.lawyerUserIds.map((id) => String(id || "").trim()).filter(Boolean)
+    ? settings.lawyerUserIds.map((id) => normalizeLegalIdentity(id)).filter(Boolean)
     : [];
-  const canManage = isLegalUser(user) || selectedLawyerIds.includes(currentUserId);
+  const canManage = isLegalUser(user) || currentUserIdentityKeys.some((id) => selectedLawyerIds.includes(id));
 
   const filteredActive = useMemo(() => {
     const term = search.trim().toLowerCase();

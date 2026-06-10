@@ -78,12 +78,26 @@ export const LEGAL_PRIORITIES = [
 export const getLegalPriorityMeta = (priority) =>
   LEGAL_PRIORITIES.find((item) => item.value === priority) || LEGAL_PRIORITIES[1];
 
+export const normalizeLegalIdentity = (value) => String(value || "").trim().toLowerCase();
+
+export const getLegalUserIdentityKeys = (user) =>
+  Array.from(
+    new Set(
+      [user?.uid, user?.id, user?.userId, user?.email]
+        .map((value) => normalizeLegalIdentity(value))
+        .filter(Boolean)
+    )
+  );
+
 // Визначення, чи користувач належить до юридичного відділу / має керувати TODO.
 export const isLegalUser = (user) => {
   const roleValue = String(user?.role || "").toLowerCase();
   const workRoleValue = String(user?.workRole || "").toLowerCase();
+  const positionValue = String(user?.position || "").toLowerCase();
   const terms = ["admin", "legal", "lawyer", "юрист", "правов", "юридич"];
-  return terms.some((term) => roleValue.includes(term) || workRoleValue.includes(term));
+  return terms.some(
+    (term) => roleValue.includes(term) || workRoleValue.includes(term) || positionValue.includes(term)
+  );
 };
 
 const dateTimeFormatterUk = new Intl.DateTimeFormat("uk-UA", {

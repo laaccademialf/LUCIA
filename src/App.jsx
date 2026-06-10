@@ -66,7 +66,7 @@ import { logAuditEvent } from "./firebase/audit";
 import { isCollectionsApiEnabled, getCollectionItemApi } from "./api/collectionsApi";
 import { batchImportAssetsApi, isAssetsApiEnabled } from "./api/assetsApi";
 import { getLegalNotificationsApi, isLegalApiEnabled } from "./api/legalTasksApi";
-import { isLegalUser, LEGAL_NAV_ID } from "./data/legalConstants";
+import { isLegalUser, LEGAL_NAV_ID, getLegalUserIdentityKeys, normalizeLegalIdentity } from "./data/legalConstants";
 
 
 const loadExcelHelpers = () => import("./utils/excelHelpers");
@@ -846,7 +846,7 @@ function App() {
       return;
     }
 
-    const currentUserId = String(user?.uid || user?.id || user?.userId || user?.email || "").trim();
+    const currentUserIdentityKeys = getLegalUserIdentityKeys(user);
     const userIsLegal = isLegalUser(user);
     let cancelled = false;
 
@@ -858,9 +858,9 @@ function App() {
           .filter((item) => {
             const source = String(item?.source || "").trim();
             if (source && source !== "legal") return false;
-            const targetUserId = String(item?.targetUserId || "");
+            const targetUserId = normalizeLegalIdentity(item?.targetUserId);
             const targetRole = String(item?.targetRole || "");
-            if (targetUserId && targetUserId === currentUserId) return true;
+            if (targetUserId && currentUserIdentityKeys.includes(targetUserId)) return true;
             if (targetRole === "legal" && userIsLegal) return true;
             return false;
           })
@@ -910,7 +910,7 @@ function App() {
       return;
     }
 
-    const currentUserId = String(user?.uid || user?.id || user?.userId || user?.email || "").trim();
+    const currentUserIdentityKeys = getLegalUserIdentityKeys(user);
     const userIsLegal = isLegalUser(user);
 
     const now = new Date();
@@ -967,9 +967,9 @@ function App() {
         return raw
           .slice(0, 100)
           .filter((item) => {
-            const targetUserId = String(item?.targetUserId || "");
+            const targetUserId = normalizeLegalIdentity(item?.targetUserId);
             const targetRole = String(item?.targetRole || "");
-            if (targetUserId && targetUserId !== currentUserId) return false;
+            if (targetUserId && !currentUserIdentityKeys.includes(targetUserId)) return false;
             if (targetRole === "legal" && !userIsLegal) return false;
             return true;
           })
