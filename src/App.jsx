@@ -92,6 +92,7 @@ const TechnologicalCardModule = lazy(() => import("./components/TechnologicalCar
 const ServiceRequestsModule = lazy(() => import("./components/ServiceRequestsModule"));
 const LegalModule = lazy(() => import("./components/LegalModule"));
 const ChecklistModule = lazy(() => import("./components/ChecklistModule"));
+const HaccpModule = lazy(() => import("./components/HaccpModule"));
 const TeamHiringModule = lazy(() => import("./components/TeamHiringModule"));
 const SecurityAuditModule = lazy(() => import("./components/SecurityAuditModule"));
 const PaymentRegistryModule = lazy(() => import("./components/PaymentRegistryModule"));
@@ -3930,6 +3931,14 @@ function App() {
     }
 
     if (activeNav === "ops-checklists" || activeNav.includes("ops-checklists")) {
+      const checklistTabKey = String(topTab || "").toLowerCase();
+      if (checklistTabKey.includes("haccp")) {
+        return (
+          <div className="grid grid-cols-1">
+            <HaccpModule topTab={topTab} restaurants={restaurants} user={user} />
+          </div>
+        );
+      }
       return (
         <div className="grid grid-cols-1">
           <ChecklistModule topTab={topTab} restaurants={restaurants} user={user} />
