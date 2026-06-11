@@ -5,6 +5,8 @@ import {
   saveVikSoftSettings,
   testVikSoftConnection,
   getVikSoftDebug,
+  getVikSoftMeters,
+  triggerVikSoftSync,
   getVikSoftApiClientContext,
 } from "../api/vikSoftSettingsApi";
 
@@ -205,6 +207,61 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
     return debugOut.treeMeters;
   }, [debugOut]);
 
+  // ---- Mapping Module: список лічильників Vik-Soft (nodename + eiccode) ----
+  const [metersLoading, setMetersLoading] = useState(false);
+  const [metersErr, setMetersErr] = useState("");
+  const [metersData, setMetersData] = useState(null);
+  const [metersFilter, setMetersFilter] = useState("");
+
+  const handleLoadMeters = async () => {
+    setMetersLoading(true);
+    setMetersErr("");
+    try {
+      const out = await getVikSoftMeters();
+      setMetersData(out);
+    } catch (e) {
+      setMetersErr(e?.message || String(e));
+    } finally {
+      setMetersLoading(false);
+    }
+  };
+
+  const filteredMeters = useMemo(() => {
+    const all = Array.isArray(metersData?.meters) ? metersData.meters : [];
+    const q = metersFilter.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((m) =>
+      [m.nodename, m.eiccode, m.idnode, m.objref].some((v) => String(v || "").toLowerCase().includes(q))
+    );
+  }, [metersData, metersFilter]);
+
+  // ---- Data Fetcher: ручна синхронізація / бекфіл історії ----
+  const isoDaysAgo = (n) => {
+    const d = new Date();
+    d.setDate(d.getDate() - n);
+    return d.toISOString().slice(0, 10);
+  };
+  const [syncFrom, setSyncFrom] = useState(() => isoDaysAgo(7));
+  const [syncTo, setSyncTo] = useState(() => isoDaysAgo(1));
+  const [syncForce, setSyncForce] = useState(false);
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncErr, setSyncErr] = useState("");
+  const [syncResult, setSyncResult] = useState(null);
+
+  const handleSync = async () => {
+    setSyncLoading(true);
+    setSyncErr("");
+    setSyncResult(null);
+    try {
+      const out = await triggerVikSoftSync({ from: syncFrom, to: syncTo, force: syncForce });
+      setSyncResult(out);
+    } catch (e) {
+      setSyncErr(e?.message || String(e));
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
   const handleDebug = async () => {
     setDebugLoading(true);
     setDebugErr("");
@@ -379,6 +436,54 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
         title="Ідентифікатори лічильників по ресторанах"
         subtitle="Можна змішувати формати через кому: eic:..., idnode:..., objref:... . Система автоматично резолвить їх у EIC через vviewtree."
       >
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className={btnGhost} disabled={metersLoading} onClick={handleLoadMeters}>
+              <RefreshCw size={16} className={metersLoading ? "animate-spin" : ""} />
+              {metersLoading ? "Завантаження…" : "Показати лічильники Vik-Soft"}
+            </button>
+            {metersData?.summary ? (
+              <span className="text-xs text-slate-600">
+                Усього: {metersData.summary.total}, з EIC: {metersData.summary.withEic}, без EIC: {metersData.summary.withoutEic}
+              </span>
+            ) : null}
+            {Array.isArray(metersData?.meters) && metersData.meters.length > 0 ? (
+              <input
+                className={`${baseInput} ml-auto max-w-xs`}
+                placeholder="Пошук за назвою / eiccode / idnode"
+                value={metersFilter}
+                onChange={(e) => setMetersFilter(e.target.value)}
+              />
+            ) : null}
+          </div>
+          {metersErr ? (
+            <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{metersErr}</div>
+          ) : null}
+          {Array.isArray(metersData?.meters) && metersData.meters.length > 0 ? (
+            <div className="mt-2 max-h-64 overflow-auto rounded-lg border border-slate-200 bg-white">
+              <table className="min-w-full text-xs">
+                <thead className="sticky top-0 bg-slate-100 text-slate-700">
+                  <tr>
+                    <th className="px-2 py-1 text-left font-semibold">Назва (nodename)</th>
+                    <th className="px-2 py-1 text-left font-semibold">eiccode</th>
+                    <th className="px-2 py-1 text-left font-semibold">idnode</th>
+                    <th className="px-2 py-1 text-left font-semibold">objref</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredMeters.map((m, idx) => (
+                    <tr key={`${m.idnode || m.objref || m.eiccode}-${idx}`} className="border-t border-slate-100">
+                      <td className="px-2 py-1 text-slate-800">{m.nodename || "—"}</td>
+                      <td className="px-2 py-1 font-mono text-slate-800">{m.eiccode || "—"}</td>
+                      <td className="px-2 py-1 font-mono text-slate-800">{m.idnode || "—"}</td>
+                      <td className="px-2 py-1 font-mono text-slate-800">{m.objref || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
         {restaurants.length === 0 ? (
           <div className="text-sm text-slate-500">Немає ресторанів.</div>
         ) : (
@@ -433,6 +538,43 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
             </table>
           </div>
         )}
+      </Section>
+
+      {/* Синхронізація споживання (Data Fetcher) */}
+      <Section
+        icon={<RefreshCw size={20} />}
+        title="Синхронізація споживання"
+        subtitle="Підтягнути показники з Vik-Soft у вкладку «Електроенергія». Діапазон дат — для бекфілу історії (максимум 60 днів за раз)."
+      >
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-slate-700">Від</span>
+            <input className={baseInput} type="date" value={syncFrom} onChange={(e) => setSyncFrom(e.target.value)} />
+          </label>
+          <label className="block text-sm">
+            <span className="mb-1 block font-medium text-slate-700">До</span>
+            <input className={baseInput} type="date" value={syncTo} onChange={(e) => setSyncTo(e.target.value)} />
+          </label>
+          <label className="flex items-end gap-2 text-sm">
+            <input type="checkbox" checked={syncForce} onChange={(e) => setSyncForce(e.target.checked)} />
+            <span className="font-medium text-slate-700">Ігнорувати кеш</span>
+          </label>
+          <div className="flex items-end">
+            <button type="button" className={btnPrimary} disabled={syncLoading} onClick={handleSync}>
+              <RefreshCw size={16} className={syncLoading ? "animate-spin" : ""} />
+              {syncLoading ? "Синхронізація…" : "Синхронізувати"}
+            </button>
+          </div>
+        </div>
+        {syncErr ? (
+          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{syncErr}</div>
+        ) : null}
+        {syncResult ? (
+          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+            Готово: днів — {syncResult.days}, збережено записів — {syncResult.okCount}, помилок — {syncResult.errCount}.
+            Дані зʼявляться у вкладці «Електроенергія» в історії по відповідних датах.
+          </div>
+        ) : null}
       </Section>
 
       {/* Debug / диагностика */}

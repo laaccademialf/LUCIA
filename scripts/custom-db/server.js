@@ -1422,7 +1422,7 @@ let viksoftAutoSyncRunning = false;
 const runVikSoftAutoSync = async ({ date, force } = {}) => {
   if (viksoftAutoSyncRunning) {
     console.log("[viksoft:auto] skipped: previous run still in progress");
-    return;
+    return { ok: false, skipped: true };
   }
   viksoftAutoSyncRunning = true;
   try {
@@ -1441,7 +1441,7 @@ const runVikSoftAutoSync = async ({ date, force } = {}) => {
 
     if (!targets.length) {
       console.log("[viksoft:auto] no restaurants with vikSoftEics configured");
-      return;
+      return { ok: true, reportDate, okCount: 0, errCount: 0, total: 0 };
     }
 
     const { fetchEnergoCenterConsumption } = await import("../vikSoftApi.js");
@@ -1492,8 +1492,10 @@ const runVikSoftAutoSync = async ({ date, force } = {}) => {
     }
 
     console.log(`[viksoft:auto] done for ${reportDate}: ok=${okCount}, errors=${errCount}, total=${targets.length}`);
+    return { ok: true, reportDate, okCount, errCount, total: targets.length };
   } catch (e) {
     console.warn(`[viksoft:auto] fatal: ${e?.message || e}`);
+    return { ok: false, error: e?.message || String(e) };
   } finally {
     viksoftAutoSyncRunning = false;
   }
@@ -4747,6 +4749,66 @@ const server = http.createServer(async (req, res) => {
       const date = String(requestUrl.searchParams.get("date") || "").trim() || undefined;
       const out = await debugVikSoft({ eic, date });
       return sendJson(res, 200, out);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
+    }
+  }
+
+  // Mapping Module: список лічильників з Vik-Soft (vviewtree -> nodename + eiccode).
+  // Дозволяє в UI бачити доступні лічильники та мапити їх на заклади.
+  if (pathname === "/api/energocenter/meters" && method === "GET") {
+    if (!isAuthorized(req)) {
+      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+    }
+    try {
+      const { listVikSoftMeters } = await import("../vikSoftApi.js");
+      const out = await listVikSoftMeters();
+      const status = out?.ok ? 200 : 502;
+      return sendJson(res, status, out);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
+    }
+  }
+
+  // Data Fetcher: ручний запуск синхронізації споживання у electricityReadings.
+  // Підтримує { date } (одна доба) або { from, to } (діапазон, максимум 60 днів) для бекфілу історії.
+  if (pathname === "/api/energocenter/sync" && method === "POST") {
+    if (!isAuthorized(req)) {
+      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+    }
+    try {
+      const body = await parseJsonBody(req).catch(() => ({}));
+      const isIso = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "").trim());
+      const force = body?.force === true || requestUrl.searchParams.get("force") === "1";
+      const single = String(body?.date || requestUrl.searchParams.get("date") || "").trim();
+      const from = String(body?.from || requestUrl.searchParams.get("from") || "").trim();
+      const to = String(body?.to || requestUrl.searchParams.get("to") || "").trim();
+
+      let dates = [];
+      if (isIso(from) && isIso(to)) {
+        let d = new Date(`${from}T00:00:00Z`);
+        const end = new Date(`${to}T00:00:00Z`);
+        let guard = 0;
+        while (d <= end && guard < 60) {
+          dates.push(d.toISOString().slice(0, 10));
+          d.setUTCDate(d.getUTCDate() + 1);
+          guard += 1;
+        }
+      } else if (isIso(single)) {
+        dates = [single];
+      } else {
+        dates = [undefined]; // yesterday за замовчуванням
+      }
+
+      const results = [];
+      for (const dt of dates) {
+        // eslint-disable-next-line no-await-in-loop
+        const r = await runVikSoftAutoSync({ date: dt, force });
+        results.push({ date: dt || "yesterday", ...(r || {}) });
+      }
+      const okCount = results.reduce((acc, r) => acc + (Number(r?.okCount) || 0), 0);
+      const errCount = results.reduce((acc, r) => acc + (Number(r?.errCount) || 0), 0);
+      return sendJson(res, 200, { ok: true, days: results.length, okCount, errCount, results });
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
     }

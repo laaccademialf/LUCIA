@@ -106,19 +106,18 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     }
   }, [apiEnabled, reportDate, hasEics, eicsKey]);
 
-  // Автопідвантаження тільки при зміні дати (не при зміні закладу).
+  // Автопідвантаження при зміні дати АБО закладу (EIC), якщо EIC задані.
+  // Якщо EIC немає — скидаємо дані.
   useEffect(() => {
+    if (!hasEics) {
+      setData(null);
+      setError("");
+      if (onDataChangeRef.current) onDataChangeRef.current(null);
+      return;
+    }
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reportDate]);
-
-  // При зміні закладу (зміні EIC) — скидаємо дані, чекаємо ручного оновлення.
-  useEffect(() => {
-    setData(null);
-    setError("");
-    if (onDataChangeRef.current) onDataChangeRef.current(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eicsKey]);
+  }, [reportDate, eicsKey, hasEics]);
 
   useEffect(() => {
     return () => {

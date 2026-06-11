@@ -130,3 +130,34 @@ export const getVikSoftDebug = async ({ eic, date } = {}) => {
   }
   return json;
 };
+
+// Mapping Module: список лічильників з Vik-Soft (nodename + eiccode) для мапінгу на заклади.
+export const getVikSoftMeters = async () => {
+  const base = requireBase();
+  const r = await fetch(`${base}/api/energocenter/meters`, { headers: buildHeaders() });
+  const json = await r.json().catch(() => null);
+  if (!r.ok || !json?.ok) {
+    throw new Error(formatRouteError(r.status, json?.error, "/api/energocenter/meters"));
+  }
+  return json; // { ok, meters: [{ nodename, eiccode, idnode, objref }], summary }
+};
+
+// Data Fetcher: ручний запуск синхронізації споживання (одна доба або діапазон from/to).
+export const triggerVikSoftSync = async ({ date, from, to, force = false } = {}) => {
+  const base = requireBase();
+  const payload = {};
+  if (date) payload.date = String(date);
+  if (from) payload.from = String(from);
+  if (to) payload.to = String(to);
+  if (force) payload.force = true;
+  const r = await fetch(`${base}/api/energocenter/sync`, {
+    method: "POST",
+    headers: buildHeaders(),
+    body: JSON.stringify(payload),
+  });
+  const json = await r.json().catch(() => null);
+  if (!r.ok || !json?.ok) {
+    throw new Error(formatRouteError(r.status, json?.error, "/api/energocenter/sync"));
+  }
+  return json; // { ok, days, okCount, errCount, results }
+};

@@ -22,6 +22,16 @@ const REQUEST_TIMEOUT_MS = Math.max(
   Number.parseInt(String(process.env.VIKSOFT_REQUEST_TIMEOUT_MS || "20000"), 10) || 20000
 );
 
+// Макети getsqlmaket, які пробуємо по черзі, поки не отримаємо записи.
+// Налаштовується через env VIKSOFT_MAKET (через кому). За замовчуванням —
+// APIGetGr30 (30-хв графік, фінальна специфікація), із fallback на APIGetD_GR.
+const MAKET_CANDIDATES = (() => {
+  const fromEnv = String(process.env.VIKSOFT_MAKET || "").trim();
+  const list = fromEnv ? fromEnv.split(/[,\s;]+/).map((s) => s.trim()).filter(Boolean) : [];
+  const merged = [...list, "APIGetGr30", "APIGetD_GR"];
+  return [...new Set(merged)];
+})();
+
 // Нормалізує базу API: приймає як чисту базу, так і випадково вставлений повний URL
 // (напр. ".../api/v1/login?user=...&pass=...") — лишає тільки origin (scheme+host+port).
 const normalizeApiBase = (raw) => {
@@ -420,7 +430,7 @@ export const vviewtree = async ({ eType = 1, sId = 0 } = {}) => {
 };
 
 // GET /api/v1/getsqlmaket?maket=APIGetD_GR&eic=...&dr=1,2,3,4&dtstart=DD.MM.YYYY&dtend=DD.MM.YYYY&type=json
-export const getSqlMaket = async ({ eic, dtstart, dtend, dr = DEFAULT_DR, maket = "APIGetD_GR" } = {}) => {
+export const getSqlMaket = async ({ eic, dtstart, dtend, dr = DEFAULT_DR, maket = MAKET_CANDIDATES[0] } = {}) => {
   if (!eic) throw new Error("getSqlMaket: eic обов'язковий");
   return apiGet("/api/v1/getsqlmaket", { maket, eic, dr, dtstart, dtend, type: "json" });
 };
@@ -713,20 +723,42 @@ export const fetchEnergoCenterConsumption = async ({
 
     const allRows = [];
     const errors = [];
+    const maketsUsed = new Set();
     for (const eic of eics) {
-      try {
-        const raw = await getSqlMaket({
-          eic,
-          dtstart: reportDateDdMmYyyy,
-          dtend: reportDateDdMmYyyy,
-        });
-        const records = findRecords(raw);
-        const pointName = await getPointName(eic);
-        const rows = aggregateForDay(records, pointName);
-        allRows.push(...rows);
-      } catch (e) {
-        errors.push(`EIC ${eic}: ${e?.message || e}`);
+      let records = [];
+      let usedMaket = null;
+      let lastErr = null;
+      // Пробуємо макети по черзі (APIGetGr30 -> APIGetD_GR), поки не буде даних.
+      for (const maket of MAKET_CANDIDATES) {
+        try {
+          const raw = await getSqlMaket({
+            eic,
+            dtstart: reportDateDdMmYyyy,
+            dtend: reportDateDdMmYyyy,
+            maket,
+          });
+          const recs = findRecords(raw);
+          if (recs.length) {
+            records = recs;
+            usedMaket = maket;
+            break;
+          }
+        } catch (e) {
+          lastErr = e;
+        }
       }
+      if (!records.length) {
+        errors.push(
+          lastErr
+            ? `EIC ${eic}: ${lastErr?.message || lastErr}`
+            : `EIC ${eic}: немає даних за ${reportDateDdMmYyyy} (макети: ${MAKET_CANDIDATES.join(", ")})`
+        );
+        continue;
+      }
+      if (usedMaket) maketsUsed.add(usedMaket);
+      const pointName = await getPointName(eic);
+      const rows = aggregateForDay(records, pointName);
+      allRows.push(...rows);
     }
 
     if (allRows.length === 0 && errors.length) {
@@ -749,6 +781,7 @@ export const fetchEnergoCenterConsumption = async ({
       headers: ["Точка обліку", "Напрямок", "Споживання"],
       rows: allRows,
       totals,
+      maket: maketsUsed.size ? [...maketsUsed].join(", ") : MAKET_CANDIDATES[0],
       resolvedIdentifiers: resolvedIds.resolved,
       unresolvedIdentifiers: resolvedIds.unresolved,
       ...(errors.length ? { warnings: errors } : {}),
@@ -764,6 +797,49 @@ export const fetchEnergoCenterConsumption = async ({
       rows: [],
       error: `Vik-Soft API: ${e?.message || e}`,
     };
+  }
+};
+
+// Mapping Module: список лічильників з vviewtree — пари nodename + eiccode для UI.
+// Викликається раз на добу/за запитом і дозволяє мапити заклад -> ідентифікатор лічильника.
+export const listVikSoftMeters = async () => {
+  const cfg = getConfig();
+  const out = {
+    ok: false,
+    fetchedAt: new Date().toISOString(),
+    apiBase: cfg.apiBase,
+    meters: [],
+  };
+  if (!cfg.user || !cfg.password) {
+    out.error = "Не задано VIKSOFT_USER / VIKSOFT_PASSWORD у змінних оточення сервера.";
+    return out;
+  }
+  try {
+    const tree = await vviewtree();
+    const records = findRecords(tree);
+    const toStr = (v) => String(v == null ? "" : v).trim();
+    const meters = records
+      .map((node) => ({
+        nodename: toStr(
+          node?.nodename ?? node?.nodeName ?? node?.NODENAME ?? node?.name ?? node?.Name ?? node?.objName ?? ""
+        ),
+        eiccode: toStr(node?.eiccode ?? node?.EICCODE ?? node?.eic ?? node?.EIC ?? ""),
+        idnode: toStr(node?.idnode ?? node?.idNode ?? node?.IDNODE ?? node?.id ?? ""),
+        objref: toStr(node?.objref ?? node?.objRef ?? node?.OBJREF ?? ""),
+        typedenom: toStr(node?.typedenom ?? node?.TYPEDENOM ?? ""),
+      }))
+      .filter((m) => m.nodename || m.eiccode || m.idnode || m.objref);
+    out.ok = true;
+    out.meters = meters;
+    out.summary = {
+      total: meters.length,
+      withEic: meters.filter((m) => Boolean(m.eiccode)).length,
+      withoutEic: meters.filter((m) => !m.eiccode).length,
+    };
+    return out;
+  } catch (e) {
+    out.error = e?.message || String(e);
+    return out;
   }
 };
 
