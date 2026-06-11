@@ -192,7 +192,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
       )}
       {currentRestaurantId && energoEics.length === 0 && (
         <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          У картці закладу не задано EIC коди лічильників. Додайте їх у «Управління ресторанами».
+          У картці закладу не задано ідентифікатори лічильників (eic:/idnode:/objref:). Додайте їх у «Управління ресторанами».
         </p>
       )}
       <EnergoCenterMetersPanel

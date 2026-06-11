@@ -541,40 +541,114 @@ const setCached = (eics, iso, payload) => {
 };
 export const invalidateVikSoftCache = () => resultCache.clear();
 
-// ---- Допоміжне: побудувати pointName з елемента vviewtree ----
-const treeIndex = { byEic: new Map(), fetchedAt: 0 };
+// ---- Допоміжне: побудувати pointName і резолв ідентифікаторів з vviewtree ----
+const treeIndex = {
+  byEic: new Map(),
+  byIdnode: new Map(),
+  byObjref: new Map(),
+  fetchedAt: 0,
+};
 const TREE_TTL_MS = 5 * 60 * 1000;
+
+const normalizeIdentifier = (raw) => {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+
+  const m = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*[:=]\s*(.+)$/.exec(s);
+  if (m) {
+    const kind = String(m[1] || "").trim().toLowerCase();
+    const value = String(m[2] || "").trim();
+    if (!value) return null;
+    if (kind === "eic" || kind === "eiccode") return { kind: "eic", value };
+    if (kind === "idnode" || kind === "id") return { kind: "idnode", value };
+    if (kind === "objref" || kind === "obj") return { kind: "objref", value };
+    return { kind: "eic", value };
+  }
+
+  // Без префікса: числові значення трактуємо як idnode, решту — як eic.
+  if (/^\d+$/.test(s)) return { kind: "idnode", value: s };
+  return { kind: "eic", value: s };
+};
 
 const refreshTreeIndex = async () => {
   try {
     const tree = await vviewtree();
     const records = findRecords(tree);
-    const map = new Map();
+    const byEic = new Map();
+    const byIdnode = new Map();
+    const byObjref = new Map();
     for (const node of records) {
-      const eic = String(pluck(node, ["eic", "EIC", "Eic"]) || "").trim();
-      if (!eic) continue;
+      const eic = String(pluck(node, ["eic", "EIC", "Eic", "eiccode", "EICCODE"]) || "").trim();
+      const idnode = String(pluck(node, ["idnode", "idNode", "IDNODE", "id", "ID"]) || "").trim();
+      const objref = String(pluck(node, ["objref", "objRef", "OBJREF"]) || "").trim();
       const name = String(pluck(node, POINT_FIELDS) || "").trim();
-      map.set(eic, name || eic);
+      const doc = { eic, idnode, objref, name: name || eic || idnode || objref || "" };
+      if (eic) byEic.set(eic, doc);
+      if (idnode) byIdnode.set(idnode, doc);
+      if (objref) byObjref.set(objref, doc);
     }
-    treeIndex.byEic = map;
+    treeIndex.byEic = byEic;
+    treeIndex.byIdnode = byIdnode;
+    treeIndex.byObjref = byObjref;
     treeIndex.fetchedAt = Date.now();
   } catch (e) {
     console.warn(`[viksoft] vviewtree failed: ${e?.message || e}`);
   }
 };
 
-const getPointName = async (eic) => {
-  if (!treeIndex.byEic.has(eic) || Date.now() - treeIndex.fetchedAt > TREE_TTL_MS) {
+const ensureTreeIndexFresh = async () => {
+  if (Date.now() - treeIndex.fetchedAt > TREE_TTL_MS) {
     await refreshTreeIndex();
   }
-  return treeIndex.byEic.get(eic) || eic;
+};
+
+const resolveIdentifiersToEics = async (inputs = []) => {
+  await ensureTreeIndexFresh();
+
+  const eics = [];
+  const unresolved = [];
+  const resolved = [];
+  const seen = new Set();
+
+  for (const input of inputs) {
+    const id = normalizeIdentifier(input);
+    if (!id) continue;
+
+    let eic = "";
+    if (id.kind === "eic") {
+      eic = id.value;
+      resolved.push({ input: String(input), kind: id.kind, value: id.value, eic });
+    } else if (id.kind === "idnode") {
+      const hit = treeIndex.byIdnode.get(id.value);
+      eic = String(hit?.eic || "").trim();
+      if (!eic) unresolved.push({ input: String(input), kind: id.kind, value: id.value, reason: "no_eic_for_idnode" });
+      else resolved.push({ input: String(input), kind: id.kind, value: id.value, eic });
+    } else if (id.kind === "objref") {
+      const hit = treeIndex.byObjref.get(id.value);
+      eic = String(hit?.eic || "").trim();
+      if (!eic) unresolved.push({ input: String(input), kind: id.kind, value: id.value, reason: "no_eic_for_objref" });
+      else resolved.push({ input: String(input), kind: id.kind, value: id.value, eic });
+    }
+
+    if (eic && !seen.has(eic)) {
+      seen.add(eic);
+      eics.push(eic);
+    }
+  }
+
+  return { eics, unresolved, resolved };
+};
+
+const getPointName = async (eic) => {
+  if (!treeIndex.byEic.has(eic) || Date.now() - treeIndex.fetchedAt > TREE_TTL_MS) await refreshTreeIndex();
+  return treeIndex.byEic.get(eic)?.name || eic;
 };
 
 // ---- Головна функція. Сумісний контракт з попереднім energocenter.js ----
 export const fetchEnergoCenterConsumption = async ({
   date,
   force = false,
-  eics: eicsInput,
+  eics: identifiersInput,
 } = {}) => {
   const fetchedAt = new Date().toISOString();
   const reportDateIso = (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date))
@@ -582,12 +656,27 @@ export const fetchEnergoCenterConsumption = async ({
     : getYesterdayIso();
   const reportDateDdMmYyyy = toDdMmYyyy(reportDateIso);
 
-  // Нормалізуємо EIC: масив, через кому, через ;, з пробілами.
-  let eics = [];
-  if (Array.isArray(eicsInput)) eics = eicsInput;
-  else if (typeof eicsInput === "string") eics = eicsInput.split(/[,\s;]+/);
-  eics = eics.map((s) => String(s || "").trim()).filter(Boolean);
-  eics = [...new Set(eics)];
+  // Нормалізуємо список ідентифікаторів: eic:..., idnode:..., objref:... або bare-token.
+  let identifiers = [];
+  if (Array.isArray(identifiersInput)) identifiers = identifiersInput;
+  else if (typeof identifiersInput === "string") identifiers = identifiersInput.split(/[,\s;]+/);
+  identifiers = identifiers.map((s) => String(s || "").trim()).filter(Boolean);
+  identifiers = [...new Set(identifiers)];
+
+  if (!identifiers.length) {
+    return {
+      ok: false,
+      fetchedAt,
+      reportDate: reportDateIso,
+      sourceUrl: "vik-soft:getsqlmaket",
+      rows: [],
+      error: "Не задано ідентифікатори лічильників у картці закладу (eic:/idnode:/objref:).",
+    };
+  }
+
+  // Резолвимо ідентифікатори в EIC через vviewtree.
+  const resolvedIds = await resolveIdentifiersToEics(identifiers);
+  const eics = resolvedIds.eics;
 
   if (!eics.length) {
     return {
@@ -596,7 +685,8 @@ export const fetchEnergoCenterConsumption = async ({
       reportDate: reportDateIso,
       sourceUrl: "vik-soft:getsqlmaket",
       rows: [],
-      error: "Не задано EIC коди лічильників у картці закладу.",
+      error: "Не вдалося резолвити жоден ідентифікатор у EIC. Перевірте treeSummary/таблицю та заповнення eiccode у Vik-Soft.",
+      unresolvedIdentifiers: resolvedIds.unresolved,
     };
   }
 
@@ -659,6 +749,8 @@ export const fetchEnergoCenterConsumption = async ({
       headers: ["Точка обліку", "Напрямок", "Споживання"],
       rows: allRows,
       totals,
+      resolvedIdentifiers: resolvedIds.resolved,
+      unresolvedIdentifiers: resolvedIds.unresolved,
       ...(errors.length ? { warnings: errors } : {}),
     };
     setCached(eics, reportDateIso, payload);
@@ -703,9 +795,12 @@ export const debugVikSoft = async ({ eic, date } = {}) => {
   } catch (e) { out.treeError = e?.message || String(e); }
   if (eic) {
     const iso = (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : getYesterdayIso();
-    const ddmm = toDdMmYyyy(iso);
     try {
-      out.maket = await getSqlMaket({ eic, dtstart: ddmm, dtend: ddmm });
+      out.maket = await fetchEnergoCenterConsumption({
+        date: iso,
+        force: true,
+        eics: [eic],
+      });
     } catch (e) { out.maketError = e?.message || String(e); }
   }
   return out;

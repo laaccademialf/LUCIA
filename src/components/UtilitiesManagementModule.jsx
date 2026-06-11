@@ -376,8 +376,8 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
       {/* EIC per restaurant */}
       <Section
         icon={<Zap size={20} />}
-        title="EIC коди лічильників по ресторанах"
-        subtitle="Перелічіть EIC коди (через кому) для кожного закладу. Один EIC = одна точка обліку у Vik-Soft."
+        title="Ідентифікатори лічильників по ресторанах"
+        subtitle="Можна змішувати формати через кому: eic:..., idnode:..., objref:... . Система автоматично резолвить їх у EIC через vviewtree."
       >
         {restaurants.length === 0 ? (
           <div className="text-sm text-slate-500">Немає ресторанів.</div>
@@ -390,7 +390,7 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
                     <Building2 size={14} className="mr-1 inline" />
                     Ресторан
                   </th>
-                  <th className="py-2 pr-3 font-semibold text-slate-700">EIC коди (через кому)</th>
+                  <th className="py-2 pr-3 font-semibold text-slate-700">Ідентифікатори (через кому)</th>
                   <th className="w-40 py-2 font-semibold text-slate-700">Дії</th>
                 </tr>
               </thead>
@@ -407,7 +407,7 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
                           rows={2}
                           className={`${baseInput} font-mono text-xs`}
                           value={cur}
-                          placeholder="62Z00000000123U7, 62Z00000000456U2"
+                          placeholder="eic:62Z..., idnode:27381, objref:1024156897"
                           onChange={(e) => handleEicChange(r.id, e.target.value)}
                           spellCheck={false}
                         />
@@ -439,11 +439,11 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
       <Section
         icon={<Bug size={20} />}
         title="Діагностика API"
-        subtitle="Тестовий запит — повертає raw payload з Vik-Soft (дерево обʼєктів + дані по EIC за добу). Корисно якщо парсинг не розпізнає поля."
+        subtitle="Тестовий запит — повертає raw payload з Vik-Soft (дерево обʼєктів + дані за добу). Можна вказати eic:/idnode:/objref:."
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-700">EIC (опційно)</span>
+            <span className="mb-1 block font-medium text-slate-700">Ідентифікатор (опційно)</span>
             {allEics.length ? (
               <select className={baseInput} value={debugEic} onChange={(e) => setDebugEic(e.target.value)}>
                 <option value="">— тільки дерево обʼєктів —</option>
@@ -457,7 +457,7 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
                 type="text"
                 value={debugEic}
                 onChange={(e) => setDebugEic(e.target.value)}
-                placeholder="EIC код"
+                placeholder="eic:... / idnode:... / objref:..."
                 spellCheck={false}
               />
             )}
