@@ -17,6 +17,10 @@
 
 const DEFAULT_API_BASE = "http://194.183.165.59:8765";
 const DEFAULT_DR = "1,2,3,4"; // A+, A-, R+, R-
+const REQUEST_TIMEOUT_MS = Math.max(
+  5000,
+  Number.parseInt(String(process.env.VIKSOFT_REQUEST_TIMEOUT_MS || "20000"), 10) || 20000
+);
 
 // Нормалізує базу API: приймає як чисту базу, так і випадково вставлений повний URL
 // (напр. ".../api/v1/login?user=...&pass=...") — лишає тільки origin (scheme+host+port).
@@ -174,8 +178,10 @@ const fetchJson = async (url, init = {}) => {
 // Спробувати «сирий» запит, повернути детальний звіт для логіну/діагностики.
 // Сюди НЕ кидаємо виключення — повертаємо { ok, status, body, json, ct, url, error }.
 const tryRequest = async (url, init = {}) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("timeout")), REQUEST_TIMEOUT_MS);
   try {
-    const r = await fetch(url, init);
+    const r = await fetch(url, { ...init, signal: controller.signal });
     const ct = String(r.headers.get("content-type") || "").toLowerCase();
     let text = "";
     try { text = await r.text(); } catch {}
@@ -192,7 +198,12 @@ const tryRequest = async (url, init = {}) => {
       json,
     };
   } catch (e) {
-    return { ok: false, status: 0, url, error: e?.message || String(e) };
+    const msg = e?.name === "AbortError"
+      ? `Request timeout after ${REQUEST_TIMEOUT_MS}ms`
+      : (e?.message || String(e));
+    return { ok: false, status: 0, url, error: msg };
+  } finally {
+    clearTimeout(timer);
   }
 };
 
@@ -331,6 +342,7 @@ const TOKEN_TRANSPORTS = [
   { name: "query:sId", apply: (u, h, t) => { u.searchParams.set("sId", t); } },
   { name: "query:sid", apply: (u, h, t) => { u.searchParams.set("sid", t); } },
   { name: "query:key", apply: (u, h, t) => { u.searchParams.set("key", t); } },
+  { name: "header:auth-token", apply: (u, h, t) => { h.Authorization = `Token ${t}`; } },
   { name: "header:bearer", apply: (u, h, t) => { h.Authorization = `Bearer ${t}`; } },
   { name: "header:token", apply: (u, h, t) => { h.Token = t; } },
   { name: "header:x-token", apply: (u, h, t) => { h["X-Token"] = t; } },
@@ -672,6 +684,22 @@ export const debugVikSoft = async ({ eic, date } = {}) => {
   } catch (e) { out.tokenError = e?.message || String(e); }
   try {
     out.tree = await vviewtree();
+    const records = findRecords(out.tree);
+    const toStr = (v) => String(v == null ? "" : v).trim();
+    const treeMeters = records
+      .map((node) => ({
+        idnode: toStr(node?.idnode ?? node?.idNode ?? node?.IDNODE ?? ""),
+        objref: toStr(node?.objref ?? node?.objRef ?? node?.OBJREF ?? ""),
+        eiccode: toStr(node?.eiccode ?? node?.EICCODE ?? node?.eic ?? node?.EIC ?? ""),
+        name: toStr(node?.name ?? node?.Name ?? node?.objName ?? ""),
+      }))
+      .filter((m) => m.idnode || m.objref || m.eiccode || m.name);
+    out.treeSummary = {
+      totalNodes: treeMeters.length,
+      withEic: treeMeters.filter((m) => Boolean(m.eiccode)).length,
+      withoutEic: treeMeters.filter((m) => !m.eiccode).length,
+    };
+    out.treeMeters = treeMeters.slice(0, 500);
   } catch (e) { out.treeError = e?.message || String(e); }
   if (eic) {
     const iso = (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : getYesterdayIso();

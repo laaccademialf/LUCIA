@@ -200,6 +200,11 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
   const [debugOut, setDebugOut] = useState(null);
   const [debugErr, setDebugErr] = useState("");
 
+  const debugTreeMeters = useMemo(() => {
+    if (!Array.isArray(debugOut?.treeMeters)) return [];
+    return debugOut.treeMeters;
+  }, [debugOut]);
+
   const handleDebug = async () => {
     setDebugLoading(true);
     setDebugErr("");
@@ -474,9 +479,44 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
         ) : null}
 
         {debugOut ? (
-          <pre className="mt-3 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-900 p-3 text-xs text-emerald-200">
+          <>
+            {debugOut?.treeSummary ? (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                Дерево лічильників: всього {debugOut.treeSummary.totalNodes || 0},
+                з EIC: {debugOut.treeSummary.withEic || 0},
+                без EIC: {debugOut.treeSummary.withoutEic || 0}
+              </div>
+            ) : null}
+
+            {debugTreeMeters.length ? (
+              <div className="mt-3 max-h-64 overflow-auto rounded-lg border border-slate-200">
+                <table className="min-w-full text-xs">
+                  <thead className="bg-slate-100 text-slate-700">
+                    <tr>
+                      <th className="px-2 py-1 text-left font-semibold">idnode</th>
+                      <th className="px-2 py-1 text-left font-semibold">objref</th>
+                      <th className="px-2 py-1 text-left font-semibold">eiccode</th>
+                      <th className="px-2 py-1 text-left font-semibold">name</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {debugTreeMeters.map((m, idx) => (
+                      <tr key={`${m.idnode}-${m.objref}-${idx}`} className="border-t border-slate-100">
+                        <td className="px-2 py-1 font-mono text-slate-800">{m.idnode || "—"}</td>
+                        <td className="px-2 py-1 font-mono text-slate-800">{m.objref || "—"}</td>
+                        <td className="px-2 py-1 font-mono text-slate-800">{m.eiccode || "—"}</td>
+                        <td className="px-2 py-1 text-slate-800">{m.name || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            <pre className="mt-3 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-900 p-3 text-xs text-emerald-200">
 {JSON.stringify(debugOut, null, 2)}
-          </pre>
+            </pre>
+          </>
         ) : null}
       </Section>
     </div>
