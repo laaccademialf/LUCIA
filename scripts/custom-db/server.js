@@ -4375,6 +4375,10 @@ const handleDeleteRuntimeSettings = async (req, res) => {
 // OPTIONS preflight is always allowed (handled before this gate) so browsers
 // can complete CORS negotiation.
 const PUBLIC_PATHS = new Set(["/health"]);
+// Роути, де дозволяємо аутентифікацію сесією користувача (x-session-token)
+// без обов'язкового глобального API-токена. Додаткова перевірка виконується
+// в самому handler'і через resolveAuthContext/profile.
+const SESSION_AUTH_PATHS = new Set(["/api/print-label"]);
 
 const server = http.createServer(async (req, res) => {
   const method = req.method || "GET";
@@ -4392,7 +4396,12 @@ const server = http.createServer(async (req, res) => {
   // Enforce the global token gate for every non-public route.
   const queryToken = String(requestUrl.searchParams.get("token") || "").trim();
   const hasQueryTokenAccess = Boolean(TOKEN) && queryToken === TOKEN;
-  if (!PUBLIC_PATHS.has(pathname) && !isAuthorized(req) && !hasQueryTokenAccess) {
+  if (
+    !PUBLIC_PATHS.has(pathname) &&
+    !SESSION_AUTH_PATHS.has(pathname) &&
+    !isAuthorized(req) &&
+    !hasQueryTokenAccess
+  ) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
   }
 
