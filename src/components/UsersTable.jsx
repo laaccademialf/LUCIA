@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../hooks/useAuth";
-import { Users, Shield, User, Trash2, AlertCircle, Edit2, X, Save, KeyRound } from "lucide-react";
+import { Users, Shield, User, Trash2, AlertCircle, Edit2, X, Save, KeyRound, Search } from "lucide-react";
 import { getUsers, updateUserRole, deleteUser, updateUser } from "../firebase/users";
 import { getRestaurants } from "../firebase/firestore";
 import { getPositions, getWorkRoles } from "../firebase/rolesPositions";
@@ -19,6 +19,7 @@ export const UsersTable = ({ currentUser }) => {
   const [resettingPasswordUserId, setResettingPasswordUserId] = useState(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
   const [editingUser, setEditingUser] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [editForm, setEditForm] = useState({
     displayName: "",
     email: "",
@@ -74,6 +75,8 @@ export const UsersTable = ({ currentUser }) => {
     if (names.length <= 2) return names.join(", ");
     return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
   };
+
+  const normalizeSearchText = (value) => String(value || "").toLowerCase().trim().replace(/\s+/g, " ");
 
   const handleRoleToggle = async (userId, currentRole) => {
     if (currentUser?.uid === userId) {
@@ -240,13 +243,23 @@ export const UsersTable = ({ currentUser }) => {
         return ids.some((id) => managerRestaurantIds.includes(id));
       })
     : users;
+  const normalizedSearchQuery = normalizeSearchText(searchQuery);
+  const filteredUsers = normalizedSearchQuery
+    ? visibleUsers.filter((user) => {
+        const userName = normalizeSearchText(user.displayName);
+        if (!userName) return false;
+        if (userName.includes(normalizedSearchQuery)) return true;
+        const searchTokens = normalizedSearchQuery.split(" ").filter(Boolean);
+        return searchTokens.every((token) => userName.includes(token));
+      })
+    : visibleUsers;
 
   return (
     <div className="card p-6 bg-white border border-slate-200 shadow-xl">
       <div className="flex items-center gap-3 mb-6">
         <Users className="text-indigo-600" size={24} />
         <h2 className="text-xl font-semibold text-slate-900">Управління користувачами</h2>
-        <span className="ml-auto text-sm text-slate-500">{visibleUsers.length} користувачів</span>
+        <span className="ml-auto text-sm text-slate-500">{filteredUsers.length} з {visibleUsers.length} користувачів</span>
       </div>
 
       {error && (
@@ -270,10 +283,23 @@ export const UsersTable = ({ currentUser }) => {
         </div>
       </div>
 
-      {visibleUsers.length === 0 ? (
+      <div className="mb-4">
+        <div className="relative">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Пошук за прізвищем та іменем"
+            className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+          />
+        </div>
+      </div>
+
+      {filteredUsers.length === 0 ? (
         <div className="text-center py-12 text-slate-500">
           <Users size={48} className="mx-auto mb-3 opacity-50" />
-          <p>Немає користувачів</p>
+          <p>{normalizedSearchQuery ? "Користувачів за таким запитом не знайдено" : "Немає користувачів"}</p>
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -307,7 +333,7 @@ export const UsersTable = ({ currentUser }) => {
               </tr>
             </thead>
             <tbody>
-              {visibleUsers.map((user) => {
+              {filteredUsers.map((user) => {
                 const isCurrentUser = currentUser?.uid === user.id;
                 const isUpdating = updatingUserId === user.id;
                 const isDeleting = deletingUserId === user.id;
