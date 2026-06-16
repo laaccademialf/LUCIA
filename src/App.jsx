@@ -4775,51 +4775,6 @@ function App() {
               )}
               {/* Плашки ліворуч */}
               <div className={clsx("flex items-center gap-3", isMobile ? "flex-1 justify-center md:justify-start ml-2" : "")}>
-                {/* Назва ресторану для всіх */}
-                {(user?.restaurant || user?.restaurantId || user?.restaurant_id || user?.restaurantName || user?.restaurant_name) && (
-                  <div className={clsx("flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg bg-emerald-900/30 border border-emerald-700/50 text-emerald-300", isMobile ? "text-xs max-w-[160px]" : "")}>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                    </svg>
-                    <span className={clsx("font-semibold truncate", isMobile ? "text-xs" : "text-sm")}>
-                      {(() => {
-                        const profileKey = String(
-                          user?.restaurant ||
-                          user?.restaurantId ||
-                          user?.restaurant_id ||
-                          user?.restaurantName ||
-                          user?.restaurant_name ||
-                          ""
-                        ).trim();
-                        const profileDisplayName = String(
-                          user?.restaurantName || user?.restaurant_name || profileKey
-                        ).trim();
-
-                        const effectiveKey =
-                          roleRestaurantIds.length === 1
-                            ? String(roleRestaurantIds[0] || "").trim()
-                            : profileKey;
-
-                        const target = String(effectiveKey || "").trim().toLowerCase();
-                        const allCandidates = Array.isArray(firebaseRestaurants) && firebaseRestaurants.length > 0
-                          ? firebaseRestaurants
-                          : restaurants;
-                        const matched = allCandidates.find((r) => {
-                          const id = String(r?.id || "").trim();
-                          const name = String(r?.name || "").trim().toLowerCase();
-                          const reg = String(r?.regNumber || r?.reg_number || "").trim();
-                          return id === effectiveKey || reg === effectiveKey || name === target;
-                        });
-
-                        if (matched?.name) return matched.name;
-                        if (restaurants.length === 1) return String(restaurants[0]?.name || "").trim() || "Невідомий ресторан";
-                        if (profileDisplayName) return profileDisplayName;
-                        return "Невідомий ресторан";
-                      })()}
-                    </span>
-                  </div>
-                )}
-                
                 {/* Робоча роль */}
                 {user?.workRole && (
                   <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-900/30 border border-indigo-700/50 text-indigo-300">
