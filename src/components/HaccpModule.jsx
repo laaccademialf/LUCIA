@@ -4,11 +4,14 @@ import {
   ArrowDown,
   ArrowUp,
   Camera,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   ClipboardCheck,
   Copy,
+  Image as ImageIcon,
+  Images,
   Layers,
   ListChecks,
   Percent,
@@ -16,6 +19,7 @@ import {
   Save,
   ShieldCheck,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { useHaccp } from "../hooks/useHaccp";
@@ -37,7 +41,10 @@ const inputClass =
   "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
 
 const MAX_PHOTOS_PER_ITEM = 5;
-const MAX_PHOTO_SIZE = 5 * 1024 * 1024;
+const MAX_GALLERY_PHOTOS = 60;
+const MAX_PHOTO_SIZE = 15 * 1024 * 1024;
+const PHOTO_MAX_DIMENSION = 1600;
+const PHOTO_JPEG_QUALITY = 0.72;
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 
@@ -49,6 +56,41 @@ const toDataUrl = (file) =>
     reader.readAsDataURL(file);
   });
 
+// Стискаємо фото на клієнті: зменшуємо розмір і кодуємо у JPEG,
+// щоб рядок аудиту в БД залишався компактним навіть за десятків знімків.
+const compressImage = (file) =>
+  new Promise((resolve) => {
+    if (!file?.type?.startsWith("image/") || file.type === "image/gif") {
+      toDataUrl(file).then(resolve).catch(() => resolve(null));
+      return;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, PHOTO_MAX_DIMENSION / Math.max(img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", PHOTO_JPEG_QUALITY);
+        URL.revokeObjectURL(objectUrl);
+        resolve(dataUrl);
+      } catch {
+        URL.revokeObjectURL(objectUrl);
+        toDataUrl(file).then(resolve).catch(() => resolve(null));
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      toDataUrl(file).then(resolve).catch(() => resolve(null));
+    };
+    img.src = objectUrl;
+  });
+
 const formatDisplayDate = (value) => {
   if (!value || typeof value !== "string") return "—";
   const [y, m, d] = value.split("-");
@@ -58,9 +100,799 @@ const formatDisplayDate = (value) => {
 
 const normalizeHaccpTab = (tab = "") => {
   const value = String(tab).toLowerCase();
+  if (value.includes("report") || value.includes("звіт") || value.includes("reprit")) return "report";
   if (value.includes("templ") || value.includes("шаблон") || value.includes("shablon")) return "templates";
   return "audit";
 };
+
+const getUserRestaurantIds = (user) => {
+  if (Array.isArray(user?.restaurants) && user.restaurants.length > 0) {
+    return user.restaurants.map((id) => String(id || "").trim()).filter(Boolean);
+  }
+  const single = String(user?.restaurant || user?.restaurantId || user?.restaurant_id || "").trim();
+  return single ? [single] : [];
+};
+
+const getAuditSortKey = (audit) => {
+  const completedAt = Date.parse(String(audit?.completedAt || ""));
+  if (Number.isFinite(completedAt)) return completedAt;
+  const updatedAt = Date.parse(String(audit?.updatedAt || ""));
+  if (Number.isFinite(updatedAt)) return updatedAt;
+  const dateTs = Date.parse(String(audit?.date || ""));
+  if (Number.isFinite(dateTs)) return dateTs;
+  return 0;
+};
+
+const scoreTrafficLight = (score) => {
+  const value = Number(score) || 0;
+  if (value >= 90) return { label: "Зелений", className: "bg-emerald-100 text-emerald-800 border-emerald-300" };
+  if (value >= 75) return { label: "Жовтий", className: "bg-amber-100 text-amber-800 border-amber-300" };
+  return { label: "Червоний", className: "bg-red-100 text-red-800 border-red-300" };
+};
+
+const countCriticalViolations = (responses) =>
+  Object.values(responses || {}).reduce((acc, response) => (Number(response?.value) === 0 ? acc + 1 : acc), 0);
+
+const collectIssueItemIds = (responses) => {
+  const ids = new Set();
+  Object.entries(responses || {}).forEach(([itemId, response]) => {
+    const value = response?.value;
+    if (value === null || value === undefined) return;
+    if (Number(value) < 2) ids.add(String(itemId));
+  });
+  return ids;
+};
+
+const MONTH_OPTIONS_UA = [
+  { value: "01", label: "Січень" },
+  { value: "02", label: "Лютий" },
+  { value: "03", label: "Березень" },
+  { value: "04", label: "Квітень" },
+  { value: "05", label: "Травень" },
+  { value: "06", label: "Червень" },
+  { value: "07", label: "Липень" },
+  { value: "08", label: "Серпень" },
+  { value: "09", label: "Вересень" },
+  { value: "10", label: "Жовтень" },
+  { value: "11", label: "Листопад" },
+  { value: "12", label: "Грудень" },
+];
+
+function HaccpReportTab({ user, restaurants, templates, audits }) {
+  const ALL_LOCATIONS_VALUE = "__ALL__";
+  const isAdmin = user?.role === "admin";
+  const userRestaurantIds = getUserRestaurantIds(user);
+
+  const availableRestaurants = useMemo(() => {
+    const list = Array.isArray(restaurants) ? restaurants : [];
+    if (isAdmin) return list;
+    if (!userRestaurantIds.length) return list;
+    const allowed = new Set(userRestaurantIds.map(String));
+    return list.filter((item) => allowed.has(String(item?.id || "")));
+  }, [restaurants, isAdmin, userRestaurantIds]);
+
+  const [selectedRestaurantId, setSelectedRestaurantId] = useState(ALL_LOCATIONS_VALUE);
+  const [selectedAuditIds, setSelectedAuditIds] = useState([]);
+  const [selectionInitialized, setSelectionInitialized] = useState(false);
+  const [showCriticalDetails, setShowCriticalDetails] = useState(false);
+  const [galleryLightboxPhoto, setGalleryLightboxPhoto] = useState(null);
+  const [periodFromMonth, setPeriodFromMonth] = useState("");
+  const [periodFromYear, setPeriodFromYear] = useState("");
+  const [periodToMonth, setPeriodToMonth] = useState("");
+  const [periodToYear, setPeriodToYear] = useState("");
+
+  useEffect(() => {
+    if (selectedRestaurantId === ALL_LOCATIONS_VALUE) return;
+    if (!availableRestaurants.length) {
+      setSelectedRestaurantId(ALL_LOCATIONS_VALUE);
+      return;
+    }
+    const exists = availableRestaurants.some((item) => String(item.id) === String(selectedRestaurantId));
+    if (!exists) setSelectedRestaurantId(ALL_LOCATIONS_VALUE);
+  }, [availableRestaurants, selectedRestaurantId]);
+
+  const auditsByLocation = useMemo(() => {
+    const allowedRestaurantIds = new Set(availableRestaurants.map((item) => String(item.id || "")).filter(Boolean));
+    return (audits || [])
+      .filter((audit) => {
+        const auditRestaurantId = String(audit?.restaurantId || "");
+        if (!isAdmin && allowedRestaurantIds.size > 0 && !allowedRestaurantIds.has(auditRestaurantId)) return false;
+        if (selectedRestaurantId === ALL_LOCATIONS_VALUE) return true;
+        return auditRestaurantId === String(selectedRestaurantId || "");
+      })
+      .sort((a, b) => getAuditSortKey(b) - getAuditSortKey(a));
+  }, [audits, availableRestaurants, isAdmin, selectedRestaurantId]);
+
+  const availablePeriodYears = useMemo(() => {
+    return Array.from(
+      new Set(
+        auditsByLocation
+          .map((audit) => String(audit?.date || "").slice(0, 4))
+          .filter((year) => /^\d{4}$/.test(year))
+      )
+    ).sort((a, b) => a.localeCompare(b));
+  }, [auditsByLocation]);
+
+  useEffect(() => {
+    const monthValues = auditsByLocation
+      .map((audit) => String(audit?.date || "").slice(0, 7))
+      .filter((value) => /^\d{4}-\d{2}$/.test(value))
+      .sort((a, b) => a.localeCompare(b));
+    if (!monthValues.length) {
+      if (periodFromMonth) setPeriodFromMonth("");
+      if (periodFromYear) setPeriodFromYear("");
+      if (periodToMonth) setPeriodToMonth("");
+      if (periodToYear) setPeriodToYear("");
+      return;
+    }
+
+    const [firstYear, firstMonth] = monthValues[0].split("-");
+    const [lastYear, lastMonth] = monthValues[monthValues.length - 1].split("-");
+
+    if (!periodFromYear) setPeriodFromYear(firstYear);
+    if (!periodFromMonth) setPeriodFromMonth(firstMonth);
+    if (!periodToYear) setPeriodToYear(lastYear);
+    if (!periodToMonth) setPeriodToMonth(lastMonth);
+  }, [auditsByLocation, periodFromMonth, periodFromYear, periodToMonth, periodToYear]);
+
+  const filteredAudits = useMemo(() => {
+    const fromCandidate = periodFromYear && periodFromMonth ? `${periodFromYear}-${periodFromMonth}` : "";
+    const toCandidate = periodToYear && periodToMonth ? `${periodToYear}-${periodToMonth}` : "";
+
+    if (!fromCandidate && !toCandidate) return auditsByLocation;
+
+    const fromKey = fromCandidate && toCandidate && fromCandidate > toCandidate ? toCandidate : fromCandidate;
+    const toKey = fromCandidate && toCandidate && fromCandidate > toCandidate ? fromCandidate : toCandidate;
+
+    return auditsByLocation.filter((audit) => {
+      const monthKey = String(audit?.date || "").slice(0, 7);
+      if (!/^\d{4}-\d{2}$/.test(monthKey)) return false;
+      if (fromKey && monthKey < fromKey) return false;
+      if (toKey && monthKey > toKey) return false;
+      return true;
+    });
+  }, [auditsByLocation, periodFromMonth, periodFromYear, periodToMonth, periodToYear]);
+
+  useEffect(() => {
+    if (!filteredAudits.length) {
+      if (selectedAuditIds.length) setSelectedAuditIds([]);
+      if (selectionInitialized) setSelectionInitialized(false);
+      return;
+    }
+
+    const allowed = new Set(filteredAudits.map((audit) => String(audit.id)));
+    const sanitized = selectedAuditIds.filter((id) => allowed.has(String(id)));
+    if (sanitized.length !== selectedAuditIds.length) {
+      setSelectedAuditIds(sanitized);
+      return;
+    }
+
+    if (!selectionInitialized) {
+      setSelectionInitialized(true);
+      setSelectedAuditIds(filteredAudits.slice(0, 5).map((audit) => String(audit.id)));
+    }
+  }, [filteredAudits, selectedAuditIds, selectionInitialized]);
+
+  const templatesById = useMemo(() => {
+    const map = new Map();
+    (templates || []).forEach((template) => map.set(String(template.id), template));
+    return map;
+  }, [templates]);
+
+  const selectedAudits = useMemo(() => {
+    const selected = new Set(selectedAuditIds.map(String));
+    return filteredAudits.filter((audit) => selected.has(String(audit.id)));
+  }, [filteredAudits, selectedAuditIds]);
+
+  const galleryAudits = useMemo(() => {
+    return selectedAudits.map((audit) => {
+      const template = templatesById.get(String(audit?.templateId || "")) || null;
+      const responses = audit?.responses && typeof audit.responses === "object" ? audit.responses : {};
+      const galleryById = new Map(
+        (Array.isArray(audit?.gallery) ? audit.gallery : [])
+          .filter((photo) => photo?.dataUrl)
+          .map((photo) => [String(photo?.id || ""), photo])
+      );
+
+      const mapItemPhotos = (itemId) => {
+        const response = responses?.[itemId] || {};
+        const byIds = (Array.isArray(response?.photoIds) ? response.photoIds : [])
+          .map((photoId) => galleryById.get(String(photoId || "")))
+          .filter(Boolean);
+        const legacy = (Array.isArray(response?.photos) ? response.photos : []).filter((photo) => photo?.dataUrl);
+        const dedup = new Set();
+        return [...byIds, ...legacy].filter((photo) => {
+          const key = String(photo?.id || photo?.dataUrl || "");
+          if (!key || dedup.has(key)) return false;
+          dedup.add(key);
+          return true;
+        });
+      };
+
+      const blocks = (template?.sections || [])
+        .slice()
+        .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+        .map((section) => {
+          const categories = (section?.items || [])
+            .slice()
+            .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+            .map((sectionItem) => {
+              const photos = mapItemPhotos(String(sectionItem?.id || ""));
+              return {
+                id: String(sectionItem?.id || ""),
+                title: String(sectionItem?.title || "Категорія без назви"),
+                photos,
+              };
+            })
+            .filter((category) => category.photos.length > 0);
+
+          return {
+            id: String(section?.id || ""),
+            title: String(section?.title || "Блок без назви"),
+            categories,
+          };
+        })
+        .filter((block) => block.categories.length > 0);
+
+      const totalPhotos = blocks.reduce(
+        (sum, block) => sum + block.categories.reduce((acc, category) => acc + category.photos.length, 0),
+        0
+      );
+
+      return {
+        auditId: String(audit?.id || ""),
+        label: `${formatDisplayDate(audit?.date)} · ${String(audit?.restaurantName || "Локація")}`,
+        blocks,
+        totalPhotos,
+      };
+    });
+  }, [selectedAudits, templatesById]);
+
+  const auditsForMetrics = selectedAudits.length ? selectedAudits : filteredAudits;
+
+  const metrics = useMemo(
+    () =>
+      auditsForMetrics.map((audit) => {
+        const responses = audit?.responses && typeof audit.responses === "object" ? audit.responses : {};
+        const template = templatesById.get(String(audit?.templateId || "")) || null;
+        const scoreValue = Number(audit?.totalPercent);
+        const fallbackScore = computeHaccpScores(template, responses).totalPercent;
+        const score = Number.isFinite(scoreValue) ? scoreValue : fallbackScore;
+        return {
+          ...audit,
+          score,
+          critical: countCriticalViolations(responses),
+          responses,
+          sortKey: getAuditSortKey(audit),
+        };
+      }),
+    [auditsForMetrics, templatesById]
+  );
+
+  const criticalDetails = useMemo(() => {
+    return metrics
+      .map((audit) => {
+        const template = templatesById.get(String(audit?.templateId || "")) || null;
+        const itemTitleById = new Map();
+        (template?.sections || []).forEach((section) => {
+          (section?.items || []).forEach((item) => {
+            itemTitleById.set(String(item?.id || ""), String(item?.title || ""));
+          });
+        });
+
+        const items = Object.entries(audit?.responses || {})
+          .filter(([, response]) => Number(response?.value) === 0)
+          .map(([itemId]) => ({
+            itemId,
+            title: itemTitleById.get(String(itemId)) || `Пункт ${itemId}`,
+          }));
+
+        if (!items.length) return null;
+
+        return {
+          auditId: String(audit?.id || ""),
+          auditLabel: `${formatDisplayDate(audit?.date)} · ${String(audit?.restaurantName || "Локація")}`,
+          items,
+        };
+      })
+      .filter(Boolean);
+  }, [metrics, templatesById]);
+
+  const trendSeries = useMemo(() => [...metrics].sort((a, b) => a.sortKey - b.sortKey), [metrics]);
+
+  const avgScore = metrics.length
+    ? roundPercent(metrics.reduce((acc, item) => acc + (Number(item.score) || 0), 0) / metrics.length)
+    : 0;
+  const traffic = scoreTrafficLight(avgScore);
+  const criticalCount = metrics.reduce((acc, item) => acc + (Number(item.critical) || 0), 0);
+
+  const dynamics = useMemo(() => {
+    if (trendSeries.length < 2) return null;
+    const base = trendSeries[0];
+    const latest = trendSeries[trendSeries.length - 1];
+    const prevIssues = collectIssueItemIds(base.responses);
+    if (prevIssues.size === 0) return null;
+
+    let fixed = 0;
+    prevIssues.forEach((itemId) => {
+      const valueNow = latest.responses?.[itemId]?.value;
+      if (valueNow !== null && valueNow !== undefined && Number(valueNow) === 2) fixed += 1;
+    });
+
+    let improved = 0;
+    let worsened = 0;
+    let unchanged = 0;
+
+    const allItemIds = new Set([...Object.keys(base.responses || {}), ...Object.keys(latest.responses || {})]);
+    allItemIds.forEach((itemId) => {
+      const from = Number(base.responses?.[itemId]?.value);
+      const to = Number(latest.responses?.[itemId]?.value);
+      if (!Number.isFinite(from) || !Number.isFinite(to)) return;
+      if (to > from) improved += 1;
+      else if (to < from) worsened += 1;
+      else unchanged += 1;
+    });
+
+    return {
+      percent: roundPercent((fixed / prevIssues.size) * 100),
+      fixed,
+      total: prevIssues.size,
+      improved,
+      worsened,
+      unchanged,
+      base,
+      latest,
+    };
+  }, [trendSeries]);
+
+  const technicalInfo = useMemo(() => {
+    if (!metrics.length) {
+      return {
+        dateLabel: "—",
+        technologistLabel: "—",
+        locationLabel: "—",
+      };
+    }
+
+    const dateValues = metrics.map((item) => String(item.date || "")).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    const firstDate = dateValues[0] || "";
+    const lastDate = dateValues[dateValues.length - 1] || "";
+    const dateLabel = firstDate && lastDate
+      ? (firstDate === lastDate ? formatDisplayDate(firstDate) : `${formatDisplayDate(firstDate)} - ${formatDisplayDate(lastDate)}`)
+      : "—";
+
+    const technologists = Array.from(
+      new Set(
+        metrics
+          .map((item) => String(item.completedByName || item.updatedByName || item.createdByName || "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    const locations = Array.from(
+      new Set(
+        metrics
+          .map((item) => String(item.restaurantName || "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    const technologistLabel = technologists.length ? technologists.join(", ") : "—";
+    const locationLabel = locations.length > 3
+      ? `${locations.slice(0, 3).join(", ")} +${locations.length - 3}`
+      : (locations.join(", ") || "—");
+
+    return { dateLabel, technologistLabel, locationLabel };
+  }, [metrics]);
+
+  const toggleAuditSelection = (auditId) => {
+    const id = String(auditId || "");
+    if (!id) return;
+    setSelectedAuditIds((prev) => {
+      if (prev.includes(id)) return prev.filter((item) => item !== id);
+      return [id, ...prev];
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className={cardClass}>
+        <div className="mb-4 flex items-center gap-2">
+          <ShieldCheck size={18} className="text-emerald-600" />
+          <h2 className="text-lg font-semibold">HACCP звіт</h2>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3">
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Локація</label>
+            <select className={inputClass} value={selectedRestaurantId} onChange={(e) => setSelectedRestaurantId(e.target.value)}>
+              <option value="">Оберіть локацію</option>
+              <option value={ALL_LOCATIONS_VALUE}>Всі локації</option>
+              {availableRestaurants.map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Період від</label>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              <select className={inputClass.replace("mt-1 ", "")} value={periodFromMonth} onChange={(e) => setPeriodFromMonth(e.target.value)}>
+                <option value="">Місяць</option>
+                {MONTH_OPTIONS_UA.map((month) => (
+                  <option key={month.value} value={month.value}>{month.label}</option>
+                ))}
+              </select>
+              <select className={inputClass.replace("mt-1 ", "")} value={periodFromYear} onChange={(e) => setPeriodFromYear(e.target.value)}>
+                <option value="">Рік</option>
+                {availablePeriodYears.map((year) => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="text-sm font-semibold text-slate-800">Період до</label>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              <select className={inputClass.replace("mt-1 ", "")} value={periodToMonth} onChange={(e) => setPeriodToMonth(e.target.value)}>
+                <option value="">Місяць</option>
+                {MONTH_OPTIONS_UA.map((month) => (
+                  <option key={month.value} value={month.value}>{month.label}</option>
+                ))}
+              </select>
+              <select className={inputClass.replace("mt-1 ", "")} value={periodToYear} onChange={(e) => setPeriodToYear(e.target.value)}>
+                <option value="">Рік</option>
+                {availablePeriodYears.map((year) => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800">
+            Меню вибору чек-листів для інфографіки
+            <span className="ml-2 text-xs font-medium text-slate-500">(обрано: {auditsForMetrics.length})</span>
+          </summary>
+
+          <div className="mt-3">
+            <div className="mb-2 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedAuditIds(filteredAudits.map((audit) => String(audit.id)))}
+                className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-white"
+              >
+                Обрати всі
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedAuditIds([])}
+                className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-white"
+              >
+                Очистити
+              </button>
+            </div>
+            <div className="max-h-44 overflow-y-auto rounded-lg border border-slate-200 bg-white p-2">
+              <div className="grid grid-cols-1 gap-1 md:grid-cols-2">
+                {filteredAudits.map((audit) => {
+                  const auditId = String(audit.id || "");
+                  const checked = selectedAuditIds.includes(auditId);
+                  return (
+                    <label key={auditId} className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+                      <input type="checkbox" checked={checked} onChange={() => toggleAuditSelection(auditId)} className="mt-0.5" />
+                      <span className="leading-relaxed">
+                        {formatDisplayDate(audit?.date)} · {String(audit?.restaurantName || "Локація")} · {String(audit?.templateName || "Без шаблону")}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      {!filteredAudits.length ? (
+        <div className={cardClass}>
+          <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+            Немає проведених HACCP-аудитів для обраної локації в межах обраного періоду.
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <div className={cardClass}>
+              <p className="text-sm font-semibold text-slate-800">HACCP Score</p>
+              <div className="mt-2 flex items-center gap-3">
+                <span className="text-4xl font-extrabold text-slate-900">{roundPercent(avgScore)}%</span>
+                <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-bold ${traffic.className}`}>
+                  {traffic.label}
+                </span>
+              </div>
+              <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className={`h-full rounded-full transition-all ${gradeBandFor(avgScore).barClass}`} style={{ width: `${Math.min(100, Math.max(0, roundPercent(avgScore)))}%` }} />
+              </div>
+              <p className="mt-2 text-xs text-slate-500">Середня оцінка за обраними чек-листами.</p>
+            </div>
+
+            <div className={cardClass}>
+              <p className="text-sm font-semibold text-slate-800">Технічна інформація</p>
+              <div className="mt-2 grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-xs text-slate-500">Дата перевірок</p>
+                  <p className="font-semibold text-slate-900">{technicalInfo.dateLabel}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-xs text-slate-500">Технолог(и)</p>
+                  <p className="font-semibold text-slate-900">{technicalInfo.technologistLabel}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 md:col-span-2">
+                  <p className="text-xs text-slate-500">Локація</p>
+                  <p className="font-semibold text-slate-900">{technicalInfo.locationLabel}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className={cardClass}>
+              <button
+                type="button"
+                onClick={() => setShowCriticalDetails((prev) => !prev)}
+                className="w-full text-left"
+              >
+                <p className="text-sm font-semibold text-slate-800">Критичні порушення</p>
+                <div className="mt-2 inline-flex items-center rounded-xl border border-red-300 bg-red-600 px-3 py-2 text-3xl font-extrabold text-white shadow-sm">
+                  {criticalCount}
+                </div>
+                <p className="mt-2 text-xs text-slate-500">Сумарна кількість пунктів з оцінкою «Погано» у вибраних чек-листах. Натисніть, щоб переглянути деталі.</p>
+              </button>
+
+              {showCriticalDetails && (
+                <div className="mt-3 max-h-56 overflow-y-auto rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-900">
+                  {criticalDetails.length ? (
+                    <div className="space-y-2">
+                      {criticalDetails.map((group) => (
+                        <div key={group.auditId} className="rounded border border-red-200 bg-white p-2">
+                          <p className="font-semibold text-red-800">{group.auditLabel}</p>
+                          <ul className="mt-1 list-disc pl-4">
+                            {group.items.map((item) => (
+                              <li key={`${group.auditId}_${item.itemId}`}>{item.title}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p>Критичних порушень не знайдено у вибраних чек-листах.</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className={cardClass}>
+              <p className="text-sm font-semibold text-slate-800">Динаміка виправлень</p>
+              {dynamics ? (
+                <>
+                  <div className="mt-2 text-4xl font-extrabold text-slate-900">{dynamics.percent}%</div>
+                  <p className="mt-1 text-sm text-slate-600">Усунено {dynamics.fixed} з {dynamics.total} помилок від найстаршого до найновішого обраного чек-листа.</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">
+                      <ArrowUp size={12} /> Покращено: {dynamics.improved}
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-50 px-2 py-1 font-semibold text-red-700">
+                      <ArrowDown size={12} /> Погіршено: {dynamics.worsened}
+                    </span>
+                    <span className="inline-flex items-center rounded-full border border-slate-300 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
+                      Без змін: {dynamics.unchanged}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">Недостатньо даних для розрахунку (оберіть щонайменше 2 чек-листи).</p>
+              )}
+            </div>
+          </div>
+
+          <div className={cardClass}>
+            <p className="text-sm font-semibold text-slate-800">Інфографіка динаміки чек-листів</p>
+            <p className="mt-1 text-xs text-slate-500">Показує зміну оцінки та критичних порушень по кожному обраному чек-листу.</p>
+
+            {trendSeries.length ? (
+              <div className="mt-3 space-y-2">
+                {trendSeries.map((item, index) => {
+                  const prev = index > 0 ? trendSeries[index - 1] : null;
+                  const scoreDelta = prev ? roundPercent((Number(item.score) || 0) - (Number(prev.score) || 0)) : null;
+                  const isUp = Number(scoreDelta) > 0;
+                  const isDown = Number(scoreDelta) < 0;
+                  const templateForItem = templatesById.get(String(item?.templateId || "")) || null;
+                  const sectionResults = computeHaccpScores(templateForItem, item?.responses || {}).sectionResults;
+                  const sectionRows = (templateForItem?.sections || [])
+                    .slice()
+                    .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+                    .map((section) => {
+                      const sectionId = String(section?.id || "");
+                      const persistedPercent = Number(item?.sectionScores?.[sectionId]);
+                      const computedPercent = Number(sectionResults?.[sectionId]?.percent);
+                      const percent = Number.isFinite(persistedPercent)
+                        ? roundPercent(persistedPercent)
+                        : roundPercent(Number.isFinite(computedPercent) ? computedPercent : 0);
+                      const items = (section?.items || [])
+                        .slice()
+                        .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+                        .map((sectionItem) => {
+                          const sectionItemId = String(sectionItem?.id || "");
+                          const responseValue = item?.responses?.[sectionItemId]?.value;
+                          const rating = RATING_BY_VALUE?.[responseValue];
+                          return {
+                            id: sectionItemId,
+                            title: String(sectionItem?.title || "Пункт без назви"),
+                            ratingLabel: rating?.label || "Не оцінено",
+                            ratingPercent: Number.isFinite(rating?.percent) ? rating.percent : null,
+                          };
+                        });
+                      return {
+                        id: sectionId,
+                        title: String(section?.title || "Без назви категорії"),
+                        percent,
+                        items,
+                      };
+                    });
+
+                  return (
+                    <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+                        <span className="font-semibold text-slate-800">{formatDisplayDate(item.date)} · {String(item.restaurantName || "Локація")}</span>
+                        <span>{String(item.templateName || "Без шаблону")}</span>
+                      </div>
+
+                      <div className="mt-2 flex items-center gap-2">
+                        <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-200">
+                          <div className={`h-full rounded-full ${gradeBandFor(item.score).barClass}`} style={{ width: `${Math.min(100, Math.max(0, roundPercent(item.score)))}%` }} />
+                        </div>
+                        <span className="w-16 text-right text-sm font-bold text-slate-900">{roundPercent(item.score)}%</span>
+                      </div>
+
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                        <span className="inline-flex items-center rounded-full border border-red-300 bg-red-50 px-2 py-1 font-semibold text-red-700">
+                          Критичні: {item.critical}
+                        </span>
+                        {scoreDelta !== null ? (
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 font-semibold ${
+                              isUp
+                                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                                : isDown
+                                  ? "border-red-300 bg-red-50 text-red-700"
+                                  : "border-slate-300 bg-slate-50 text-slate-700"
+                            }`}
+                          >
+                            {isUp ? <ArrowUp size={12} /> : isDown ? <ArrowDown size={12} /> : null}
+                            Δ оцінки: {scoreDelta > 0 ? `+${scoreDelta}` : scoreDelta}%
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center rounded-full border border-slate-300 bg-slate-50 px-2 py-1 font-semibold text-slate-700">Базова точка</span>
+                        )}
+                      </div>
+
+                      <details className="mt-2 rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                        <summary className="cursor-pointer text-xs font-semibold text-slate-700">Категорії та оцінки чек-листа</summary>
+                        <div className="mt-2 space-y-1.5">
+                          {sectionRows.length ? (
+                            sectionRows.map((section) => (
+                              <details key={`${item.id}_${section.id}`} className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs">
+                                <summary className="cursor-pointer list-none">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="truncate text-slate-700">{section.title}</span>
+                                    <span className="font-semibold text-slate-900">{section.percent}%</span>
+                                  </div>
+                                </summary>
+                                <div className="mt-1.5 space-y-1">
+                                  {section.items.length ? (
+                                    section.items.map((sectionItem) => (
+                                      <div key={`${section.id}_${sectionItem.id}`} className="flex items-start justify-between gap-2 rounded border border-slate-200 bg-white px-2 py-1">
+                                        <span className="text-slate-700">{sectionItem.title}</span>
+                                        <span className="shrink-0 font-semibold text-slate-900">
+                                          {sectionItem.ratingLabel}
+                                          {sectionItem.ratingPercent !== null ? ` (${sectionItem.ratingPercent}%)` : ""}
+                                        </span>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <p className="text-xs text-slate-500">У категорії немає пунктів.</p>
+                                  )}
+                                </div>
+                              </details>
+                            ))
+                          ) : (
+                            <p className="text-xs text-slate-500">Для цього чек-листа немає доступних категорій.</p>
+                          )}
+                        </div>
+                      </details>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-slate-500">Немає даних для побудови інфографіки.</p>
+            )}
+          </div>
+
+          <div className={cardClass}>
+            <div className="flex items-center gap-2">
+              <Images size={16} className="text-emerald-600" />
+              <p className="text-sm font-semibold text-slate-800">Галерея фото чек-листів</p>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">Показує фото, які були додані під час проведення вибраних чек-листів.</p>
+
+            {!selectedAudits.length ? (
+              <p className="mt-3 text-sm text-slate-500">Оберіть чек-лист у меню вибору, щоб переглянути фото.</p>
+            ) : (
+              <div className="mt-3 space-y-3">
+                {galleryAudits.map((auditGroup) => (
+                  <div key={auditGroup.auditId} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-slate-700">{auditGroup.label}</p>
+                      <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                        Фото: {auditGroup.totalPhotos}
+                      </span>
+                    </div>
+
+                    {auditGroup.blocks.length ? (
+                      <div className="mt-2 space-y-2">
+                        {auditGroup.blocks.map((block) => (
+                          <details key={`${auditGroup.auditId}_${block.id}`} className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                            <summary className="cursor-pointer list-none text-xs font-semibold text-slate-700">
+                              {block.title}
+                            </summary>
+
+                            <div className="mt-2 space-y-2">
+                              {block.categories.map((category) => (
+                                <details key={`${auditGroup.auditId}_${block.id}_${category.id}`} className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
+                                  <summary className="cursor-pointer list-none text-xs text-slate-700">
+                                    {category.title}
+                                    <span className="ml-1 text-slate-500">({category.photos.length})</span>
+                                  </summary>
+
+                                  <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+                                    {category.photos.map((photo, index) => (
+                                      <button
+                                        key={`${auditGroup.auditId}_${block.id}_${category.id}_${photo?.id || index}`}
+                                        type="button"
+                                        onClick={() => setGalleryLightboxPhoto(photo)}
+                                        className="group relative overflow-hidden rounded-lg border border-slate-200 bg-white"
+                                        title={photo?.name || "Фото чек-листа"}
+                                      >
+                                        <img
+                                          src={photo.dataUrl}
+                                          alt={photo?.name || "Фото чек-листа"}
+                                          className="h-24 w-full object-cover transition group-hover:scale-[1.02]"
+                                        />
+                                      </button>
+                                    ))}
+                                  </div>
+                                </details>
+                              ))}
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-xs text-slate-500">У цьому чек-листі немає фото, прив'язаних до блоків/категорій.</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      <PhotoLightbox photo={galleryLightboxPhoto} onClose={() => setGalleryLightboxPhoto(null)} />
+    </div>
+  );
+}
 
 const findAuditFor = (audits, restaurantId, templateId, date) =>
   (audits || []).find(
@@ -77,6 +909,51 @@ const distributeEqually = (count) => {
   const used = base * count;
   weights[count - 1] = Math.round((weights[count - 1] + (100 - used)) * 10) / 10;
   return weights;
+};
+
+// Нормалізація фото аудиту: галерея — єдине джерело зображень,
+// а пункти лише посилаються на них через photoIds. Підтримуємо
+// зворотну сумісність зі старим форматом (фото прямо в пункті).
+const migrateAuditPhotos = (rawGallery, rawResponses) => {
+  const gallery = [];
+  const knownIds = new Set();
+  const pushPhoto = (photo) => {
+    if (!photo || !photo.dataUrl) return null;
+    let id = photo.id;
+    if (id && knownIds.has(id)) return id;
+    if (!id) id = makeHaccpId();
+    gallery.push({
+      id,
+      name: photo.name || "Фото",
+      type: photo.type || "image/jpeg",
+      dataUrl: photo.dataUrl,
+      addedAt: photo.addedAt || "",
+    });
+    knownIds.add(id);
+    return id;
+  };
+
+  (Array.isArray(rawGallery) ? rawGallery : []).forEach(pushPhoto);
+
+  const responses = {};
+  Object.entries(rawResponses || {}).forEach(([itemId, resp]) => {
+    if (!resp || typeof resp !== "object") {
+      responses[itemId] = resp;
+      return;
+    }
+    const next = { ...resp };
+    if (Array.isArray(resp.photos) && resp.photos.length) {
+      const migratedIds = resp.photos.map(pushPhoto).filter(Boolean);
+      const existing = Array.isArray(resp.photoIds) ? resp.photoIds.filter((id) => knownIds.has(id)) : [];
+      next.photoIds = Array.from(new Set([...existing, ...migratedIds]));
+      delete next.photos;
+    } else {
+      next.photoIds = Array.isArray(resp.photoIds) ? resp.photoIds.filter((id) => knownIds.has(id)) : [];
+    }
+    responses[itemId] = next;
+  });
+
+  return { gallery, responses };
 };
 
 function WeightSumBadge({ sum, target = 100, label }) {
@@ -103,6 +980,251 @@ function ScoreBadge({ percent }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Перегляд фото на повний екран                                       */
+/* ------------------------------------------------------------------ */
+
+function PhotoLightbox({ photo, onClose }) {
+  useEffect(() => {
+    if (!photo) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [photo, onClose]);
+
+  if (!photo) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4" onClick={onClose}>
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white transition hover:bg-white/20"
+      >
+        <X size={20} />
+      </button>
+      <figure className="max-w-3xl" onClick={(e) => e.stopPropagation()}>
+        <img src={photo.dataUrl} alt={photo.name || "фото"} className="max-h-[80vh] w-auto rounded-lg object-contain" />
+        {photo.name ? <figcaption className="mt-2 text-center text-sm text-white/80">{photo.name}</figcaption> : null}
+      </figure>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Галерея фото аудиту (спільний пул знімків сесії)                    */
+/* ------------------------------------------------------------------ */
+
+function PhotoGalleryPanel({ photos, assignmentCount, collapsed, onToggle, onAddFiles, onRemove, onPreview, disabled }) {
+  const total = photos.length;
+  const assigned = photos.filter((photo) => (assignmentCount[photo.id] || 0) > 0).length;
+  const unassigned = total - assigned;
+
+  return (
+    <div className={cardClass}>
+      <button type="button" onClick={onToggle} className="flex w-full items-center justify-between gap-3 text-left">
+        <div className="flex min-w-0 items-center gap-2">
+          <ImageIcon size={17} className="shrink-0 text-emerald-600" />
+          <div className="min-w-0">
+            <p className="font-semibold text-slate-900">Галерея фото</p>
+            <p className="text-xs text-slate-500">Зробіть усі знімки під час обходу, а потім прикріпіть їх до пунктів нижче.</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {total > 0 ? (
+            <div className="hidden items-center gap-1.5 text-[11px] font-semibold sm:flex">
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">{total}</span>
+              {unassigned > 0 ? (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">не призначено: {unassigned}</span>
+              ) : (
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">усі прикріплені</span>
+              )}
+            </div>
+          ) : null}
+          {collapsed ? <ChevronDown size={18} className="text-slate-400" /> : <ChevronUp size={18} className="text-slate-400" />}
+        </div>
+      </button>
+
+      {!collapsed ? (
+        <div className="mt-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <label
+              className={`inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 ${
+                disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+              }`}
+            >
+              <Camera size={15} /> Зробити фото
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                disabled={disabled}
+                className="hidden"
+                onChange={(e) => {
+                  onAddFiles(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            <label
+              className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 ${
+                disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+              }`}
+            >
+              <Upload size={15} /> Завантажити
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                disabled={disabled}
+                className="hidden"
+                onChange={(e) => {
+                  onAddFiles(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+            <span className="text-xs text-slate-400">{total}/{MAX_GALLERY_PHOTOS}</span>
+          </div>
+
+          {total > 0 ? (
+            <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
+              {photos.map((photo) => {
+                const count = assignmentCount[photo.id] || 0;
+                return (
+                  <div key={photo.id} className="relative shrink-0">
+                    <button type="button" onClick={() => onPreview(photo)} className="block">
+                      <img
+                        src={photo.dataUrl}
+                        alt={photo.name || "фото"}
+                        className="h-24 w-24 rounded-lg border border-slate-200 object-cover"
+                      />
+                    </button>
+                    <span
+                      className={`absolute left-1 top-1 inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold text-white ${
+                        count > 0 ? "bg-emerald-600" : "bg-amber-500"
+                      }`}
+                    >
+                      {count > 0 ? `×${count}` : "—"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onRemove(photo.id)}
+                      className="absolute -right-1.5 -top-1.5 rounded-full bg-red-600 p-0.5 text-white shadow transition hover:bg-red-500"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-xs text-slate-400">
+              Фото ще не додані. Зробіть знімки під час обходу — потім прикріпите їх до виявлених невідповідностей.
+            </p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Пікер: вибір фото з галереї для конкретного пункту                  */
+/* ------------------------------------------------------------------ */
+
+function PhotoPickerModal({ open, itemLabel, photos, selectedIds, max, onToggle, onAddFiles, onClose }) {
+  if (!open) return null;
+  const selectedSet = new Set(selectedIds);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+          <div className="min-w-0">
+            <p className="font-semibold text-slate-900">Прикріпити фото</p>
+            {itemLabel ? <p className="truncate text-xs text-slate-500">{itemLabel}</p> : null}
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full p-1.5 text-slate-400 transition hover:bg-slate-100">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-2">
+          <span className="text-xs text-slate-500">Обрано {selectedIds.length}/{max}</span>
+          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">
+            <Plus size={13} /> Додати нові
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                onAddFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {photos.length ? (
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+              {photos.map((photo) => {
+                const selected = selectedSet.has(photo.id);
+                const blocked = !selected && selectedIds.length >= max;
+                return (
+                  <button
+                    key={photo.id}
+                    type="button"
+                    onClick={() => (blocked ? null : onToggle(photo.id))}
+                    className={`group relative overflow-hidden rounded-lg border-2 transition ${
+                      selected ? "border-emerald-500" : "border-transparent"
+                    } ${blocked ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`}
+                  >
+                    <img src={photo.dataUrl} alt={photo.name || "фото"} className="h-24 w-full object-cover" />
+                    <span
+                      className={`absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full ${
+                        selected ? "bg-emerald-600 text-white" : "bg-black/40 text-transparent"
+                      }`}
+                    >
+                      <Check size={12} />
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-400">
+              Галерея порожня. Додайте фото кнопкою «Додати нові».
+            </p>
+          )}
+        </div>
+
+        <div className="border-t border-slate-200 px-4 py-3 text-right">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500"
+          >
+            Готово
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Вкладка заповнення аудиту                                           */
 /* ------------------------------------------------------------------ */
 
@@ -120,6 +1242,10 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
   const [submitting, setSubmitting] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState({});
   const [showHistory, setShowHistory] = useState(false);
+  const [gallery, setGallery] = useState([]);
+  const [galleryCollapsed, setGalleryCollapsed] = useState(false);
+  const [picker, setPicker] = useState(null);
+  const [lightbox, setLightbox] = useState(null);
 
   const submitLockRef = useRef(false);
 
@@ -162,11 +1288,14 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
     if (dirty) return;
     const match = findAuditFor(audits, effectiveRestaurantId, selectedTemplateId, selectedDate);
     if (match) {
-      setResponses(match.responses || {});
+      const migrated = migrateAuditPhotos(match.gallery, match.responses);
+      setResponses(migrated.responses);
+      setGallery(migrated.gallery);
       setCurrentAuditId(match.id);
       setStatus(match.status || "draft");
     } else {
       setResponses({});
+      setGallery([]);
       setCurrentAuditId(null);
       setStatus("draft");
     }
@@ -174,6 +1303,22 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
 
   const scores = useMemo(() => computeHaccpScores(selectedTemplate, responses), [selectedTemplate, responses]);
   const sectionWeightSum = useMemo(() => sumWeights(selectedTemplate?.sections), [selectedTemplate]);
+
+  const galleryById = useMemo(() => {
+    const map = new Map();
+    gallery.forEach((photo) => map.set(photo.id, photo));
+    return map;
+  }, [gallery]);
+
+  const assignmentCount = useMemo(() => {
+    const counts = {};
+    Object.values(responses).forEach((resp) => {
+      (Array.isArray(resp?.photoIds) ? resp.photoIds : []).forEach((id) => {
+        counts[id] = (counts[id] || 0) + 1;
+      });
+    });
+    return counts;
+  }, [responses]);
 
   const sortedSections = useMemo(() => {
     const sections = Array.isArray(selectedTemplate?.sections) ? [...selectedTemplate.sections] : [];
@@ -188,34 +1333,100 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
   const handleRating = (itemId, value) => updateResponse(itemId, { value });
   const handleComment = (itemId, comment) => updateResponse(itemId, { comment });
 
-  const handleAddPhotos = async (itemId, fileList) => {
-    const files = Array.from(fileList || []);
-    if (!files.length) return;
-    const existing = responses[itemId]?.photos || [];
-    const room = Math.max(0, MAX_PHOTOS_PER_ITEM - existing.length);
+  // Перетворюємо файли на стиснені фото та додаємо їх у спільну галерею аудиту.
+  const addPhotosToGallery = async (fileList) => {
+    const files = Array.from(fileList || []).filter((file) => file.type?.startsWith("image/"));
+    if (!files.length) return [];
+    const room = Math.max(0, MAX_GALLERY_PHOTOS - gallery.length);
     if (room <= 0) {
-      alert(`Можна додати не більше ${MAX_PHOTOS_PER_ITEM} фото до пункту.`);
-      return;
+      alert(`У галереї може бути не більше ${MAX_GALLERY_PHOTOS} фото.`);
+      return [];
+    }
+    if (files.some((file) => file.size > MAX_PHOTO_SIZE)) {
+      alert("Кожне фото має бути до 15 МБ.");
+      return [];
     }
     const limited = files.slice(0, room);
-    if (limited.some((file) => file.size > MAX_PHOTO_SIZE)) {
-      alert("Кожне фото має бути до 5 МБ.");
-      return;
-    }
     try {
-      const encoded = await Promise.all(
-        limited.map(async (file) => ({ name: file.name, type: file.type, dataUrl: await toDataUrl(file) }))
-      );
-      updateResponse(itemId, { photos: [...existing, ...encoded] });
+      const encoded = [];
+      for (const file of limited) {
+        const dataUrl = await compressImage(file);
+        if (dataUrl) {
+          encoded.push({
+            id: makeHaccpId(),
+            name: file.name || "Фото",
+            type: "image/jpeg",
+            dataUrl,
+            addedAt: new Date().toISOString(),
+          });
+        }
+      }
+      if (encoded.length) {
+        setDirty(true);
+        setGallery((prev) => [...prev, ...encoded]);
+      }
+      return encoded.map((photo) => photo.id);
     } catch (error) {
-      console.error("Помилка завантаження фото:", error);
+      console.error("Помилка обробки фото:", error);
       alert("Не вдалося обробити фото.");
+      return [];
     }
   };
 
-  const handleRemovePhoto = (itemId, index) => {
-    const existing = responses[itemId]?.photos || [];
-    updateResponse(itemId, { photos: existing.filter((_, idx) => idx !== index) });
+  // Зйомка/завантаження одразу під конкретний пункт: додаємо в галерею та прикріплюємо.
+  const captureForItem = async (itemId, fileList) => {
+    const ids = await addPhotosToGallery(fileList);
+    if (!ids.length) return;
+    const existing = responses[itemId]?.photoIds || [];
+    const room = Math.max(0, MAX_PHOTOS_PER_ITEM - existing.length);
+    if (room <= 0) {
+      alert(`До пункту можна прикріпити не більше ${MAX_PHOTOS_PER_ITEM} фото (інші залишаться в галереї).`);
+      return;
+    }
+    updateResponse(itemId, { photoIds: [...existing, ...ids.slice(0, room)] });
+  };
+
+  // Прикріпити/відкріпити фото галереї до пункту.
+  const toggleAttach = (itemId, photoId) => {
+    const existing = responses[itemId]?.photoIds || [];
+    const attached = existing.includes(photoId);
+    if (!attached && existing.length >= MAX_PHOTOS_PER_ITEM) {
+      alert(`До пункту можна прикріпити не більше ${MAX_PHOTOS_PER_ITEM} фото.`);
+      return;
+    }
+    updateResponse(itemId, {
+      photoIds: attached ? existing.filter((id) => id !== photoId) : [...existing, photoId],
+    });
+  };
+
+  const detachFromItem = (itemId, photoId) => {
+    const existing = responses[itemId]?.photoIds || [];
+    updateResponse(itemId, { photoIds: existing.filter((id) => id !== photoId) });
+  };
+
+  // Видалення фото з галереї: прибираємо його і з усіх пунктів, де воно прикріплене.
+  const removeFromGallery = (photoId) => {
+    setDirty(true);
+    setGallery((prev) => prev.filter((photo) => photo.id !== photoId));
+    setResponses((prev) => {
+      let changed = false;
+      const next = {};
+      Object.entries(prev).forEach(([itemId, resp]) => {
+        const ids = Array.isArray(resp?.photoIds) ? resp.photoIds : null;
+        if (ids && ids.includes(photoId)) {
+          changed = true;
+          next[itemId] = { ...resp, photoIds: ids.filter((id) => id !== photoId) };
+        } else {
+          next[itemId] = resp;
+        }
+      });
+      return changed ? next : prev;
+    });
+  };
+
+  const getItemPhotos = (response) => {
+    const ids = Array.isArray(response?.photoIds) ? response.photoIds : [];
+    return ids.map((id) => galleryById.get(id)).filter(Boolean);
   };
 
   const toggleSection = (sectionId) => {
@@ -258,6 +1469,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
       date: selectedDate,
       status: nextStatus,
       responses,
+      gallery,
       totalPercent: roundPercent(computed.totalPercent),
       sectionScores,
       assessedItems: computed.assessedItems,
@@ -441,6 +1653,17 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
               ))}
             </div>
           </div>
+
+          <PhotoGalleryPanel
+            photos={gallery}
+            assignmentCount={assignmentCount}
+            collapsed={galleryCollapsed}
+            onToggle={() => setGalleryCollapsed((prev) => !prev)}
+            onAddFiles={(files) => { void addPhotosToGallery(files); }}
+            onRemove={removeFromGallery}
+            onPreview={setLightbox}
+            disabled={isCompleted}
+          />
 
           <div className="space-y-3">
             {sortedSections.map((section, sectionIndex) => {
@@ -1109,8 +2332,8 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
 /* Кореневий компонент модуля                                          */
 /* ------------------------------------------------------------------ */
 
-export default function HaccpModule({ topTab, user, restaurants }) {
-  const mode = normalizeHaccpTab(topTab);
+export default function HaccpModule({ topTab, user, restaurants, forceMode = "" }) {
+  const mode = forceMode || normalizeHaccpTab(topTab);
   const {
     templates,
     audits,
@@ -1149,6 +2372,17 @@ export default function HaccpModule({ topTab, user, restaurants }) {
         createTemplate={createTemplate}
         updateTemplate={updateTemplate}
         removeTemplate={removeTemplate}
+      />
+    );
+  }
+
+  if (mode === "report") {
+    return (
+      <HaccpReportTab
+        user={user}
+        restaurants={restaurants}
+        templates={templates}
+        audits={audits}
       />
     );
   }

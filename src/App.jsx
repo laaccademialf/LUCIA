@@ -3946,6 +3946,19 @@ function App() {
       );
     }
 
+    if (
+      activeNav === "ops-haccp" ||
+      activeNav.includes("ops-haccp") ||
+      String(activeNav || "").toLowerCase().includes("haccpreport") ||
+      String(activeNav || "").toLowerCase().includes("haccp-report")
+    ) {
+      return (
+        <div className="grid grid-cols-1">
+          <HaccpModule topTab={topTab} restaurants={restaurants} user={user} forceMode="report" />
+        </div>
+      );
+    }
+
     const activeNavKey = String(activeNav || "").toLowerCase();
     const topTabKey = String(topTab || "").toLowerCase();
     const isProductBookingNav =

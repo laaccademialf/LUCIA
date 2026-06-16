@@ -19,7 +19,7 @@ export const RATING_SCALE = [
   {
     value: 2,
     key: "excellent",
-    label: "Відмінно",
+    label: "Добре",
     short: "Виконується",
     percent: 100,
     selectedClass: "border-emerald-600 bg-emerald-600 text-white shadow-sm",
@@ -30,7 +30,7 @@ export const RATING_SCALE = [
   {
     value: 1,
     key: "good",
-    label: "Добре",
+    label: "Задовільно",
     short: "Частково",
     percent: 50,
     selectedClass: "border-amber-500 bg-amber-500 text-white shadow-sm",
