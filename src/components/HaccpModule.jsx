@@ -153,7 +153,12 @@ const scoreTrafficLight = (score) => {
 };
 
 const countCriticalViolations = (responses) =>
-  Object.values(responses || {}).reduce((acc, response) => (Number(response?.value) === 0 ? acc + 1 : acc), 0);
+  Object.values(responses || {}).reduce((acc, response) => {
+    const value = response?.value;
+    const rating = value === null || value === undefined ? null : RATING_BY_VALUE[value];
+    if (!rating) return acc;
+    return rating.value === 0 || rating.value === 1 ? acc + 1 : acc;
+  }, 0);
 
 const collectIssueItemIds = (responses) => {
   const ids = new Set();
@@ -238,6 +243,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
 
   const [selectedRestaurantId, setSelectedRestaurantId] = useState(ALL_LOCATIONS_VALUE);
   const [showCriticalDetails, setShowCriticalDetails] = useState(false);
+  const [showActionPlanDetails, setShowActionPlanDetails] = useState(false);
   const [galleryLightboxPhoto, setGalleryLightboxPhoto] = useState(null);
   const [periodFromMonth, setPeriodFromMonth] = useState("");
   const [periodFromYear, setPeriodFromYear] = useState("");
@@ -245,6 +251,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   const [periodToYear, setPeriodToYear] = useState("");
   const [actionPlanByItem, setActionPlanByItem] = useState({});
   const [planDialogContext, setPlanDialogContext] = useState(null);
+  const [planDialogSource, setPlanDialogSource] = useState("critical");
   const [planDialogDeadline, setPlanDialogDeadline] = useState("");
   const [planDialogResponsible, setPlanDialogResponsible] = useState("");
   const [planDialogComment, setPlanDialogComment] = useState("");
@@ -429,7 +436,11 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
         });
 
         const items = Object.entries(audit?.responses || {})
-          .filter(([, response]) => Number(response?.value) === 0)
+          .filter(([, response]) => {
+            const value = response?.value;
+            const rating = value === null || value === undefined ? null : RATING_BY_VALUE[value];
+            return Boolean(rating && (rating.value === 0 || rating.value === 1));
+          })
           .map(([itemId]) => ({
             itemId,
             title: itemTitleById.get(String(itemId)) || `Пункт ${itemId}`,
@@ -458,6 +469,20 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
         }))
       ),
     [criticalDetails]
+  );
+
+  const criticalDialogItems = useMemo(
+    () =>
+      criticalDetails.flatMap((group) =>
+        (group?.items || []).map((entry) => ({
+          auditId: String(group.auditId || ""),
+          auditLabel: String(group.auditLabel || ""),
+          itemId: String(entry?.itemId || ""),
+          title: String(entry?.title || "Пункт без назви"),
+          hasPlan: Boolean(String(actionPlanByItem?.[getCriticalPlanKey(group.auditId, entry?.itemId)]?.comment || "").trim()),
+        }))
+      ),
+    [actionPlanByItem, criticalDetails]
   );
 
   const trendSeries = useMemo(() => [...metrics].sort((a, b) => a.sortKey - b.sortKey), [metrics]);
@@ -592,7 +617,10 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
   }, [actionPlanByItem, criticalItemsFlat]);
 
-  const openPlanDialog = (auditId, auditLabel, item) => {
+  const openPlanDialog = (auditId, auditLabel, item, source = "critical") => {
+    setShowCriticalDetails(false);
+    setShowActionPlanDetails(false);
+    setPlanDialogSource(source === "plan" ? "plan" : "critical");
     const itemId = String(item?.itemId || "");
     const itemTitle = String(item?.title || "Пункт без назви");
     const planKey = getCriticalPlanKey(auditId, itemId);
@@ -647,6 +675,12 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     setPlanDialogDeadline("");
     setPlanDialogResponsible("");
     setPlanDialogComment("");
+
+    if (planDialogSource === "critical") {
+      setShowCriticalDetails(true);
+    } else {
+      setShowActionPlanDetails(true);
+    }
   };
 
   const handleExportExcel = async () => {
@@ -665,7 +699,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           Значення: `${periodFromMonth && periodFromYear ? `${periodFromMonth}.${periodFromYear}` : "—"} - ${periodToMonth && periodToYear ? `${periodToMonth}.${periodToYear}` : "—"}`,
         },
         { Показник: "Середній HACCP Score", Значення: `${roundPercent(avgScore)}%` },
-        { Показник: "Критичні порушення", Значення: criticalCount },
+        { Показник: "Порушення", Значення: criticalCount },
         { Показник: "Кількість чек-листів", Значення: auditsForMetrics.length },
         { Показник: "Технічна інформація: дати", Значення: technicalInfo.dateLabel },
         { Показник: "Технічна інформація: технолог(и)", Значення: technicalInfo.technologistLabel },
@@ -676,7 +710,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
         Локація: String(item.restaurantName || "Локація"),
         Шаблон: String(item.templateName || "Без шаблону"),
         Оцінка: `${roundPercent(item.score)}%`,
-        Критичні: Number(item.critical || 0),
+        Порушення: Number(item.critical || 0),
       }));
 
       const detailsRows = [];
@@ -790,13 +824,6 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => { void handleExportExcel(); }}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
-            >
-              <Download size={16} /> Вивантажити звіт в Excel
-            </button>
           </div>
 
           <div>
@@ -815,6 +842,14 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                 <p className="font-semibold text-slate-900">{technicalInfo.locationLabel}</p>
               </div>
             </div>
+
+            <button
+              type="button"
+              onClick={() => { void handleExportExcel(); }}
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
+            >
+              <Download size={16} /> Вивантажити звіт в Excel
+            </button>
           </div>
         </div>
       </div>
@@ -865,80 +900,41 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
               )}
             </div>
 
-            <div className={cardClass}>
-              <button
-                type="button"
-                onClick={() => setShowCriticalDetails((prev) => !prev)}
-                className="w-full text-left"
-              >
-                <p className="text-sm font-semibold text-slate-800">Критичні порушення</p>
-                <div className="mt-2 inline-flex items-center rounded-xl border border-red-300 bg-red-600 px-3 py-2 text-3xl font-extrabold text-white shadow-sm">
+            <button
+              type="button"
+              onClick={() => setShowCriticalDetails(true)}
+              className={`${cardClass} flex h-full flex-col text-left`}
+            >
+              <p className="text-sm font-semibold text-slate-800">Порушення</p>
+              <div className="mt-2 flex items-center gap-3">
+                <div className="inline-flex items-center rounded-xl border border-red-300 bg-red-600 px-3 py-2 text-3xl font-extrabold text-white shadow-sm">
                   {criticalCount}
                 </div>
-                <p className="mt-2 text-xs text-slate-500">Сумарна кількість пунктів з оцінкою «Погано» у вибраних чек-листах. Натисніть, щоб переглянути деталі.</p>
-              </button>
+                <p className="text-xs text-slate-500">Натисніть, щоб переглянути перелік порушень.</p>
+              </div>
+            </button>
 
-              {showCriticalDetails && (
-                <div className="mt-3 max-h-56 overflow-y-auto rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-900">
-                  {criticalDetails.length ? (
-                    <div className="space-y-2">
-                      {criticalDetails.map((group) => (
-                        <div key={group.auditId} className="rounded border border-red-200 bg-white p-2">
-                          <p className="font-semibold text-red-800">{group.auditLabel}</p>
-                          <div className="mt-2 space-y-1.5">
-                            {group.items.map((item) => (
-                              <div key={`${group.auditId}_${item.itemId}`} className="flex items-center justify-between gap-3 rounded-md border border-red-200 bg-white px-2 py-1.5">
-                                <p className="min-w-0 text-xs text-red-900">{item.title}</p>
-                                <button
-                                  type="button"
-                                  onClick={() => openPlanDialog(group.auditId, group.auditLabel, item)}
-                                  className={`inline-flex h-8 min-w-[118px] items-center justify-center rounded-full border px-2 text-[10px] font-semibold whitespace-nowrap ${
-                                    String(actionPlanByItem?.[getCriticalPlanKey(group.auditId, item.itemId)]?.comment || "").trim()
-                                      ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                                      : "border-red-300 bg-white text-red-700"
-                                  }`}
-                                >
-                                  {String(actionPlanByItem?.[getCriticalPlanKey(group.auditId, item.itemId)]?.comment || "").trim() ? "План збережено" : "Додати план дій"}
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p>Критичних порушень не знайдено у вибраних чек-листах.</p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className={cardClass}>
+            <button
+              type="button"
+              onClick={() => setShowActionPlanDetails(true)}
+              className={`${cardClass} flex h-full flex-col text-left`}
+            >
               <div className="flex items-start justify-between gap-2">
                 <p className="text-sm font-semibold text-slate-800">План дій</p>
                 <ListChecks size={16} className="text-emerald-600" />
               </div>
-              {actionPlanEntries.length ? (
-                <ul className="mt-2 space-y-2 text-sm text-slate-700">
-                  {actionPlanEntries.map((entry) => (
-                    <li key={entry.planKey} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                      <p className="text-xs font-semibold text-slate-500">{entry.auditLabel} · {entry.itemTitle}</p>
-                      <p className="mt-1 text-xs text-slate-600">
-                        Дедлайн: {actionPlanByItem?.[entry.planKey]?.deadline ? formatDisplayDate(actionPlanByItem[entry.planKey].deadline) : "—"} · Відповідальний: {actionPlanByItem?.[entry.planKey]?.responsible || "—"}
-                      </p>
-                      <p className="mt-1 text-sm text-slate-800">{entry.comment}</p>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="mt-2 text-sm text-slate-500">Натисніть на пункт у блоці «Критичні порушення», додайте коментар і збережіть його як план дій.</p>
-              )}
-            </div>
+              <div className="mt-2 flex items-center gap-3">
+                <div className="inline-flex items-center rounded-xl border border-emerald-300 bg-emerald-600 px-3 py-2 text-3xl font-extrabold text-white shadow-sm">
+                  {actionPlanEntries.length}
+                </div>
+                <p className="text-xs text-slate-500">Натисніть, щоб переглянути внесені пункти плану дій.</p>
+              </div>
+            </button>
           </div>
 
           <div className={cardClass}>
             <p className="text-sm font-semibold text-slate-800">Інфографіка динаміки чек-листів</p>
-            <p className="mt-1 text-xs text-slate-500">Показує зміну оцінки та критичних порушень по кожному обраному чек-листу.</p>
+            <p className="mt-1 text-xs text-slate-500">Показує зміну оцінки та порушень по кожному обраному чек-листу.</p>
 
             {trendSeries.length ? (
               <div className="mt-3 space-y-2">
@@ -1012,7 +1008,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
 
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                         <span className="inline-flex items-center rounded-full border border-red-300 bg-red-50 px-2 py-1 font-semibold text-red-700">
-                          Критичні: {item.critical}
+                          Порушення: {item.critical}
                         </span>
                         {scoreDelta !== null ? (
                           <span
@@ -1107,6 +1103,82 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
         </>
       )}
 
+      {showCriticalDetails ? (
+        <div className="fixed inset-0 z-[68] flex items-center justify-center bg-black/50 p-4" onClick={() => setShowCriticalDetails(false)}>
+          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-base font-semibold text-slate-900">Порушення</p>
+              <div className="inline-flex items-center rounded-xl border border-red-300 bg-red-600 px-3 py-1.5 text-lg font-extrabold text-white shadow-sm">
+                {criticalCount}
+              </div>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">Натисніть на порушення, щоб додати/оновити план дій.</p>
+
+            <div className="mt-3 max-h-[60vh] overflow-y-auto rounded-lg border border-red-200 bg-red-50 p-3">
+              {criticalDialogItems.length ? (
+                <div className="space-y-2">
+                  {criticalDialogItems.map((entry) => (
+                    <button
+                      key={`${entry.auditId}_${entry.itemId}`}
+                      type="button"
+                      onClick={() => openPlanDialog(entry.auditId, entry.auditLabel, { itemId: entry.itemId, title: entry.title }, "critical")}
+                      className="w-full rounded border border-red-200 bg-white px-3 py-2 text-left hover:bg-red-50"
+                    >
+                      <p className="text-xs font-semibold text-red-800">{entry.auditLabel}</p>
+                      <div className="mt-1 flex items-start justify-between gap-2">
+                        <p className="text-sm text-red-900">{entry.title}</p>
+                        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${entry.hasPlan ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-red-300 bg-white text-red-700"}`}>
+                          {entry.hasPlan ? "План є" : "Додати план"}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-slate-600">Порушень не знайдено.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showActionPlanDetails ? (
+        <div className="fixed inset-0 z-[68] flex items-center justify-center bg-black/50 p-4" onClick={() => setShowActionPlanDetails(false)}>
+          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-base font-semibold text-slate-900">План дій</p>
+              <div className="inline-flex items-center rounded-xl border border-emerald-300 bg-emerald-600 px-3 py-1.5 text-lg font-extrabold text-white shadow-sm">
+                {actionPlanEntries.length}
+              </div>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">Натисніть на запис, щоб переглянути або відредагувати план дій.</p>
+
+            <div className="mt-3 max-h-[60vh] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3">
+              {actionPlanEntries.length ? (
+                <div className="space-y-2">
+                  {actionPlanEntries.map((entry) => (
+                    <button
+                      key={entry.planKey}
+                      type="button"
+                      onClick={() => openPlanDialog(entry.auditId, entry.auditLabel, { itemId: entry.itemId, title: entry.itemTitle }, "plan")}
+                      className="w-full rounded border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50"
+                    >
+                      <p className="text-xs font-semibold text-slate-500">{entry.auditLabel} · {entry.itemTitle}</p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Дедлайн: {actionPlanByItem?.[entry.planKey]?.deadline ? formatDisplayDate(actionPlanByItem[entry.planKey].deadline) : "—"} · Відповідальний: {actionPlanByItem?.[entry.planKey]?.responsible || "—"}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-800">{entry.comment}</p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-slate-600">Плани дій ще не додані.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {planDialogContext ? (
         <div
           className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
@@ -1118,7 +1190,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           }}
         >
           <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
-            <p className="text-base font-semibold text-slate-900">План дій для критичного порушення</p>
+            <p className="text-base font-semibold text-slate-900">План дій для порушення</p>
             <p className="mt-1 text-xs text-slate-500">{planDialogContext.auditLabel}</p>
             <p className="mt-1 text-sm font-semibold text-slate-700">{planDialogContext.itemTitle}</p>
 
@@ -1542,6 +1614,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
   const [galleryCollapsed, setGalleryCollapsed] = useState(false);
   const [picker, setPicker] = useState(null);
   const [lightbox, setLightbox] = useState(null);
+  const [historyAuditPreview, setHistoryAuditPreview] = useState(null);
 
   const submitLockRef = useRef(false);
 
@@ -1892,13 +1965,28 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
       .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
   }, [audits, effectiveRestaurantId]);
 
-  const loadAudit = (audit) => {
-    setSelectedRestaurantId(audit.restaurantId || "");
-    setSelectedTemplateId(audit.templateId || "");
-    setSelectedDate(audit.date || todayDate());
-    setDirty(false);
-    setShowHistory(false);
+  const openHistoryAuditPreview = (audit) => {
+    setHistoryAuditPreview(audit || null);
   };
+
+  const historyPreviewTemplate = useMemo(() => {
+    if (!historyAuditPreview) return null;
+    return (templates || []).find((template) => String(template?.id || "") === String(historyAuditPreview?.templateId || "")) || null;
+  }, [historyAuditPreview, templates]);
+
+  const historyPreviewSections = useMemo(() => {
+    const list = Array.isArray(historyPreviewTemplate?.sections) ? [...historyPreviewTemplate.sections] : [];
+    return list.sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0));
+  }, [historyPreviewTemplate]);
+
+  const historyPreviewGalleryById = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(historyAuditPreview?.gallery) ? historyAuditPreview.gallery : []).forEach((photo) => {
+      const id = String(photo?.id || "");
+      if (id) map.set(id, photo);
+    });
+    return map;
+  }, [historyAuditPreview]);
 
   const handleDeleteAudit = async (audit) => {
     if (!isAdmin) return;
@@ -2059,7 +2147,8 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                         const currentValue = response.value;
                         const needsComment = isCommentRequired(currentValue);
                         const needsPhotos = isPhotoRequired(currentValue);
-                        const showEvidenceBlock = needsComment || needsPhotos;
+                        const canAttachPhotos = currentValue !== null && currentValue !== undefined && (Number(currentValue) === 1 || Number(currentValue) === 0);
+                        const showEvidenceBlock = needsComment || canAttachPhotos;
                         const commentMissing = needsComment && !String(response.comment || "").trim();
                         const photos = getItemPhotos(response);
                         const photosMissing = needsPhotos && photos.length === 0;
@@ -2109,7 +2198,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                                   </div>
                                 ) : null}
 
-                                {needsPhotos ? (
+                                {canAttachPhotos ? (
                                   <div>
                                     <div className="flex flex-wrap items-center gap-2">
                                       <label className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 ${isReadOnlyAudit ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
@@ -2155,7 +2244,11 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                                         ))}
                                       </div>
                                     ) : (
-                                      <p className="mt-2 text-xs text-red-500">Для оцінки «Погано» додайте щонайменше одне фото.</p>
+                                      <p className={`mt-2 text-xs ${needsPhotos ? "text-red-500" : "text-slate-500"}`}>
+                                        {needsPhotos
+                                          ? "Для оцінки «Погано» додайте щонайменше одне фото."
+                                          : "Фото можна додати за бажанням для оцінки «Задовільно»."}
+                                      </p>
                                     )}
                                   </div>
                                 ) : null}
@@ -2275,7 +2368,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                       </td>
                       <td className="py-2 pr-3">
                         <div className="flex items-center justify-end gap-2">
-                          <button type="button" onClick={() => loadAudit(audit)} className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">
+                          <button type="button" onClick={() => openHistoryAuditPreview(audit)} className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">
                             Відкрити
                           </button>
                           {isAdmin ? (
@@ -2295,6 +2388,94 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
           </div>
         ) : null}
       </div>
+
+      {historyAuditPreview ? (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/50 p-4" onClick={() => setHistoryAuditPreview(null)}>
+          <div className="w-full max-w-5xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-base font-semibold text-slate-900">Перегляд аудиту з історії</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {formatDisplayDate(historyAuditPreview?.date)} · {String(historyAuditPreview?.restaurantName || selectedRestaurant?.name || "Заклад")}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">{String(historyAuditPreview?.templateName || historyPreviewTemplate?.name || "Шаблон")}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <ScoreBadge percent={Number(historyAuditPreview?.totalPercent || 0)} />
+                <button
+                  type="button"
+                  onClick={() => setHistoryAuditPreview(null)}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Закрити
+                </button>
+              </div>
+            </div>
+
+            <div className="max-h-[68vh] space-y-2 overflow-y-auto pr-1">
+              {historyPreviewSections.length ? (
+                historyPreviewSections.map((section, sectionIndex) => {
+                  const items = (Array.isArray(section?.items) ? [...section.items] : []).sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0));
+                  return (
+                    <div key={String(section?.id || sectionIndex)} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <p className="font-semibold text-slate-900">{sectionIndex + 1}. {String(section?.title || "Розділ")}</p>
+                      <div className="mt-2 space-y-2">
+                        {items.map((sectionItem, itemIndex) => {
+                          const itemId = String(sectionItem?.id || "");
+                          const response = historyAuditPreview?.responses?.[itemId] || {};
+                          const rating = RATING_BY_VALUE?.[response?.value] || null;
+                          const photoIds = Array.isArray(response?.photoIds) ? response.photoIds : [];
+                          const linkedPhotos = photoIds.map((id) => historyPreviewGalleryById.get(String(id || ""))).filter((photo) => getPhotoSrc(photo));
+                          const legacyPhotos = (Array.isArray(response?.photos) ? response.photos : []).filter((photo) => getPhotoSrc(photo));
+                          const mergedPhotos = [...linkedPhotos, ...legacyPhotos];
+                          const seen = new Set();
+                          const photos = mergedPhotos.filter((photo) => {
+                            const key = String(photo?.id || getPhotoSrc(photo) || "");
+                            if (!key || seen.has(key)) return false;
+                            seen.add(key);
+                            return true;
+                          });
+
+                          return (
+                            <div key={`${section?.id || sectionIndex}_${itemId || itemIndex}`} className="rounded-md border border-slate-200 bg-white p-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="text-sm text-slate-800">{sectionIndex + 1}.{itemIndex + 1} {String(sectionItem?.title || "Пункт")}</p>
+                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-semibold ${rating ? rating.idleClass : "border-slate-300 bg-slate-100 text-slate-600"}`}>
+                                  {rating ? rating.label : "Не оцінено"}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs text-slate-600">
+                                <span className="font-semibold text-slate-700">Коментар:</span> {String(response?.comment || "").trim() || "Коментар відсутній"}
+                              </p>
+                              {photos.length ? (
+                                <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                                  {photos.map((photo, photoIndex) => (
+                                    <button
+                                      key={`${itemId}_${photo?.id || photoIndex}`}
+                                      type="button"
+                                      onClick={() => setLightbox(photo)}
+                                      className="overflow-hidden rounded border border-slate-200 bg-slate-50"
+                                      title={photo?.name || "Фото пункту"}
+                                    >
+                                      <img src={getPhotoSrc(photo)} alt={photo?.name || "Фото пункту"} className="h-16 w-full object-cover" />
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">Для цього аудиту не знайдено структуру шаблону.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
