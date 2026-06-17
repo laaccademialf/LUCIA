@@ -52,6 +52,8 @@ const SETTINGS_FILE = process.env.RUNTIME_SETTINGS_FILE || "./tmp/custom-db/runt
 const POSTGRES_URL = String(process.env.POSTGRES_URL || "").trim();
 const ASSET_IMAGE_DIR = String(process.env.ASSET_IMAGE_DIR || "/var/www/luci.lafamiglia.ua/app/img").trim();
 const ASSET_IMAGE_PUBLIC_BASE = String(process.env.ASSET_IMAGE_PUBLIC_BASE || "/app/img").trim().replace(/\/+$/, "");
+const HACCP_IMAGE_DIR = String(process.env.HACCP_IMAGE_DIR || `${ASSET_IMAGE_DIR}/haccp`).trim();
+const HACCP_IMAGE_PUBLIC_BASE = String(process.env.HACCP_IMAGE_PUBLIC_BASE || `${ASSET_IMAGE_PUBLIC_BASE}/haccp`).trim().replace(/\/+$/, "");
 const LEGAL_ATTACHMENT_DIR = String(process.env.LEGAL_ATTACHMENT_DIR || `${ASSET_IMAGE_DIR}/legal`).trim();
 const LEGAL_ATTACHMENT_PUBLIC_BASE = String(process.env.LEGAL_ATTACHMENT_PUBLIC_BASE || `${ASSET_IMAGE_PUBLIC_BASE}/legal`).trim().replace(/\/+$/, "");
 const BACKEND_PACKAGE_PATH = new URL("./package.json", import.meta.url);
@@ -507,20 +509,28 @@ const sanitizeFileBaseName = (name) => {
   return cleaned || "photo";
 };
 
-const saveAssetPhoto = async ({ fileName, dataUrl }) => {
+const saveImageFile = async ({ fileName, dataUrl, directory, publicBase }) => {
   const { ext, buffer } = decodeDataUrlImage(dataUrl);
   const safeName = sanitizeFileBaseName(fileName);
   const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString("hex")}_${safeName}.${ext}`;
 
-  await ensureDir(ASSET_IMAGE_DIR);
-  const absolutePath = path.join(ASSET_IMAGE_DIR, uniqueName);
+  await ensureDir(directory);
+  const absolutePath = path.join(directory, uniqueName);
   await fs.writeFile(absolutePath, buffer);
 
   return {
     name: String(fileName || "photo"),
-    url: `${ASSET_IMAGE_PUBLIC_BASE}/${uniqueName}`,
+    url: `${String(publicBase || "").trim().replace(/\/+$/, "")}/${uniqueName}`,
   };
 };
+
+const saveAssetPhoto = async ({ fileName, dataUrl }) =>
+  saveImageFile({
+    fileName,
+    dataUrl,
+    directory: ASSET_IMAGE_DIR,
+    publicBase: ASSET_IMAGE_PUBLIC_BASE,
+  });
 
 const decodeDataUrlFile = (dataUrl) => {
   const source = String(dataUrl || "").trim();
@@ -580,6 +590,14 @@ const saveLegalAttachment = async ({ fileName, dataUrl, size, type }) => {
     type: String(type || mimeType || ""),
   };
 };
+
+const saveHaccpPhoto = async ({ fileName, dataUrl }) =>
+  saveImageFile({
+    fileName,
+    dataUrl,
+    directory: HACCP_IMAGE_DIR,
+    publicBase: HACCP_IMAGE_PUBLIC_BASE,
+  });
 
 const isRecoverableLegalAttachmentStorageError = (error) => {
   const code = String(error?.code || "").trim().toUpperCase();
@@ -3743,6 +3761,51 @@ const handleLegalAttachmentUploadApi = async (req, res) => {
   }
 };
 
+const handleHaccpPhotoUploadApi = async (req, res) => {
+  if (!isAuthorized(req)) {
+    return sendJson(res, 401, { ok: false, error: "Unauthorized" });
+  }
+
+  let payload;
+  try {
+    payload = await parseJsonBody(req, 50 * 1024 * 1024);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  const rawPhotos = Array.isArray(payload?.photos)
+    ? payload.photos
+    : payload?.photo
+      ? [payload.photo]
+      : [];
+
+  if (!rawPhotos.length) {
+    return sendJson(res, 400, { ok: false, error: "photos are required" });
+  }
+
+  try {
+    const savedPhotos = [];
+    for (const rawPhoto of rawPhotos) {
+      const saved = await saveHaccpPhoto({
+        fileName: rawPhoto?.fileName || rawPhoto?.name || "photo",
+        dataUrl: rawPhoto?.dataUrl,
+      });
+      savedPhotos.push({
+        id: String(rawPhoto?.id || "").trim(),
+        name: String(saved?.name || rawPhoto?.name || "photo"),
+        url: String(saved?.url || ""),
+      });
+    }
+
+    return sendJson(res, 200, {
+      ok: true,
+      photos: savedPhotos,
+    });
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: error.message || "HACCP photo upload failed" });
+  }
+};
+
 const handleServiceRequestsApi = async (req, res, requestId) => {
   if (!isAuthorized(req)) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
@@ -4886,6 +4949,14 @@ const server = http.createServer(async (req, res) => {
   if (pathname === "/api/legal/attachments" && method === "POST") {
     try {
       return await handleLegalAttachmentUploadApi(req, res);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
+    }
+  }
+
+  if (pathname === "/api/haccp/photos" && method === "POST") {
+    try {
+      return await handleHaccpPhotoUploadApi(req, res);
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: `Server error: ${error.message}` });
     }

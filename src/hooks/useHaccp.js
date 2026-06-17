@@ -6,9 +6,93 @@ import {
   listCollectionItemsApi,
   updateCollectionItemApi,
 } from "../api/collectionsApi";
+import { uploadHaccpPhotosApi } from "../api/haccpPhotosApi";
 
 const TEMPLATES_COLLECTION = "haccpTemplates";
 const AUDITS_COLLECTION = "haccpAudits";
+
+const isCompletedAudit = (payload) => String(payload?.status || "").trim() === "completed";
+
+const collectUploadTargets = (payload) => {
+  const targets = [];
+
+  (Array.isArray(payload?.gallery) ? payload.gallery : []).forEach((photo, index) => {
+    if (photo?.dataUrl && !photo?.url) {
+      targets.push({ scope: "gallery", index, photo });
+    }
+  });
+
+  Object.entries(payload?.responses || {}).forEach(([itemId, response]) => {
+    (Array.isArray(response?.photos) ? response.photos : []).forEach((photo, index) => {
+      if (photo?.dataUrl && !photo?.url) {
+        targets.push({ scope: "response", itemId, index, photo });
+      }
+    });
+  });
+
+  return targets;
+};
+
+const rewriteUploadedPhotos = (payload, uploadedPhotos = []) => {
+  const next = {
+    ...payload,
+    gallery: Array.isArray(payload?.gallery) ? [...payload.gallery] : [],
+    responses: payload?.responses && typeof payload.responses === "object" ? { ...payload.responses } : {},
+  };
+
+  const uploadMap = new Map(
+    (Array.isArray(uploadedPhotos) ? uploadedPhotos : [])
+      .filter((item) => item?.id)
+      .map((item) => [String(item.id), item])
+  );
+
+  next.gallery = next.gallery.map((photo, index) => {
+    if (!photo?.dataUrl || photo?.url) return photo;
+    const saved = uploadMap.get(`gallery:${index}`);
+    if (!saved?.url) return photo;
+    const normalized = { ...photo, name: String(saved.name || photo.name || "Фото"), url: String(saved.url || "") };
+    delete normalized.dataUrl;
+    return normalized;
+  });
+
+  Object.entries(next.responses).forEach(([itemId, response]) => {
+    if (!response || typeof response !== "object") return;
+    if (!Array.isArray(response.photos)) return;
+    next.responses[itemId] = {
+      ...response,
+      photos: response.photos.map((photo, index) => {
+        if (!photo?.dataUrl || photo?.url) return photo;
+        const saved = uploadMap.get(`response:${itemId}:${index}`);
+        if (!saved?.url) return photo;
+        const normalized = { ...photo, name: String(saved.name || photo.name || "Фото"), url: String(saved.url || "") };
+        delete normalized.dataUrl;
+        return normalized;
+      }),
+    };
+  });
+
+  return next;
+};
+
+const uploadAuditPhotosIfNeeded = async (payload) => {
+  if (!isCompletedAudit(payload)) return payload;
+
+  const targets = collectUploadTargets(payload);
+  if (!targets.length) return payload;
+
+  const uploadedPhotos = await uploadHaccpPhotosApi(
+    targets.map((target) => ({
+      id:
+        target.scope === "gallery"
+          ? `gallery:${target.index}`
+          : `response:${target.itemId}:${target.index}`,
+      fileName: target.photo?.name || target.photo?.fileName || "Фото",
+      dataUrl: target.photo?.dataUrl,
+    }))
+  );
+
+  return rewriteUploadedPhotos(payload, uploadedPhotos);
+};
 
 // Хук для роботи з шаблонами аудиту HACCP та самими аудитами.
 // Дані зберігаються у власній БД (MariaDB) через generic collections API,
@@ -114,7 +198,8 @@ export const useHaccp = () => {
   const createAudit = useCallback(async (payload) => {
     if (!apiEnabled) return { success: false, error: new Error("API недоступний") };
     try {
-      const id = await createCollectionItemApi(AUDITS_COLLECTION, payload);
+      const nextPayload = await uploadAuditPhotosIfNeeded(payload);
+      const id = await createCollectionItemApi(AUDITS_COLLECTION, nextPayload);
       await refreshAudits();
       return { success: true, id };
     } catch (err) {
@@ -126,7 +211,8 @@ export const useHaccp = () => {
   const updateAudit = useCallback(async (id, payload) => {
     if (!apiEnabled) return { success: false, error: new Error("API недоступний") };
     try {
-      await updateCollectionItemApi(AUDITS_COLLECTION, id, payload);
+      const nextPayload = await uploadAuditPhotosIfNeeded(payload);
+      await updateCollectionItemApi(AUDITS_COLLECTION, id, nextPayload);
       await refreshAudits();
       return { success: true };
     } catch (err) {

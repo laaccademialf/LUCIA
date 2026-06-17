@@ -66,6 +66,9 @@ const headers = () => {
 
 const endpoint = (path) => `${getApiBase()}${path}`;
 
+export const getCollectionsApiBase = () => getApiBase();
+export const getCollectionsApiHeaders = () => headers();
+
 const cloneData = (value) => {
   if (typeof structuredClone === "function") {
     return structuredClone(value);

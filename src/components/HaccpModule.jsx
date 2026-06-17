@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { useHaccp } from "../hooks/useHaccp";
+import DatePickerPopover from "./DatePickerPopover";
 import {
   RATING_BY_VALUE,
   RATING_SCALE,
@@ -158,6 +159,8 @@ const MONTH_OPTIONS_UA = [
   { value: "12", label: "Грудень" },
 ];
 
+const getPhotoSrc = (photo) => String(photo?.url || photo?.dataUrl || "").trim();
+
 function HaccpReportTab({ user, restaurants, templates, audits }) {
   const ALL_LOCATIONS_VALUE = "__ALL__";
   const isAdmin = user?.role === "admin";
@@ -290,7 +293,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       const responses = audit?.responses && typeof audit.responses === "object" ? audit.responses : {};
       const galleryById = new Map(
         (Array.isArray(audit?.gallery) ? audit.gallery : [])
-          .filter((photo) => photo?.dataUrl)
+          .filter((photo) => getPhotoSrc(photo))
           .map((photo) => [String(photo?.id || ""), photo])
       );
 
@@ -299,10 +302,10 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
         const byIds = (Array.isArray(response?.photoIds) ? response.photoIds : [])
           .map((photoId) => galleryById.get(String(photoId || "")))
           .filter(Boolean);
-        const legacy = (Array.isArray(response?.photos) ? response.photos : []).filter((photo) => photo?.dataUrl);
+        const legacy = (Array.isArray(response?.photos) ? response.photos : []).filter((photo) => getPhotoSrc(photo));
         const dedup = new Set();
         return [...byIds, ...legacy].filter((photo) => {
-          const key = String(photo?.id || photo?.dataUrl || "");
+          const key = String(photo?.id || getPhotoSrc(photo) || "");
           if (!key || dedup.has(key)) return false;
           dedup.add(key);
           return true;
@@ -865,7 +868,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                                         title={photo?.name || "Фото чек-листа"}
                                       >
                                         <img
-                                          src={photo.dataUrl}
+                                          src={getPhotoSrc(photo)}
                                           alt={photo?.name || "Фото чек-листа"}
                                           className="h-24 w-full object-cover transition group-hover:scale-[1.02]"
                                         />
@@ -918,7 +921,8 @@ const migrateAuditPhotos = (rawGallery, rawResponses) => {
   const gallery = [];
   const knownIds = new Set();
   const pushPhoto = (photo) => {
-    if (!photo || !photo.dataUrl) return null;
+    const src = getPhotoSrc(photo);
+    if (!photo || !src) return null;
     let id = photo.id;
     if (id && knownIds.has(id)) return id;
     if (!id) id = makeHaccpId();
@@ -927,6 +931,7 @@ const migrateAuditPhotos = (rawGallery, rawResponses) => {
       name: photo.name || "Фото",
       type: photo.type || "image/jpeg",
       dataUrl: photo.dataUrl,
+      url: photo.url,
       addedAt: photo.addedAt || "",
     });
     knownIds.add(id);
@@ -1005,7 +1010,7 @@ function PhotoLightbox({ photo, onClose }) {
         <X size={20} />
       </button>
       <figure className="max-w-3xl" onClick={(e) => e.stopPropagation()}>
-        <img src={photo.dataUrl} alt={photo.name || "фото"} className="max-h-[80vh] w-auto rounded-lg object-contain" />
+        <img src={getPhotoSrc(photo)} alt={photo.name || "фото"} className="max-h-[80vh] w-auto rounded-lg object-contain" />
         {photo.name ? <figcaption className="mt-2 text-center text-sm text-white/80">{photo.name}</figcaption> : null}
       </figure>
     </div>
@@ -1097,7 +1102,7 @@ function PhotoGalleryPanel({ photos, assignmentCount, collapsed, onToggle, onAdd
                   <div key={photo.id} className="relative shrink-0">
                     <button type="button" onClick={() => onPreview(photo)} className="block">
                       <img
-                        src={photo.dataUrl}
+                        src={getPhotoSrc(photo)}
                         alt={photo.name || "фото"}
                         className="h-24 w-24 rounded-lg border border-slate-200 object-cover"
                       />
@@ -1191,7 +1196,7 @@ function PhotoPickerModal({ open, itemLabel, photos, selectedIds, max, onToggle,
                       selected ? "border-emerald-500" : "border-transparent"
                     } ${blocked ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`}
                   >
-                    <img src={photo.dataUrl} alt={photo.name || "фото"} className="h-24 w-full object-cover" />
+                    <img src={getPhotoSrc(photo)} alt={photo.name || "фото"} className="h-24 w-full object-cover" />
                     <span
                       className={`absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full ${
                         selected ? "bg-emerald-600 text-white" : "bg-black/40 text-transparent"
@@ -1238,6 +1243,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
   const [responses, setResponses] = useState({});
   const [currentAuditId, setCurrentAuditId] = useState(null);
   const [status, setStatus] = useState("draft");
+  const [auditStartedAt, setAuditStartedAt] = useState("");
   const [dirty, setDirty] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState({});
@@ -1293,11 +1299,13 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
       setGallery(migrated.gallery);
       setCurrentAuditId(match.id);
       setStatus(match.status || "draft");
+      setAuditStartedAt(String(match.startedAt || ""));
     } else {
       setResponses({});
       setGallery([]);
       setCurrentAuditId(null);
       setStatus("draft");
+      setAuditStartedAt("");
     }
   }, [effectiveRestaurantId, selectedTemplateId, selectedDate, audits, dirty]);
 
@@ -1324,6 +1332,14 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
     const sections = Array.isArray(selectedTemplate?.sections) ? [...selectedTemplate.sections] : [];
     return sections.sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));
   }, [selectedTemplate]);
+
+  useEffect(() => {
+    const next = {};
+    sortedSections.forEach((section) => {
+      next[section.id] = true;
+    });
+    setCollapsedSections(next);
+  }, [selectedDate, selectedTemplateId, effectiveRestaurantId, sortedSections]);
 
   const updateResponse = (itemId, patch) => {
     setDirty(true);
@@ -1429,7 +1445,28 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
     return ids.map((id) => galleryById.get(id)).filter(Boolean);
   };
 
+  const isCompleted = status === "completed";
+  const hasAuditStarted = Boolean(auditStartedAt);
+  const isAuditInProgress = hasAuditStarted && !isCompleted;
+  const isReadOnlyAudit = isCompleted || !isAuditInProgress;
+
+  useEffect(() => {
+    if (isAuditInProgress) return;
+    setCollapsedSections((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      sortedSections.forEach((section) => {
+        if (!next[section.id]) {
+          next[section.id] = true;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [isAuditInProgress, sortedSections]);
+
   const toggleSection = (sectionId) => {
+    if (!isAuditInProgress) return;
     setCollapsedSections((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
   };
 
@@ -1446,12 +1483,14 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
         if (isCommentRequired(response.value) && !String(response.comment || "").trim()) {
           issues.push(`${prefix} — потрібен коментар`);
         }
+        const photoIds = Array.isArray(response?.photoIds) ? response.photoIds.filter((id) => galleryById.has(id)) : [];
+        if (!photoIds.length) issues.push(`${prefix} — додайте фото`);
       });
     });
     return issues;
   };
 
-  const buildPayload = (nextStatus) => {
+  const buildPayload = (nextStatus, startAt) => {
     const computed = computeHaccpScores(selectedTemplate, responses);
     const sectionScores = {};
     Object.entries(computed.sectionResults).forEach(([sectionId, result]) => {
@@ -1479,6 +1518,8 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
       updatedByName: actorName,
     };
 
+    if (startAt) payload.startedAt = startAt;
+
     if (nextStatus === "completed") {
       payload.completedAt = nowIso;
       payload.completedById = actorId;
@@ -1488,16 +1529,18 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
     return payload;
   };
 
-  const persist = async (nextStatus) => {
+  const persist = async (nextStatus, options = {}) => {
     if (submitLockRef.current) return;
     if (!effectiveRestaurantId) {
       alert("Оберіть заклад.");
-      return;
+      return false;
     }
     if (!selectedTemplate) {
       alert("Оберіть шаблон аудиту.");
-      return;
+      return false;
     }
+
+    const startAt = options.startAt || auditStartedAt || "";
 
     if (nextStatus === "completed") {
       const issues = collectIssues();
@@ -1505,13 +1548,13 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
         const preview = issues.slice(0, 8).join("\n");
         const more = issues.length > 8 ? `\n…та ще ${issues.length - 8}` : "";
         alert(`Неможливо завершити аудит. Виправте:\n\n${preview}${more}`);
-        return;
+        return false;
       }
     }
 
     submitLockRef.current = true;
     setSubmitting(true);
-    const payload = buildPayload(nextStatus);
+    const payload = buildPayload(nextStatus, startAt);
 
     let result;
     if (currentAuditId) {
@@ -1531,18 +1574,31 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
 
     if (!result?.success) {
       alert("Не вдалося зберегти аудит.");
-      return;
+      return false;
     }
 
     setDirty(false);
     if (!currentAuditId && result.id) setCurrentAuditId(result.id);
     setStatus(nextStatus);
+    setAuditStartedAt(startAt);
+    return true;
+  };
+
+  const completionIssues = useMemo(() => collectIssues(), [responses, sortedSections, galleryById]);
+  const canCompleteAudit = isAuditInProgress && completionIssues.length === 0;
+
+  const handleStartAudit = async () => {
+    if (hasAuditStarted || isCompleted) return;
+    const startedAtIso = new Date().toISOString();
+    setAuditStartedAt(startedAtIso);
+    setStatus("draft");
   };
 
   const restaurantAudits = useMemo(() => {
     const restaurantId = String(effectiveRestaurantId || "");
     return (audits || [])
       .filter((audit) => String(audit.restaurantId || "") === restaurantId)
+      .filter((audit) => String(audit.status || "") === "completed")
       .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
   }, [audits, effectiveRestaurantId]);
 
@@ -1560,8 +1616,6 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
     const result = await removeAudit(audit.id);
     if (!result.success) alert("Не вдалося видалити аудит.");
   };
-
-  const isCompleted = status === "completed";
 
   return (
     <div className="space-y-4">
@@ -1585,7 +1639,17 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <div>
             <label className="text-sm font-semibold text-slate-800">Дата</label>
-            <input type="date" className={inputClass} value={selectedDate} onChange={(e) => { setSelectedDate(e.target.value); setDirty(false); }} />
+            <div className="mt-1">
+              <DatePickerPopover
+                value={selectedDate}
+                onChange={(nextDate) => {
+                  setSelectedDate(nextDate);
+                  setDirty(false);
+                }}
+                max={todayDate()}
+                label=""
+              />
+            </div>
           </div>
           <div>
             <label className="text-sm font-semibold text-slate-800">Заклад</label>
@@ -1662,7 +1726,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
             onAddFiles={(files) => { void addPhotosToGallery(files); }}
             onRemove={removeFromGallery}
             onPreview={setLightbox}
-            disabled={isCompleted}
+            disabled={isReadOnlyAudit}
           />
 
           <div className="space-y-3">
@@ -1672,7 +1736,12 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
               const items = [...(section.items || [])].sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));
               return (
                 <div key={section.id} className={cardClass}>
-                  <button type="button" onClick={() => toggleSection(section.id)} className="flex w-full items-center justify-between gap-3 text-left">
+                  <button
+                    type="button"
+                    onClick={() => toggleSection(section.id)}
+                    disabled={!isAuditInProgress}
+                    className={`flex w-full items-center justify-between gap-3 text-left ${isAuditInProgress ? "" : "cursor-not-allowed opacity-80"}`}
+                  >
                     <div className="flex min-w-0 items-center gap-2">
                       <Layers size={16} className="shrink-0 text-emerald-600" />
                       <div className="min-w-0">
@@ -1693,7 +1762,8 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                         const currentValue = response.value;
                         const needsComment = isCommentRequired(currentValue);
                         const commentMissing = needsComment && !String(response.comment || "").trim();
-                        const photos = response.photos || [];
+                        const photos = getItemPhotos(response);
+                        const photosMissing = photos.length === 0;
                         return (
                           <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
@@ -1712,6 +1782,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                                       key={rating.value}
                                       type="button"
                                       onClick={() => handleRating(item.id, rating.value)}
+                                      disabled={isReadOnlyAudit}
                                       className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${active ? rating.selectedClass : rating.idleClass}`}
                                       title={rating.short}
                                     >
@@ -1722,53 +1793,69 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                               </div>
                             </div>
 
-                            {needsComment ? (
-                              <div className="mt-2.5 space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5">
-                                <div>
-                                  <label className="flex items-center gap-1 text-xs font-semibold text-amber-800">
-                                    <AlertTriangle size={12} /> Коментар обовʼязковий
-                                  </label>
-                                  <textarea
-                                    className={`${inputClass} min-h-[56px] ${commentMissing ? "border-red-400 focus:border-red-500 focus:ring-red-100" : ""}`}
-                                    value={String(response.comment || "")}
-                                    onChange={(e) => handleComment(item.id, e.target.value)}
-                                    placeholder="Опишіть виявлену невідповідність та пропозиції"
-                                  />
-                                </div>
-
-                                <div>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                                      <Camera size={13} /> Додати фото
-                                      <input
-                                        type="file"
-                                        accept="image/*"
-                                        multiple
-                                        className="hidden"
-                                        onChange={(e) => { void handleAddPhotos(item.id, e.target.files); e.target.value = ""; }}
-                                      />
-                                    </label>
-                                    <span className="text-[11px] text-slate-400">{photos.length}/{MAX_PHOTOS_PER_ITEM}</span>
-                                  </div>
-                                  {photos.length > 0 ? (
-                                    <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
-                                      {photos.map((photo, photoIndex) => (
-                                        <div key={`${item.id}_${photoIndex}`} className="relative">
-                                          <img src={photo.dataUrl} alt={photo.name || "фото"} className="h-20 w-full rounded-lg border border-slate-200 object-cover" />
-                                          <button
-                                            type="button"
-                                            onClick={() => handleRemovePhoto(item.id, photoIndex)}
-                                            className="absolute -right-1.5 -top-1.5 rounded-full bg-red-600 p-0.5 text-white shadow hover:bg-red-500"
-                                          >
-                                            <X size={12} />
-                                          </button>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  ) : null}
-                                </div>
+                            <div className="mt-2.5 space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5">
+                              <div>
+                                <label className="flex items-center gap-1 text-xs font-semibold text-amber-800">
+                                  <AlertTriangle size={12} /> {needsComment ? "Коментар обовʼязковий" : "Коментар (необовʼязково)"}
+                                </label>
+                                <textarea
+                                  className={`${inputClass} min-h-[56px] ${commentMissing ? "border-red-400 focus:border-red-500 focus:ring-red-100" : ""}`}
+                                  value={String(response.comment || "")}
+                                  onChange={(e) => handleComment(item.id, e.target.value)}
+                                  disabled={isReadOnlyAudit}
+                                  placeholder="Опишіть результат перевірки по пункту"
+                                />
                               </div>
-                            ) : null}
+
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <label className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 ${isReadOnlyAudit ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                                    <Camera size={13} /> Додати фото
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      multiple
+                                      disabled={isReadOnlyAudit}
+                                      className="hidden"
+                                      onChange={(e) => {
+                                        void captureForItem(item.id, e.target.files);
+                                        e.target.value = "";
+                                      }}
+                                    />
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => setPicker({ itemId: item.id, itemLabel: `${sectionIndex + 1}.${itemIndex + 1} ${item.title}` })}
+                                    disabled={isReadOnlyAudit}
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    <Images size={13} /> З галереї
+                                  </button>
+                                  <span className={`text-[11px] ${photosMissing ? "text-red-500" : "text-slate-400"}`}>{photos.length}/{MAX_PHOTOS_PER_ITEM}</span>
+                                </div>
+                                {photos.length > 0 ? (
+                                  <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                                    {photos.map((photo, photoIndex) => (
+                                      <div key={`${item.id}_${photo.id || photoIndex}`} className="relative">
+                                        <button type="button" onClick={() => setLightbox(photo)} className="w-full">
+                                          <img src={getPhotoSrc(photo)} alt={photo.name || "фото"} className="h-20 w-full rounded-lg border border-slate-200 object-cover" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => detachFromItem(item.id, photo.id)}
+                                          disabled={isReadOnlyAudit}
+                                          className="absolute -right-1.5 -top-1.5 rounded-full bg-red-600 p-0.5 text-white shadow hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                          <X size={12} />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="mt-2 text-xs text-red-500">Додайте щонайменше одне фото до цього пункту.</p>
+                                )}
+                              </div>
+                            </div>
                           </div>
                         );
                       })}
@@ -1785,29 +1872,66 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
               <div className="text-sm text-slate-600">
                 Результат: <span className="font-bold text-slate-900">{roundPercent(scores.totalPercent)}%</span> · оцінено {scores.assessedItems}/{scores.totalItems}
                 {dirty ? <span className="ml-2 text-amber-600">• є незбережені зміни</span> : null}
+                {!isAuditInProgress && !isCompleted ? (
+                  <span className="ml-2 text-slate-500">• блоки оцінки стануть доступні після старту аудиту</span>
+                ) : null}
+                {isAuditInProgress && !canCompleteAudit ? (
+                  <span className="ml-2 text-red-600">• для завершення залишилось заповнити: {completionIssues.length}</span>
+                ) : null}
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => persist("draft")}
-                  disabled={submitting}
+                  disabled={submitting || isCompleted}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
                 >
                   <Save size={15} /> Зберегти чернетку
                 </button>
-                <button
-                  type="button"
-                  onClick={() => persist("completed")}
-                  disabled={submitting}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
-                >
-                  <CheckCircle2 size={15} /> Завершити аудит
-                </button>
+                {!hasAuditStarted ? (
+                  <button
+                    type="button"
+                    onClick={handleStartAudit}
+                    disabled={submitting || isCompleted}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+                  >
+                    <CheckCircle2 size={15} /> Розпочати аудит
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => persist("completed")}
+                    disabled={submitting || !canCompleteAudit}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+                  >
+                    <CheckCircle2 size={15} /> Завершити аудит
+                  </button>
+                )}
               </div>
             </div>
+            {hasAuditStarted ? (
+              <p className="mt-2 text-xs text-slate-500">Початок аудиту: {new Date(auditStartedAt).toLocaleString("uk-UA")}</p>
+            ) : null}
           </div>
         </>
       )}
+
+      <PhotoPickerModal
+        open={Boolean(picker)}
+        itemLabel={picker?.itemLabel || ""}
+        photos={gallery}
+        selectedIds={Array.isArray(responses?.[picker?.itemId]?.photoIds) ? responses?.[picker?.itemId]?.photoIds : []}
+        max={MAX_PHOTOS_PER_ITEM}
+        onToggle={(photoId) => {
+          if (!picker?.itemId) return;
+          toggleAttach(picker.itemId, photoId);
+        }}
+        onAddFiles={(files) => {
+          if (!picker?.itemId) return;
+          void captureForItem(picker.itemId, files);
+        }}
+        onClose={() => setPicker(null)}
+      />
 
       <div className={cardClass}>
         <button type="button" onClick={() => setShowHistory((prev) => !prev)} className="flex w-full items-center justify-between gap-2 text-left">
