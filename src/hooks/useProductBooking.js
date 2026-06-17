@@ -358,15 +358,28 @@ export const useProductBooking = (enableRealtime = true) => {
     return true;
   };
 
+  const safeListCollectionItemsApi = async (collectionName) => {
+    try {
+      return await listCollectionItemsApi(collectionName);
+    } catch (err) {
+      console.error(`Помилка завантаження колекції ${collectionName}:`, err);
+      return [];
+    }
+  };
+
+  const reportActionError = (contextMessage, err) => {
+    console.error(contextMessage, err);
+  };
+
   const reloadAllApi = async () => {
     const [productsData, inventoryListProductsData, ordersData, suppliersData, typicalFieldsData, inventoriesData] =
       await Promise.all([
-        listCollectionItemsApi("bookingProducts"),
-        listCollectionItemsApi("inventoryListProducts"),
-        listCollectionItemsApi("productOrders"),
-        listCollectionItemsApi("bookingSuppliers"),
-        listCollectionItemsApi("bookingTypicalFields"),
-        listCollectionItemsApi("productInventories"),
+        safeListCollectionItemsApi("bookingProducts"),
+        safeListCollectionItemsApi("inventoryListProducts"),
+        safeListCollectionItemsApi("productOrders"),
+        safeListCollectionItemsApi("bookingSuppliers"),
+        safeListCollectionItemsApi("bookingTypicalFields"),
+        safeListCollectionItemsApi("productInventories"),
       ]);
 
     setCollectionStateIfChanged("products", productsData, setProducts, normalizeProductRecord);
@@ -545,7 +558,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true, id };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка створення продукту:", err);
       return { success: false, error: err };
     }
   };
@@ -578,7 +591,7 @@ export const useProductBooking = (enableRealtime = true) => {
       if (skipReload && previousItem) {
         updateProductsState((prev) => prev.map((item) => (String(item.id) === normalizedId ? previousItem : item)));
       }
-      setError(err);
+      reportActionError("Помилка оновлення продукту:", err);
       return { success: false, error: err };
     }
   };
@@ -598,7 +611,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка видалення продукту:", err);
       return { success: false, error: err };
     }
   };
@@ -611,7 +624,7 @@ export const useProductBooking = (enableRealtime = true) => {
       if (isCollectionsApiEnabled()) await reloadAllApi();
       return { success: true, id };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка створення замовлення:", err);
       return { success: false, error: err };
     }
   };
@@ -624,7 +637,7 @@ export const useProductBooking = (enableRealtime = true) => {
       if (isCollectionsApiEnabled()) await reloadAllApi();
       return { success: true, id };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка додавання позиції в список інвентаризації:", err);
       return { success: false, error: err };
     }
   };
@@ -730,7 +743,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка оновлення замовлення:", err);
       return { success: false, error: err };
     }
   };
@@ -745,7 +758,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка видалення замовлення:", err);
       return { success: false, error: err };
     }
   };
@@ -766,7 +779,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true, id };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка створення постачальника:", err);
       return { success: false, error: err };
     }
   };
@@ -786,7 +799,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка оновлення постачальника:", err);
       return { success: false, error: err };
     }
   };
@@ -806,7 +819,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка видалення постачальника:", err);
       return { success: false, error: err };
     }
   };
@@ -827,7 +840,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true, id };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка створення типового поля:", err);
       return { success: false, error: err };
     }
   };
@@ -847,7 +860,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка оновлення типового поля:", err);
       return { success: false, error: err };
     }
   };
@@ -867,7 +880,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка видалення типового поля:", err);
       return { success: false, error: err };
     }
   };
@@ -879,7 +892,7 @@ export const useProductBooking = (enableRealtime = true) => {
         : await addSupplierDispatch(dispatch);
       return { success: true, id };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка створення відправки постачальнику:", err);
       return { success: false, error: err };
     }
   };
@@ -985,11 +998,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true, id };
     } catch (err) {
-      if (!isNetworkLikeError(err)) {
-        setError(err);
-      } else {
-        setError(null);
-      }
+      reportActionError("Помилка створення інвентаризації:", err);
       return { success: false, error: err };
     }
   };
@@ -1004,11 +1013,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true };
     } catch (err) {
-      if (!isNetworkLikeError(err)) {
-        setError(err);
-      } else {
-        setError(null);
-      }
+      reportActionError("Помилка оновлення інвентаризації:", err);
       return { success: false, error: err };
     }
   };
@@ -1023,7 +1028,7 @@ export const useProductBooking = (enableRealtime = true) => {
       }
       return { success: true };
     } catch (err) {
-      setError(err);
+      reportActionError("Помилка видалення інвентаризації:", err);
       return { success: false, error: err };
     }
   };

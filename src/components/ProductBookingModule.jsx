@@ -2451,8 +2451,13 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
 
   const mergeCandidates = useMemo(() => {
     const scoped = inventories.filter((item) => isInventoryVisibleForUserRestaurant(item, user, inventoryAvailableRestaurants, isGlobalAdmin));
-    return scoped.filter((item) => getMergedIntoId(item) === "" && getMergedFromIds(item).length === 0);
-  }, [inventories, user, isGlobalAdmin, inventoryAvailableRestaurants]);
+    const selectedRestaurantId = String(restaurantId || "").trim();
+    return scoped.filter((item) => {
+      if (getMergedIntoId(item) !== "" || getMergedFromIds(item).length > 0) return false;
+      if (!selectedRestaurantId) return false;
+      return String(item?.restaurantId || "").trim() === selectedRestaurantId;
+    });
+  }, [inventories, user, isGlobalAdmin, inventoryAvailableRestaurants, restaurantId]);
 
   const buildRestoredQuantities = (inventory, targetRestaurantId) => {
     const normalizedRestaurantId = String(targetRestaurantId || "");
@@ -2973,6 +2978,87 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     alert("Інвентаризації об'єднано.");
   };
 
+  const handleMoveSelectedInventoryToJournal = async () => {
+    const ids = Array.from(selectedInventoryIds);
+    if (ids.length !== 1) {
+      alert("Оберіть рівно одну інвентаризацію для перенесення в журнал.");
+      return;
+    }
+
+    const selectedInventory = mergeCandidates.find((inv) => String(inv?.id || "") === String(ids[0] || ""));
+    if (!selectedInventory) {
+      alert("Не вдалося знайти вибрану інвентаризацію.");
+      return;
+    }
+
+    const sourceItems = Array.isArray(selectedInventory?.items) ? selectedInventory.items : [];
+    const sourceTotalItems = sourceItems.reduce((sum, item) => sum + toNumber(item?.qty), 0);
+    const sourceTotalAmount = sourceItems.reduce((sum, item) => sum + toNumber(item?.amount), 0);
+    const mergedSourceDocuments = [{
+      id: String(selectedInventory?.id || ""),
+      inventoryDate: selectedInventory?.inventoryDate || "",
+      restaurantId: selectedInventory?.restaurantId || "",
+      restaurantName: selectedInventory?.restaurantName || "",
+      restaurantRegNumber: selectedInventory?.restaurantRegNumber || "",
+      stockTakingPlace: selectedInventory?.stockTakingPlace || selectedInventory?.stock_taking_place || "",
+      createdBy: selectedInventory?.createdBy || "",
+      createdById: selectedInventory?.createdById || selectedInventory?.created_by_id || "",
+      inventorySessionEndedBy: selectedInventory?.inventorySessionEndedBy || selectedInventory?.inventory_session_ended_by || "",
+      inventorySessionEndedById: selectedInventory?.inventorySessionEndedById || selectedInventory?.inventory_session_ended_by_id || "",
+      inventorySessionEndedAt: selectedInventory?.inventorySessionEndedAt || selectedInventory?.inventory_session_ended_at || "",
+      items: sourceItems,
+      totalItems: selectedInventory?.totalItems,
+      totalAmount: selectedInventory?.totalAmount,
+    }];
+
+    const payload = {
+      restaurantId: String(selectedInventory?.restaurantId || ""),
+      restaurantName: selectedInventory?.restaurantName || "",
+      restaurantRegNumber: selectedInventory?.restaurantRegNumber || "",
+      inventoryDate: selectedInventory?.inventoryDate,
+      stockTakingPlace: selectedInventory?.stockTakingPlace || selectedInventory?.stock_taking_place || "",
+      stock_taking_place: selectedInventory?.stockTakingPlace || selectedInventory?.stock_taking_place || "",
+      items: sourceItems,
+      totalItems: sourceTotalItems,
+      totalAmount: sourceTotalAmount,
+      isMerged: true,
+      mergedFromIds: ids,
+      mergedSourceDocuments,
+      merged_source_documents: mergedSourceDocuments,
+      createdBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+      createdById: user?.uid || "",
+      inventorySessionEndedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
+      inventorySessionEndedById: user?.uid || "",
+      inventorySessionEndedAt: new Date().toISOString(),
+    };
+
+    const confirmed = window.confirm(
+      `Перенести інвентаризацію за ${formatDateUk(selectedInventory?.inventoryDate)} (${selectedInventory?.restaurantName || "без закладу"}) у журнал інвентаризацій?`
+    );
+    if (!confirmed) return;
+
+    const createResult = await createInventory(payload);
+    if (!createResult.success) {
+      alert("Не вдалося перенести інвентаризацію в журнал.");
+      return;
+    }
+
+    const deleteResult = await deleteInventory(String(selectedInventory?.id || ""));
+    if (!deleteResult.success) {
+      alert(getErrorMessage(deleteResult.error, "Інвентаризацію перенесено, але не вдалося прибрати початковий запис."));
+      return;
+    }
+
+    if (String(editingInventoryId || "") === String(selectedInventory?.id || "")) {
+      setEditingInventoryId("");
+      setQuantities({});
+      setInputValues({});
+    }
+
+    setSelectedInventoryIds(new Set());
+    alert("Інвентаризацію перенесено в журнал.");
+  };
+
   const handleCancelEditing = () => {
     setEditingInventoryId("");
     setQuantities({});
@@ -3352,15 +3438,26 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       <div className={`${cardClass} px-2 sm:px-5`}>
         <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
           <h3 className="text-base font-semibold text-slate-900">Проведені інвентаризації</h3>
-          {selectedInventoryIds.size >= 2 && (
-            <button
-              type="button"
-              onClick={handleMergeInventories}
-              className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-500"
-            >
-              Об'єднати вибрані ({selectedInventoryIds.size})
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {selectedInventoryIds.size === 1 && (
+              <button
+                type="button"
+                onClick={handleMoveSelectedInventoryToJournal}
+                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+              >
+                Перенести в журнал
+              </button>
+            )}
+            {selectedInventoryIds.size >= 2 && (
+              <button
+                type="button"
+                onClick={handleMergeInventories}
+                className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-500"
+              >
+                Об'єднати вибрані ({selectedInventoryIds.size})
+              </button>
+            )}
+          </div>
         </div>
         <div className="-mx-1 sm:mx-0 overflow-x-auto rounded-lg border border-slate-200">
           <table className="min-w-full text-sm">
