@@ -13,8 +13,8 @@ export const toPositiveNumber = (value, fallback = 0) => {
   return num;
 };
 
-// Три типи оцінок. Кожна має умовне значення (2/1/0) та відсоток виконання.
-// "Відмінно" = максимум; усе нижче вимагає коментаря та дозволяє фото.
+// Шкала оцінок для пунктів HACCP.
+// N/A означає, що пункт не застосовується і не впливає на загальний результат.
 export const RATING_SCALE = [
   {
     value: 2,
@@ -49,6 +49,18 @@ export const RATING_SCALE = [
     dotClass: "bg-red-500",
     textClass: "text-red-700",
   },
+  {
+    value: -1,
+    key: "na",
+    label: "N/A",
+    short: "Не застосовується",
+    percent: null,
+    excludeFromScore: true,
+    selectedClass: "border-slate-600 bg-slate-600 text-white shadow-sm",
+    idleClass: "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200",
+    dotClass: "bg-slate-500",
+    textClass: "text-slate-700",
+  },
 ];
 
 export const MAX_RATING_VALUE = 2;
@@ -72,7 +84,10 @@ export const gradeBandFor = (percent) => {
 };
 
 export const isCommentRequired = (value) =>
-  value !== null && value !== undefined && Number(value) < MAX_RATING_VALUE;
+  value !== null && value !== undefined && (Number(value) === 1 || Number(value) === 0);
+
+export const isPhotoRequired = (value) =>
+  value !== null && value !== undefined && Number(value) === 0;
 
 export const sumWeights = (arr) =>
   Array.isArray(arr) ? arr.reduce((acc, item) => acc + toPositiveNumber(item?.weight, 0), 0) : 0;
@@ -109,8 +124,10 @@ export const computeHaccpScores = (template, responses = {}) => {
       if (rating) {
         assessed += 1;
         assessedItems += 1;
-        planWeight += itemWeight;
-        factWeight += (itemWeight * rating.percent) / 100;
+        if (!rating.excludeFromScore && Number.isFinite(rating.percent)) {
+          planWeight += itemWeight;
+          factWeight += (itemWeight * rating.percent) / 100;
+        }
       }
     }
 
@@ -121,7 +138,7 @@ export const computeHaccpScores = (template, responses = {}) => {
       percent,
       assessed,
       total: items.length,
-      hasData: assessed > 0,
+      hasData: planWeight > 0,
       weight: sectionWeight,
     };
 

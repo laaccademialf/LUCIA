@@ -10,6 +10,7 @@ import {
   ChevronUp,
   ClipboardCheck,
   Copy,
+  Download,
   Image as ImageIcon,
   Images,
   Layers,
@@ -24,6 +25,7 @@ import {
 } from "lucide-react";
 import { useHaccp } from "../hooks/useHaccp";
 import DatePickerPopover from "./DatePickerPopover";
+import { isCollectionsApiEnabled, listCollectionItemsApi } from "../api/collectionsApi";
 import {
   RATING_BY_VALUE,
   RATING_SCALE,
@@ -31,6 +33,7 @@ import {
   computeHaccpScores,
   gradeBandFor,
   isCommentRequired,
+  isPhotoRequired,
   makeHaccpId,
   roundPercent,
   sumWeights,
@@ -40,6 +43,8 @@ import {
 const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass =
   "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
+const compactInputClass =
+  "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
 
 const MAX_PHOTOS_PER_ITEM = 5;
 const MAX_GALLERY_PHOTOS = 60;
@@ -93,10 +98,26 @@ const compressImage = (file) =>
   });
 
 const formatDisplayDate = (value) => {
-  if (!value || typeof value !== "string") return "—";
-  const [y, m, d] = value.split("-");
-  if (!y || !m || !d) return value;
-  return `${d}.${m}.${y}`;
+  if (!value) return "—";
+
+  const text = String(value).trim();
+  if (!text) return "—";
+
+  const isoDateMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoDateMatch) {
+    const [, year, month, day] = isoDateMatch;
+    return `${day}.${month}.${year}`;
+  }
+
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) {
+    const day = String(parsed.getDate()).padStart(2, "0");
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const year = parsed.getFullYear();
+    return `${day}.${month}.${year}`;
+  }
+
+  return text;
 };
 
 const normalizeHaccpTab = (tab = "") => {
@@ -138,8 +159,9 @@ const collectIssueItemIds = (responses) => {
   const ids = new Set();
   Object.entries(responses || {}).forEach(([itemId, response]) => {
     const value = response?.value;
-    if (value === null || value === undefined) return;
-    if (Number(value) < 2) ids.add(String(itemId));
+    const rating = value === null || value === undefined ? null : RATING_BY_VALUE[value];
+    if (!rating) return;
+    if (rating.value === 0 || rating.value === 1) ids.add(String(itemId));
   });
   return ids;
 };
@@ -160,6 +182,46 @@ const MONTH_OPTIONS_UA = [
 ];
 
 const getPhotoSrc = (photo) => String(photo?.url || photo?.dataUrl || "").trim();
+const getCriticalPlanKey = (auditId, itemId) => `${String(auditId || "")}::${String(itemId || "")}`;
+
+const parseUserRestaurantIds = (userRow) => {
+  const raw = userRow?.restaurants ?? userRow?.restaurant_ids ?? userRow?.restaurantIds;
+  if (Array.isArray(raw)) {
+    return Array.from(new Set(raw.map((value) => String(value || "").trim()).filter(Boolean)));
+  }
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (!text) return [];
+    if (text.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+          return Array.from(new Set(parsed.map((value) => String(value || "").trim()).filter(Boolean)));
+        }
+      } catch {
+        // noop
+      }
+    }
+    return Array.from(new Set(text.split(",").map((value) => value.trim()).filter(Boolean)));
+  }
+  const single = String(userRow?.restaurant || userRow?.restaurant_id || userRow?.restaurantId || "").trim();
+  return single ? [single] : [];
+};
+
+const getUserDisplayLabel = (userRow) => {
+  const name = String(userRow?.displayName || userRow?.display_name || userRow?.name || "").trim();
+  const email = String(userRow?.email || userRow?.user_email || "").trim();
+  if (name && email) return `${name} (${email})`;
+  return name || email;
+};
+
+const isEstablishmentManagerUser = (userRow) => {
+  const roleValue = String(userRow?.role || "").toLowerCase();
+  const workRoleValue = String(userRow?.workRole || userRow?.work_role || userRow?.work_role_name || "").toLowerCase();
+  const positionValue = String(userRow?.position || userRow?.position_name || "").toLowerCase();
+  const text = `${roleValue} ${workRoleValue} ${positionValue}`;
+  return text.includes("керуюч") || text.includes("manager");
+};
 
 function HaccpReportTab({ user, restaurants, templates, audits }) {
   const ALL_LOCATIONS_VALUE = "__ALL__";
@@ -175,14 +237,85 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   }, [restaurants, isAdmin, userRestaurantIds]);
 
   const [selectedRestaurantId, setSelectedRestaurantId] = useState(ALL_LOCATIONS_VALUE);
-  const [selectedAuditIds, setSelectedAuditIds] = useState([]);
-  const [selectionInitialized, setSelectionInitialized] = useState(false);
   const [showCriticalDetails, setShowCriticalDetails] = useState(false);
   const [galleryLightboxPhoto, setGalleryLightboxPhoto] = useState(null);
   const [periodFromMonth, setPeriodFromMonth] = useState("");
   const [periodFromYear, setPeriodFromYear] = useState("");
   const [periodToMonth, setPeriodToMonth] = useState("");
   const [periodToYear, setPeriodToYear] = useState("");
+  const [actionPlanByItem, setActionPlanByItem] = useState({});
+  const [planDialogContext, setPlanDialogContext] = useState(null);
+  const [planDialogDeadline, setPlanDialogDeadline] = useState("");
+  const [planDialogResponsible, setPlanDialogResponsible] = useState("");
+  const [planDialogComment, setPlanDialogComment] = useState("");
+  const [usersForResponsible, setUsersForResponsible] = useState([]);
+  const [loadingResponsibleUsers, setLoadingResponsibleUsers] = useState(false);
+
+  const actionPlanStorageKey = useMemo(
+    () => `haccp.report.actionPlan.${String(user?.id || user?.email || "default")}`,
+    [user?.email, user?.id]
+  );
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(actionPlanStorageKey);
+      if (!raw) {
+        setActionPlanByItem({});
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      setActionPlanByItem(parsed && typeof parsed === "object" ? parsed : {});
+    } catch {
+      setActionPlanByItem({});
+    }
+  }, [actionPlanStorageKey]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(actionPlanStorageKey, JSON.stringify(actionPlanByItem || {}));
+    } catch {
+      // localStorage може бути недоступним у приватних режимах браузера
+    }
+  }, [actionPlanByItem, actionPlanStorageKey]);
+
+  useEffect(() => {
+    if (!planDialogContext) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setPlanDialogContext(null);
+        setPlanDialogDeadline("");
+        setPlanDialogResponsible("");
+        setPlanDialogComment("");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [planDialogContext]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadUsersForResponsible = async () => {
+      if (!isCollectionsApiEnabled()) {
+        setUsersForResponsible([]);
+        return;
+      }
+      setLoadingResponsibleUsers(true);
+      try {
+        const rows = await listCollectionItemsApi("users");
+        if (!cancelled) setUsersForResponsible(Array.isArray(rows) ? rows : []);
+      } catch (error) {
+        console.error("Не вдалося завантажити користувачів для плану дій:", error);
+        if (!cancelled) setUsersForResponsible([]);
+      } finally {
+        if (!cancelled) setLoadingResponsibleUsers(false);
+      }
+    };
+
+    void loadUsersForResponsible();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (selectedRestaurantId === ALL_LOCATIONS_VALUE) return;
@@ -256,102 +389,13 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     });
   }, [auditsByLocation, periodFromMonth, periodFromYear, periodToMonth, periodToYear]);
 
-  useEffect(() => {
-    if (!filteredAudits.length) {
-      if (selectedAuditIds.length) setSelectedAuditIds([]);
-      if (selectionInitialized) setSelectionInitialized(false);
-      return;
-    }
-
-    const allowed = new Set(filteredAudits.map((audit) => String(audit.id)));
-    const sanitized = selectedAuditIds.filter((id) => allowed.has(String(id)));
-    if (sanitized.length !== selectedAuditIds.length) {
-      setSelectedAuditIds(sanitized);
-      return;
-    }
-
-    if (!selectionInitialized) {
-      setSelectionInitialized(true);
-      setSelectedAuditIds(filteredAudits.slice(0, 5).map((audit) => String(audit.id)));
-    }
-  }, [filteredAudits, selectedAuditIds, selectionInitialized]);
-
   const templatesById = useMemo(() => {
     const map = new Map();
     (templates || []).forEach((template) => map.set(String(template.id), template));
     return map;
   }, [templates]);
 
-  const selectedAudits = useMemo(() => {
-    const selected = new Set(selectedAuditIds.map(String));
-    return filteredAudits.filter((audit) => selected.has(String(audit.id)));
-  }, [filteredAudits, selectedAuditIds]);
-
-  const galleryAudits = useMemo(() => {
-    return selectedAudits.map((audit) => {
-      const template = templatesById.get(String(audit?.templateId || "")) || null;
-      const responses = audit?.responses && typeof audit.responses === "object" ? audit.responses : {};
-      const galleryById = new Map(
-        (Array.isArray(audit?.gallery) ? audit.gallery : [])
-          .filter((photo) => getPhotoSrc(photo))
-          .map((photo) => [String(photo?.id || ""), photo])
-      );
-
-      const mapItemPhotos = (itemId) => {
-        const response = responses?.[itemId] || {};
-        const byIds = (Array.isArray(response?.photoIds) ? response.photoIds : [])
-          .map((photoId) => galleryById.get(String(photoId || "")))
-          .filter(Boolean);
-        const legacy = (Array.isArray(response?.photos) ? response.photos : []).filter((photo) => getPhotoSrc(photo));
-        const dedup = new Set();
-        return [...byIds, ...legacy].filter((photo) => {
-          const key = String(photo?.id || getPhotoSrc(photo) || "");
-          if (!key || dedup.has(key)) return false;
-          dedup.add(key);
-          return true;
-        });
-      };
-
-      const blocks = (template?.sections || [])
-        .slice()
-        .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
-        .map((section) => {
-          const categories = (section?.items || [])
-            .slice()
-            .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
-            .map((sectionItem) => {
-              const photos = mapItemPhotos(String(sectionItem?.id || ""));
-              return {
-                id: String(sectionItem?.id || ""),
-                title: String(sectionItem?.title || "Категорія без назви"),
-                photos,
-              };
-            })
-            .filter((category) => category.photos.length > 0);
-
-          return {
-            id: String(section?.id || ""),
-            title: String(section?.title || "Блок без назви"),
-            categories,
-          };
-        })
-        .filter((block) => block.categories.length > 0);
-
-      const totalPhotos = blocks.reduce(
-        (sum, block) => sum + block.categories.reduce((acc, category) => acc + category.photos.length, 0),
-        0
-      );
-
-      return {
-        auditId: String(audit?.id || ""),
-        label: `${formatDisplayDate(audit?.date)} · ${String(audit?.restaurantName || "Локація")}`,
-        blocks,
-        totalPhotos,
-      };
-    });
-  }, [selectedAudits, templatesById]);
-
-  const auditsForMetrics = selectedAudits.length ? selectedAudits : filteredAudits;
+  const auditsForMetrics = filteredAudits;
 
   const metrics = useMemo(
     () =>
@@ -363,6 +407,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
         const score = Number.isFinite(scoreValue) ? scoreValue : fallbackScore;
         return {
           ...audit,
+          gallery: Array.isArray(audit?.gallery) ? audit.gallery : [],
           score,
           critical: countCriticalViolations(responses),
           responses,
@@ -401,6 +446,20 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       .filter(Boolean);
   }, [metrics, templatesById]);
 
+  const criticalItemsFlat = useMemo(
+    () =>
+      criticalDetails.flatMap((group) =>
+        (group?.items || []).map((item) => ({
+          planKey: getCriticalPlanKey(group.auditId, item.itemId),
+          auditId: String(group.auditId || ""),
+          auditLabel: String(group.auditLabel || ""),
+          itemId: String(item.itemId || ""),
+          itemTitle: String(item.title || "Пункт без назви"),
+        }))
+      ),
+    [criticalDetails]
+  );
+
   const trendSeries = useMemo(() => [...metrics].sort((a, b) => a.sortKey - b.sortKey), [metrics]);
 
   const avgScore = metrics.length
@@ -408,6 +467,29 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     : 0;
   const traffic = scoreTrafficLight(avgScore);
   const criticalCount = metrics.reduce((acc, item) => acc + (Number(item.critical) || 0), 0);
+
+  const responsibleOptions = useMemo(() => {
+    const allowedLocationIds = selectedRestaurantId === ALL_LOCATIONS_VALUE
+      ? new Set(availableRestaurants.map((row) => String(row?.id || "")).filter(Boolean))
+      : new Set([String(selectedRestaurantId || "")].filter(Boolean));
+
+    const labels = (Array.isArray(usersForResponsible) ? usersForResponsible : [])
+      .filter((userRow) => {
+        if (!allowedLocationIds.size) return true;
+        const ids = parseUserRestaurantIds(userRow);
+        return ids.some((id) => allowedLocationIds.has(String(id || "")));
+      })
+      .filter((userRow) => isEstablishmentManagerUser(userRow))
+      .map(getUserDisplayLabel)
+      .filter(Boolean);
+
+    return Array.from(new Set(labels)).sort((a, b) => a.localeCompare(b, "uk"));
+  }, [availableRestaurants, selectedRestaurantId, usersForResponsible]);
+
+  const defaultResponsibleManager = useMemo(
+    () => String(responsibleOptions?.[0] || "").trim(),
+    [responsibleOptions]
+  );
 
   const dynamics = useMemo(() => {
     if (trendSeries.length < 2) return null;
@@ -488,13 +570,167 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     return { dateLabel, technologistLabel, locationLabel };
   }, [metrics]);
 
-  const toggleAuditSelection = (auditId) => {
-    const id = String(auditId || "");
-    if (!id) return;
-    setSelectedAuditIds((prev) => {
-      if (prev.includes(id)) return prev.filter((item) => item !== id);
-      return [id, ...prev];
-    });
+  const selectedLocationLabel = useMemo(() => {
+    if (selectedRestaurantId === ALL_LOCATIONS_VALUE) return "Всі локації";
+    const match = availableRestaurants.find((item) => String(item?.id || "") === String(selectedRestaurantId || ""));
+    return String(match?.name || "—");
+  }, [availableRestaurants, selectedRestaurantId]);
+
+  const actionPlanEntries = useMemo(() => {
+    return criticalItemsFlat
+      .map((item) => {
+        const saved = actionPlanByItem?.[item.planKey];
+        const comment = String(saved?.comment || "").trim();
+        if (!comment) return null;
+        return {
+          ...item,
+          comment,
+          updatedAt: String(saved?.updatedAt || ""),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  }, [actionPlanByItem, criticalItemsFlat]);
+
+  const openPlanDialog = (auditId, auditLabel, item) => {
+    const itemId = String(item?.itemId || "");
+    const itemTitle = String(item?.title || "Пункт без назви");
+    const planKey = getCriticalPlanKey(auditId, itemId);
+    const saved = actionPlanByItem?.[planKey] || {};
+    setPlanDialogContext({ planKey, auditId: String(auditId || ""), auditLabel: String(auditLabel || ""), itemId, itemTitle });
+    setPlanDialogDeadline(String(saved?.deadline || todayDate()));
+    setPlanDialogResponsible(String(saved?.responsible || defaultResponsibleManager || ""));
+    setPlanDialogComment(String(saved?.comment || ""));
+  };
+
+  useEffect(() => {
+    if (!planDialogContext) return;
+    if (String(planDialogResponsible || "").trim()) return;
+    if (!defaultResponsibleManager) return;
+    setPlanDialogResponsible(defaultResponsibleManager);
+  }, [defaultResponsibleManager, planDialogContext, planDialogResponsible]);
+
+  const savePlanDialog = () => {
+    if (!planDialogContext?.planKey) return;
+    const comment = String(planDialogComment || "").trim();
+    const deadline = String(planDialogDeadline || "").trim();
+    const responsible = String(planDialogResponsible || "").trim();
+
+    if (!deadline) {
+      alert("Вкажіть дедлайн виконання.");
+      return;
+    }
+    if (!responsible) {
+      alert("Для обраної локації не знайдено керуючого закладу.");
+      return;
+    }
+    if (!comment) {
+      alert("Вкажіть план дій перед збереженням.");
+      return;
+    }
+
+    setActionPlanByItem((prev) => ({
+      ...(prev || {}),
+      [planDialogContext.planKey]: {
+        deadline,
+        responsible,
+        comment,
+        auditId: planDialogContext.auditId,
+        auditLabel: planDialogContext.auditLabel,
+        itemId: planDialogContext.itemId,
+        itemTitle: planDialogContext.itemTitle,
+        updatedAt: new Date().toISOString(),
+      },
+    }));
+
+    setPlanDialogContext(null);
+    setPlanDialogDeadline("");
+    setPlanDialogResponsible("");
+    setPlanDialogComment("");
+  };
+
+  const handleExportExcel = async () => {
+    if (!auditsForMetrics.length) {
+      alert("Немає даних для експорту.");
+      return;
+    }
+
+    try {
+      const XLSX = await import("xlsx");
+
+      const summaryRows = [
+        { Показник: "Локація", Значення: selectedLocationLabel },
+        {
+          Показник: "Період",
+          Значення: `${periodFromMonth && periodFromYear ? `${periodFromMonth}.${periodFromYear}` : "—"} - ${periodToMonth && periodToYear ? `${periodToMonth}.${periodToYear}` : "—"}`,
+        },
+        { Показник: "Середній HACCP Score", Значення: `${roundPercent(avgScore)}%` },
+        { Показник: "Критичні порушення", Значення: criticalCount },
+        { Показник: "Кількість чек-листів", Значення: auditsForMetrics.length },
+        { Показник: "Технічна інформація: дати", Значення: technicalInfo.dateLabel },
+        { Показник: "Технічна інформація: технолог(и)", Значення: technicalInfo.technologistLabel },
+      ];
+
+      const checklistRows = trendSeries.map((item) => ({
+        Дата: formatDisplayDate(item.date),
+        Локація: String(item.restaurantName || "Локація"),
+        Шаблон: String(item.templateName || "Без шаблону"),
+        Оцінка: `${roundPercent(item.score)}%`,
+        Критичні: Number(item.critical || 0),
+      }));
+
+      const detailsRows = [];
+      trendSeries.forEach((auditItem) => {
+        const templateForItem = templatesById.get(String(auditItem?.templateId || "")) || null;
+        const galleryById = new Map(
+          (Array.isArray(auditItem?.gallery) ? auditItem.gallery : [])
+            .filter((photo) => getPhotoSrc(photo))
+            .map((photo) => [String(photo?.id || ""), photo])
+        );
+        (templateForItem?.sections || [])
+          .slice()
+          .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+          .forEach((section) => {
+            (section?.items || [])
+              .slice()
+              .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+              .forEach((sectionItem) => {
+                const itemId = String(sectionItem?.id || "");
+                const response = auditItem?.responses?.[itemId] || {};
+                const rating = RATING_BY_VALUE?.[response?.value] || null;
+                const photos = [
+                  ...(Array.isArray(response?.photoIds) ? response.photoIds : [])
+                    .map((photoId) => galleryById.get(String(photoId || "")))
+                    .filter((photo) => getPhotoSrc(photo)),
+                  ...(Array.isArray(response?.photos) ? response.photos : []).filter((photo) => getPhotoSrc(photo)),
+                ];
+                const photoLinks = Array.from(new Set(photos.map((photo) => getPhotoSrc(photo)).filter(Boolean)));
+
+                detailsRows.push({
+                  Дата: formatDisplayDate(auditItem?.date),
+                  Локація: String(auditItem?.restaurantName || "Локація"),
+                  Шаблон: String(auditItem?.templateName || "Без шаблону"),
+                  Розділ: String(section?.title || "Без назви розділу"),
+                  Пункт: String(sectionItem?.title || "Пункт без назви"),
+                  Оцінка: rating?.label || "Не оцінено",
+                  Коментар: String(response?.comment || "").trim(),
+                  Фото: photoLinks.join("\n"),
+                });
+              });
+          });
+      });
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), "Підсумок");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(checklistRows), "Чек-листи");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detailsRows), "Пункти та коментарі");
+
+      const fileStamp = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, `HACCP_report_${fileStamp}.xlsx`);
+    } catch (error) {
+      console.error("Не вдалося експортувати звіт:", error);
+      alert("Не вдалося експортувати звіт у Excel.");
+    }
   };
 
   return (
@@ -505,97 +741,82 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           <h2 className="text-lg font-semibold">HACCP звіт</h2>
         </div>
 
-        <div className="grid grid-cols-1 gap-3">
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Локація</label>
-            <select className={inputClass} value={selectedRestaurantId} onChange={(e) => setSelectedRestaurantId(e.target.value)}>
-              <option value="">Оберіть локацію</option>
-              <option value={ALL_LOCATIONS_VALUE}>Всі локації</option>
-              {availableRestaurants.map((item) => (
-                <option key={item.id} value={item.id}>{item.name}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Період від</label>
-            <div className="mt-1 grid grid-cols-2 gap-2">
-              <select className={inputClass.replace("mt-1 ", "")} value={periodFromMonth} onChange={(e) => setPeriodFromMonth(e.target.value)}>
-                <option value="">Місяць</option>
-                {MONTH_OPTIONS_UA.map((month) => (
-                  <option key={month.value} value={month.value}>{month.label}</option>
-                ))}
-              </select>
-              <select className={inputClass.replace("mt-1 ", "")} value={periodFromYear} onChange={(e) => setPeriodFromYear(e.target.value)}>
-                <option value="">Рік</option>
-                {availablePeriodYears.map((year) => (
-                  <option key={year} value={year}>{year}</option>
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm font-semibold text-slate-800">Локація</label>
+              <select className={inputClass} value={selectedRestaurantId} onChange={(e) => setSelectedRestaurantId(e.target.value)}>
+                <option value="">Оберіть локацію</option>
+                <option value={ALL_LOCATIONS_VALUE}>Всі локації</option>
+                {availableRestaurants.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
                 ))}
               </select>
             </div>
+
+            <div>
+              <label className="text-sm font-semibold text-slate-800">Період від</label>
+              <div className="mt-1 grid grid-cols-2 gap-2">
+                <select className={inputClass.replace("mt-1 ", "")} value={periodFromMonth} onChange={(e) => setPeriodFromMonth(e.target.value)}>
+                  <option value="">Місяць</option>
+                  {MONTH_OPTIONS_UA.map((month) => (
+                    <option key={month.value} value={month.value}>{month.label}</option>
+                  ))}
+                </select>
+                <select className={inputClass.replace("mt-1 ", "")} value={periodFromYear} onChange={(e) => setPeriodFromYear(e.target.value)}>
+                  <option value="">Рік</option>
+                  {availablePeriodYears.map((year) => (
+                    <option key={year} value={year}>{year}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-sm font-semibold text-slate-800">Період до</label>
+              <div className="mt-1 grid grid-cols-2 gap-2">
+                <select className={inputClass.replace("mt-1 ", "")} value={periodToMonth} onChange={(e) => setPeriodToMonth(e.target.value)}>
+                  <option value="">Місяць</option>
+                  {MONTH_OPTIONS_UA.map((month) => (
+                    <option key={month.value} value={month.value}>{month.label}</option>
+                  ))}
+                </select>
+                <select className={inputClass.replace("mt-1 ", "")} value={periodToYear} onChange={(e) => setPeriodToYear(e.target.value)}>
+                  <option value="">Рік</option>
+                  {availablePeriodYears.map((year) => (
+                    <option key={year} value={year}>{year}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => { void handleExportExcel(); }}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
+            >
+              <Download size={16} /> Вивантажити звіт в Excel
+            </button>
           </div>
+
           <div>
-            <label className="text-sm font-semibold text-slate-800">Період до</label>
-            <div className="mt-1 grid grid-cols-2 gap-2">
-              <select className={inputClass.replace("mt-1 ", "")} value={periodToMonth} onChange={(e) => setPeriodToMonth(e.target.value)}>
-                <option value="">Місяць</option>
-                {MONTH_OPTIONS_UA.map((month) => (
-                  <option key={month.value} value={month.value}>{month.label}</option>
-                ))}
-              </select>
-              <select className={inputClass.replace("mt-1 ", "")} value={periodToYear} onChange={(e) => setPeriodToYear(e.target.value)}>
-                <option value="">Рік</option>
-                {availablePeriodYears.map((year) => (
-                  <option key={year} value={year}>{year}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
-
-        <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <summary className="cursor-pointer list-none text-sm font-semibold text-slate-800">
-            Меню вибору чек-листів для інфографіки
-            <span className="ml-2 text-xs font-medium text-slate-500">(обрано: {auditsForMetrics.length})</span>
-          </summary>
-
-          <div className="mt-3">
-            <div className="mb-2 flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setSelectedAuditIds(filteredAudits.map((audit) => String(audit.id)))}
-                className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-white"
-              >
-                Обрати всі
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedAuditIds([])}
-                className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-white"
-              >
-                Очистити
-              </button>
-            </div>
-            <div className="max-h-44 overflow-y-auto rounded-lg border border-slate-200 bg-white p-2">
-              <div className="grid grid-cols-1 gap-1 md:grid-cols-2">
-                {filteredAudits.map((audit) => {
-                  const auditId = String(audit.id || "");
-                  const checked = selectedAuditIds.includes(auditId);
-                  return (
-                    <label key={auditId} className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
-                      <input type="checkbox" checked={checked} onChange={() => toggleAuditSelection(auditId)} className="mt-0.5" />
-                      <span className="leading-relaxed">
-                        {formatDisplayDate(audit?.date)} · {String(audit?.restaurantName || "Локація")} · {String(audit?.templateName || "Без шаблону")}
-                      </span>
-                    </label>
-                  );
-                })}
+            <p className="text-sm font-semibold text-slate-800">Технічна інформація</p>
+            <div className="mt-2 grid grid-cols-1 gap-2 text-sm md:grid-cols-3">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 min-h-[72px]">
+                <p className="text-xs text-slate-500">Дата перевірок</p>
+                <p className="font-semibold text-slate-900">{technicalInfo.dateLabel}</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 min-h-[72px]">
+                <p className="text-xs text-slate-500">Технолог(и)</p>
+                <p className="font-semibold text-slate-900">{technicalInfo.technologistLabel}</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 min-h-[72px]">
+                <p className="text-xs text-slate-500">Локація</p>
+                <p className="font-semibold text-slate-900">{technicalInfo.locationLabel}</p>
               </div>
             </div>
           </div>
-        </details>
+        </div>
       </div>
 
       {!filteredAudits.length ? (
@@ -622,21 +843,26 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             </div>
 
             <div className={cardClass}>
-              <p className="text-sm font-semibold text-slate-800">Технічна інформація</p>
-              <div className="mt-2 grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                  <p className="text-xs text-slate-500">Дата перевірок</p>
-                  <p className="font-semibold text-slate-900">{technicalInfo.dateLabel}</p>
-                </div>
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                  <p className="text-xs text-slate-500">Технолог(и)</p>
-                  <p className="font-semibold text-slate-900">{technicalInfo.technologistLabel}</p>
-                </div>
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 md:col-span-2">
-                  <p className="text-xs text-slate-500">Локація</p>
-                  <p className="font-semibold text-slate-900">{technicalInfo.locationLabel}</p>
-                </div>
-              </div>
+              <p className="text-sm font-semibold text-slate-800">Динаміка виправлень</p>
+              {dynamics ? (
+                <>
+                  <div className="mt-2 text-4xl font-extrabold text-slate-900">{dynamics.percent}%</div>
+                  <p className="mt-1 text-sm text-slate-600">Усунено {dynamics.fixed} з {dynamics.total} помилок від найстаршого до найновішого обраного чек-листа.</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">
+                      <ArrowUp size={12} /> Покращено: {dynamics.improved}
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-50 px-2 py-1 font-semibold text-red-700">
+                      <ArrowDown size={12} /> Погіршено: {dynamics.worsened}
+                    </span>
+                    <span className="inline-flex items-center rounded-full border border-slate-300 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
+                      Без змін: {dynamics.unchanged}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">Недостатньо даних для розрахунку (оберіть щонайменше 2 чек-листи).</p>
+              )}
             </div>
 
             <div className={cardClass}>
@@ -659,11 +885,24 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                       {criticalDetails.map((group) => (
                         <div key={group.auditId} className="rounded border border-red-200 bg-white p-2">
                           <p className="font-semibold text-red-800">{group.auditLabel}</p>
-                          <ul className="mt-1 list-disc pl-4">
+                          <div className="mt-2 space-y-1.5">
                             {group.items.map((item) => (
-                              <li key={`${group.auditId}_${item.itemId}`}>{item.title}</li>
+                              <div key={`${group.auditId}_${item.itemId}`} className="flex items-center justify-between gap-3 rounded-md border border-red-200 bg-white px-2 py-1.5">
+                                <p className="min-w-0 text-xs text-red-900">{item.title}</p>
+                                <button
+                                  type="button"
+                                  onClick={() => openPlanDialog(group.auditId, group.auditLabel, item)}
+                                  className={`inline-flex h-8 min-w-[118px] items-center justify-center rounded-full border px-2 text-[10px] font-semibold whitespace-nowrap ${
+                                    String(actionPlanByItem?.[getCriticalPlanKey(group.auditId, item.itemId)]?.comment || "").trim()
+                                      ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                                      : "border-red-300 bg-white text-red-700"
+                                  }`}
+                                >
+                                  {String(actionPlanByItem?.[getCriticalPlanKey(group.auditId, item.itemId)]?.comment || "").trim() ? "План збережено" : "Додати план дій"}
+                                </button>
+                              </div>
                             ))}
-                          </ul>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -675,25 +914,24 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             </div>
 
             <div className={cardClass}>
-              <p className="text-sm font-semibold text-slate-800">Динаміка виправлень</p>
-              {dynamics ? (
-                <>
-                  <div className="mt-2 text-4xl font-extrabold text-slate-900">{dynamics.percent}%</div>
-                  <p className="mt-1 text-sm text-slate-600">Усунено {dynamics.fixed} з {dynamics.total} помилок від найстаршого до найновішого обраного чек-листа.</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">
-                      <ArrowUp size={12} /> Покращено: {dynamics.improved}
-                    </span>
-                    <span className="inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-50 px-2 py-1 font-semibold text-red-700">
-                      <ArrowDown size={12} /> Погіршено: {dynamics.worsened}
-                    </span>
-                    <span className="inline-flex items-center rounded-full border border-slate-300 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
-                      Без змін: {dynamics.unchanged}
-                    </span>
-                  </div>
-                </>
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-semibold text-slate-800">План дій</p>
+                <ListChecks size={16} className="text-emerald-600" />
+              </div>
+              {actionPlanEntries.length ? (
+                <ul className="mt-2 space-y-2 text-sm text-slate-700">
+                  {actionPlanEntries.map((entry) => (
+                    <li key={entry.planKey} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                      <p className="text-xs font-semibold text-slate-500">{entry.auditLabel} · {entry.itemTitle}</p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Дедлайн: {actionPlanByItem?.[entry.planKey]?.deadline ? formatDisplayDate(actionPlanByItem[entry.planKey].deadline) : "—"} · Відповідальний: {actionPlanByItem?.[entry.planKey]?.responsible || "—"}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-800">{entry.comment}</p>
+                    </li>
+                  ))}
+                </ul>
               ) : (
-                <p className="mt-2 text-sm text-slate-500">Недостатньо даних для розрахунку (оберіть щонайменше 2 чек-листи).</p>
+                <p className="mt-2 text-sm text-slate-500">Натисніть на пункт у блоці «Критичні порушення», додайте коментар і збережіть його як план дій.</p>
               )}
             </div>
           </div>
@@ -728,11 +966,26 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                           const sectionItemId = String(sectionItem?.id || "");
                           const responseValue = item?.responses?.[sectionItemId]?.value;
                           const rating = RATING_BY_VALUE?.[responseValue];
+                          const response = item?.responses?.[sectionItemId] || {};
+                          const photos = (Array.isArray(response?.photoIds) ? response.photoIds : [])
+                            .map((photoId) => ({ photoId, photo: (item?.gallery || []).find((entry) => String(entry?.id || "") === String(photoId || "")) || null }))
+                            .map(({ photo }) => photo)
+                            .filter((photo) => getPhotoSrc(photo));
+                          const legacyPhotos = (Array.isArray(response?.photos) ? response.photos : []).filter((photo) => getPhotoSrc(photo));
+                          const dedup = new Set();
+                          const photoList = [...photos, ...legacyPhotos].filter((photo) => {
+                            const key = String(photo?.id || getPhotoSrc(photo) || "");
+                            if (!key || dedup.has(key)) return false;
+                            dedup.add(key);
+                            return true;
+                          });
                           return {
                             id: sectionItemId,
                             title: String(sectionItem?.title || "Пункт без назви"),
+                            comment: String(response?.comment || "").trim(),
                             ratingLabel: rating?.label || "Не оцінено",
                             ratingPercent: Number.isFinite(rating?.percent) ? rating.percent : null,
+                            photos: photoList,
                           };
                         });
                       return {
@@ -794,12 +1047,41 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                                 <div className="mt-1.5 space-y-1">
                                   {section.items.length ? (
                                     section.items.map((sectionItem) => (
-                                      <div key={`${section.id}_${sectionItem.id}`} className="flex items-start justify-between gap-2 rounded border border-slate-200 bg-white px-2 py-1">
-                                        <span className="text-slate-700">{sectionItem.title}</span>
-                                        <span className="shrink-0 font-semibold text-slate-900">
-                                          {sectionItem.ratingLabel}
-                                          {sectionItem.ratingPercent !== null ? ` (${sectionItem.ratingPercent}%)` : ""}
-                                        </span>
+                                      <div key={`${section.id}_${sectionItem.id}`} className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                                        <div className="flex items-start justify-between gap-2">
+                                          <span className="text-slate-700">{sectionItem.title}</span>
+                                          <span className="shrink-0 font-semibold text-slate-900">
+                                            {sectionItem.ratingLabel}
+                                            {sectionItem.ratingPercent !== null ? ` (${sectionItem.ratingPercent}%)` : ""}
+                                          </span>
+                                        </div>
+                                        <div className="mt-2 space-y-2 border-t border-slate-100 pt-2">
+                                          <div className="rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                                            <span className="font-semibold text-slate-700">Коментар:</span>{" "}
+                                            {sectionItem.comment || "Коментар відсутній"}
+                                          </div>
+                                          {sectionItem.photos.length ? (
+                                            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
+                                              {sectionItem.photos.map((photo, photoIndex) => (
+                                                <button
+                                                  key={`${section.id}_${sectionItem.id}_${photo?.id || photoIndex}`}
+                                                  type="button"
+                                                  onClick={() => setGalleryLightboxPhoto(photo)}
+                                                  className="overflow-hidden rounded border border-slate-200 bg-slate-50"
+                                                  title={photo?.name || "Фото пункту"}
+                                                >
+                                                  <img
+                                                    src={getPhotoSrc(photo)}
+                                                    alt={photo?.name || "Фото пункту"}
+                                                    className="h-16 w-full object-cover"
+                                                  />
+                                                </button>
+                                              ))}
+                                            </div>
+                                          ) : (
+                                            <p className="text-[11px] text-slate-400">Фото до цього пункту відсутні.</p>
+                                          )}
+                                        </div>
                                       </div>
                                     ))
                                   ) : (
@@ -822,75 +1104,83 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             )}
           </div>
 
-          <div className={cardClass}>
-            <div className="flex items-center gap-2">
-              <Images size={16} className="text-emerald-600" />
-              <p className="text-sm font-semibold text-slate-800">Галерея фото чек-листів</p>
-            </div>
-            <p className="mt-1 text-xs text-slate-500">Показує фото, які були додані під час проведення вибраних чек-листів.</p>
-
-            {!selectedAudits.length ? (
-              <p className="mt-3 text-sm text-slate-500">Оберіть чек-лист у меню вибору, щоб переглянути фото.</p>
-            ) : (
-              <div className="mt-3 space-y-3">
-                {galleryAudits.map((auditGroup) => (
-                  <div key={auditGroup.auditId} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs font-semibold text-slate-700">{auditGroup.label}</p>
-                      <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                        Фото: {auditGroup.totalPhotos}
-                      </span>
-                    </div>
-
-                    {auditGroup.blocks.length ? (
-                      <div className="mt-2 space-y-2">
-                        {auditGroup.blocks.map((block) => (
-                          <details key={`${auditGroup.auditId}_${block.id}`} className="rounded border border-slate-200 bg-white px-2 py-1.5">
-                            <summary className="cursor-pointer list-none text-xs font-semibold text-slate-700">
-                              {block.title}
-                            </summary>
-
-                            <div className="mt-2 space-y-2">
-                              {block.categories.map((category) => (
-                                <details key={`${auditGroup.auditId}_${block.id}_${category.id}`} className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5">
-                                  <summary className="cursor-pointer list-none text-xs text-slate-700">
-                                    {category.title}
-                                    <span className="ml-1 text-slate-500">({category.photos.length})</span>
-                                  </summary>
-
-                                  <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-                                    {category.photos.map((photo, index) => (
-                                      <button
-                                        key={`${auditGroup.auditId}_${block.id}_${category.id}_${photo?.id || index}`}
-                                        type="button"
-                                        onClick={() => setGalleryLightboxPhoto(photo)}
-                                        className="group relative overflow-hidden rounded-lg border border-slate-200 bg-white"
-                                        title={photo?.name || "Фото чек-листа"}
-                                      >
-                                        <img
-                                          src={getPhotoSrc(photo)}
-                                          alt={photo?.name || "Фото чек-листа"}
-                                          className="h-24 w-full object-cover transition group-hover:scale-[1.02]"
-                                        />
-                                      </button>
-                                    ))}
-                                  </div>
-                                </details>
-                              ))}
-                            </div>
-                          </details>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="mt-2 text-xs text-slate-500">У цьому чек-листі немає фото, прив'язаних до блоків/категорій.</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </>
       )}
+
+      {planDialogContext ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => {
+            setPlanDialogContext(null);
+            setPlanDialogDeadline("");
+            setPlanDialogResponsible("");
+            setPlanDialogComment("");
+          }}
+        >
+          <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <p className="text-base font-semibold text-slate-900">План дій для критичного порушення</p>
+            <p className="mt-1 text-xs text-slate-500">{planDialogContext.auditLabel}</p>
+            <p className="mt-1 text-sm font-semibold text-slate-700">{planDialogContext.itemTitle}</p>
+
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div>
+                <label className="block text-sm font-semibold text-slate-800">Дедлайн виконання</label>
+                <div className="mt-1">
+                  <DatePickerPopover
+                    value={planDialogDeadline}
+                    onChange={setPlanDialogDeadline}
+                    min={todayDate()}
+                    label=""
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-slate-800">Відповідальний</label>
+                <input
+                  type="text"
+                  value={planDialogResponsible}
+                  readOnly
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+                  placeholder="Керуючого не знайдено"
+                />
+                {loadingResponsibleUsers ? <p className="mt-1 text-xs text-slate-500">Завантаження користувачів...</p> : null}
+                {!loadingResponsibleUsers && !defaultResponsibleManager ? <p className="mt-1 text-xs text-amber-600">Для обраної локації не знайдено керуючого.</p> : null}
+              </div>
+            </div>
+
+            <label className="mt-3 block text-sm font-semibold text-slate-800">Коментар / план дій</label>
+            <textarea
+              value={planDialogComment}
+              onChange={(event) => setPlanDialogComment(event.target.value)}
+              rows={5}
+              className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+              placeholder="Опишіть конкретні дії: що зробити, хто відповідальний, термін виконання."
+            />
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPlanDialogContext(null);
+                  setPlanDialogDeadline("");
+                  setPlanDialogResponsible("");
+                  setPlanDialogComment("");
+                }}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Скасувати
+              </button>
+              <button
+                type="button"
+                onClick={savePlanDialog}
+                className="rounded-lg border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+              >
+                Зберегти
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <PhotoLightbox photo={galleryLightboxPhoto} onClose={() => setGalleryLightboxPhoto(null)} />
     </div>
@@ -1484,7 +1774,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
           issues.push(`${prefix} — потрібен коментар`);
         }
         const photoIds = Array.isArray(response?.photoIds) ? response.photoIds.filter((id) => galleryById.has(id)) : [];
-        if (!photoIds.length) issues.push(`${prefix} — додайте фото`);
+        if (isPhotoRequired(response.value) && !photoIds.length) issues.push(`${prefix} — додайте фото`);
       });
     });
     return issues;
@@ -1636,48 +1926,82 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
           ) : null}
         </div>
 
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Дата</label>
-            <div className="mt-1">
-              <DatePickerPopover
-                value={selectedDate}
-                onChange={(nextDate) => {
-                  setSelectedDate(nextDate);
-                  setDirty(false);
-                }}
-                max={todayDate()}
-                label=""
-              />
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-12 xl:items-stretch">
+          <div className="space-y-3 xl:col-span-3">
+            <div>
+              <label className="text-sm font-semibold text-slate-800">Заклад</label>
+              <select
+                className={compactInputClass}
+                value={effectiveRestaurantId || ""}
+                onChange={(e) => { setSelectedRestaurantId(e.target.value); setDirty(false); }}
+                disabled={Boolean(user?.restaurant) && !isAdmin}
+              >
+                <option value="">Оберіть заклад</option>
+                {availableRestaurants.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-sm font-semibold text-slate-800">Шаблон аудиту</label>
+              <select
+                className={compactInputClass}
+                value={selectedTemplateId || ""}
+                onChange={(e) => { setSelectedTemplateId(e.target.value); setDirty(false); }}
+              >
+                <option value="">Оберіть шаблон</option>
+                {applicableTemplates.map((template) => (
+                  <option key={template.id} value={template.id}>{template.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-sm font-semibold text-slate-800">Дата</label>
+              <div className="mt-1">
+                <DatePickerPopover
+                  value={selectedDate}
+                  onChange={(nextDate) => {
+                    setSelectedDate(nextDate);
+                    setDirty(false);
+                  }}
+                  max={todayDate()}
+                  label=""
+                />
+              </div>
             </div>
           </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Заклад</label>
-            <select
-              className={inputClass}
-              value={effectiveRestaurantId || ""}
-              onChange={(e) => { setSelectedRestaurantId(e.target.value); setDirty(false); }}
-              disabled={Boolean(user?.restaurant) && !isAdmin}
-            >
-              <option value="">Оберіть заклад</option>
-              {availableRestaurants.map((item) => (
-                <option key={item.id} value={item.id}>{item.name}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Шаблон аудиту</label>
-            <select
-              className={inputClass}
-              value={selectedTemplateId || ""}
-              onChange={(e) => { setSelectedTemplateId(e.target.value); setDirty(false); }}
-            >
-              <option value="">Оберіть шаблон</option>
-              {applicableTemplates.map((template) => (
-                <option key={template.id} value={template.id}>{template.name}</option>
-              ))}
-            </select>
-          </div>
+
+          {effectiveRestaurantId && selectedTemplate ? (
+            <div className="xl:col-span-9">
+              <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-slate-50 px-5 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">Підсумкова оцінка</p>
+                    <div className="mt-1 flex items-center gap-3">
+                      <span className="text-4xl font-extrabold text-slate-900">{roundPercent(scores.totalPercent)}%</span>
+                      <ScoreBadge percent={scores.totalPercent} />
+                    </div>
+                  </div>
+                  <div className="text-left text-sm text-slate-600 sm:text-right">
+                    <p>Оцінено пунктів: <span className="font-semibold text-slate-900">{scores.assessedItems} з {scores.totalItems}</span></p>
+                    <div className="mt-1"><WeightSumBadge sum={sectionWeightSum} label="Ваги розділів" /></div>
+                  </div>
+                </div>
+                <div className="mt-4 h-3 w-full overflow-hidden rounded-full bg-white">
+                  <div className={`h-full rounded-full transition-all ${gradeBandFor(scores.totalPercent).barClass}`} style={{ width: `${Math.min(100, Math.max(0, roundPercent(scores.totalPercent)))}%` }} />
+                </div>
+                <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
+                  {RATING_SCALE.map((rating) => (
+                    <span key={rating.value} className="inline-flex items-center gap-1.5">
+                      <span className={`h-2.5 w-2.5 rounded-full ${rating.dotClass}`} /> {rating.label} — {Number.isFinite(rating.percent) ? `${rating.percent}%` : "не враховується"}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -1691,33 +2015,6 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
         </div>
       ) : (
         <>
-          <div className={cardClass}>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-slate-800">Підсумкова оцінка</p>
-                <div className="mt-1 flex items-center gap-3">
-                  <span className="text-3xl font-extrabold text-slate-900">{roundPercent(scores.totalPercent)}%</span>
-                  <ScoreBadge percent={scores.totalPercent} />
-                </div>
-              </div>
-              <div className="text-right text-sm text-slate-600">
-                <p>Оцінено пунктів: <span className="font-semibold text-slate-900">{scores.assessedItems} з {scores.totalItems}</span></p>
-                <div className="mt-1"><WeightSumBadge sum={sectionWeightSum} label="Ваги розділів" /></div>
-              </div>
-            </div>
-            <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
-              <div className={`h-full rounded-full transition-all ${gradeBandFor(scores.totalPercent).barClass}`} style={{ width: `${Math.min(100, Math.max(0, roundPercent(scores.totalPercent)))}%` }} />
-            </div>
-
-            <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
-              {RATING_SCALE.map((rating) => (
-                <span key={rating.value} className="inline-flex items-center gap-1.5">
-                  <span className={`h-2.5 w-2.5 rounded-full ${rating.dotClass}`} /> {rating.label} — {rating.percent}%
-                </span>
-              ))}
-            </div>
-          </div>
-
           <PhotoGalleryPanel
             photos={gallery}
             assignmentCount={assignmentCount}
@@ -1761,9 +2058,11 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                         const response = responses[item.id] || {};
                         const currentValue = response.value;
                         const needsComment = isCommentRequired(currentValue);
+                        const needsPhotos = isPhotoRequired(currentValue);
+                        const showEvidenceBlock = needsComment || needsPhotos;
                         const commentMissing = needsComment && !String(response.comment || "").trim();
                         const photos = getItemPhotos(response);
-                        const photosMissing = photos.length === 0;
+                        const photosMissing = needsPhotos && photos.length === 0;
                         return (
                           <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
@@ -1793,69 +2092,75 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                               </div>
                             </div>
 
-                            <div className="mt-2.5 space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5">
-                              <div>
-                                <label className="flex items-center gap-1 text-xs font-semibold text-amber-800">
-                                  <AlertTriangle size={12} /> {needsComment ? "Коментар обовʼязковий" : "Коментар (необовʼязково)"}
-                                </label>
-                                <textarea
-                                  className={`${inputClass} min-h-[56px] ${commentMissing ? "border-red-400 focus:border-red-500 focus:ring-red-100" : ""}`}
-                                  value={String(response.comment || "")}
-                                  onChange={(e) => handleComment(item.id, e.target.value)}
-                                  disabled={isReadOnlyAudit}
-                                  placeholder="Опишіть результат перевірки по пункту"
-                                />
-                              </div>
-
-                              <div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <label className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 ${isReadOnlyAudit ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
-                                    <Camera size={13} /> Додати фото
-                                    <input
-                                      type="file"
-                                      accept="image/*"
-                                      multiple
+                            {showEvidenceBlock ? (
+                              <div className="mt-2.5 space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5">
+                                {needsComment ? (
+                                  <div>
+                                    <label className="flex items-center gap-1 text-xs font-semibold text-amber-800">
+                                      <AlertTriangle size={12} /> Коментар обовʼязковий
+                                    </label>
+                                    <textarea
+                                      className={`${inputClass} min-h-[56px] ${commentMissing ? "border-red-400 focus:border-red-500 focus:ring-red-100" : ""}`}
+                                      value={String(response.comment || "")}
+                                      onChange={(e) => handleComment(item.id, e.target.value)}
                                       disabled={isReadOnlyAudit}
-                                      className="hidden"
-                                      onChange={(e) => {
-                                        void captureForItem(item.id, e.target.files);
-                                        e.target.value = "";
-                                      }}
+                                      placeholder="Опишіть результат перевірки по пункту"
                                     />
-                                  </label>
-                                  <button
-                                    type="button"
-                                    onClick={() => setPicker({ itemId: item.id, itemLabel: `${sectionIndex + 1}.${itemIndex + 1} ${item.title}` })}
-                                    disabled={isReadOnlyAudit}
-                                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                                  >
-                                    <Images size={13} /> З галереї
-                                  </button>
-                                  <span className={`text-[11px] ${photosMissing ? "text-red-500" : "text-slate-400"}`}>{photos.length}/{MAX_PHOTOS_PER_ITEM}</span>
-                                </div>
-                                {photos.length > 0 ? (
-                                  <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
-                                    {photos.map((photo, photoIndex) => (
-                                      <div key={`${item.id}_${photo.id || photoIndex}`} className="relative">
-                                        <button type="button" onClick={() => setLightbox(photo)} className="w-full">
-                                          <img src={getPhotoSrc(photo)} alt={photo.name || "фото"} className="h-20 w-full rounded-lg border border-slate-200 object-cover" />
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => detachFromItem(item.id, photo.id)}
-                                          disabled={isReadOnlyAudit}
-                                          className="absolute -right-1.5 -top-1.5 rounded-full bg-red-600 p-0.5 text-white shadow hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
-                                        >
-                                          <X size={12} />
-                                        </button>
-                                      </div>
-                                    ))}
                                   </div>
-                                ) : (
-                                  <p className="mt-2 text-xs text-red-500">Додайте щонайменше одне фото до цього пункту.</p>
-                                )}
+                                ) : null}
+
+                                {needsPhotos ? (
+                                  <div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <label className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 ${isReadOnlyAudit ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                                        <Camera size={13} /> Додати фото
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          multiple
+                                          disabled={isReadOnlyAudit}
+                                          className="hidden"
+                                          onChange={(e) => {
+                                            void captureForItem(item.id, e.target.files);
+                                            e.target.value = "";
+                                          }}
+                                        />
+                                      </label>
+                                      <button
+                                        type="button"
+                                        onClick={() => setPicker({ itemId: item.id, itemLabel: `${sectionIndex + 1}.${itemIndex + 1} ${item.title}` })}
+                                        disabled={isReadOnlyAudit}
+                                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                      >
+                                        <Images size={13} /> З галереї
+                                      </button>
+                                      <span className={`text-[11px] ${photosMissing ? "text-red-500" : "text-slate-400"}`}>{photos.length}/{MAX_PHOTOS_PER_ITEM}</span>
+                                    </div>
+                                    {photos.length > 0 ? (
+                                      <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                                        {photos.map((photo, photoIndex) => (
+                                          <div key={`${item.id}_${photo.id || photoIndex}`} className="relative">
+                                            <button type="button" onClick={() => setLightbox(photo)} className="w-full">
+                                              <img src={getPhotoSrc(photo)} alt={photo.name || "фото"} className="h-20 w-full rounded-lg border border-slate-200 object-cover" />
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => detachFromItem(item.id, photo.id)}
+                                              disabled={isReadOnlyAudit}
+                                              className="absolute -right-1.5 -top-1.5 rounded-full bg-red-600 p-0.5 text-white shadow hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                              <X size={12} />
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <p className="mt-2 text-xs text-red-500">Для оцінки «Погано» додайте щонайменше одне фото.</p>
+                                    )}
+                                  </div>
+                                ) : null}
                               </div>
-                            </div>
+                            ) : null}
                           </div>
                         );
                       })}
