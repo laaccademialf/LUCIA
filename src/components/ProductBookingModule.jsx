@@ -1,5 +1,5 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Package, ShoppingCart, ClipboardCheck, Trash2, Download, Upload, FileDown, X, Printer, Calculator, BarChart2, Plus } from "lucide-react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Package, ShoppingCart, ClipboardCheck, Trash2, Download, Upload, FileDown, X, Printer, Calculator, BarChart2, Plus, AlertTriangle } from "lucide-react";
 import { useProductBooking } from "../hooks/useProductBooking";
 import MetroVendorParserTab from "./MetroVendorParserTab";
 import {
@@ -522,7 +522,43 @@ const getSupplierMinimumForRestaurant = (supplierRecord, restaurantRef = {}) => 
   return 0;
 };
 
-const resolveSupplierForRestaurantContext = (rawSupplier, restaurantRef = {}, suppliersDirectory = []) => {
+// ─── Рекомендований постачальник у заклад (chef-pinned) ───
+// Шеф-кухар може закріпити конкретного постачальника продукту за переліком
+// закладів. Це правило має найвищий пріоритет — вище за APL та контракти.
+// Зберігається у довіднику постачальника як supplier.productRecommendations:
+//   [{ productKey, productName, code1C, restaurantIds: [...] }]
+const buildProductRecommendationKey = (productRef) => {
+  if (!productRef || typeof productRef !== "object") return "";
+  const code = String(productRef.code1C || "").trim().toLowerCase();
+  if (code) return code;
+  return String(productRef.name || "").trim().toLowerCase();
+};
+
+const parseSupplierRecommendations = (supplierRecord) => {
+  const raw = supplierRecord?.productRecommendations;
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string" && raw.trim().startsWith("[")) {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+const supplierRecommendsForProductRestaurant = (supplierRecord, productKey, restaurantId) => {
+  if (!productKey || !restaurantId) return false;
+  const entry = parseSupplierRecommendations(supplierRecord).find(
+    (item) => String(item?.productKey || "").trim().toLowerCase() === productKey
+  );
+  if (!entry) return false;
+  const ids = Array.isArray(entry.restaurantIds) ? entry.restaurantIds.map((id) => String(id || "").trim()) : [];
+  return ids.includes(String(restaurantId || "").trim());
+};
+
+const resolveSupplierForRestaurantContext = (rawSupplier, restaurantRef = {}, suppliersDirectory = [], productRef = null, supplierPriceMap = null) => {
   const candidates = splitSupplierCandidates(rawSupplier);
   if (candidates.length === 0) return "";
   if (candidates.length === 1) return candidates[0];
@@ -533,15 +569,77 @@ const resolveSupplierForRestaurantContext = (rawSupplier, restaurantRef = {}, su
       .filter(([key]) => Boolean(key))
   );
 
-  for (const candidate of candidates) {
-    const supplierRecord = directoryByName.get(normalizeSupplierIdentity(candidate));
-    if (!supplierRecord) continue;
-    if (supplierHasContractForRestaurant(supplierRecord, restaurantRef)) {
-      return String(supplierRecord?.name || candidate).trim();
+  // 1) Рекомендація шефа (закріплення постачальника за закладом) — найвищий пріоритет.
+  const productKey = buildProductRecommendationKey(productRef);
+  const restaurantId = String(restaurantRef?.id || "").trim();
+  if (productKey && restaurantId) {
+    for (const candidate of candidates) {
+      const supplierRecord = directoryByName.get(normalizeSupplierIdentity(candidate));
+      if (supplierRecord && supplierRecommendsForProductRestaurant(supplierRecord, productKey, restaurantId)) {
+        return String(supplierRecord?.name || candidate).trim();
+      }
     }
   }
 
-  return candidates[0];
+  // Вибір найдешевшого постачальника серед списку (за наявності карти цін).
+  const priceMap = supplierPriceMap instanceof Map ? supplierPriceMap : null;
+  const pickCheapest = (list) => {
+    if (!priceMap || list.length === 0) return null;
+    let best = null;
+    let bestPrice = Infinity;
+    for (const name of list) {
+      const price = priceMap.get(normalizeSupplierIdentity(name));
+      if (Number.isFinite(price) && price > 0 && price < bestPrice) {
+        bestPrice = price;
+        best = name;
+      }
+    }
+    return best;
+  };
+
+  // 2) Контракт постачальника для цього закладу.
+  //    Якщо контракт мають кілька постачальників — обираємо з найменшою ціною.
+  const contractedCandidates = candidates.filter((candidate) => {
+    const supplierRecord = directoryByName.get(normalizeSupplierIdentity(candidate));
+    return supplierRecord && supplierHasContractForRestaurant(supplierRecord, restaurantRef);
+  });
+
+  if (contractedCandidates.length > 0) {
+    const chosen = pickCheapest(contractedCandidates) || contractedCandidates[0];
+    const supplierRecord = directoryByName.get(normalizeSupplierIdentity(chosen));
+    return String(supplierRecord?.name || chosen).trim();
+  }
+
+  // 3) Запасний варіант — найдешевший серед усіх кандидатів, інакше перший.
+  return pickCheapest(candidates) || candidates[0];
+};
+
+// Карта «постачальник → мінімальна ціна» для конкретного продукту BookingTab.
+// Використовується резолвером для вибору найдешевшого постачальника серед
+// тих, що мають контракт із закладом (коли немає рекомендації шефа).
+const buildSupplierPriceMap = (product) => {
+  const map = new Map();
+  const add = (supplierName, price) => {
+    const key = normalizeSupplierIdentity(supplierName);
+    if (!key) return;
+    const numeric = toNumber(price);
+    if (!Number.isFinite(numeric) || numeric <= 0) return;
+    if (!map.has(key) || numeric < map.get(key)) map.set(key, numeric);
+  };
+
+  if (Array.isArray(product?.whiteCards)) {
+    product.whiteCards.forEach((card) => add(card?.supplier, card?.unitPrice));
+  }
+
+  if (map.size === 0) {
+    const price = toNumber(product?.unitPrice);
+    const list = Array.isArray(product?.supplierList) && product.supplierList.length > 0
+      ? product.supplierList
+      : splitSupplierCandidates(product?.supplier || "");
+    list.forEach((name) => add(name, price));
+  }
+
+  return map;
 };
 
 
@@ -573,6 +671,23 @@ const getSupplierResponseStatus = (item) => {
   const status = String(item?.supplierResponseStatus || item?.vendorResponseStatus || "").trim().toLowerCase();
   if (status) return status;
   return item?.sentToSupplier ? "pending" : "draft";
+};
+
+// Статус у розрізі позицій ОДНОГО постачальника (для порталу постачальника),
+// щоб бейдж не залежав від позицій інших постачальників у тому ж замовленні.
+const getSupplierScopedStatus = (summary = {}) => {
+  const total = toNumber(summary.total);
+  const pending = toNumber(summary.pending);
+  const accepted = toNumber(summary.accepted);
+  const partial = toNumber(summary.partial);
+  const unavailable = toNumber(summary.unavailable);
+  if (total <= 0) return { key: "pending", label: "Очікує відповіді", badge: "bg-slate-100 text-slate-700" };
+  if (partial + unavailable > 0) return { key: "issues", label: "Є проблемні позиції", badge: "bg-rose-100 text-rose-700" };
+  if (pending > 0) {
+    if (accepted > 0) return { key: "partial", label: "Частково опрацьовано", badge: "bg-amber-100 text-amber-700" };
+    return { key: "sent", label: "Надіслано постачальнику", badge: "bg-slate-100 text-slate-700" };
+  }
+  return { key: "confirmed", label: "Підтверджено постачальником", badge: "bg-emerald-100 text-emerald-700" };
 };
 
 const getSupplierResponseLabel = (status) => {
@@ -622,6 +737,17 @@ const DELIVERY_WEEK_DAYS = [
 
 const DELIVERY_WEEK_DAY_IDS = DELIVERY_WEEK_DAYS.map((day) => day.id);
 
+const DELIVERY_WEEK_DAY_INDEX = DELIVERY_WEEK_DAY_IDS.reduce((acc, dayId, index) => {
+  acc[dayId] = index;
+  return acc;
+}, {});
+
+// Повертає id дня тижня (mon..sun) для переданої дати (за замовчуванням — сьогодні).
+const getDeliveryWeekdayId = (date = new Date()) => {
+  const jsDay = date.getDay(); // 0 = неділя ... 6 = субота
+  return DELIVERY_WEEK_DAY_IDS[(jsDay + 6) % 7];
+};
+
 const normalizeContractDeliverySchedule = (contract = {}) => {
   const deliveryDays = Array.isArray(contract?.deliveryDays)
     ? contract.deliveryDays.map((day) => String(day || "").trim()).filter(Boolean)
@@ -638,6 +764,56 @@ const normalizeContractDeliverySchedule = (contract = {}) => {
     normalized[dayId] = /^\d{2}:\d{2}$/.test(rawTime) ? rawTime : "";
   });
   return normalized;
+};
+
+// Обчислює дні тижня, у які потрібно оформляти замовлення для контракту:
+// день замовлення = день доставки − термін поставки (deliveryLeadDays), з переходом через тиждень.
+// Напр.: доставка Чт+Нд, термін 1 день → замовлення Ср+Сб.
+const computeContractOrderWeekdays = (contract = {}) => {
+  const schedule = normalizeContractDeliverySchedule(contract);
+  const deliveryDayIds = Object.keys(schedule);
+  if (deliveryDayIds.length === 0) return new Set();
+
+  const leadDays = Math.max(0, Math.round(toNumber(contract?.deliveryLeadDays)));
+  const orderDays = new Set();
+  deliveryDayIds.forEach((dayId) => {
+    const deliveryIndex = DELIVERY_WEEK_DAY_INDEX[dayId];
+    if (deliveryIndex === undefined) return;
+    const orderIndex = ((deliveryIndex - leadDays) % 7 + 7) % 7;
+    orderDays.add(DELIVERY_WEEK_DAY_IDS[orderIndex]);
+  });
+  return orderDays;
+};
+
+// Дні тижня доставки для контракту (де реально привозять товар).
+const computeContractDeliveryWeekdays = (contract = {}) => {
+  const schedule = normalizeContractDeliverySchedule(contract);
+  return new Set(Object.keys(schedule));
+};
+
+// Форматує Date у локальний рядок YYYY-MM-DD (без зсуву часового поясу).
+const formatLocalIsoDate = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+// Обчислює найближчу дату доставки: від (сьогодні + термін поставки) шукаємо
+// найближчий день, що входить у графік доставок постачальника.
+const computeNextDeliveryDate = (deliveryWeekdays, leadDays, fromDate = new Date()) => {
+  if (!deliveryWeekdays || deliveryWeekdays.size === 0) return "";
+  const lead = Math.max(0, Math.round(toNumber(leadDays)));
+  const start = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate());
+  start.setDate(start.getDate() + lead);
+  for (let offset = 0; offset < 14; offset += 1) {
+    const candidate = new Date(start);
+    candidate.setDate(start.getDate() + offset);
+    if (deliveryWeekdays.has(getDeliveryWeekdayId(candidate))) {
+      return formatLocalIsoDate(candidate);
+    }
+  }
+  return "";
 };
 
 const isGlobalAdminUser = (user) => String(user?.role || "").toLowerCase() === "admin";
@@ -684,10 +860,8 @@ function ProductAdminTab({
   const [selectedProductIds, setSelectedProductIds] = useState([]);
   const [bulkSupplier, setBulkSupplier] = useState("");
   const [bulkCategory, setBulkCategory] = useState("");
-  const [expandedProductCategories, setExpandedProductCategories] = useState({});
-  const [expandedProductSubcategories, setExpandedProductSubcategories] = useState({});
-  const [expandedGroupedRows, setExpandedGroupedRows] = useState({});
-  const [pendingStatusIds, setPendingStatusIds] = useState({});
+  const [recommendModal, setRecommendModal] = useState(null);
+  const [savingRecommendation, setSavingRecommendation] = useState(false);
 
   useEffect(() => {
     if (isGlobalAdmin) return;
@@ -886,49 +1060,111 @@ function ProductAdminTab({
       }));
   }, [filteredProducts]);
 
-  const isProductCategoryExpanded = (categoryName) => Boolean(Object.prototype.hasOwnProperty.call(expandedProductCategories, categoryName)
-    ? expandedProductCategories[categoryName]
-    : false);
+  const selectedIdSet = useMemo(
+    () => new Set(selectedProductIds.map((id) => String(id))),
+    [selectedProductIds]
+  );
 
-  const isProductSubcategoryExpanded = (categoryName, subcategoryName) => {
-    const key = `${categoryName}::${subcategoryName}`;
-    return Boolean(Object.prototype.hasOwnProperty.call(expandedProductSubcategories, key)
-      ? expandedProductSubcategories[key]
-      : false);
-  };
+  // Lookup рекомендацій шефа: `${supplierIdentity}::${productKey}` -> [restaurantIds]
+  const recommendationLookup = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(suppliersDirectory) ? suppliersDirectory : []).forEach((supplierRecord) => {
+      const supplierIdentity = normalizeSupplierIdentity(supplierRecord?.name);
+      if (!supplierIdentity) return;
+      parseSupplierRecommendations(supplierRecord).forEach((entry) => {
+        const productKey = String(entry?.productKey || "").trim().toLowerCase();
+        if (!productKey) return;
+        const ids = Array.isArray(entry?.restaurantIds)
+          ? entry.restaurantIds.map((id) => String(id || "").trim()).filter(Boolean)
+          : [];
+        map.set(`${supplierIdentity}::${productKey}`, ids);
+      });
+    });
+    return map;
+  }, [suppliersDirectory]);
 
-  const toggleProductCategory = (categoryName) => {
-    setExpandedProductCategories((prev) => ({
-      ...prev,
-      [categoryName]: !(Object.prototype.hasOwnProperty.call(prev, categoryName) ? prev[categoryName] : true),
-    }));
-  };
+  const handleToggleSelectMany = useCallback((ids = []) => {
+    const normalizedIds = ids.map((id) => String(id || "")).filter(Boolean);
+    if (normalizedIds.length === 0) return;
+    setSelectedProductIds((prev) => {
+      const next = new Set(prev.map((id) => String(id)));
+      const allSelected = normalizedIds.every((id) => next.has(id));
+      if (allSelected) normalizedIds.forEach((id) => next.delete(id));
+      else normalizedIds.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
+  }, [setSelectedProductIds]);
 
-  const toggleProductSubcategory = (categoryName, subcategoryName) => {
-    const key = `${categoryName}::${subcategoryName}`;
-    setExpandedProductSubcategories((prev) => ({
-      ...prev,
-      [key]: !(Object.prototype.hasOwnProperty.call(prev, key) ? prev[key] : true),
-    }));
-  };
+  const openRecommendModal = useCallback((supplierName, productRef) => {
+    const supplierIdentity = normalizeSupplierIdentity(supplierName);
+    const productKey = buildProductRecommendationKey(productRef);
+    const existing = recommendationLookup.get(`${supplierIdentity}::${productKey}`) || [];
+    setRecommendModal({
+      supplierName: String(supplierName || "").trim(),
+      productRef: {
+        key: productKey,
+        name: String(productRef?.name || "").trim(),
+        code1C: String(productRef?.code1C || "").trim(),
+      },
+      selectedRestaurantIds: existing.slice(),
+    });
+  }, [recommendationLookup]);
 
-  const toggleGroupedRow = (groupKey) => {
-    setExpandedGroupedRows((prev) => ({
-      ...prev,
-      [groupKey]: !prev[groupKey],
-    }));
-  };
+  const handleSaveRecommendation = async () => {
+    if (!recommendModal) return;
+    const { supplierName, productRef, selectedRestaurantIds } = recommendModal;
+    const productKey = buildProductRecommendationKey(productRef);
+    if (!productKey) {
+      alert("Не вдалося визначити продукт для рекомендації.");
+      return;
+    }
 
-  const handleToggleProductStatus = async (productId, nextIsActive) => {
-    const normalizedId = String(productId || "");
-    if (!normalizedId) return;
+    setSavingRecommendation(true);
+    try {
+      const supplierIdentity = normalizeSupplierIdentity(supplierName);
+      const supplierRecord = (Array.isArray(suppliersDirectory) ? suppliersDirectory : []).find(
+        (item) => normalizeSupplierIdentity(item?.name) === supplierIdentity
+      );
 
-    setPendingStatusIds((prev) => ({ ...prev, [normalizedId]: true }));
-    const result = await updateProduct(normalizedId, { isActive: nextIsActive }, { skipReload: true });
-    setPendingStatusIds((prev) => ({ ...prev, [normalizedId]: false }));
+      const previousRecommendations = parseSupplierRecommendations(supplierRecord).filter(
+        (entry) => String(entry?.productKey || "").trim().toLowerCase() !== productKey
+      );
+      const cleanRestaurantIds = Array.from(
+        new Set((selectedRestaurantIds || []).map((id) => String(id || "").trim()).filter(Boolean))
+      );
+      const nextRecommendations = cleanRestaurantIds.length > 0
+        ? [
+            ...previousRecommendations,
+            {
+              productKey,
+              productName: productRef.name || "",
+              code1C: productRef.code1C || "",
+              restaurantIds: cleanRestaurantIds,
+            },
+          ]
+        : previousRecommendations;
 
-    if (!result?.success) {
-      alert("Не вдалося оновити статус картки.");
+      let result;
+      if (supplierRecord?.id) {
+        result = await updateSupplier(
+          supplierRecord.id,
+          { productRecommendations: nextRecommendations },
+          { skipReload: true }
+        );
+      } else {
+        result = await createSupplier(
+          { name: supplierName, contracts: [], productRecommendations: nextRecommendations },
+          { skipReload: true }
+        );
+      }
+
+      if (!result?.success) {
+        alert("Не вдалося зберегти рекомендацію постачальника.");
+        return;
+      }
+      setRecommendModal(null);
+    } finally {
+      setSavingRecommendation(false);
     }
   };
 
@@ -1505,158 +1741,18 @@ function ProductAdminTab({
         <span>Показано {filteredProducts.length} з {products.length}</span>
       </div>
 
-      <div className="space-y-4">
-        {groupedProducts.map((categoryNode) => {
-          const categoryExpanded = isProductCategoryExpanded(categoryNode.categoryName);
-          const categoryTotal = categoryNode.subcategories.reduce((sum, subcategory) => sum + subcategory.items.length, 0);
-
-          return (
-            <div key={categoryNode.categoryName} className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-                <button
-                  type="button"
-                  className="flex min-w-0 items-center gap-2 text-left"
-                  onClick={() => toggleProductCategory(categoryNode.categoryName)}
-                >
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-50 text-sm font-bold text-indigo-700">
-                    {categoryExpanded ? "−" : "+"}
-                  </span>
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold text-slate-900">{categoryNode.categoryName}</p>
-                    <p className="text-xs text-slate-500">{categoryTotal} позицій · {categoryNode.subcategories.length} підкатегорій</p>
-                  </div>
-                </button>
-                <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
-                  Категорія
-                </span>
-              </div>
-
-              {categoryExpanded && (
-                <div className="space-y-3 p-4">
-                  {categoryNode.subcategories.map((subcategoryNode) => {
-                    const subcategoryExpanded = isProductSubcategoryExpanded(categoryNode.categoryName, subcategoryNode.subcategoryName);
-
-                    return (
-                      <div key={`${categoryNode.categoryName}__${subcategoryNode.subcategoryName}`} className="rounded-xl border border-slate-200 bg-slate-50">
-                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-3 py-2.5 pl-6">
-                          <button
-                            type="button"
-                            className="flex min-w-0 items-center gap-2 text-left"
-                            onClick={() => toggleProductSubcategory(categoryNode.categoryName, subcategoryNode.subcategoryName)}
-                          >
-                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">
-                              {subcategoryExpanded ? "−" : "+"}
-                            </span>
-                            <div className="min-w-0">
-                              <p className="truncate font-semibold text-slate-900">{subcategoryNode.subcategoryName}</p>
-                              <p className="text-xs text-slate-500">{subcategoryNode.items.length} білих карток</p>
-                            </div>
-                          </button>
-                          <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">
-                            Підкатегорія
-                          </span>
-                        </div>
-
-                        {subcategoryExpanded && (
-                          <div className="space-y-2 p-3">
-                            <div className="hidden grid-cols-[28px_2.2fr_0.9fr_0.8fr_0.9fr_1.4fr_1fr_0.9fr] items-center gap-2 rounded-md border border-slate-200 bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600 lg:grid">
-                              {canManageProducts ? <span>Вибір</span> : <span />}
-                              <span>Назва / Код 1С</span>
-                              <span>Одиниця</span>
-                              <span>Ціна</span>
-                              <span>Постачальник</span>
-                              <span>Заклад</span>
-                              <span>Статус</span>
-                            </div>
-                            {subcategoryNode.groupedItems.map((item) => {
-                              const selectedSet = new Set(selectedProductIds.map((id) => String(id)));
-                              const allGroupSelected = item.ids.length > 0 && item.ids.every((id) => selectedSet.has(String(id)));
-
-                              return (
-                              <div key={item.key} className="rounded-md border border-slate-200 bg-white px-2 py-2 shadow-sm">
-                                <div className="grid grid-cols-1 gap-2 lg:grid-cols-[28px_2.2fr_0.9fr_0.8fr_0.9fr_1.4fr_1fr_0.9fr] lg:items-center">
-                                  {canManageProducts && (
-                                    <input
-                                      type="checkbox"
-                                      checked={allGroupSelected}
-                                      onChange={() => toggleSelectedMany(item.ids)}
-                                      className="h-4 w-4 accent-indigo-600"
-                                    />
-                                  )}
-
-                                  {!canManageProducts && <div className="hidden lg:block" />}
-
-                                  <div className="min-w-0">
-                                    <p className="truncate text-sm font-semibold text-slate-900">{item.name}</p>
-                                    <p className="text-[11px] text-slate-500">Код 1С: {item.code1C || "-"}</p>
-                                  </div>
-
-                                  <div className="text-xs text-slate-700">{item.unitText}</div>
-                                  <div className="text-xs text-slate-700">{item.priceText}</div>
-                                  <div className="text-xs leading-4 text-slate-700" title={item.supplierText}>{item.supplierText}</div>
-                                  <div className="truncate text-xs text-slate-700" title={item.restaurantText}>{item.restaurantText}</div>
-                                  <div className="flex items-center justify-start">
-                                    {item.ids.length <= 1 ? (
-                                      <button
-                                        type="button"
-                                        disabled={Boolean(pendingStatusIds[item.ids[0]])}
-                                        onClick={() => handleToggleProductStatus(item.ids[0], !item.isActive)}
-                                        className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors ${item.isActive ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-slate-200 text-slate-700 hover:bg-slate-300"} ${pendingStatusIds[item.ids[0]] ? "cursor-wait opacity-60" : "cursor-pointer"}`}
-                                      >
-                                        {pendingStatusIds[item.ids[0]] ? "Оновлення..." : (item.isActive ? "Активний" : "Вимкнений")}
-                                      </button>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        onClick={() => toggleGroupedRow(item.key)}
-                                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors ${item.isActive ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-slate-200 text-slate-700 hover:bg-slate-300"}`}
-                                      >
-                                        {item.isActive ? "Активний" : "Вимкнений"}
-                                        <span>{expandedGroupedRows[item.key] ? "▲" : "▼"}</span>
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {item.ids.length > 1 && expandedGroupedRows[item.key] && (
-                                  <div className="mt-2 ml-8 space-y-1">
-                                    {item.subItems.map((subItem) => {
-                                      const subId = String(subItem.id || "");
-                                      const subActive = subItem.isActive !== false;
-                                      const isPending = Boolean(pendingStatusIds[subId]);
-                                      return (
-                                        <div key={subId} className="flex items-center justify-between gap-3 rounded border border-slate-100 bg-slate-50 px-2 py-1 text-xs">
-                                          <div className="min-w-0 text-slate-700">
-                                            <span className="font-medium text-slate-900">{subItem.supplier || "—"}</span>
-                                            <span className="ml-2 text-slate-500">{subItem.restaurantName || "—"}</span>
-                                            <span className="ml-2 text-slate-400">{formatMoney(toNumber(subItem.unitPrice))} грн/{subItem.unit || "шт"}</span>
-                                          </div>
-                                          <button
-                                            type="button"
-                                            disabled={isPending}
-                                            onClick={() => handleToggleProductStatus(subId, !subActive)}
-                                            className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold transition-colors ${subActive ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-slate-200 text-slate-700 hover:bg-slate-300"} ${isPending ? "cursor-wait opacity-60" : "cursor-pointer"}`}
-                                          >
-                                            {isPending ? "Оновлення..." : (subActive ? "Активний" : "Вимкнений")}
-                                          </button>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
+      <div className="space-y-2">
+        {groupedProducts.map((categoryNode) => (
+          <ProductCategoryCard
+            key={categoryNode.categoryName}
+            categoryNode={categoryNode}
+            canManageProducts={canManageProducts}
+            selectedIdSet={selectedIdSet}
+            onToggleSelectMany={handleToggleSelectMany}
+            onOpenRecommend={openRecommendModal}
+            recommendationLookup={recommendationLookup}
+          />
+        ))}
 
         {groupedProducts.length === 0 && (
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-slate-500">
@@ -1664,9 +1760,336 @@ function ProductAdminTab({
           </div>
         )}
       </div>
+
+      {recommendModal && (
+        <SupplierRecommendationModal
+          supplierName={recommendModal.supplierName}
+          productRef={recommendModal.productRef}
+          restaurants={restaurants}
+          selectedRestaurantIds={recommendModal.selectedRestaurantIds}
+          saving={savingRecommendation}
+          onToggleRestaurant={(restaurantId) => {
+            setRecommendModal((prev) => {
+              if (!prev) return prev;
+              const id = String(restaurantId || "").trim();
+              const set = new Set((prev.selectedRestaurantIds || []).map((value) => String(value)));
+              if (set.has(id)) set.delete(id);
+              else set.add(id);
+              return { ...prev, selectedRestaurantIds: Array.from(set) };
+            });
+          }}
+          onClose={() => setRecommendModal(null)}
+          onSave={handleSaveRecommendation}
+        />
+      )}
     </div>
   );
 }
+
+// Компактний tree-вузол категорії. Винесений у мемоізований компонент із
+// локальним станом розгортання — це усуває перерендер усього дерева при кліку
+// на одну категорію (оптимізація швидкодії) і прибирає баг «подвійного кліку».
+const ProductCategoryCard = memo(function ProductCategoryCard({
+  categoryNode,
+  canManageProducts,
+  selectedIdSet,
+  onToggleSelectMany,
+  onOpenRecommend,
+  recommendationLookup,
+}) {
+  const [open, setOpen] = useState(false);
+  const [openSubcategories, setOpenSubcategories] = useState(() => new Set());
+
+  const categoryTotal = categoryNode.subcategories.reduce((sum, subcategory) => sum + subcategory.items.length, 0);
+
+  const toggleSubcategory = (subcategoryName) => {
+    setOpenSubcategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(subcategoryName)) next.delete(subcategoryName);
+      else next.add(subcategoryName);
+      return next;
+    });
+  };
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left hover:bg-slate-50"
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="flex h-5 w-5 flex-none items-center justify-center rounded-md bg-indigo-50 text-sm font-bold text-indigo-700">
+            {open ? "−" : "+"}
+          </span>
+          <span className="truncate font-semibold text-slate-900">{categoryNode.categoryName}</span>
+          <span className="flex-none text-xs text-slate-400">· {categoryTotal} поз. · {categoryNode.subcategories.length} підкат.</span>
+        </span>
+        <span className="flex-none rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+          Категорія
+        </span>
+      </button>
+
+      {open && (
+        <div className="border-t border-slate-100">
+          {categoryNode.subcategories.map((subcategoryNode) => {
+            const subcategoryOpen = openSubcategories.has(subcategoryNode.subcategoryName);
+            return (
+              <ProductSubcategoryNode
+                key={`${categoryNode.categoryName}__${subcategoryNode.subcategoryName}`}
+                subcategoryNode={subcategoryNode}
+                open={subcategoryOpen}
+                onToggle={() => toggleSubcategory(subcategoryNode.subcategoryName)}
+                canManageProducts={canManageProducts}
+                selectedIdSet={selectedIdSet}
+                onToggleSelectMany={onToggleSelectMany}
+                onOpenRecommend={onOpenRecommend}
+                recommendationLookup={recommendationLookup}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+});
+
+const ProductSubcategoryNode = memo(function ProductSubcategoryNode({
+  subcategoryNode,
+  open,
+  onToggle,
+  canManageProducts,
+  selectedIdSet,
+  onToggleSelectMany,
+  onOpenRecommend,
+  recommendationLookup,
+}) {
+  return (
+    <div className="border-t border-slate-100 first:border-t-0">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-3 py-1.5 pl-7 pr-3 text-left hover:bg-slate-50"
+        onClick={onToggle}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="flex h-4 w-4 flex-none items-center justify-center rounded bg-indigo-100 text-[11px] font-bold text-indigo-700">
+            {open ? "−" : "+"}
+          </span>
+          <span className="truncate text-sm font-medium text-slate-800">{subcategoryNode.subcategoryName}</span>
+          <span className="flex-none text-[11px] text-slate-400">· {subcategoryNode.items.length} карток</span>
+        </span>
+        <span className="flex-none rounded-full border border-indigo-100 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600">
+          Підкатегорія
+        </span>
+      </button>
+
+      {open && (
+        <div className="pb-1 pl-10 pr-2">
+          {subcategoryNode.groupedItems.map((item) => (
+            <ProductGroupRow
+              key={item.key}
+              item={item}
+              canManageProducts={canManageProducts}
+              selectedIdSet={selectedIdSet}
+              onToggleSelectMany={onToggleSelectMany}
+              onOpenRecommend={onOpenRecommend}
+              recommendationLookup={recommendationLookup}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
+const buildSupplierGroupsFromItems = (subItems) => {
+  const map = new Map();
+  (Array.isArray(subItems) ? subItems : []).forEach((sub) => {
+    const supplierName = String(sub.supplier || "").trim() || "Без постачальника";
+    const key = normalizeSupplierIdentity(supplierName) || supplierName.toLowerCase();
+    if (!map.has(key)) map.set(key, { supplier: supplierName, items: [] });
+    map.get(key).items.push(sub);
+  });
+
+  return Array.from(map.values())
+    .map((group) => {
+      const prices = Array.from(
+        new Set(
+          group.items
+            .map((entry) => toNumber(entry.unitPrice))
+            .filter((price) => Number.isFinite(price) && price >= 0)
+            .map((price) => Number(price.toFixed(2)))
+        )
+      ).sort((left, right) => left - right);
+
+      const priceText = prices.length > 0 ? formatMoney(prices[0]) : "-";
+
+      const units = Array.from(new Set(group.items.map((entry) => String(entry.unit || "").trim()).filter(Boolean)));
+      const restaurants = Array.from(new Set(group.items.map((entry) => String(entry.restaurantName || "").trim()).filter(Boolean)));
+      const ids = group.items.map((entry) => String(entry.id || "")).filter(Boolean);
+
+      return {
+        supplier: group.supplier,
+        items: group.items,
+        priceText,
+        minPrice: prices.length > 0 ? prices[0] : null,
+        unitText: units.length > 0 ? units.join(", ") : "-",
+        restaurantText: restaurants.length > 0 ? restaurants.join(", ") : "-",
+        ids,
+        isActive: group.items.some((entry) => entry.isActive !== false),
+      };
+    })
+    .sort((a, b) => a.supplier.localeCompare(b.supplier, "uk"));
+};
+
+// Один продукт (біла картка) із розбиттям на окремі картки по постачальниках.
+const ProductGroupRow = memo(function ProductGroupRow({
+  item,
+  canManageProducts,
+  selectedIdSet,
+  onToggleSelectMany,
+  onOpenRecommend,
+  recommendationLookup,
+}) {
+  const supplierGroups = useMemo(() => buildSupplierGroupsFromItems(item.subItems), [item.subItems]);
+  const allGroupSelected = item.ids.length > 0 && item.ids.every((id) => selectedIdSet.has(String(id)));
+  const productRef = { key: item.key, name: item.name, code1C: item.code1C };
+
+  return (
+    <div className="mt-1 rounded-lg border border-slate-200 bg-white">
+      <div className="flex items-center gap-2 border-b border-slate-100 px-2 py-1.5">
+        {canManageProducts && (
+          <input
+            type="checkbox"
+            checked={allGroupSelected}
+            onChange={() => onToggleSelectMany(item.ids)}
+            className="h-3.5 w-3.5 flex-none accent-indigo-600"
+          />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold text-slate-900">{item.name}</p>
+          <p className="text-[10px] text-slate-400">Код 1С: {item.code1C || "-"}</p>
+        </div>
+        {supplierGroups.length > 1 && (
+          <span className="flex-none rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+            {supplierGroups.length} постачальників
+          </span>
+        )}
+      </div>
+
+      <div className="divide-y divide-slate-50">
+        {supplierGroups.map((group) => {
+          const recommendationKey = `${normalizeSupplierIdentity(group.supplier)}::${String(item.key || "").toLowerCase()}`;
+          const recommendedIds = recommendationLookup.get(recommendationKey) || [];
+          const hasRecommendation = recommendedIds.length > 0;
+
+          return (
+            <div key={group.supplier} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-1.5">
+              <div className="min-w-0 flex-1 basis-[180px]">
+                <p className="truncate text-xs font-medium text-slate-800" title={group.supplier}>{group.supplier}</p>
+                <p className="truncate text-[10px] text-slate-400" title={group.restaurantText}>{group.restaurantText}</p>
+              </div>
+              <div className="flex-none text-[11px] text-slate-600">{group.priceText}</div>
+              <div className="flex-none text-[11px] text-slate-400">{group.unitText}</div>
+
+              {canManageProducts && (
+                <button
+                  type="button"
+                  onClick={() => onOpenRecommend(group.supplier, productRef)}
+                  title="Закріпити постачальника за закладами (вище за APL та контракт)"
+                  className={`inline-flex flex-none items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-colors ${hasRecommendation ? "border-indigo-300 bg-indigo-600 text-white hover:bg-indigo-700" : "border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"}`}
+                >
+                  {hasRecommendation ? `★ Рекомендований (${recommendedIds.length})` : "☆ Рекомендований у заклад"}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+});
+
+const SupplierRecommendationModal = ({
+  supplierName,
+  productRef,
+  restaurants,
+  selectedRestaurantIds,
+  saving,
+  onToggleRestaurant,
+  onClose,
+  onSave,
+}) => {
+  const selectedSet = new Set((selectedRestaurantIds || []).map((id) => String(id)));
+  const availableRestaurants = (Array.isArray(restaurants) ? restaurants : []).filter((item) => String(item?.id || "").trim());
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+      <div className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-slate-900">Рекомендований постачальник у заклад</h3>
+            <p className="mt-0.5 truncate text-xs text-slate-500">
+              {productRef?.name || "Продукт"} · {supplierName}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="flex-none rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <p className="border-b border-slate-100 bg-amber-50 px-4 py-2 text-[11px] leading-4 text-amber-700">
+          Оберіть заклади, для яких замовлення цього продукту маршрутизуються саме до цього постачальника.
+          Це правило має пріоритет над APL та контрактами.
+        </p>
+
+        <div className="flex-1 overflow-y-auto px-4 py-2">
+          {availableRestaurants.length === 0 ? (
+            <p className="py-6 text-center text-sm text-slate-400">Немає доступних закладів.</p>
+          ) : (
+            <div className="space-y-1">
+              {availableRestaurants.map((restaurant) => {
+                const id = String(restaurant.id);
+                const checked = selectedSet.has(id);
+                return (
+                  <label
+                    key={id}
+                    className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm ${checked ? "border-indigo-300 bg-indigo-50" : "border-slate-200 hover:bg-slate-50"}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onToggleRestaurant(id)}
+                      className="h-4 w-4 accent-indigo-600"
+                    />
+                    <span className="min-w-0 flex-1 truncate text-slate-800">{restaurant.name || `Заклад ${id}`}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-2 border-t border-slate-200 px-4 py-3">
+          <span className="text-xs text-slate-500">Обрано: {selectedSet.size}</span>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={onClose} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-100">
+              Скасувати
+            </button>
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={saving}
+              className={`rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-700 ${saving ? "cursor-wait opacity-60" : ""}`}
+            >
+              {saving ? "Збереження..." : "Зберегти"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 function InventoryTab({ products, inventories, restaurants, user, createInventory, updateInventory, deleteInventory }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
@@ -5269,22 +5692,40 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
   );
 }
 
+// Групує позиції замовлення за постачальниками для відображення в «Мої заявки».
+const groupOrderItemsBySupplier = (order) => {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const map = new Map();
+  items.forEach((item, index) => {
+    const supplierName = String(item?.supplier || "").trim() || "Без постачальника";
+    const key = normalizeSupplierIdentity(supplierName) || supplierName.toLowerCase();
+    if (!map.has(key)) map.set(key, { supplier: supplierName, items: [], total: 0 });
+    const group = map.get(key);
+    group.items.push({ ...item, _index: index });
+    group.total += toNumber(item.amount);
+  });
+  return Array.from(map.values()).sort((a, b) => a.supplier.localeCompare(b.supplier, "uk"));
+};
+
 function BookingTab({ products, orders, aplAssignments = [], createOrder, updateOrder, restaurants, user, suppliersDirectory = [] }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const pageSizeOptions = [12, 25, 50];
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
-  const [requiredDate, setRequiredDate] = useState("");
   const [comment, setComment] = useState("");
   const [quantities, setQuantities] = useState({});
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
-  const [supplierFilter, setSupplierFilter] = useState("");
+  const [supplierFilter] = useState("");
   const [showOnlySelected, setShowOnlySelected] = useState(false);
+  const [respectDeliverySchedule, setRespectDeliverySchedule] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(12);
   const [receivingOrder, setReceivingOrder] = useState(null);
   const [receivingDraft, setReceivingDraft] = useState({});
+  const [returnDrafts, setReturnDrafts] = useState({});
   const [savingReceiving, setSavingReceiving] = useState(false);
+  const [orderDetailsRow, setOrderDetailsRow] = useState(null);
+  const [showCreateOrder, setShowCreateOrder] = useState(false);
 
   useEffect(() => {
     if (isGlobalAdmin) return;
@@ -5301,11 +5742,163 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
     return orders.filter((order) => String(order.restaurantId) === String(user?.restaurant));
   }, [orders, user, isGlobalAdmin]);
 
+  // Кожне замовлення розкладається на окремі рядки по постачальниках:
+  // один рядок = заклад + постачальник.
+  const myOrderRows = useMemo(() => {
+    const rows = [];
+    myOrders.forEach((order) => {
+      groupOrderItemsBySupplier(order).forEach((group, index) => {
+        const correctedItems = group.items.filter((item) => item?.correctionPending);
+        // Статус у розрізі позицій цього постачальника (єдина екосистема з порталом і бордом).
+        const sentItems = group.items.filter((item) => item?.sentToSupplier);
+        const summary = { pending: 0, accepted: 0, partial: 0, unavailable: 0, total: sentItems.length };
+        sentItems.forEach((item) => {
+          const st = getSupplierResponseStatus(item);
+          if (Object.prototype.hasOwnProperty.call(summary, st)) summary[st] += 1;
+        });
+        const orderStatusStr = String(order.status || "");
+        let supplierStatusKey;
+        let supplierStatusLabel;
+        let supplierStatusBadge;
+        if (orderStatusStr === "completed") {
+          supplierStatusKey = "completed";
+          supplierStatusLabel = statusLabel("completed");
+          supplierStatusBadge = "bg-emerald-100 text-emerald-700";
+        } else if (sentItems.length === 0) {
+          supplierStatusKey = orderStatusStr || "new";
+          supplierStatusLabel = statusLabel(orderStatusStr || "new");
+          supplierStatusBadge = "bg-slate-100 text-slate-700";
+        } else {
+          const scoped = getSupplierScopedStatus(summary);
+          supplierStatusKey = scoped.key;
+          supplierStatusLabel = scoped.label;
+          supplierStatusBadge = scoped.badge;
+        }
+        rows.push({
+          order,
+          rowKey: `${String(order.id)}::${normalizeSupplierIdentity(group.supplier) || index}`,
+          supplier: group.supplier,
+          items: group.items,
+          total: group.total,
+          hasPendingCorrection: correctedItems.length > 0,
+          pendingCorrectionCount: correctedItems.length,
+          supplierStatusKey,
+          supplierStatusLabel,
+          supplierStatusBadge,
+        });
+      });
+    });
+    return rows;
+  }, [myOrders]);
+
   const selectedRestaurantContext = useMemo(() => {
     const selected = restaurants.find((item) => String(item.id) === String(restaurantId));
     if (selected) return selected;
     return { id: String(restaurantId || "") };
   }, [restaurants, restaurantId]);
+
+  // Для кожного постачальника обчислюємо дні тижня, у які можна оформляти замовлення
+  // (день доставки за контрактом мінус термін поставки). Беруться контракти,
+  // що відповідають обраному закладу. Ключ — нормалізована назва постачальника.
+  const supplierOrderWeekdayMap = useMemo(() => {
+    const map = new Map();
+    const restaurantLookupKey = buildRestaurantLookupKey(selectedRestaurantContext || {});
+    const restaurantTokens = collectRestaurantTokens(selectedRestaurantContext || {});
+    const contractMatchesRestaurant = (contract) => {
+      const contractLookupKey = String(contract?.restaurantLookupKey || "").trim();
+      if (restaurantLookupKey && contractLookupKey && contractLookupKey === restaurantLookupKey) return true;
+      return hasRestaurantTokenOverlap(collectRestaurantTokens(contract || {}), restaurantTokens);
+    };
+    (Array.isArray(suppliersDirectory) ? suppliersDirectory : []).forEach((supplierRecord) => {
+      const supplierKey = normalizeSupplierIdentity(supplierRecord?.name);
+      if (!supplierKey) return;
+      const contracts = Array.isArray(supplierRecord?.contracts) ? supplierRecord.contracts : [];
+      contracts.forEach((contract) => {
+        if (!contractMatchesRestaurant(contract)) return;
+        const orderDays = computeContractOrderWeekdays(contract);
+        if (orderDays.size === 0) return;
+        if (!map.has(supplierKey)) map.set(supplierKey, new Set());
+        const target = map.get(supplierKey);
+        orderDays.forEach((dayId) => target.add(dayId));
+      });
+    });
+    return map;
+  }, [suppliersDirectory, selectedRestaurantContext]);
+
+  const todayWeekdayId = useMemo(() => getDeliveryWeekdayId(), []);
+
+  // Інфо про доставку по постачальниках для обраного закладу:
+  // ключ — нормалізована назва, значення — { deliveryWeekdays, leadDays }.
+  const supplierDeliveryInfoMap = useMemo(() => {
+    const map = new Map();
+    const restaurantLookupKey = buildRestaurantLookupKey(selectedRestaurantContext || {});
+    const restaurantTokens = collectRestaurantTokens(selectedRestaurantContext || {});
+    const contractMatchesRestaurant = (contract) => {
+      const contractLookupKey = String(contract?.restaurantLookupKey || "").trim();
+      if (restaurantLookupKey && contractLookupKey && contractLookupKey === restaurantLookupKey) return true;
+      return hasRestaurantTokenOverlap(collectRestaurantTokens(contract || {}), restaurantTokens);
+    };
+    (Array.isArray(suppliersDirectory) ? suppliersDirectory : []).forEach((supplierRecord) => {
+      const supplierKey = normalizeSupplierIdentity(supplierRecord?.name);
+      if (!supplierKey) return;
+      const contracts = Array.isArray(supplierRecord?.contracts) ? supplierRecord.contracts : [];
+      contracts.forEach((contract) => {
+        if (!contractMatchesRestaurant(contract)) return;
+        const deliveryWeekdays = computeContractDeliveryWeekdays(contract);
+        if (deliveryWeekdays.size === 0) return;
+        const leadDays = Math.max(0, Math.round(toNumber(contract?.deliveryLeadDays)));
+        const existing = map.get(supplierKey);
+        // Беремо контракт із найменшим терміном поставки (найшвидша доставка).
+        if (!existing || leadDays < existing.leadDays) {
+          map.set(supplierKey, { deliveryWeekdays, leadDays });
+        } else if (existing) {
+          deliveryWeekdays.forEach((dayId) => existing.deliveryWeekdays.add(dayId));
+        }
+      });
+    });
+    return map;
+  }, [suppliersDirectory, selectedRestaurantContext]);
+
+  // Обчислює найближчу дату доставки для продукту (за обраним постачальником).
+  const computeProductDeliveryDate = useCallback((product) => {
+    const supplierRaw = Array.isArray(product?.supplierList) && product.supplierList.length > 0
+      ? product.supplierList.join(", ")
+      : product?.supplier;
+    const resolvedSupplier = resolveSupplierForRestaurantContext(
+      supplierRaw,
+      selectedRestaurantContext,
+      suppliersDirectory,
+      { code1C: product?.code1C, name: product?.name },
+      buildSupplierPriceMap(product)
+    );
+    const info = supplierDeliveryInfoMap.get(normalizeSupplierIdentity(resolvedSupplier));
+    if (!info) return "";
+    return computeNextDeliveryDate(info.deliveryWeekdays, info.leadDays);
+  }, [supplierDeliveryInfoMap, selectedRestaurantContext, suppliersDirectory]);
+
+  // Чи дозволено замовляти продукт сьогодні згідно графіка доставок.
+  // Перевіряємо графік САМЕ ТОГО постачальника, якого буде обрано для замовлення
+  // (resolveSupplierForRestaurantContext — рекомендований/найдешевший контрактний).
+  // Якщо в обраного постачальника немає графіка для цього закладу — не обмежуємо.
+  const isProductOrderableToday = useCallback((product) => {
+    if (!respectDeliverySchedule) return true;
+    if (supplierOrderWeekdayMap.size === 0) return true;
+    const supplierRaw = Array.isArray(product?.supplierList) && product.supplierList.length > 0
+      ? product.supplierList.join(", ")
+      : product?.supplier;
+    const resolvedSupplier = resolveSupplierForRestaurantContext(
+      supplierRaw,
+      selectedRestaurantContext,
+      suppliersDirectory,
+      { code1C: product?.code1C, name: product?.name },
+      buildSupplierPriceMap(product)
+    );
+    const key = normalizeSupplierIdentity(resolvedSupplier);
+    const orderDays = key ? supplierOrderWeekdayMap.get(key) : null;
+    // Обраний постачальник без графіка для цього закладу — не обмежуємо.
+    if (!orderDays || orderDays.size === 0) return true;
+    return orderDays.has(todayWeekdayId);
+  }, [respectDeliverySchedule, supplierOrderWeekdayMap, todayWeekdayId, selectedRestaurantContext, suppliersDirectory]);
 
   const activeProducts = useMemo(() => {
     const selectedRestaurantId = String(restaurantId || "");
@@ -5500,9 +6093,10 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
             : product.supplier === supplierFilter)
         : true;
       const bySelected = showOnlySelected ? toNumber(quantities[product.id]) > 0 : true;
-      return bySearch && byCategory && bySupplier && bySelected;
+      const byDeliveryDay = isProductOrderableToday(product);
+      return bySearch && byCategory && bySupplier && bySelected && byDeliveryDay;
     });
-  }, [activeProducts, searchTerm, categoryFilter, supplierFilter, showOnlySelected, quantities]);
+  }, [activeProducts, searchTerm, categoryFilter, supplierFilter, showOnlySelected, quantities, isProductOrderableToday]);
 
   const keywordPool = useMemo(() => {
     return Array.from(
@@ -5567,16 +6161,23 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
           name: product.name,
           code1C: product.code1C || "",
           category: product.category,
-          supplier: resolveSupplierForRestaurantContext(supplierRaw, selectedRestaurantContext, suppliersDirectory),
+          supplier: resolveSupplierForRestaurantContext(supplierRaw, selectedRestaurantContext, suppliersDirectory, { code1C: product.code1C, name: product.name }, buildSupplierPriceMap(product)),
           unit: product.unit,
           qty,
           unitPrice,
           amount: qty * unitPrice,
+          deliveryDate: computeProductDeliveryDate(product),
           whiteCards: Array.isArray(product.whiteCards) ? product.whiteCards : [],
         };
       })
       .filter(Boolean);
-  }, [activeProducts, quantities, selectedRestaurantContext, suppliersDirectory]);
+  }, [activeProducts, quantities, selectedRestaurantContext, suppliersDirectory, computeProductDeliveryDate]);
+
+  // Найближча дата доставки серед обраних позицій (для автозаповнення заявки).
+  const autoDeliveryDate = useMemo(() => {
+    const dates = selectedItems.map((item) => item.deliveryDate).filter(Boolean).sort();
+    return dates[0] || "";
+  }, [selectedItems]);
 
   const suppliersDirectoryByName = useMemo(() => {
     const map = new Map();
@@ -5646,17 +6247,25 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
           qty,
           unitPrice: toNumber(product.unitPrice),
           amount: qty * toNumber(product.unitPrice),
-          supplier: resolveSupplierForRestaurantContext(supplierRaw, selectedRestaurantContext, suppliersDirectory) || "",
+          supplier: resolveSupplierForRestaurantContext(supplierRaw, selectedRestaurantContext, suppliersDirectory, { code1C: product.code1C, name: product.name }, buildSupplierPriceMap(product)) || "",
+          deliveryDate: computeProductDeliveryDate(product),
           aplWhiteCards: Array.isArray(product.whiteCards) ? product.whiteCards : [],
           isAplLine: String(product.id || "").startsWith("apl::"),
         };
       })
       .filter(Boolean);
 
-    if (!restaurantId || !requiredDate || orderItems.length === 0) {
-      alert("Оберіть ресторан, дату поставки та введіть хоча б одну кількість.");
+    if (!restaurantId || orderItems.length === 0) {
+      alert("Оберіть ресторан та введіть хоча б одну кількість.");
       return;
     }
+
+    // Дата поставки визначається автоматично з графіка доставок постачальників.
+    const computedRequiredDate = orderItems
+      .map((item) => item.deliveryDate)
+      .filter(Boolean)
+      .sort()[0] || "";
+
 
     if (hasMinimumOrderViolation) {
       const details = minimumOrderWarnings
@@ -5678,7 +6287,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
       restaurantId: String(restaurantId),
       restaurantName,
       restaurantRegNumber,
-      requiredDate,
+      requiredDate: computedRequiredDate,
       comment: comment.trim(),
       status: "new",
       items: orderItems,
@@ -5695,10 +6304,19 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
     }
     setQuantities({});
     setComment("");
+    setShowCreateOrder(false);
     alert("Замовлення сформовано та передано у відділ закупівель.");
   };
 
-  const printOrderInvoice = (order) => {
+  const printOrderInvoice = (order, supplierFilterName = null) => {
+    const allItems = Array.isArray(order.items) ? order.items : [];
+    const filterKey = supplierFilterName ? normalizeSupplierIdentity(supplierFilterName) : null;
+    const printItems = filterKey
+      ? allItems.filter((item) => normalizeSupplierIdentity(item?.supplier || "Без постачальника") === filterKey)
+      : allItems;
+    const printTotal = filterKey
+      ? printItems.reduce((sum, item) => sum + toNumber(item.amount), 0)
+      : toNumber(order.totalAmount);
     const htmlContent = `
       <!DOCTYPE html>
       <html lang="uk">
@@ -5774,6 +6392,11 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
               <div class="info-block-label">Статус</div>
               <div class="info-block-value"><span class="status-badge status-${String(order.status || "").toLowerCase()}">${statusLabel(order.status)}</span></div>
             </div>
+            ${supplierFilterName ? `
+            <div class="info-block">
+              <div class="info-block-label">Постачальник</div>
+              <div class="info-block-value">${supplierFilterName}</div>
+            </div>` : ""}
           </div>
 
           <div class="table-container">
@@ -5789,7 +6412,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                 </tr>
               </thead>
               <tbody>
-                ${(Array.isArray(order.items) ? order.items : []).map((item, index) => `
+                ${printItems.map((item, index) => `
                   <tr>
                     <td>${index + 1}</td>
                     <td>
@@ -5804,7 +6427,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                 `).join("")}
                 <tr class="total-row">
                   <td colspan="5" style="text-align: right;">РАЗОМ:</td>
-                  <td class="number-cell">${formatMoney(order.totalAmount)}</td>
+                  <td class="number-cell">${formatMoney(printTotal)}</td>
                 </tr>
               </tbody>
             </table>
@@ -5832,7 +6455,8 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
     }
   };
 
-  const openReceiveOrder = (order) => {
+  const openOrderDetails = (row) => {
+    const order = row?.order;
     const nextDraft = {};
     (Array.isArray(order?.items) ? order.items : []).forEach((item, index) => {
       const itemKey = `${String(order?.id || "order")}::${index}`;
@@ -5846,13 +6470,41 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
       nextDraft[itemKey] = String(defaultQty || 0);
     });
     setReceivingDraft(nextDraft);
-    setReceivingOrder(order);
+    setReturnDrafts({});
+    setOrderDetailsRow(row);
   };
 
-  const saveReceivingOrder = async () => {
-    if (!receivingOrder?.id || !updateOrder) return;
+  const [confirmingCorrection, setConfirmingCorrection] = useState(false);
 
-    const sourceOrder = orders.find((order) => String(order.id) === String(receivingOrder.id));
+  // Замовник підтверджує коригування, внесені менеджером.
+  const confirmOrderCorrections = async (order) => {
+    if (!order?.id || !updateOrder) return;
+    const now = new Date().toISOString();
+    const nextItems = (Array.isArray(order.items) ? order.items : []).map((item) => {
+      if (!item?.correctionPending) return item;
+      return {
+        ...item,
+        correctionPending: false,
+        correctionConfirmedAt: now,
+        correctionConfirmedBy: user?.displayName || user?.fullName || user?.email || "Замовник",
+      };
+    });
+    const { id, ...payload } = order;
+    setConfirmingCorrection(true);
+    const result = await updateOrder(id, { ...payload, items: nextItems, updatedAt: now });
+    setConfirmingCorrection(false);
+    if (!result.success) {
+      alert("Не вдалося підтвердити коригування.");
+      return;
+    }
+    setOrderDetailsRow(null);
+    alert("Коригування підтверджено. Менеджер може надіслати замовлення постачальнику.");
+  };
+
+  const saveReceivingOrder = async (targetOrder = receivingOrder) => {
+    if (!targetOrder?.id || !updateOrder) return;
+
+    const sourceOrder = orders.find((order) => String(order.id) === String(targetOrder.id));
     if (!sourceOrder) {
       alert("Не вдалося знайти заявку для приймання.");
       return;
@@ -5861,7 +6513,14 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
     const now = new Date().toISOString();
     const nextItems = (Array.isArray(sourceOrder.items) ? sourceOrder.items : []).map((item, index) => {
       const itemKey = `${String(sourceOrder.id)}::${index}`;
-      const actualReceivedQty = toNumber(receivingDraft[itemKey]);
+      const draftReturn = returnDrafts[itemKey];
+      const isReturned = Boolean(draftReturn?.open);
+      const returnReason = isReturned ? String(draftReturn.reason || "").trim() : "";
+      // Повернення завжди повне: повертається вся замовлена кількість позиції.
+      const returnedQty = isReturned ? toNumber(item.qty) : 0;
+      const hasReturn = isReturned && returnedQty > 0;
+      // Якщо позицію повернуто — фактично прийнято 0 (вона не залишилась у закладі).
+      const actualReceivedQty = hasReturn ? 0 : toNumber(receivingDraft[itemKey]);
       return {
         ...item,
         actualReceivedQty,
@@ -5870,6 +6529,13 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
         receivedAt: now,
         receivedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
         receivedById: user?.uid || user?.email || "",
+        returnedQty,
+        returnReason,
+        hasReturn,
+        returnStatus: hasReturn ? "pending" : "",
+        returnedAt: hasReturn ? now : "",
+        returnedBy: hasReturn ? (user?.displayName || user?.fullName || user?.email || "Користувач") : "",
+        reorderId: hasReturn ? "" : (item.reorderId || ""),
       };
     });
 
@@ -5878,6 +6544,13 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
       return;
     }
 
+    const returnedItems = nextItems.filter((item) => item.hasReturn);
+    if (returnedItems.some((item) => !item.returnReason)) {
+      alert("Для повернення товару вкажіть причину.");
+      return;
+    }
+
+    const hasReturns = returnedItems.length > 0;
     const { id, ...payload } = sourceOrder;
     setSavingReceiving(true);
     const result = await updateOrder(id, {
@@ -5888,6 +6561,8 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
       completedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
       completedById: user?.uid || user?.email || "",
       receivedAt: now,
+      hasPendingReturns: hasReturns,
+      returnsRegisteredAt: hasReturns ? now : (payload.returnsRegisteredAt || ""),
       updatedAt: now,
     });
     setSavingReceiving(false);
@@ -5898,23 +6573,37 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
     }
 
     setReceivingOrder(null);
+    setOrderDetailsRow(null);
     setReceivingDraft({});
-    alert("Приймання замовлення підтверджено.");
+    setReturnDrafts({});
+    alert(hasReturns
+      ? "Приймання підтверджено. Повернення зафіксовано — менеджер сформує дозамовлення."
+      : "Приймання замовлення підтверджено.");
   };
 
   return (
     <div className="space-y-5">
-      <div className={cardClass}>
-        <div className="flex items-center gap-2 mb-4">
-          <ShoppingCart size={18} className="text-indigo-600" />
-          <h2 className="text-lg font-semibold">Формування замовлення продукції</h2>
+      {showCreateOrder && (
+      <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-3 sm:p-6" onClick={() => setShowCreateOrder(false)}>
+      <div className={`${cardClass} relative my-2 w-full max-w-5xl`} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <div className="flex items-center gap-2">
+            <ShoppingCart size={18} className="text-indigo-600" />
+            <h2 className="text-lg font-semibold">Формування замовлення продукції</h2>
+          </div>
+          <button
+            type="button"
+            className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            onClick={() => setShowCreateOrder(false)}
+          >
+            Закрити
+          </button>
         </div>
 
-        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <p className="mb-2 text-sm font-semibold text-slate-900">Реквізити заявки</p>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="mb-4 rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div>
-              <label className="text-sm font-semibold text-slate-800">Ресторан</label>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Ресторан</label>
               <select
                 className={inputClass}
                 value={restaurantId}
@@ -5927,71 +6616,69 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                 ))}
               </select>
             </div>
-            <div>
-              <label className="text-sm font-semibold text-slate-800">Потрібна дата поставки</label>
-              <input
-                type="date"
-                className={inputClass}
-                value={requiredDate}
-                onChange={(e) => setRequiredDate(e.target.value)}
-                onFocus={openNativeDatePicker}
-                onClick={openNativeDatePicker}
-              />
+            <div className="sm:col-span-2">
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Коментар</label>
+              <input className={inputClass} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Напр. терміново до обіду" />
             </div>
             <div>
-              <label className="text-sm font-semibold text-slate-800">Коментар</label>
-              <input className={inputClass} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Напр. терміново до обіду" />
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Дата поставки</label>
+              <div className="flex h-[38px] items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 text-sm font-semibold text-indigo-700">
+                <ClipboardCheck size={15} className="shrink-0 text-indigo-500" />
+                <span>{autoDeliveryDate ? formatDateUk(autoDeliveryDate) : "авто за графіком"}</span>
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
-          <div className="lg:col-span-2">
-            <label className="text-sm font-semibold text-slate-800">Пошук</label>
+        <div className="mb-3 flex flex-nowrap items-center gap-2">
+          <div className="relative min-w-0 flex-1">
             <input
-              className={inputClass}
+              className={`${inputClass} mt-0 pl-9`}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Назва, категорія, постачальник, од. вим."
+              placeholder="Пошук: назва, категорія, од. вим."
             />
+            <svg className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>
           </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Категорія</label>
-            <select className={inputClass} value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-              <option value="">Всі категорії</option>
-              {availableCategories.map((category) => (
-                <option key={category} value={category}>{category}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="text-sm font-semibold text-slate-800">Постачальник</label>
-            <select className={inputClass} value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)}>
-              <option value="">Всі постачальники</option>
-              {availableSuppliers.map((supplier) => (
-                <option key={supplier} value={supplier}>{supplier}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex flex-col justify-end gap-2">
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input type="checkbox" checked={showOnlySelected} onChange={(e) => setShowOnlySelected(e.target.checked)} />
-              Лише вибрані
-            </label>
+          <select className={`${inputClass} mt-0 w-auto max-w-[160px] shrink-0`} value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+            <option value="">Всі категорії</option>
+            {availableCategories.map((category) => (
+              <option key={category} value={category}>{category}</option>
+            ))}
+          </select>
+          <label className={`flex h-[38px] shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-lg border px-3 text-sm font-medium transition ${showOnlySelected ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}>
+            <input type="checkbox" className="accent-indigo-600" checked={showOnlySelected} onChange={(e) => setShowOnlySelected(e.target.checked)} />
+            Вибрані
+          </label>
+          <label className={`flex h-[38px] shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap rounded-lg border px-3 text-sm font-medium transition ${respectDeliverySchedule ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}>
+            <input type="checkbox" className="accent-emerald-600" checked={respectDeliverySchedule} onChange={(e) => setRespectDeliverySchedule(e.target.checked)} />
+            За графіком
+          </label>
+          {(searchTerm || categoryFilter || showOnlySelected) && (
             <button
               type="button"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              className="flex h-[38px] shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-slate-300 px-3 text-sm font-medium text-slate-500 hover:bg-slate-50"
               onClick={() => {
                 setSearchTerm("");
                 setCategoryFilter("");
-                setSupplierFilter("");
                 setShowOnlySelected(false);
               }}
             >
-              Скинути фільтри
+              <X size={14} /> Скинути
             </button>
-          </div>
+          )}
         </div>
+
+        {respectDeliverySchedule && supplierOrderWeekdayMap.size > 0 && (
+          <div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <ClipboardCheck size={14} className="shrink-0" />
+            <span>
+              Показано продукти, доступні для замовлення сьогодні
+              (<span className="font-semibold">{DELIVERY_WEEK_DAYS.find((d) => d.id === todayWeekdayId)?.label || "—"}</span>)
+              згідно з графіком доставок. Зніміть «За графіком», щоб побачити всі.
+            </span>
+          </div>
+        )}
 
         {keywordSuggestions.length > 0 && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -6027,7 +6714,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                 const supplierRaw = Array.isArray(product.supplierList) && product.supplierList.length > 0
                   ? product.supplierList.join(", ")
                   : product.supplier;
-                const resolvedSupplier = resolveSupplierForRestaurantContext(supplierRaw, selectedRestaurantContext, suppliersDirectory);
+                const resolvedSupplier = resolveSupplierForRestaurantContext(supplierRaw, selectedRestaurantContext, suppliersDirectory, { code1C: product.code1C, name: product.name }, buildSupplierPriceMap(product));
                 const supplierMinimumAmount = minimumOrderTargetBySupplier.get(normalizeSupplierIdentity(resolvedSupplier)) || 0;
                 const unitPrice = toNumber(product.unitPrice);
                 const minimumQtyHint = supplierMinimumAmount > 0 && unitPrice > 0
@@ -6195,15 +6882,27 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
           </button>
         </div>
       </div>
+      </div>
+      )}
 
       <div className={cardClass}>
-        <h3 className="text-base font-semibold text-slate-900 mb-3">Мої заявки</h3>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3 className="text-base font-semibold text-slate-900">Мої заявки</h3>
+          <button
+            type="button"
+            onClick={() => setShowCreateOrder(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500"
+          >
+            <Plus size={15} /> Створити нове замовлення
+          </button>
+        </div>
         <div className="overflow-x-auto rounded-lg border border-slate-200">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-slate-700">
               <tr>
                 <th className="px-3 py-2 text-left">Дата</th>
                 <th className="px-3 py-2 text-left">Ресторан</th>
+                <th className="px-3 py-2 text-left">Постачальник</th>
                 <th className="px-3 py-2 text-left">Позицій</th>
                 <th className="px-3 py-2 text-left">Поставка</th>
                 <th className="px-3 py-2 text-left">Сума</th>
@@ -6212,50 +6911,63 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
               </tr>
             </thead>
             <tbody>
-              {myOrders.map((order) => (
-                <tr key={order.id} className="border-t border-slate-200">
-                  <td className="px-3 py-2">{formatDateTimeSafe(resolveOrderCreatedAt(order))}</td>
-                  <td className="px-3 py-2">{order.restaurantName}</td>
-                  <td className="px-3 py-2">{order.items.length}</td>
-                  <td className="px-3 py-2">{formatDateUk(order.requiredDate) || "—"}</td>
-                  <td className="px-3 py-2 font-medium">{formatMoney(order.totalAmount)}</td>
-                  <td className="px-3 py-2">{statusLabel(order.status)}</td>
-                  <td className="px-3 py-2 space-y-1">
-                    <div className="flex flex-wrap items-center gap-1">
-                      {String(order.status || "") === "confirmed" ? (
+              {myOrderRows.map((row) => {
+                const { order } = row;
+                return (
+                  <tr
+                    key={row.rowKey}
+                    className={`cursor-pointer border-t border-slate-200 ${row.hasPendingCorrection ? "bg-amber-50 hover:bg-amber-100/70" : "hover:bg-slate-50"}`}
+                    onClick={() => openOrderDetails(row)}
+                  >
+                    <td className="px-3 py-2">{formatDateTimeSafe(resolveOrderCreatedAt(order))}</td>
+                    <td className="px-3 py-2">{order.restaurantName}</td>
+                    <td className="px-3 py-2">
+                      <span className="inline-flex items-center gap-1.5 font-medium text-slate-800">
+                        <Package size={13} className="text-indigo-600" />
+                        {row.supplier}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">{row.items.length}</td>
+                    <td className="px-3 py-2">{formatDateUk(order.requiredDate) || "—"}</td>
+                    <td className="px-3 py-2 font-medium">{formatMoney(row.total)}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex flex-col items-start gap-1">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${row.supplierStatusBadge}`}>{row.supplierStatusLabel}</span>
+                        {row.hasPendingCorrection && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-300 animate-pulse">
+                            <AlertTriangle size={11} /> Коригування ×{row.pendingCorrectionCount}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 space-y-1" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex flex-wrap items-center gap-1">
+                        {row.hasPendingCorrection && (
+                          <button
+                            type="button"
+                            className="rounded-lg border border-amber-400 bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-200 inline-flex items-center gap-1"
+                            onClick={() => openOrderDetails(row)}
+                            title="Переглянути та підтвердити коригування"
+                          >
+                            <AlertTriangle size={12} /> Підтвердити
+                          </button>
+                        )}
                         <button
                           type="button"
-                          className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                          onClick={() => openReceiveOrder(order)}
+                          className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"
+                          onClick={() => printOrderInvoice(order, row.supplier)}
+                          title={`Друкувати накладну для ${row.supplier}`}
                         >
-                          Прийняти замовлення
+                          <Printer size={12} /> Друк
                         </button>
-                      ) : String(order.status || "") === "completed" ? (
-                        <button
-                          type="button"
-                          className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                          onClick={() => openReceiveOrder(order)}
-                        >
-                          Переглянути приймання
-                        </button>
-                      ) : (
-                        <span className="text-xs text-slate-400">—</span>
-                      )}
-                      <button
-                        type="button"
-                        className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"
-                        onClick={() => printOrderInvoice(order)}
-                        title="Друкувати накладну"
-                      >
-                        <Printer size={12} /> Друк
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {myOrders.length === 0 && (
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {myOrderRows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-slate-500">Заявок поки немає.</td>
+                  <td colSpan={8} className="px-3 py-6 text-center text-slate-500">Заявок поки немає.</td>
                 </tr>
               )}
             </tbody>
@@ -6263,96 +6975,218 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
         </div>
       </div>
 
-      {receivingOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3" onClick={() => !savingReceiving && setReceivingOrder(null)}>
-          <div className="w-full max-w-5xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-3 flex items-center justify-between gap-2">
+      {orderDetailsRow && (() => {
+        const detailsStatus = String(orderDetailsRow.order.status || "");
+        const scopedKey = orderDetailsRow.supplierStatusKey || detailsStatus;
+        const canReceive = scopedKey === "confirmed" || scopedKey === "completed" || detailsStatus === "completed";
+        const isCompleted = detailsStatus === "completed";
+        const receivedTotal = orderDetailsRow.items.reduce((sum, item) => {
+          const itemKey = `${String(orderDetailsRow.order.id)}::${item._index}`;
+          return sum + toNumber(receivingDraft[itemKey]) * toNumber(item.unitPrice);
+        }, 0);
+        const correctionItems = orderDetailsRow.items.filter((item) => item?.correctionPending);
+        return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3" onClick={() => setOrderDetailsRow(null)}>
+          <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-start justify-between gap-2">
               <div>
-                <h3 className="text-base font-semibold text-slate-900">Приймання замовлення: {receivingOrder.restaurantName}</h3>
-                <p className="text-xs text-slate-500">Поставка: {receivingOrder.requiredDate || "—"} • {statusLabel(receivingOrder.status)}</p>
+                <h3 className="text-base font-semibold text-slate-900 inline-flex items-center gap-2">
+                  <Package size={16} className="text-indigo-600" />
+                  {orderDetailsRow.supplier}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {orderDetailsRow.order.restaurantName} • Поставка: {formatDateUk(orderDetailsRow.order.requiredDate) || "—"} • {statusLabel(orderDetailsRow.order.status)}
+                </p>
               </div>
               <button
                 type="button"
-                className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700"
-                onClick={() => setReceivingOrder(null)}
-                disabled={savingReceiving}
+                className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                onClick={() => setOrderDetailsRow(null)}
               >
                 Закрити
               </button>
             </div>
 
+            {correctionItems.length > 0 && (
+              <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3">
+                <div className="flex items-center gap-2 text-sm font-semibold text-amber-800">
+                  <AlertTriangle size={15} /> Менеджер скоригував ваше замовлення
+                </div>
+                <p className="mt-1 text-xs text-amber-700">
+                  Перевірте зміни та підтвердьте їх. Доки коригування не підтверджено, замовлення не буде надіслано постачальнику.
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {correctionItems.map((item) => (
+                    <li key={`corr-${item._index}`} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-amber-900">
+                      <span className="font-medium">{item.productName || "Без назви"}:</span>
+                      <span className="inline-flex items-center gap-1 rounded bg-white/70 px-1.5 py-0.5 ring-1 ring-amber-200">
+                        <span className="text-rose-600 line-through">{toNumber(item.correctionOriginalQty).toFixed(2)}</span>
+                        <span className="text-amber-500">→</span>
+                        <span className="font-semibold text-emerald-700">{toNumber(item.correctionNewQty).toFixed(2)}</span>
+                        <span className="text-amber-700">{item.unit || ""}</span>
+                      </span>
+                      {item.correctedBy && <span className="text-amber-600">({item.correctedBy})</span>}
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  type="button"
+                  disabled={confirmingCorrection}
+                  className="mt-2 inline-flex items-center gap-1 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                  onClick={() => confirmOrderCorrections(orderDetailsRow.order)}
+                >
+                  <ClipboardCheck size={14} /> {confirmingCorrection ? "Підтвердження…" : "Підтвердити коригування"}
+                </button>
+              </div>
+            )}
+
             <div className="max-h-[60vh] overflow-auto rounded-lg border border-slate-200">
               <table className="min-w-full text-sm">
-                <thead className="bg-slate-50 text-slate-700">
+                <thead className="bg-slate-50 text-slate-600">
                   <tr>
-                    <th className="px-3 py-2 text-left">Товар</th>
-                    <th className="px-3 py-2 text-left">Постачальник</th>
-                    <th className="px-3 py-2 text-right">Замовлено</th>
-                    <th className="px-3 py-2 text-right">Підтв. постачальником</th>
-                    <th className="px-3 py-2 text-right">Фактично прийнято</th>
-                    <th className="px-3 py-2 text-right">Різниця</th>
-                    <th className="px-3 py-2 text-left">Статус постачальника</th>
+                    <th className="px-3 py-2 text-left font-medium">Товар</th>
+                    <th className="px-3 py-2 text-right font-medium">К-сть</th>
+                    <th className="px-3 py-2 text-right font-medium">Ціна</th>
+                    <th className="px-3 py-2 text-right font-medium">Сума</th>
+                    {canReceive && <th className="px-3 py-2 text-right font-medium">Фактично прийнято</th>}
+                    {canReceive && <th className="px-3 py-2 text-right font-medium">Різниця</th>}
+                    {canReceive && !isCompleted && <th className="px-3 py-2 text-left font-medium">Повернення</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {(Array.isArray(receivingOrder.items) ? receivingOrder.items : []).map((item, index) => {
-                    const itemKey = `${String(receivingOrder.id)}::${index}`;
-                    const orderedQty = toNumber(item.qty);
-                    const confirmedQty = getSupplierResponseStatus(item) === "accepted"
-                      ? toNumber(item.supplierResponseQty || item.qty)
-                      : toNumber(item.supplierResponseQty);
+                  {orderDetailsRow.items.map((item, index) => {
+                    const itemKey = `${String(orderDetailsRow.order.id)}::${item._index}`;
                     const actualQty = toNumber(receivingDraft[itemKey]);
-                    const diffQty = actualQty - orderedQty;
-                    const diffRounded = Math.round((diffQty + Number.EPSILON) * 100) / 100;
-                    const diffDisplay = diffRounded.toFixed(2);
+                    const variance = actualQty - toNumber(item.qty);
+                    const isCorrected = !!item?.correctionPending;
+                    const returnDraft = returnDrafts[itemKey];
+                    const isReturning = Boolean(returnDraft?.open);
                     return (
-                      <tr key={itemKey} className="border-t border-slate-200">
-                        <td className="px-3 py-2 font-medium text-slate-900">{item.productName || "Без назви"}</td>
-                        <td className="px-3 py-2">{item.supplier || "—"}</td>
-                        <td className="px-3 py-2 text-right">{orderedQty} {item.unit || ""}</td>
-                        <td className="px-3 py-2 text-right">{confirmedQty} {item.unit || ""}</td>
-                        <td className="px-3 py-2 text-right">
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.1"
-                            disabled={String(receivingOrder.status || "") === "completed"}
-                            className="w-28 rounded border border-slate-300 px-2 py-1 text-right"
-                            value={receivingDraft[itemKey] ?? ""}
-                            onChange={(e) => setReceivingDraft((prev) => ({ ...prev, [itemKey]: e.target.value }))}
-                          />
-                        </td>
-                        <td className={`px-3 py-2 text-right font-semibold ${diffRounded < 0 ? "text-rose-600" : diffRounded > 0 ? "text-amber-700" : "text-emerald-700"}`}>
-                          {diffRounded > 0 ? "+" : ""}{diffDisplay} {item.unit || ""}
-                        </td>
-                        <td className="px-3 py-2">
-                          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${getSupplierResponseBadgeClass(getSupplierResponseStatus(item))}`}>
-                            {getSupplierResponseLabel(getSupplierResponseStatus(item))}
+                    <tr key={`${orderDetailsRow.rowKey}::${index}`} className={`border-t border-slate-200 ${isReturning ? "bg-rose-50" : isCorrected ? "bg-amber-50" : ""}`}>
+                      <td className="px-3 py-2 text-slate-800">
+                        {isCorrected && <AlertTriangle size={12} className="mr-1 inline text-amber-500" />}
+                        {item.productName || "Без назви"}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-600">
+                        {isCorrected ? (
+                          <span className="inline-flex items-center gap-1">
+                            <span className="text-rose-500 line-through">{toNumber(item.correctionOriginalQty).toFixed(2)}</span>
+                            <span className="font-semibold text-emerald-700">{toNumber(item.qty).toFixed(2)}</span>
+                            <span>{item.unit || ""}</span>
                           </span>
+                        ) : (
+                          <>{toNumber(item.qty).toFixed(2)} {item.unit || ""}</>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-600">{toNumber(item.unitPrice).toFixed(2)} грн</td>
+                      <td className="px-3 py-2 text-right font-medium text-slate-900">{formatMoney(item.amount)}</td>
+                      {canReceive && (
+                        <td className="px-3 py-2 text-right">
+                          {isReturning ? (
+                            <span className="inline-flex items-center gap-1 text-rose-600">
+                              <span className="line-through text-slate-400">{(receivingDraft[itemKey] ?? "0")}</span>
+                              <span className="font-semibold">0</span>
+                              <span className="text-xs text-slate-500">{item.unit || ""}</span>
+                            </span>
+                          ) : (
+                            <>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                disabled={isCompleted || savingReceiving}
+                                className="w-24 rounded border border-slate-300 px-2 py-1 text-right text-sm disabled:bg-slate-100"
+                                value={receivingDraft[itemKey] ?? ""}
+                                onChange={(e) => setReceivingDraft((prev) => ({ ...prev, [itemKey]: e.target.value }))}
+                              />
+                              <span className="ml-1 text-xs text-slate-500">{item.unit || ""}</span>
+                            </>
+                          )}
                         </td>
-                      </tr>
+                      )}
+                      {canReceive && (
+                        isReturning ? (
+                          <td className="px-3 py-2 text-right font-semibold text-rose-600">
+                            -{toNumber(item.qty).toFixed(2)}
+                          </td>
+                        ) : (
+                          <td className={`px-3 py-2 text-right font-medium ${variance === 0 ? "text-slate-500" : variance > 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                            {variance > 0 ? "+" : ""}{variance.toFixed(2)}
+                          </td>
+                        )
+                      )}
+                      {canReceive && !isCompleted && (
+                        <td className="px-3 py-2">
+                          {isReturning ? (
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                autoFocus
+                                placeholder="Причина повернення"
+                                className="w-48 rounded border border-rose-300 px-2 py-1 text-xs"
+                                value={returnDraft.reason ?? ""}
+                                onChange={(e) => setReturnDrafts((prev) => ({ ...prev, [itemKey]: { ...prev[itemKey], reason: e.target.value } }))}
+                              />
+                              <button
+                                type="button"
+                                className="rounded border border-slate-300 px-1.5 py-1 text-xs text-slate-500 hover:bg-slate-100"
+                                onClick={() => setReturnDrafts((prev) => { const n = { ...prev }; delete n[itemKey]; return n; })}
+                                title="Скасувати повернення"
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                              onClick={() => setReturnDrafts((prev) => ({ ...prev, [itemKey]: { open: true, reason: "" } }))}
+                              title="Повернути всю позицію постачальнику"
+                            >
+                              <Trash2 size={12} /> Повернути
+                            </button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
                     );
                   })}
                 </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-slate-200 bg-slate-50">
+                    <td className="px-3 py-2 text-right font-semibold text-slate-700" colSpan={3}>РАЗОМ:</td>
+                    <td className="px-3 py-2 text-right font-semibold text-slate-900">{formatMoney(orderDetailsRow.total)}</td>
+                    {canReceive && <td className="px-3 py-2" />}
+                    {canReceive && <td className="px-3 py-2 text-right font-semibold text-slate-900">{formatMoney(receivedTotal)}</td>}
+                    {canReceive && !isCompleted && <td className="px-3 py-2" />}
+                  </tr>
+                </tfoot>
               </table>
             </div>
 
-            <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
-              <span>Різниця рахується від замовленої кількості.</span>
-              {String(receivingOrder.status || "") !== "completed" && (
+            <div className="mt-3 flex items-center justify-end gap-2">
+              {scopedKey === "confirmed" && (
                 <button
                   type="button"
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-300"
-                  onClick={() => { void saveReceivingOrder(); }}
                   disabled={savingReceiving}
+                  className="rounded-lg border border-emerald-300 bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                  onClick={() => saveReceivingOrder(orderDetailsRow.order)}
                 >
-                  {savingReceiving ? "Збереження..." : "Підтвердити приймання"}
+                  {savingReceiving ? "Збереження…" : "Підтвердити приймання"}
                 </button>
               )}
+              <button
+                type="button"
+                className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 hover:bg-blue-100 inline-flex items-center gap-1"
+                onClick={() => printOrderInvoice(orderDetailsRow.order, orderDetailsRow.supplier)}
+              >
+                <Printer size={14} /> Друк
+              </button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -6503,6 +7337,131 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       });
   }, [roleScopedOrders]);
 
+  const returnIncidents = useMemo(() => {
+    const groups = [];
+    for (const order of roleScopedOrders) {
+      const items = Array.isArray(order?.items) ? order.items : [];
+      const pendingReturns = items
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => item?.hasReturn && toNumber(item?.returnedQty) > 0 && !item?.reorderId);
+      if (pendingReturns.length === 0) continue;
+
+      const bySupplier = {};
+      for (const { item, index } of pendingReturns) {
+        const supplier = resolveLineSupplierName(order, item);
+        if (!bySupplier[supplier]) {
+          bySupplier[supplier] = {
+            key: `${String(order.id)}::${normalizeSupplierIdentity(supplier) || "no-supplier"}`,
+            orderId: order.id,
+            order,
+            supplier,
+            restaurantName: order.restaurantName || "",
+            requiredDate: order.requiredDate || "",
+            lines: [],
+            totalAmount: 0,
+            returnedAt: "",
+          };
+        }
+        const lineAmount = toNumber(item.returnedQty) * toNumber(item.unitPrice);
+        bySupplier[supplier].lines.push({ item, index, returnedQty: toNumber(item.returnedQty), reason: item.returnReason || "", amount: lineAmount });
+        bySupplier[supplier].totalAmount += lineAmount;
+        if (String(item.returnedAt || "") > String(bySupplier[supplier].returnedAt || "")) {
+          bySupplier[supplier].returnedAt = item.returnedAt || "";
+        }
+      }
+      groups.push(...Object.values(bySupplier));
+    }
+    return groups.sort((left, right) => String(right.returnedAt || "").localeCompare(String(left.returnedAt || "")));
+  }, [roleScopedOrders, resolveLineSupplierName]);
+
+  const createReorderForReturns = useCallback(async (incident) => {
+    if (!incident?.order?.id || !createOrder || !updateOrder) return;
+    const sourceOrder = orders.find((order) => String(order.id) === String(incident.orderId));
+    if (!sourceOrder) {
+      alert("Не вдалося знайти вихідну заявку для дозамовлення.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const actorName = user?.displayName || user?.fullName || user?.email || "Користувач";
+    const reorderId = `reorder-${Date.now()}`;
+    const reasons = incident.lines.map((line) => line.reason).filter(Boolean);
+
+    const reorderItems = incident.lines.map(({ item, returnedQty }) => ({
+      ...item,
+      qty: returnedQty,
+      amount: returnedQty * toNumber(item.unitPrice),
+      sentToSupplier: true,
+      supplierResponseStatus: "",
+      supplierResponseQty: 0,
+      supplierResponseComment: "",
+      correctionPending: false,
+      hasReturn: false,
+      returnedQty: 0,
+      returnReason: "",
+      returnStatus: "",
+      actualReceivedQty: undefined,
+      actualReceivedAmount: undefined,
+      receivedVarianceQty: undefined,
+      receivedAt: "",
+      isReorderItem: true,
+      reorderSourceOrderId: sourceOrder.id,
+    }));
+
+    const totalAmount = reorderItems.reduce((sum, item) => sum + toNumber(item.amount), 0);
+
+    const newOrder = {
+      createdBy: actorName,
+      restaurantId: sourceOrder.restaurantId || "",
+      restaurantName: sourceOrder.restaurantName || "",
+      restaurantRegNumber: sourceOrder.restaurantRegNumber || "",
+      requiredDate: sourceOrder.requiredDate || "",
+      comment: `Дозамовлення (повернення товару). Причина: ${reasons.join("; ") || "не вказано"}`,
+      status: "sent",
+      isReorder: true,
+      reorderSourceOrderId: sourceOrder.id,
+      returnReasonSummary: reasons.join("; "),
+      items: reorderItems,
+      totalItems: reorderItems.length,
+      totalAmount,
+      sentAt: now,
+      sentBy: actorName,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const createResult = await createOrder(newOrder);
+    if (createResult && createResult.success === false) {
+      alert("Не вдалося сформувати дозамовлення.");
+      return;
+    }
+
+    const newOrderId = createResult?.id || createResult?.data?.id || reorderId;
+    const reorderedIndexes = new Set(incident.lines.map((line) => line.index));
+    const updatedItems = (Array.isArray(sourceOrder.items) ? sourceOrder.items : []).map((item, index) => {
+      if (!reorderedIndexes.has(index)) return item;
+      return {
+        ...item,
+        reorderId: String(newOrderId),
+        reorderedAt: now,
+        reorderedBy: actorName,
+        returnStatus: "reordered",
+      };
+    });
+
+    const stillHasReturns = updatedItems.some((item) => item.hasReturn && toNumber(item.returnedQty) > 0 && !item.reorderId);
+    const { id, ...payload } = sourceOrder;
+    await updateOrder(id, {
+      ...payload,
+      items: updatedItems,
+      hasPendingReturns: stillHasReturns,
+      updatedAt: now,
+    });
+
+    alert("Дозамовлення сформовано та надіслано постачальнику на день доставки.");
+  }, [orders, createOrder, updateOrder, user]);
+
+
   const groupedBySupplier = useMemo(() => {
     const map = {};
     for (const order of visibleOrders) {
@@ -6629,6 +7588,10 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       qty: effectiveQty,
       actualReceivedQty: item?.actualReceivedQty !== undefined ? toNumber(item.actualReceivedQty) : null,
       receivedVarianceQty: item?.receivedVarianceQty !== undefined ? toNumber(item.receivedVarianceQty) : null,
+      returnedQty: toNumber(item?.returnedQty),
+      hasReturn: Boolean(item?.hasReturn),
+      returnReason: String(item?.returnReason || "").trim(),
+      reorderId: String(item?.reorderId || ""),
       requiredDate: order.requiredDate,
       orderId: order.id,
       productId: item.productId || "",
@@ -6640,6 +7603,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       responseQty: toNumber(item.supplierResponseQty),
       responseComment: String(item.supplierResponseComment || item.supplierResponseComment || "").trim(),
       sentToSupplier: Boolean(item?.sentToSupplier),
+      correctionPending: Boolean(item?.correctionPending),
       isCancelled: Boolean(isCancelled),
     });
     supplierMap[supplierName].rows[key].orderIds.add(order.id);
@@ -6650,6 +7614,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       supplierMap[supplierName].lineSnapshots.push({
         sentToSupplier: Boolean(item?.sentToSupplier),
         responseStatus,
+        correctionPending: Boolean(item?.correctionPending),
         boardStatus: resolveSupplierLineBoardStatus(order, item, supplierName),
       });
     }
@@ -6691,6 +7656,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
           dates: new Set(order?.requiredDate ? [order.requiredDate] : []),
           lineSnapshots: [],
           createdAt: String(order?.createdAt || ""),
+          status: String(order?.status || ""),
         };
       }
 
@@ -6745,6 +7711,9 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
         responseQty: toNumber(item.supplierResponseQty),
         responseComment: String(item.supplierResponseComment || "").trim(),
         sentToSupplier: Boolean(item?.sentToSupplier),
+        correctionPending: Boolean(item?.correctionPending),
+        correctionOriginalQty: toNumber(item?.correctionOriginalQty),
+        correctionNewQty: toNumber(item?.correctionNewQty),
         isCancelled: Boolean(isCancelled),
       });
 
@@ -6758,6 +7727,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
         entry.lineSnapshots.push({
           sentToSupplier: Boolean(item?.sentToSupplier),
           responseStatus,
+          correctionPending: Boolean(item?.correctionPending),
           boardStatus: resolveSupplierLineBoardStatus(order, item, entry.supplier),
         });
       }
@@ -6812,10 +7782,28 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       const batches = [];
 
       orderEntries.forEach((entry) => {
+        // Менеджер замовлень бачить мердж по (постачальник + дата поставки):
+        // усі замовлення одного постачальника на одну дату об'єднуються в одну
+        // картку, навіть якщо вони з різних закладів або з одного закладу повторно.
+        //
+        // ВИНЯТОК: якщо замовлення вже надіслано постачальнику (sentToSupplier),
+        // то нове (ще не надіслане) дозамовлення на ту ж дату НЕ зливається в цю
+        // картку, а йде окремою карткою — щоб не «відкочувати» статус назад у
+        // «В обробці» та не плутати вже відправлені позиції з новими.
+        const entryDispatched = entry.lineSnapshots.some((snapshot) => snapshot.sentToSupplier);
+        const entryCompleted = String(entry.status || "") === "completed";
+        const entryDateKey = Array.from(entry.dates).sort().join("|");
         let placed = false;
         for (const batch of batches) {
-          const hasRestaurantConflict = Array.from(entry.restaurantTokens).some((token) => batch.restaurantTokens.has(token));
-          if (hasRestaurantConflict) continue;
+          const batchDateKey = Array.from(batch.dates).sort().join("|");
+          if (batchDateKey !== entryDateKey) continue;
+
+          const batchDispatched = batch.lineSnapshots.some((snapshot) => snapshot.sentToSupplier);
+          // Не зливаємо різні стани відправки в одну картку.
+          if (batchDispatched !== entryDispatched) continue;
+          // Не зливаємо закриті (completed) замовлення з активними — інакше
+          // дозамовлення (повернення) на ту ж дату поглинається закритою карткою.
+          if (Boolean(batch.completed) !== entryCompleted) continue;
 
           Object.entries(entry.rows).forEach(([rowKey, rowValue]) => {
             if (!batch.rows[rowKey]) {
@@ -6859,6 +7847,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
             restaurantTokens: new Set(Array.from(entry.restaurantTokens)),
             dates: new Set(Array.from(entry.dates)),
             lineSnapshots: [...entry.lineSnapshots],
+            completed: entryCompleted,
           });
         }
       });
@@ -6877,6 +7866,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
         const completedRestaurantCount = sourceOrders.filter((entry) => String(entry.status || "") === "completed").length;
         const pendingRestaurantCount = Math.max(0, batch.restaurants.size - completedRestaurantCount);
         const calculatedStatus = calculateBoardStatus(batch.lineSnapshots);
+        const hasPendingCorrection = batch.lineSnapshots.some((item) => item.correctionPending);
 
         boardOrders.push({
           id: boardCardId,
@@ -6891,6 +7881,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
           totalAmount,
           totalQty,
           positionsCount: rows.length,
+          hasPendingCorrection,
           deliveryDates: Array.from(batch.dates).sort(),
         });
       });
@@ -6904,6 +7895,16 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       return leftDate.localeCompare(rightDate, "uk");
     });
   }, [visibleOrders, resolveLineSupplierName, lineEdits, resolveSupplierLineBoardStatus, buildBoardLineKey, buildSupplierBoardCardId]);
+
+  // Тримаємо відкриту модалку зведеного замовлення синхронною з актуальними даними,
+  // щоб після коригування одразу зʼявлялись індикатори та оновлені кількості.
+  useEffect(() => {
+    if (!editingSupplierBoard) return;
+    const fresh = supplierBoardOrders.find((order) => order.id === editingSupplierBoard.id);
+    if (fresh && fresh !== editingSupplierBoard) {
+      setEditingSupplierBoard(fresh);
+    }
+  }, [supplierBoardOrders, editingSupplierBoard]);
 
   const dispatchableSuppliers = useMemo(() => Object.keys(consolidatedBySupplier), [consolidatedBySupplier]);
 
@@ -7098,11 +8099,25 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
     );
     const hasTargetLineKeys = targetLineKeys.size > 0;
 
-    const nextItems = (order.items || []).map((item) => {
+    const itemIsInScope = (item) => {
       const candidateLineKey = buildBoardLineKey(order, item, { supplierHint: scopedSupplierName });
       const matchesByLineKey = hasTargetLineKeys ? targetLineKeys.has(candidateLineKey) : true;
       const matchesSupplierScope = !normalizedSupplierScope || normalizeSupplierIdentity(resolveLineSupplierName(order, item)) === normalizedSupplierScope;
-      const shouldAffectItem = hasTargetLineKeys ? matchesByLineKey : matchesSupplierScope;
+      return hasTargetLineKeys ? matchesByLineKey : matchesSupplierScope;
+    };
+
+    // Гард: не можна надіслати постачальнику, поки замовник не підтвердив коригування.
+    if (status === "sent") {
+      const blockingItems = (order.items || []).filter((item) => itemIsInScope(item) && item?.correctionPending);
+      if (blockingItems.length > 0) {
+        const names = Array.from(new Set(blockingItems.map((item) => item.productName || "Без назви"))).join(", ");
+        alert(`Неможливо надіслати постачальнику: замовник ще не підтвердив коригування позицій:\n\n${names}`);
+        return false;
+      }
+    }
+
+    const nextItems = (order.items || []).map((item) => {
+      const shouldAffectItem = itemIsInScope(item);
       if (!shouldAffectItem) return item;
 
       if (status === "processing") {
@@ -7182,6 +8197,24 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       .filter(Boolean);
 
     if (targets.length === 0) return;
+
+    // Атомарне блокування: якщо в зведеному замовленні (по всіх закладах) є хоча б одне
+    // непідтверджене коригування — не надсилаємо постачальнику жоден заклад.
+    if (nextStatus === "sent") {
+      const blocking = [];
+      (boardOrder.rows || []).forEach((row) => {
+        (row.restaurants || []).forEach((entry) => {
+          if (entry?.correctionPending) {
+            blocking.push(`${entry.restaurantName || "Без закладу"}: ${row.productName || "Без назви"}`);
+          }
+        });
+      });
+      if (blocking.length > 0) {
+        const unique = Array.from(new Set(blocking));
+        alert(`Неможливо надіслати постачальнику — замовник ще не підтвердив коригування:\n\n${unique.join("\n")}`);
+        return;
+      }
+    }
 
     const results = await Promise.all(targets.map((target) => updateStatus(target, nextStatus, boardOrder)));
     if (results.some((item) => item === false)) {
@@ -7794,11 +8827,24 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
     const updatedItems = (order.items || []).map((item) => {
       const sameProduct = (item.productId || item.productName) === (entry.productId || entry.productName);
       if (!sameProduct) return item;
+      const previousQty = toNumber(item.qty);
+      const qtyChanged = Math.abs(previousQty - qty) > 0.0001;
+      if (!qtyChanged) {
+        return { ...item, amount: qty * toNumber(item.unitPrice), sentToSupplier: false };
+      }
       return {
         ...item,
         qty,
         amount: qty * toNumber(item.unitPrice),
         sentToSupplier: false,
+        // Коригування менеджера: позиція очікує підтвердження замовником.
+        correctionPending: true,
+        correctionOriginalQty: item.correctionPending ? toNumber(item.correctionOriginalQty) : previousQty,
+        correctionNewQty: qty,
+        correctedAt: new Date().toISOString(),
+        correctedBy: user?.displayName || user?.fullName || user?.email || "Менеджер",
+        correctionConfirmedAt: "",
+        correctionConfirmedBy: "",
       };
     });
 
@@ -7881,6 +8927,50 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
               <p className="mt-1 text-xs text-indigo-700">{dispatchableSuppliers.length} постачальників ще не відправлено</p>
             </div>
           </div>
+
+          {returnIncidents.length > 0 && (
+            <div className="mb-4 rounded-xl border-2 border-rose-300 bg-rose-50 p-3 shadow-sm">
+              <div className="mb-2 flex items-center gap-2">
+                <AlertTriangle size={18} className="text-rose-600" />
+                <p className="text-sm font-semibold text-rose-800">Повернення товарів ({returnIncidents.length})</p>
+                <span className="text-xs text-rose-600">Сформуйте дозамовлення постачальнику на день доставки</span>
+              </div>
+              <div className="space-y-2">
+                {returnIncidents.map((incident) => (
+                  <div key={incident.key} className="rounded-lg border border-rose-200 bg-white p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-900">
+                          {incident.supplier}
+                          <span className="ml-2 text-xs font-normal text-slate-500">
+                            {incident.restaurantName || "—"}{incident.requiredDate ? ` · доставка ${incident.requiredDate}` : ""}
+                          </span>
+                        </p>
+                        <ul className="mt-1 space-y-0.5">
+                          {incident.lines.map((line) => (
+                            <li key={`${incident.key}-${line.index}`} className="text-xs text-slate-700">
+                              <span className="font-medium text-rose-700">{line.returnedQty} {line.item.unit || ""}</span>
+                              {" "}{line.item.productName || "Без назви"}
+                              {line.reason ? <span className="text-slate-500"> — {line.reason}</span> : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      {canManageOrders && (
+                        <button
+                          type="button"
+                          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
+                          onClick={() => createReorderForReturns(incident)}
+                        >
+                          <ShoppingCart size={13} /> Сформувати дозамовлення
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="mb-4 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
             <div className="mb-2 flex items-center justify-between gap-2">
@@ -8087,6 +9177,11 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                           <p className="truncate text-[11px] font-semibold leading-4 text-slate-900">{order.supplier || "Без постачальника"}</p>
                           <div className="mt-0.5 text-[10px] text-slate-500">{formatDateTimeCompact(order.deliveryDates[0])}</div>
                         </div>
+                        {order.hasPendingCorrection && (
+                          <div className="mt-1 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 ring-1 ring-amber-300">
+                            <AlertTriangle size={10} /> Чекає підтвердження коригування
+                          </div>
+                        )}
                         <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10px] leading-4 text-slate-600">
                           <span>{order.positionsCount} поз.</span>
                           <span>{order.restaurantCount} закл.</span>
@@ -8255,6 +9350,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
               <thead className="bg-slate-50 text-slate-700">
                 <tr>
                   <th className="px-3 py-2 text-left">Заклад</th>
+                  <th className="px-3 py-2 text-left">Постачальник</th>
                   <th className="px-3 py-2 text-left">Поставка</th>
                   <th className="px-3 py-2 text-left">Позицій</th>
                   <th className="px-3 py-2 text-left">Сума</th>
@@ -8264,9 +9360,27 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                 </tr>
               </thead>
               <tbody>
-                {archivedOrders.map((order) => (
+                {archivedOrders.map((order) => {
+                  const archivedSuppliers = Array.from(new Set(
+                    (Array.isArray(order.items) ? order.items : [])
+                      .map((item) => resolveLineSupplierName(order, item))
+                      .filter(Boolean)
+                  ));
+                  return (
                   <tr key={`archived_${order.id}`} className="border-t border-slate-200 align-top">
                     <td className="px-3 py-2">{order.restaurantName || "-"}</td>
+                    <td className="px-3 py-2">
+                      {archivedSuppliers.length > 0 ? (
+                        <div className="flex flex-col gap-0.5">
+                          {archivedSuppliers.map((supplierName) => (
+                            <span key={supplierName} className="inline-flex items-center gap-1 font-medium text-slate-800">
+                              <Package size={12} className="text-indigo-600" />
+                              {supplierName}
+                            </span>
+                          ))}
+                        </div>
+                      ) : "-"}
+                    </td>
                     <td className="px-3 py-2">{formatDateTimeCompact(order.requiredDate)}</td>
                     <td className="px-3 py-2">{(order.items || []).length}</td>
                     <td className="px-3 py-2 font-medium">{formatMoney(order.totalAmount)}</td>
@@ -8284,7 +9398,8 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                       </td>
                     )}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -8380,15 +9495,30 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                         <div className="space-y-2">
                           {row.restaurants.map((entry, entryIndex) => {
                             const isIssue = entry.sentToSupplier && ["partial", "unavailable", "cancelled_by_supplier"].includes(entry.responseStatus);
-                            const canEditQty = String(entry.orderStatus || "") === "processing";
+                            const isPendingCorrection = Boolean(entry.correctionPending);
+                            const canEditQty = !entry.sentToSupplier && !entry.isCancelled
+                              && (["new", "processing"].includes(String(entry.orderStatus || "")) || isPendingCorrection);
                             const hasReceivingData = entry.actualReceivedQty !== null && entry.actualReceivedQty !== undefined;
                             const receivingDiff = entry.receivedVarianceQty !== null && entry.receivedVarianceQty !== undefined
                               ? toNumber(entry.receivedVarianceQty)
                               : (hasReceivingData ? toNumber(entry.actualReceivedQty) - toNumber(entry.qty) : 0);
                             const showReceivingStats = String(entry.orderStatus || "") === "completed";
                             return (
-                              <div key={`modal_entry_${entry.orderId}_${entryIndex}`} className={`flex flex-wrap items-center gap-2 text-xs ${isIssue ? "text-rose-700" : "text-slate-700"}`}>
+                              <div key={`modal_entry_${entry.orderId}_${entryIndex}`} className={`flex flex-wrap items-center gap-2 rounded-md px-1.5 py-1 text-xs ${isPendingCorrection ? "bg-amber-50 ring-1 ring-amber-200 text-amber-900" : isIssue ? "text-rose-700" : "text-slate-700"}`}>
                                 <span className="min-w-[220px]">{entry.restaurantName} ({formatDateTimeCompact(entry.requiredDate)})</span>
+                                {isPendingCorrection && (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 ring-1 ring-amber-300">
+                                    <AlertTriangle size={11} /> Очікує підтвердження замовником
+                                    {entry.correctionOriginalQty > 0 && (
+                                      <span className="ml-1 inline-flex items-center gap-0.5">
+                                        <span className="text-rose-500 line-through">{entry.correctionOriginalQty}</span>
+                                        <span>→</span>
+                                        <span className="font-bold text-emerald-700">{entry.correctionNewQty}</span>
+                                        <span>{row.unit}</span>
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
                                 {isIssue ? (
                                   <span className={`inline-flex rounded-full px-2 py-0.5 font-semibold ${getSupplierResponseBadgeClass(entry.responseStatus)}`}>
                                     {getSupplierResponseLabel(entry.responseStatus)}{entry.responseQty > 0 ? ` (підтв. ${entry.responseQty} ${row.unit})` : ""}
@@ -8426,6 +9556,13 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                                       Розбіжність: {hasReceivingData ? `${receivingDiff > 0 ? "+" : ""}${receivingDiff.toFixed(2)} ${row.unit}` : "—"}
                                     </span>
                                   </>
+                                )}
+                                {entry.hasReturn && (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 font-semibold text-rose-700 ring-1 ring-rose-300">
+                                    <AlertTriangle size={11} /> Повернуто: {toNumber(entry.returnedQty)} {row.unit}
+                                    {entry.reorderId ? " • дозамовлено" : ""}
+                                    {entry.returnReason ? ` (${entry.returnReason})` : ""}
+                                  </span>
                                 )}
                                 {entry.responseComment && <span className="text-slate-400">({entry.responseComment})</span>}
                               </div>
@@ -8558,11 +9695,13 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
   const [responseFilter, setResponseFilter] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [portalViewMode, setPortalViewMode] = useState("new");
+  const [portalGroupMode, setPortalGroupMode] = useState("restaurant");
   const [responseDrafts, setResponseDrafts] = useState({});
   const [savingKey, setSavingKey] = useState("");
   const [savedLineKeys, setSavedLineKeys] = useState({});
   const [optimisticOrderPatches, setOptimisticOrderPatches] = useState({});
   const [expandedOrderIds, setExpandedOrderIds] = useState({});
+  const [expandedProductKeys, setExpandedProductKeys] = useState({});
 
   const resolvedSupplier = useMemo(() => {
     if (previewSupplierId) {
@@ -8726,6 +9865,44 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
       })
       .filter(Boolean);
   }, [portalOrders, portalViewMode, responseFilter]);
+
+  // Групування позицій по продуктах (для вигляду "Продукти"):
+  // один блок = продукт (напр. "Кінза"), всередині — рядки по закладах.
+  const productGroups = useMemo(() => {
+    const map = new Map();
+    filteredPortalOrders.forEach((order) => {
+      order.supplierItems.forEach((item) => {
+        const key = String(item.productId || item.productName || "—").toLowerCase().trim();
+        if (!map.has(key)) {
+          map.set(key, {
+            key,
+            productName: item.productName || "Без назви",
+            unit: item.unit || "",
+            totalQty: 0,
+            totalAmount: 0,
+            summary: { pending: 0, accepted: 0, partial: 0, unavailable: 0, total: 0 },
+            lines: [],
+          });
+        }
+        const group = map.get(key);
+        group.totalQty += toNumber(item.qty);
+        group.totalAmount += toNumber(item.amount);
+        const status = getSupplierResponseStatus(item);
+        group.summary.total += 1;
+        if (Object.prototype.hasOwnProperty.call(group.summary, status)) group.summary[status] += 1;
+        if (!group.unit && item.unit) group.unit = item.unit;
+        group.lines.push({ order, item });
+      });
+    });
+    return Array.from(map.values())
+      .map((group) => ({
+        ...group,
+        lines: group.lines.sort((a, b) =>
+          String(a.order.restaurantName || "").localeCompare(String(b.order.restaurantName || ""), "uk")
+        ),
+      }))
+      .sort((a, b) => a.productName.localeCompare(b.productName, "uk"));
+  }, [filteredPortalOrders]);
 
   const portalStats = useMemo(() => {
     const restaurants = new Set();
@@ -8915,6 +10092,71 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
     }, 1800);
   };
 
+  // Підтвердити всі заклади для одного продукту (вигляд "Продукти").
+  const acceptProductGroup = async (group) => {
+    const byOrder = new Map();
+    (group.lines || []).forEach(({ order, item }) => {
+      if (getSupplierResponseStatus(item) === "accepted") return;
+      const orderId = String(order?.id || "");
+      if (!byOrder.has(orderId)) byOrder.set(orderId, { order, indices: new Set() });
+      byOrder.get(orderId).indices.add(item.itemIndex);
+    });
+    if (byOrder.size === 0) return;
+
+    setSavingKey(`product::${group.key}`);
+    const now = new Date().toISOString();
+
+    for (const { order, indices } of byOrder.values()) {
+      const { id, ...payload } = order;
+      const nextItems = (order.items || []).map((item, itemIndex) => {
+        if (!indices.has(itemIndex)) return item;
+        const qty = Math.max(0, toNumber(item.qty));
+        return {
+          ...item,
+          supplierResponseStatus: "accepted",
+          supplierResponseQty: qty,
+          supplierResponseAmount: qty * toNumber(item.unitPrice),
+          supplierResponseComment: String(item?.supplierResponseComment || "").trim(),
+          supplierRespondedAt: now,
+          supplierRespondedBy: user?.displayName || user?.fullName || user?.email || currentSupplierName,
+          supplierRespondedById: user?.uid || user?.email || "",
+        };
+      });
+
+      setOptimisticOrderPatches((prev) => ({
+        ...prev,
+        [String(order?.id || "")]: {
+          items: nextItems,
+          status: deriveOrderStatus(nextItems, order.status),
+          supplierResponseUpdatedAt: now,
+        },
+      }));
+
+      const result = await updateOrder(id, {
+        ...payload,
+        items: nextItems,
+        status: deriveOrderStatus(nextItems, order.status),
+        supplierResponseUpdatedAt: now,
+      });
+
+      if (!result.success) {
+        setOptimisticOrderPatches((prev) => {
+          const next = { ...prev };
+          delete next[String(order?.id || "")];
+          return next;
+        });
+        setSavingKey("");
+        alert(getErrorMessage(result.error, "Не вдалося підтвердити позиції продукту."));
+        return;
+      }
+    }
+
+    setSavingKey("");
+    window.setTimeout(() => {
+      setOptimisticOrderPatches({});
+    }, 1800);
+  };
+
   return (
     <div className="space-y-5">
       <div className={cardClass}>
@@ -8972,7 +10214,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
           </div>
 
           <div className={cardClass}>
-            <div className="mb-3 flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
               <button
                 type="button"
                 className={`rounded-md px-3 py-1.5 text-xs font-semibold ${portalViewMode === "new" ? "bg-amber-100 text-amber-800" : "bg-white text-slate-600 hover:bg-slate-100"}`}
@@ -8994,6 +10236,23 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
               >
                 Архів: {portalOrderCounts.archive}
               </button>
+
+              <div className="ml-auto inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-0.5">
+                <button
+                  type="button"
+                  className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-semibold transition ${portalGroupMode === "restaurant" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                  onClick={() => setPortalGroupMode("restaurant")}
+                >
+                  По закладах
+                </button>
+                <button
+                  type="button"
+                  className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-semibold transition ${portalGroupMode === "product" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                  onClick={() => setPortalGroupMode("product")}
+                >
+                  По продуктах
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-5">
@@ -9042,7 +10301,7 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
           </div>
 
           <div className="space-y-3">
-            {filteredPortalOrders.map((order) => {
+            {portalGroupMode === "restaurant" && filteredPortalOrders.map((order) => {
               const isExpanded = expandedOrderIds[String(order.id || "")];
               const toggleExpanded = () => {
                 setExpandedOrderIds((prev) => ({
@@ -9065,6 +10324,11 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
                                         {formatDateUk(order.requiredDate)}
                                       </span>
+                                      {order.isReorder && (
+                                        <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700">
+                                          <AlertTriangle size={10} /> Дозамовлення (повернення)
+                                        </span>
+                                      )}
                                       {order.isArchived && (
                                         <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">Архів</span>
                                       )}
@@ -9078,7 +10342,12 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">{statusLabel(order.status)}</span>
+                                  {(() => {
+                                    const scoped = getSupplierScopedStatus(order.supplierSummary);
+                                    return (
+                                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${scoped.badge}`}>{scoped.label}</span>
+                                    );
+                                  })()}
                     <button
                       type="button"
                                     className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
@@ -9217,7 +10486,178 @@ function SupplierPortalTab({ orders, suppliers = [], updateOrder, user }) {
               );
             })}
 
-            {filteredPortalOrders.length === 0 && (
+            {portalGroupMode === "product" && productGroups.map((group) => {
+              const isExpanded = expandedProductKeys[group.key];
+              const toggleExpanded = () => {
+                setExpandedProductKeys((prev) => ({
+                  ...prev,
+                  [group.key]: !prev[group.key],
+                }));
+              };
+              const allArchived = group.lines.every(({ order }) => order.isArchived);
+              const problemCount = group.summary.partial + group.summary.unavailable;
+
+              return (
+                <div key={group.key} className={`${cardClass} p-3 sm:p-4`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2 cursor-pointer hover:bg-slate-50 rounded-xl px-1.5 py-1.5 transition-colors" onClick={toggleExpanded} role="button" tabIndex={0}>
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <span className="text-sm font-semibold text-slate-700">{isExpanded ? "▼" : "▶"}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <div className="truncate text-sm font-semibold text-slate-900">{group.productName}</div>
+                          <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                            {group.lines.length} закл.
+                          </span>
+                          <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">
+                            {toNumber(group.totalQty)} {group.unit}
+                          </span>
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                            {formatMoney(group.totalAmount)}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                          <span>Очікує: {group.summary.pending}</span>
+                          <span>Підтв.: {group.summary.accepted}</span>
+                          {problemCount > 0 && <span>Проблемні: {problemCount}</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                        disabled={allArchived || savingKey === `product::${group.key}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void acceptProductGroup(group);
+                        }}
+                      >
+                        {savingKey === `product::${group.key}` ? "Збереження..." : "Підтвердити все"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-slate-50 text-slate-600">
+                          <tr>
+                            <th className="px-3 py-2 text-left font-semibold">Заклад</th>
+                            <th className="px-2 py-2 text-left font-semibold">Поставка</th>
+                            <th className="px-2 py-2 text-left font-semibold">Замовл.</th>
+                            <th className="px-2 py-2 text-left font-semibold">Ціна</th>
+                            <th className="px-2 py-2 text-left font-semibold">Сума</th>
+                            <th className="px-2 py-2 text-left font-semibold">Статус</th>
+                            <th className="px-2 py-2 text-left font-semibold">К-сть</th>
+                            <th className="px-2 py-2 text-left font-semibold">Коментар</th>
+                            <th className="px-2 py-2 text-left font-semibold">Дія</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {group.lines.map(({ order, item }) => {
+                            const draft = getDraft(item);
+                            const status = String(draft.status || getSupplierResponseStatus(item));
+                            const requestedQty = `${toNumber(item.qty)} ${item.unit || ""}`.trim();
+                            const confirmedQty = status === "accepted" ? String(toNumber(item.qty)) : draft.responseQty;
+
+                            return (
+                              <tr key={`${group.key}::${item.lineKey}`} className="border-t border-slate-200 align-top">
+                                <td className="px-3 py-2.5">
+                                  <div className="min-w-[200px]">
+                                    <div className="font-semibold text-slate-900">{order.restaurantName || "Без закладу"}</div>
+                                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                                      <span>{item.supplierRespondedAt ? formatDateTimeSafe(item.supplierRespondedAt) : "Ще ні"}</span>
+                                      {order.isArchived && (
+                                        <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 font-semibold text-emerald-700">Архів</span>
+                                      )}
+                                    </div>
+                                    <div className="mt-1">
+                                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${getSupplierResponseBadgeClass(status)}`}>
+                                        {getSupplierResponseLabel(status)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-2 py-2.5 whitespace-nowrap">{formatDateUk(order.requiredDate)}</td>
+                                <td className="px-2 py-2.5 font-semibold text-slate-900 whitespace-nowrap">{requestedQty || "—"}</td>
+                                <td className="px-2 py-2.5 whitespace-nowrap">{toNumber(item.unitPrice).toFixed(2)}</td>
+                                <td className="px-2 py-2.5 whitespace-nowrap">{formatMoney(item.amount)}</td>
+                                <td className="px-2 py-2.5">
+                                  <select
+                                    className="w-[150px] rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
+                                    value={status}
+                                    disabled={order.isArchived}
+                                    onChange={(e) => patchDraft(item.lineKey, { status: e.target.value })}
+                                  >
+                                    <option value="pending">Очікує відповіді</option>
+                                    <option value="accepted">Підтвердити</option>
+                                    <option value="partial">Частково</option>
+                                    <option value="unavailable">Немає в наявності</option>
+                                  </select>
+                                </td>
+                                <td className="px-2 py-2.5">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    className="w-20 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
+                                    value={confirmedQty}
+                                    disabled={order.isArchived || status === "accepted" || status === "unavailable"}
+                                    onChange={(e) => {
+                                      const nextValue = e.target.value;
+                                      const requestedQtyValue = Math.max(0, toNumber(item.qty));
+                                      const responseQtyValue = toNumber(nextValue);
+
+                                      let nextStatus = status;
+                                      if (nextValue === "") {
+                                        nextStatus = "partial";
+                                      } else if (responseQtyValue <= 0) {
+                                        nextStatus = "unavailable";
+                                      } else if (responseQtyValue < requestedQtyValue) {
+                                        nextStatus = "partial";
+                                      } else {
+                                        nextStatus = "accepted";
+                                      }
+
+                                      patchDraft(item.lineKey, {
+                                        responseQty: nextValue,
+                                        status: nextStatus,
+                                      });
+                                    }}
+                                  />
+                                </td>
+                                <td className="px-2 py-2.5">
+                                  <textarea
+                                    className="min-h-[38px] w-[200px] rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900"
+                                    value={draft.comment}
+                                    disabled={order.isArchived}
+                                    onChange={(e) => patchDraft(item.lineKey, { comment: e.target.value })}
+                                    placeholder="Коментар або заміна"
+                                  />
+                                </td>
+                                <td className="px-2 py-2.5">
+                                  <button
+                                    type="button"
+                                    className="whitespace-nowrap rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                                    disabled={order.isArchived || savingKey === item.lineKey}
+                                    onClick={() => { void saveLineResponse(order, item); }}
+                                  >
+                                    {savingKey === item.lineKey ? "Збереження..." : (savedLineKeys[item.lineKey] ? "Збережено" : (status === "accepted" ? "Підтвердити" : "Зберегти"))}
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {((portalGroupMode === "restaurant" && filteredPortalOrders.length === 0) ||
+              (portalGroupMode === "product" && productGroups.length === 0)) && (
               <div className={`${cardClass} text-sm text-slate-500`}>
                 Для цього постачальника немає замовлень у вибраному розділі/фільтрах.
               </div>
