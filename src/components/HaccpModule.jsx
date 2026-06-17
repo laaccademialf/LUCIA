@@ -127,12 +127,58 @@ const normalizeHaccpTab = (tab = "") => {
   return "audit";
 };
 
-const getUserRestaurantIds = (user) => {
-  if (Array.isArray(user?.restaurants) && user.restaurants.length > 0) {
-    return user.restaurants.map((id) => String(id || "").trim()).filter(Boolean);
+const parseRestaurantScope = (raw) => {
+  if (Array.isArray(raw)) {
+    return raw.map((value) => String(value || "").trim()).filter(Boolean);
   }
-  const single = String(user?.restaurant || user?.restaurantId || user?.restaurant_id || "").trim();
-  return single ? [single] : [];
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (!text) return [];
+    if (text.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+          return parsed.map((value) => String(value || "").trim()).filter(Boolean);
+        }
+      } catch {
+        // noop
+      }
+    }
+    return text.split(",").map((value) => value.trim()).filter(Boolean);
+  }
+  return [];
+};
+
+const getUserRestaurantIds = (user) =>
+  Array.from(
+    new Set(
+      [
+        ...parseRestaurantScope(user?.restaurants),
+        ...parseRestaurantScope(user?.restaurant_ids),
+        ...parseRestaurantScope(user?.restaurantIds),
+        String(user?.restaurant || "").trim(),
+        String(user?.restaurantId || "").trim(),
+        String(user?.restaurant_id || "").trim(),
+        String(user?.restaurantName || "").trim(),
+        String(user?.restaurant_name || "").trim(),
+      ].filter(Boolean)
+    )
+  );
+
+const restaurantMatchesScope = (restaurant, scopeValue) => {
+  const normalizedScope = String(scopeValue || "").trim().toLowerCase();
+  if (!normalizedScope) return false;
+  return (
+    String(restaurant?.id || "").trim().toLowerCase() === normalizedScope ||
+    String(restaurant?.name || "").trim().toLowerCase() === normalizedScope
+  );
+};
+
+const resolveRestaurantIdFromScope = (restaurants, scopeValue) => {
+  const match = (Array.isArray(restaurants) ? restaurants : []).find((restaurant) =>
+    restaurantMatchesScope(restaurant, scopeValue)
+  );
+  return String(match?.id || "").trim();
 };
 
 const getAuditSortKey = (audit) => {
@@ -1597,10 +1643,8 @@ function PhotoPickerModal({ open, itemLabel, photos, selectedIds, max, onToggle,
 
 function AuditTab({ user, restaurants, templates, audits, createAudit, updateAudit, removeAudit }) {
   const isAdmin = user?.role === "admin";
-  const availableRestaurants = restaurants || [];
-
   const [selectedDate, setSelectedDate] = useState(todayDate());
-  const [selectedRestaurantId, setSelectedRestaurantId] = useState(user?.restaurant || "");
+  const [selectedRestaurantId, setSelectedRestaurantId] = useState("");
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [responses, setResponses] = useState({});
   const [currentAuditId, setCurrentAuditId] = useState(null);
@@ -1618,7 +1662,44 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
 
   const submitLockRef = useRef(false);
 
-  const effectiveRestaurantId = isAdmin ? selectedRestaurantId : user?.restaurant || selectedRestaurantId;
+  const userRestaurantScope = useMemo(() => getUserRestaurantIds(user), [user]);
+
+  const availableRestaurants = useMemo(() => {
+    const list = Array.isArray(restaurants) ? restaurants : [];
+    if (isAdmin) return list;
+    if (!userRestaurantScope.length) return list;
+    return list.filter((restaurant) =>
+      userRestaurantScope.some((scopeValue) => restaurantMatchesScope(restaurant, scopeValue))
+    );
+  }, [isAdmin, restaurants, userRestaurantScope]);
+
+  useEffect(() => {
+    if (isAdmin) return;
+    if (!availableRestaurants.length) {
+      if (selectedRestaurantId) setSelectedRestaurantId("");
+      return;
+    }
+
+    const matchedSelection = availableRestaurants.some((item) => String(item?.id || "") === String(selectedRestaurantId || ""));
+    if (matchedSelection) return;
+
+    if (availableRestaurants.length === 1) {
+      const onlyId = String(availableRestaurants[0]?.id || "").trim();
+      if (onlyId !== String(selectedRestaurantId || "")) setSelectedRestaurantId(onlyId);
+      return;
+    }
+
+    const fallbackScope = userRestaurantScope.find((scopeValue) => resolveRestaurantIdFromScope(availableRestaurants, scopeValue));
+    const fallbackId = fallbackScope ? resolveRestaurantIdFromScope(availableRestaurants, fallbackScope) : "";
+    if (fallbackId && fallbackId !== String(selectedRestaurantId || "")) {
+      setSelectedRestaurantId(fallbackId);
+      return;
+    }
+
+    if (selectedRestaurantId) setSelectedRestaurantId("");
+  }, [availableRestaurants, isAdmin, selectedRestaurantId, userRestaurantScope]);
+
+  const effectiveRestaurantId = String(selectedRestaurantId || "").trim();
 
   const selectedRestaurant = useMemo(
     () => availableRestaurants.find((item) => String(item.id) === String(effectiveRestaurantId)),
@@ -2022,7 +2103,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                 className={compactInputClass}
                 value={effectiveRestaurantId || ""}
                 onChange={(e) => { setSelectedRestaurantId(e.target.value); setDirty(false); }}
-                disabled={Boolean(user?.restaurant) && !isAdmin}
+                disabled={!isAdmin && availableRestaurants.length <= 1}
               >
                 <option value="">Оберіть заклад</option>
                 {availableRestaurants.map((item) => (
