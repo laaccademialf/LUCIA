@@ -9,6 +9,13 @@ import {
   subscribeToActiveProductInventorySession,
 } from "../firebase/firestore";
 import { getUsers } from "../firebase/users";
+import {
+  deriveOrderStatus,
+  getSupplierResponseStatus,
+  getSupplierScopedStatus,
+  getSupplierResponseLabel,
+  getSupplierResponseBadgeClass,
+} from "../utils/booking/orderStatus";
 
 const loadProductInventoryExcel = () => import("../utils/productInventoryExcel");
 const loadInventoryListExcel = () => import("../utils/inventoryListExcel");
@@ -558,17 +565,30 @@ const supplierRecommendsForProductRestaurant = (supplierRecord, productKey, rest
   return ids.includes(String(restaurantId || "").trim());
 };
 
+// Кеш мапи «нормалізована назва постачальника → запис довідника».
+// Ключ — посилання на масив suppliersDirectory (стабільне між рендерами),
+// тож мапа перебудовується лише коли довідник реально змінився.
+const supplierDirectoryByNameCache = new WeakMap();
+const getSupplierDirectoryByName = (suppliersDirectory) => {
+  const arr = Array.isArray(suppliersDirectory) ? suppliersDirectory : null;
+  if (!arr) return new Map();
+  const cached = supplierDirectoryByNameCache.get(arr);
+  if (cached) return cached;
+  const map = new Map(
+    arr
+      .map((supplier) => [normalizeSupplierIdentity(supplier?.name), supplier])
+      .filter(([key]) => Boolean(key))
+  );
+  supplierDirectoryByNameCache.set(arr, map);
+  return map;
+};
+
 const resolveSupplierForRestaurantContext = (rawSupplier, restaurantRef = {}, suppliersDirectory = [], productRef = null, supplierPriceMap = null) => {
   const candidates = splitSupplierCandidates(rawSupplier);
   if (candidates.length === 0) return "";
   if (candidates.length === 1) return candidates[0];
 
-  const directoryByName = new Map(
-    (Array.isArray(suppliersDirectory) ? suppliersDirectory : [])
-      .map((supplier) => [normalizeSupplierIdentity(supplier?.name), supplier])
-      .filter(([key]) => Boolean(key))
-  );
-
+  const directoryByName = getSupplierDirectoryByName(suppliersDirectory);
   // 1) Рекомендація шефа (закріплення постачальника за закладом) — найвищий пріоритет.
   const productKey = buildProductRecommendationKey(productRef);
   const restaurantId = String(restaurantRef?.id || "").trim();
@@ -617,7 +637,12 @@ const resolveSupplierForRestaurantContext = (rawSupplier, restaurantRef = {}, su
 // Карта «постачальник → мінімальна ціна» для конкретного продукту BookingTab.
 // Використовується резолвером для вибору найдешевшого постачальника серед
 // тих, що мають контракт із закладом (коли немає рекомендації шефа).
+const supplierPriceMapCache = new WeakMap();
 const buildSupplierPriceMap = (product) => {
+  if (product && typeof product === "object") {
+    const cached = supplierPriceMapCache.get(product);
+    if (cached) return cached;
+  }
   const map = new Map();
   const add = (supplierName, price) => {
     const key = normalizeSupplierIdentity(supplierName);
@@ -639,74 +664,13 @@ const buildSupplierPriceMap = (product) => {
     list.forEach((name) => add(name, price));
   }
 
+  if (product && typeof product === "object") {
+    supplierPriceMapCache.set(product, map);
+  }
   return map;
 };
 
 
-
-const deriveOrderStatus = (items, currentStatus) => {
-  if (currentStatus === "completed") return "completed";
-  const normalizedItems = Array.isArray(items) ? items : [];
-  const hasItems = normalizedItems.length > 0;
-  const allZeroQty = hasItems && normalizedItems.every((item) => toNumber(item?.qty) <= 0);
-  const hasUnsent = normalizedItems.some((item) => !item.sentToSupplier);
-  const hasSent = normalizedItems.some((item) => item.sentToSupplier);
-  const hasPendingSupplierResponses = normalizedItems.some((item) => item.sentToSupplier && getSupplierResponseStatus(item) === "pending");
-  const hasSupplierIssues = normalizedItems.some((item) => {
-    if (!item.sentToSupplier) return false;
-    const responseStatus = getSupplierResponseStatus(item);
-    return responseStatus === "partial" || responseStatus === "unavailable";
-  });
-
-  if (!hasItems) return "new";
-  if (allZeroQty) return "completed";
-  if (hasSupplierIssues) return "processing";
-  if (hasPendingSupplierResponses) return "sent";
-  if (!hasUnsent) return "confirmed";
-  if (hasSent && hasUnsent) return "processing";
-  return "new";
-};
-
-const getSupplierResponseStatus = (item) => {
-  const status = String(item?.supplierResponseStatus || item?.vendorResponseStatus || "").trim().toLowerCase();
-  if (status) return status;
-  return item?.sentToSupplier ? "pending" : "draft";
-};
-
-// Статус у розрізі позицій ОДНОГО постачальника (для порталу постачальника),
-// щоб бейдж не залежав від позицій інших постачальників у тому ж замовленні.
-const getSupplierScopedStatus = (summary = {}) => {
-  const total = toNumber(summary.total);
-  const pending = toNumber(summary.pending);
-  const accepted = toNumber(summary.accepted);
-  const partial = toNumber(summary.partial);
-  const unavailable = toNumber(summary.unavailable);
-  if (total <= 0) return { key: "pending", label: "Очікує відповіді", badge: "bg-slate-100 text-slate-700" };
-  if (partial + unavailable > 0) return { key: "issues", label: "Є проблемні позиції", badge: "bg-rose-100 text-rose-700" };
-  if (pending > 0) {
-    if (accepted > 0) return { key: "partial", label: "Частково опрацьовано", badge: "bg-amber-100 text-amber-700" };
-    return { key: "sent", label: "Надіслано постачальнику", badge: "bg-slate-100 text-slate-700" };
-  }
-  return { key: "confirmed", label: "Підтверджено постачальником", badge: "bg-emerald-100 text-emerald-700" };
-};
-
-const getSupplierResponseLabel = (status) => {
-  if (status === "accepted") return "Підтверджено";
-  if (status === "partial") return "Частково";
-  if (status === "unavailable") return "Немає в наявності";
-  if (status === "pending") return "Очікує відповіді";
-  if (status === "cancelled_by_supplier") return "Скасовано постачальником";
-  return "Чернетка";
-};
-
-const getSupplierResponseBadgeClass = (status) => {
-  if (status === "accepted") return "bg-emerald-100 text-emerald-700";
-  if (status === "partial") return "bg-amber-100 text-amber-700";
-  if (status === "unavailable") return "bg-rose-100 text-rose-700";
-  if (status === "pending") return "bg-indigo-100 text-indigo-700";
-  if (status === "cancelled_by_supplier") return "bg-slate-200 text-slate-500 line-through";
-  return "bg-slate-100 text-slate-600";
-};
 
 const summarizeSupplierResponses = (order, supplierName) => {
   const normalizedSupplier = normalizeSupplierIdentity(supplierName);

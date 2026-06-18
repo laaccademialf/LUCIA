@@ -11,6 +11,8 @@
     "prepreview": "node scripts/git-meta.cjs",
     "lint": "eslint .",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "premigration:server": "node scripts/git-meta.cjs",
     "migration:server": "node scripts/custom-db/server.js",
     "postinstall": "node scripts/git-meta.cjs"
@@ -51,7 +53,8 @@
     "playwright": "^1.60.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.18",
-    "vite": "npm:rolldown-vite@7.2.5"
+    "vite": "npm:rolldown-vite@7.2.5",
+    "vitest": "^4.1.9"
   },
   "overrides": {
     "vite": "npm:rolldown-vite@7.2.5"
