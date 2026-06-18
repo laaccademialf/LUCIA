@@ -57,6 +57,23 @@ import {
   normalizeRestaurantScopedRecord,
   buildDerivedRestaurants,
 } from "../utils/booking/restaurantScope";
+import {
+  hasProcurementAccess,
+  hasSupplierPortalAccess,
+  isGlobalAdminUser,
+} from "../utils/booking/access";
+import {
+  normalizeSupplierIdentity,
+  getSupplierPortalEmails,
+  resolveSupplierForUser,
+  splitSupplierCandidates,
+  supplierHasContractForRestaurant,
+  getSupplierMinimumForRestaurant,
+  buildProductRecommendationKey,
+  parseSupplierRecommendations,
+  resolveSupplierForRestaurantContext,
+  buildSupplierPriceMap,
+} from "../utils/booking/suppliers";
 
 const loadProductInventoryExcel = () => import("../utils/productInventoryExcel");
 const loadInventoryListExcel = () => import("../utils/inventoryListExcel");
@@ -171,280 +188,6 @@ const openNativeDatePicker = (event) => {
     event.currentTarget.showPicker();
   }
 };
-
-const hasProcurementAccess = (user) => {
-  const roleValue = String(user?.role || "").toLowerCase();
-  const workRoleValue = String(user?.workRole || "").toLowerCase();
-  const terms = [
-    "admin",
-    "procurement",
-    "purchasing",
-    "закуп",
-    "закупівл",
-    "постач",
-    "manager",
-    "керуюч",
-    "управля",
-  ];
-  return terms.some((term) => roleValue.includes(term) || workRoleValue.includes(term));
-};
-
-const hasSupplierPortalAccess = (user) => {
-  const roleValue = String(user?.role || "").toLowerCase();
-  const workRoleValue = String(user?.workRole || "").toLowerCase();
-  const terms = ["supplier", "vendor", "постач"];
-  return terms.some((term) => roleValue.includes(term) || workRoleValue.includes(term));
-};
-
-const normalizeSupplierIdentity = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
-
-const getSupplierPortalEmails = (supplier) => {
-  const emails = [
-    ...(Array.isArray(supplier?.portalEmails) ? supplier.portalEmails : []),
-    supplier?.portalEmail,
-    supplier?.contactEmail,
-    supplier?.email,
-  ];
-  return Array.from(
-    new Set(
-      emails
-        .map((item) => String(item || "").trim().toLowerCase())
-        .filter(Boolean)
-    )
-  );
-};
-
-const resolveSupplierForUser = (user, suppliers = []) => {
-  const normalizedSuppliers = Array.isArray(suppliers) ? suppliers : [];
-  const email = String(user?.email || "").trim().toLowerCase();
-  if (email) {
-    const matchedByEmail = normalizedSuppliers.find((supplier) => getSupplierPortalEmails(supplier).includes(email));
-    if (matchedByEmail) return matchedByEmail;
-  }
-
-  const identityCandidates = [user?.displayName, user?.fullName, user?.name]
-    .map((item) => normalizeSupplierIdentity(item))
-    .filter(Boolean);
-
-  if (identityCandidates.length > 0) {
-    const matchedByName = normalizedSuppliers.find((supplier) =>
-      identityCandidates.includes(normalizeSupplierIdentity(supplier?.name))
-    );
-    if (matchedByName) return matchedByName;
-  }
-
-  return null;
-};
-
-const splitSupplierCandidates = (value) => {
-  return Array.from(
-    new Set(
-      String(value || "")
-        .split(/[,;\n|/]+/)
-        .map((item) => String(item || "").trim())
-        .filter(Boolean)
-    )
-  );
-};
-
-const supplierHasContractForRestaurant = (supplierRecord, restaurantRef = {}) => {
-  const contracts = Array.isArray(supplierRecord?.contracts) ? supplierRecord.contracts : [];
-  if (contracts.length === 0) return false;
-
-  const restaurantLookupKey = buildRestaurantLookupKey(restaurantRef || {});
-  const restaurantTokens = collectRestaurantTokens(restaurantRef || {});
-
-  return contracts.some((contract) => {
-    const contractLookupKey = String(contract?.restaurantLookupKey || "").trim();
-    if (restaurantLookupKey && contractLookupKey && contractLookupKey === restaurantLookupKey) return true;
-    return hasRestaurantTokenOverlap(collectRestaurantTokens(contract || {}), restaurantTokens);
-  });
-};
-
-const resolveSupplierContractForRestaurant = (supplierRecord, restaurantRef = {}) => {
-  const contracts = Array.isArray(supplierRecord?.contracts) ? supplierRecord.contracts : [];
-  if (contracts.length === 0) return null;
-
-  const restaurantLookupKey = buildRestaurantLookupKey(restaurantRef || {});
-  const restaurantTokens = collectRestaurantTokens(restaurantRef || {});
-
-  for (const contract of contracts) {
-    const contractLookupKey = String(contract?.restaurantLookupKey || "").trim();
-    if (restaurantLookupKey && contractLookupKey && contractLookupKey === restaurantLookupKey) return contract;
-    if (hasRestaurantTokenOverlap(collectRestaurantTokens(contract || {}), restaurantTokens)) return contract;
-  }
-  return null;
-};
-
-const getSupplierMinimumForRestaurant = (supplierRecord, restaurantRef = {}) => {
-  const matchedContract = resolveSupplierContractForRestaurant(supplierRecord, restaurantRef);
-  if (matchedContract) return Math.max(0, toNumber(matchedContract?.minimumOrderAmount || 0));
-  return 0;
-};
-
-// ─── Рекомендований постачальник у заклад (chef-pinned) ───
-// Шеф-кухар може закріпити конкретного постачальника продукту за переліком
-// закладів. Це правило має найвищий пріоритет — вище за APL та контракти.
-// Зберігається у довіднику постачальника як supplier.productRecommendations:
-//   [{ productKey, productName, code1C, restaurantIds: [...] }]
-const buildProductRecommendationKey = (productRef) => {
-  if (!productRef || typeof productRef !== "object") return "";
-  const code = String(productRef.code1C || "").trim().toLowerCase();
-  if (code) return code;
-  return String(productRef.name || "").trim().toLowerCase();
-};
-
-const parseSupplierRecommendations = (supplierRecord) => {
-  const raw = supplierRecord?.productRecommendations;
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === "string" && raw.trim().startsWith("[")) {
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-};
-
-const supplierRecommendsForProductRestaurant = (supplierRecord, productKey, restaurantId) => {
-  if (!productKey || !restaurantId) return false;
-  const entry = parseSupplierRecommendations(supplierRecord).find(
-    (item) => String(item?.productKey || "").trim().toLowerCase() === productKey
-  );
-  if (!entry) return false;
-  const ids = Array.isArray(entry.restaurantIds) ? entry.restaurantIds.map((id) => String(id || "").trim()) : [];
-  return ids.includes(String(restaurantId || "").trim());
-};
-
-// Кеш мапи «нормалізована назва постачальника → запис довідника».
-// Ключ — посилання на масив suppliersDirectory (стабільне між рендерами),
-// тож мапа перебудовується лише коли довідник реально змінився.
-const supplierDirectoryByNameCache = new WeakMap();
-const getSupplierDirectoryByName = (suppliersDirectory) => {
-  const arr = Array.isArray(suppliersDirectory) ? suppliersDirectory : null;
-  if (!arr) return new Map();
-  const cached = supplierDirectoryByNameCache.get(arr);
-  if (cached) return cached;
-  const map = new Map(
-    arr
-      .map((supplier) => [normalizeSupplierIdentity(supplier?.name), supplier])
-      .filter(([key]) => Boolean(key))
-  );
-  supplierDirectoryByNameCache.set(arr, map);
-  return map;
-};
-
-const resolveSupplierForRestaurantContext = (rawSupplier, restaurantRef = {}, suppliersDirectory = [], productRef = null, supplierPriceMap = null) => {
-  const candidates = splitSupplierCandidates(rawSupplier);
-  if (candidates.length === 0) return "";
-  if (candidates.length === 1) return candidates[0];
-
-  const directoryByName = getSupplierDirectoryByName(suppliersDirectory);
-  // 1) Рекомендація шефа (закріплення постачальника за закладом) — найвищий пріоритет.
-  const productKey = buildProductRecommendationKey(productRef);
-  const restaurantId = String(restaurantRef?.id || "").trim();
-  if (productKey && restaurantId) {
-    for (const candidate of candidates) {
-      const supplierRecord = directoryByName.get(normalizeSupplierIdentity(candidate));
-      if (supplierRecord && supplierRecommendsForProductRestaurant(supplierRecord, productKey, restaurantId)) {
-        return String(supplierRecord?.name || candidate).trim();
-      }
-    }
-  }
-
-  // Вибір найдешевшого постачальника серед списку (за наявності карти цін).
-  const priceMap = supplierPriceMap instanceof Map ? supplierPriceMap : null;
-  const pickCheapest = (list) => {
-    if (!priceMap || list.length === 0) return null;
-    let best = null;
-    let bestPrice = Infinity;
-    for (const name of list) {
-      const price = priceMap.get(normalizeSupplierIdentity(name));
-      if (Number.isFinite(price) && price > 0 && price < bestPrice) {
-        bestPrice = price;
-        best = name;
-      }
-    }
-    return best;
-  };
-
-  // 2) Контракт постачальника для цього закладу.
-  //    Якщо контракт мають кілька постачальників — обираємо з найменшою ціною.
-  const contractedCandidates = candidates.filter((candidate) => {
-    const supplierRecord = directoryByName.get(normalizeSupplierIdentity(candidate));
-    return supplierRecord && supplierHasContractForRestaurant(supplierRecord, restaurantRef);
-  });
-
-  if (contractedCandidates.length > 0) {
-    const chosen = pickCheapest(contractedCandidates) || contractedCandidates[0];
-    const supplierRecord = directoryByName.get(normalizeSupplierIdentity(chosen));
-    return String(supplierRecord?.name || chosen).trim();
-  }
-
-  // 3) Запасний варіант — найдешевший серед усіх кандидатів, інакше перший.
-  return pickCheapest(candidates) || candidates[0];
-};
-
-// Карта «постачальник → мінімальна ціна» для конкретного продукту BookingTab.
-// Використовується резолвером для вибору найдешевшого постачальника серед
-// тих, що мають контракт із закладом (коли немає рекомендації шефа).
-const supplierPriceMapCache = new WeakMap();
-const buildSupplierPriceMap = (product) => {
-  if (product && typeof product === "object") {
-    const cached = supplierPriceMapCache.get(product);
-    if (cached) return cached;
-  }
-  const map = new Map();
-  const add = (supplierName, price) => {
-    const key = normalizeSupplierIdentity(supplierName);
-    if (!key) return;
-    const numeric = toNumber(price);
-    if (!Number.isFinite(numeric) || numeric <= 0) return;
-    if (!map.has(key) || numeric < map.get(key)) map.set(key, numeric);
-  };
-
-  if (Array.isArray(product?.whiteCards)) {
-    product.whiteCards.forEach((card) => add(card?.supplier, card?.unitPrice));
-  }
-
-  if (map.size === 0) {
-    const price = toNumber(product?.unitPrice);
-    const list = Array.isArray(product?.supplierList) && product.supplierList.length > 0
-      ? product.supplierList
-      : splitSupplierCandidates(product?.supplier || "");
-    list.forEach((name) => add(name, price));
-  }
-
-  if (product && typeof product === "object") {
-    supplierPriceMapCache.set(product, map);
-  }
-  return map;
-};
-
-
-
-const summarizeSupplierResponses = (order, supplierName) => {
-  const normalizedSupplier = normalizeSupplierIdentity(supplierName);
-  const items = (Array.isArray(order?.items) ? order.items : []).filter((item) => {
-    if (!item?.sentToSupplier) return false;
-    return normalizeSupplierIdentity(item?.supplier) === normalizedSupplier;
-  });
-
-  const summary = { pending: 0, accepted: 0, partial: 0, unavailable: 0, total: items.length };
-  items.forEach((item) => {
-    const status = getSupplierResponseStatus(item);
-    if (Object.prototype.hasOwnProperty.call(summary, status)) {
-      summary[status] += 1;
-    }
-  });
-  return summary;
-};
-
-// Делівері-утиліти (DELIVERY_WEEK_DAYS, computeNextDeliveryDate тощо) винесено в utils/booking/deliveryDates.
-
-const isGlobalAdminUser = (user) => String(user?.role || "").toLowerCase() === "admin";
 
 function ProductAdminTab({
   products,
