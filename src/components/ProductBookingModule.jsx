@@ -83,6 +83,48 @@ const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3
 const INVENTORY_DRAFT_STORAGE_PREFIX = "lucia_inventory_draft_v1__";
 const INVENTORY_OFFLINE_QUEUE_STORAGE_KEY = "lucia_inventory_offline_queue_v1";
 
+const SyncIndicator = ({ lastSyncedAt }) => {
+  const [, forceTick] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => forceTick((value) => value + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!lastSyncedAt) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
+        <span className="h-2 w-2 rounded-full bg-slate-400" />
+        Синхронізація…
+      </span>
+    );
+  }
+
+  const secondsAgo = Math.max(0, Math.round((Date.now() - lastSyncedAt) / 1000));
+  const isFresh = secondsAgo <= 10;
+  const timeLabel = new Date(lastSyncedAt).toLocaleTimeString("uk-UA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const relativeLabel =
+    secondsAgo < 5 ? "щойно" : secondsAgo < 60 ? `${secondsAgo} с тому` : `о ${timeLabel}`;
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
+        isFresh ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
+      }`}
+      title={`Останнє оновлення даних: ${timeLabel}`}
+    >
+      <span
+        className={`h-2 w-2 rounded-full ${isFresh ? "bg-emerald-500" : "bg-slate-400"}`}
+      />
+      Синхронізовано {relativeLabel}
+    </span>
+  );
+};
+
 const getErrorMessage = (error, fallbackMessage) => {
   const message = String(error?.message || error || "").trim();
   return message ? `${fallbackMessage}\n\n${message}` : fallbackMessage;
@@ -5768,7 +5810,7 @@ const groupOrderItemsBySupplier = (order) => {
   return Array.from(map.values()).sort((a, b) => a.supplier.localeCompare(b.supplier, "uk"));
 };
 
-function BookingTab({ products, orders, aplAssignments = [], createOrder, updateOrder, restaurants, user, suppliersDirectory = [] }) {
+function BookingTab({ products, orders, aplAssignments = [], createOrder, updateOrder, restaurants, user, suppliersDirectory = [], lastSyncedAt = null }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const pageSizeOptions = [12, 25, 50];
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
@@ -6793,6 +6835,9 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                   ? supplierMinimumAmount / unitPrice
                   : 0;
                 const productDeliveryDate = computeProductDeliveryDate(product);
+                const isLateDelivery = Boolean(
+                  autoDeliveryDate && productDeliveryDate && productDeliveryDate > autoDeliveryDate
+                );
 
                 return (
                   <tr key={product.id} className="border-t border-slate-200">
@@ -6800,8 +6845,26 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                     <td className="px-3 py-2 font-medium text-slate-900">{product.name}</td>
                     <td className="px-3 py-2">{product.unit || "-"}</td>
                     <td className="px-3 py-2">{formatMoney(product.unitPrice)}</td>
-                    <td className="px-3 py-2 text-xs text-slate-600">
-                      {productDeliveryDate ? formatDateUk(productDeliveryDate) : "—"}
+                    <td className="px-3 py-2 text-xs">
+                      {productDeliveryDate ? (
+                        <span
+                          className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-medium ${
+                            isLateDelivery
+                              ? "bg-amber-50 text-amber-700"
+                              : "text-slate-600"
+                          }`}
+                          title={
+                            isLateDelivery
+                              ? `Прибуде пізніше за решту замовлення (найраніше — ${formatDateUk(autoDeliveryDate)})`
+                              : undefined
+                          }
+                        >
+                          {isLateDelivery && <AlertTriangle size={11} className="shrink-0" />}
+                          {formatDateUk(productDeliveryDate)}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2">
@@ -6964,13 +7027,16 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
       <div className={cardClass}>
         <div className="mb-3 flex items-center justify-between gap-2">
           <h3 className="text-base font-semibold text-slate-900">Мої заявки</h3>
-          <button
-            type="button"
-            onClick={() => setShowCreateOrder(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500"
-          >
-            <Plus size={15} /> Створити нове замовлення
-          </button>
+          <div className="flex items-center gap-3">
+            <SyncIndicator lastSyncedAt={lastSyncedAt} />
+            <button
+              type="button"
+              onClick={() => setShowCreateOrder(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-indigo-500"
+            >
+              <Plus size={15} /> Створити нове замовлення
+            </button>
+          </div>
         </div>
         <div className="overflow-x-auto rounded-lg border border-slate-200">
           <table className="min-w-full text-sm">
@@ -7061,6 +7127,32 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
           return sum + toNumber(receivingDraft[itemKey]) * toNumber(item.unitPrice);
         }, 0);
         const correctionItems = orderDetailsRow.items.filter((item) => item?.correctionPending);
+        const activeReturns = orderDetailsRow.items.reduce((acc, item) => {
+          const itemKey = `${String(orderDetailsRow.order.id)}::${item._index}`;
+          const draft = returnDrafts[itemKey];
+          if (!draft?.open) return acc;
+          const orderedQty = toNumber(item.qty);
+          const qty = Math.min(Math.max(0, toNumber(draft.qty)), orderedQty);
+          const reason = String(draft.reason || "").trim();
+          acc.push({
+            itemKey,
+            productName: item.productName || "Без назви",
+            unit: item.unit || "",
+            qty,
+            reason,
+            amount: qty * toNumber(item.unitPrice),
+            isValid: qty > 0 && reason.length > 0,
+          });
+          return acc;
+        }, []);
+        const invalidReturns = activeReturns.filter((entry) => !entry.isValid);
+        const returnsSummary = activeReturns
+          .filter((entry) => entry.qty > 0)
+          .reduce(
+            (acc, entry) => ({ count: acc.count + 1, amount: acc.amount + entry.amount }),
+            { count: 0, amount: 0 }
+          );
+        const hasBlockingReturns = invalidReturns.length > 0;
         return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-3" onClick={() => setOrderDetailsRow(null)}>
           <div className="w-full max-w-3xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -7289,12 +7381,39 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
               </table>
             </div>
 
+            {activeReturns.length > 0 && (
+              <div
+                className={`mt-3 rounded-lg border p-3 ${
+                  hasBlockingReturns ? "border-amber-300 bg-amber-50" : "border-rose-200 bg-rose-50"
+                }`}
+              >
+                {returnsSummary.count > 0 && (
+                  <div className="flex items-center gap-2 text-sm font-semibold text-rose-700">
+                    <Trash2 size={15} />
+                    Повертається {returnsSummary.count}{" "}
+                    {returnsSummary.count === 1 ? "позиція" : returnsSummary.count < 5 ? "позиції" : "позицій"}
+                    {" "}на суму {formatMoney(returnsSummary.amount)}
+                  </div>
+                )}
+                {hasBlockingReturns && (
+                  <div className="mt-1 flex items-start gap-2 text-xs font-medium text-amber-800">
+                    <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                    <span>
+                      Незавершені повернення (вкажіть кількість &gt; 0 та причину):{" "}
+                      {invalidReturns.map((entry) => entry.productName).join(", ")}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="mt-3 flex items-center justify-end gap-2">
               {scopedKey === "confirmed" && (
                 <button
                   type="button"
-                  disabled={savingReceiving}
-                  className="rounded-lg border border-emerald-300 bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                  disabled={savingReceiving || hasBlockingReturns}
+                  title={hasBlockingReturns ? "Завершіть оформлення повернень: вкажіть кількість (> 0) та причину" : undefined}
+                  className="rounded-lg border border-emerald-300 bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                   onClick={() => saveReceivingOrder(orderDetailsRow.order)}
                 >
                   {savingReceiving ? "Збереження…" : "Підтвердити приймання"}
@@ -7325,7 +7444,7 @@ const statusLabel = (status) => {
   return status;
 };
 
-function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, deleteOrder, canManageOrders, user, suppliersDirectory = [] }) {
+function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, deleteOrder, canManageOrders, user, suppliersDirectory = [], lastSyncedAt = null }) {
   const isGlobalAdmin = isGlobalAdminUser(user);
   const [statusFilter, setStatusFilter] = useState("");
   const [orderDateFrom, setOrderDateFrom] = useState("");
@@ -9037,21 +9156,24 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
                 <p className="text-xs text-slate-600">Оперативний контроль статусів, постачальників та проблемних позицій в одному просторі.</p>
               </div>
             </div>
-            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
-              <button
-                type="button"
-                className={`rounded-md px-3 py-1.5 text-xs font-semibold ${ordersViewMode === "board" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-                onClick={() => setOrdersViewMode("board")}
-              >
-                Борд
-              </button>
-              <button
-                type="button"
-                className={`rounded-md px-3 py-1.5 text-xs font-semibold ${ordersViewMode === "table" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-                onClick={() => setOrdersViewMode("table")}
-              >
-                Таблиця
-              </button>
+            <div className="flex items-center gap-3">
+              <SyncIndicator lastSyncedAt={lastSyncedAt} />
+              <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+                <button
+                  type="button"
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${ordersViewMode === "board" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                  onClick={() => setOrdersViewMode("board")}
+                >
+                  Борд
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${ordersViewMode === "table" ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+                  onClick={() => setOrdersViewMode("table")}
+                >
+                  Таблиця
+                </button>
+              </div>
             </div>
           </div>
 
@@ -11386,6 +11508,7 @@ export default function ProductBookingModule({ topTab, topTabLabel = "", restaur
     inventories,
     loading,
     error,
+    lastSyncedAt,
     addProduct,
     updateProduct,
     deleteProduct,
@@ -11647,6 +11770,7 @@ export default function ProductBookingModule({ topTab, topTabLabel = "", restaur
         canManageOrders={canManageOrders}
         user={user}
         suppliersDirectory={suppliers}
+        lastSyncedAt={lastSyncedAt}
       />
     );
   }
@@ -11672,5 +11796,5 @@ export default function ProductBookingModule({ topTab, topTabLabel = "", restaur
     );
   }
 
-  return <BookingTab products={normalizedProducts} orders={normalizedOrders} aplAssignments={aplAssignments} createOrder={createOrder} updateOrder={updateOrder} restaurants={effectiveRestaurants} user={user} suppliersDirectory={suppliers} />;
+  return <BookingTab products={normalizedProducts} orders={normalizedOrders} aplAssignments={aplAssignments} createOrder={createOrder} updateOrder={updateOrder} restaurants={effectiveRestaurants} user={user} suppliersDirectory={suppliers} lastSyncedAt={lastSyncedAt} />;
 }

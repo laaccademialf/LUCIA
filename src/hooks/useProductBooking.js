@@ -356,6 +356,7 @@ export const useProductBooking = (enableRealtime = true) => {
   const [inventories, setInventories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const hasLoadedApiDataRef = useRef(false);
 
   const setCollectionStateIfChanged = (key, nextItems, setter, normalizer) => {
@@ -431,6 +432,7 @@ export const useProductBooking = (enableRealtime = true) => {
           await reloadAllApi();
           hasLoadedApiDataRef.current = true;
           setError(null);
+          setLastSyncedAt(Date.now());
         } catch (err) {
           console.error("Помилка завантаження модуля замовлень через API:", err);
           // Do not switch to fatal state after initial successful load;
@@ -1051,6 +1053,7 @@ export const useProductBooking = (enableRealtime = true) => {
     inventories,
     loading,
     error,
+    lastSyncedAt,
     addProduct,
     updateProduct,
     deleteProduct,
