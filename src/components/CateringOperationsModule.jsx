@@ -12,6 +12,7 @@ import CateringKitchenTab from "./catering/CateringKitchenTab";
 import CateringAnalyticsTab from "./catering/CateringAnalyticsTab";
 import CateringAssortmentTab from "./catering/CateringAssortmentTab";
 import CateringRoleSettingsTab from "./catering/CateringRoleSettingsTab";
+import CateringLocationsCalendarTab from "./catering/CateringLocationsCalendarTab";
 
 const COLLECTIONS = {
   orders: {
@@ -42,7 +43,17 @@ const COLLECTIONS = {
     api: "cateringRoleSettings",
     storage: "lucia_catering_role_settings",
   },
+  locations: {
+    api: "cateringLocations",
+    storage: "lucia_catering_locations",
+  },
+  events: {
+    api: "cateringCalendarEvents",
+    storage: "lucia_catering_calendar_events",
+  },
 };
+
+const EVENT_STATUS_OPTIONS = ["confirmed", "tentative", "cancelled"];
 
 const CRM_STATUS_OPTIONS = ["new", "brief", "proposal", "work", "tender", "confirmed", "cancelled"];
 const KITCHEN_STATUS_OPTIONS = ["queue", "preparing", "ready", "completed", "archived"];
@@ -161,7 +172,11 @@ const normalizeOrder = (value = {}) => {
     amount: toNumber(value?.amount),
     guestCount: String(value?.guestCount || value?.guest_count || "").trim(),
     eventDate: String(value?.eventDate || value?.event_date || value?.requiredDate || value?.required_date || "").trim(),
+    eventEndDate: String(value?.eventEndDate || value?.event_end_date || "").trim(),
     eventTime: String(value?.eventTime || value?.event_time || value?.time || "").trim(),
+    eventEndTime: String(value?.eventEndTime || value?.event_end_time || "").trim(),
+    locationId: String(value?.locationId || value?.location_id || "").trim(),
+    locationName: String(value?.locationName || value?.location_name || value?.location || "").trim(),
     paymentType: String(value?.paymentType || value?.payment_type || "").trim(),
     discountValue: String(value?.discountValue || value?.discount_value || value?.discount || "").trim(),
     status,
@@ -287,6 +302,41 @@ const normalizeRoleSetting = (value = {}) => ({
   updatedAt: String(value?.updatedAt || ""),
 });
 
+const normalizeLocation = (value = {}) => ({
+  id: String(value?.id || ""),
+  name: String(value?.name || value?.label || "").trim(),
+  color: String(value?.color || "").trim() || "#6366f1",
+  address: String(value?.address || value?.location || "").trim(),
+  capacity: String(value?.capacity || "").trim(),
+  notes: String(value?.notes || "").trim(),
+  createdAt: String(value?.createdAt || ""),
+  updatedAt: String(value?.updatedAt || ""),
+});
+
+const normalizeEvent = (value = {}) => {
+  const status = EVENT_STATUS_OPTIONS.includes(String(value?.status || "")) ? String(value.status) : "confirmed";
+  return {
+    id: String(value?.id || ""),
+    title: String(value?.title || value?.name || "").trim(),
+    locationId: String(value?.locationId || value?.location_id || "").trim(),
+    locationName: String(value?.locationName || value?.location_name || value?.location || "").trim(),
+    startDate: String(value?.startDate || value?.start_date || "").trim(),
+    endDate: String(value?.endDate || value?.end_date || "").trim(),
+    startTime: String(value?.startTime || value?.start_time || "").trim(),
+    endTime: String(value?.endTime || value?.end_time || "").trim(),
+    allDay: Boolean(value?.allDay),
+    status,
+    color: String(value?.color || "").trim(),
+    guestCount: String(value?.guestCount || value?.guest_count || "").trim(),
+    contactName: String(value?.contactName || value?.contact_name || "").trim(),
+    managerName: String(value?.managerName || value?.manager_name || "").trim(),
+    orderId: String(value?.orderId || value?.order_id || "").trim(),
+    notes: String(value?.notes || "").trim(),
+    createdAt: String(value?.createdAt || ""),
+    updatedAt: String(value?.updatedAt || ""),
+  };
+};
+
 const sortByUpdatedAt = (left, right) => String(right?.updatedAt || right?.createdAt || "").localeCompare(String(left?.updatedAt || left?.createdAt || ""));
 
 export default function CateringOperationsModule({ user, activeNav, topTab }) {
@@ -297,6 +347,8 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
   const [commercialProposals, setCommercialProposals] = useState([]);
   const [assortmentItems, setAssortmentItems] = useState([]);
   const [roleSettings, setRoleSettings] = useState([]);
+  const [locations, setLocations] = useState([]);
+  const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -318,6 +370,15 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
     if (probe.includes("asortiment") || probe.includes("assortment")) return "assortment";
     if (probe.includes("chefmonitor") || probe.includes("kitchen")) return "kitchen";
     if (
+      probe.includes("cateringlocation") ||
+      probe.includes("locationscalendar") ||
+      probe.includes("locationcalendar") ||
+      probe.includes("календарлокац") ||
+      probe.includes("локаці")
+    ) {
+      return "locations-calendar";
+    }
+    if (
       probe.includes("salescateringreport") ||
       probe.includes("managmentpnl") ||
       probe.includes("managementpnl") ||
@@ -338,7 +399,7 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
     setLoading(true);
     setError("");
     try {
-      const [ordersData, contactsData, fieldsData, plansData, proposalsData, assortmentItemsData, roleSettingsData] = await Promise.all([
+      const [ordersData, contactsData, fieldsData, plansData, proposalsData, assortmentItemsData, roleSettingsData, locationsData, eventsData] = await Promise.all([
         listRecords(COLLECTIONS.orders),
         listRecords(COLLECTIONS.contacts),
         listRecords(COLLECTIONS.fields),
@@ -346,6 +407,8 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
         listRecords(COLLECTIONS.proposals),
         listRecords(COLLECTIONS.assortmentItems),
         listRecords(COLLECTIONS.roleSettings),
+        listRecords(COLLECTIONS.locations),
+        listRecords(COLLECTIONS.events),
       ]);
       setOrders((Array.isArray(ordersData) ? ordersData : []).map(normalizeOrder).sort(sortByUpdatedAt));
       setContacts((Array.isArray(contactsData) ? contactsData : []).map(normalizeContact).sort((left, right) => left.name.localeCompare(right.name, "uk")));
@@ -354,6 +417,8 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
       setCommercialProposals((Array.isArray(proposalsData) ? proposalsData : []).map(normalizeProposal).sort(sortByUpdatedAt));
       setAssortmentItems((Array.isArray(assortmentItemsData) ? assortmentItemsData : []).map(normalizeAssortmentItem).filter((item) => item.productName));
       setRoleSettings((Array.isArray(roleSettingsData) ? roleSettingsData : []).map(normalizeRoleSetting).sort(sortByUpdatedAt));
+      setLocations((Array.isArray(locationsData) ? locationsData : []).map(normalizeLocation).sort((left, right) => left.name.localeCompare(right.name, "uk")));
+      setEvents((Array.isArray(eventsData) ? eventsData : []).map(normalizeEvent).sort(sortByUpdatedAt));
     } catch (loadError) {
       console.error("Помилка завантаження кейтеринг-модуля:", loadError);
       setError("Не вдалося завантажити дані Кейтерингу.");
@@ -614,6 +679,62 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
     }
   }, []);
 
+  const handleSaveLocation = useCallback(async (draft) => {
+    setSaving(true);
+    try {
+      const saved = normalizeLocation(await saveRecord(COLLECTIONS.locations, draft));
+      setLocations((prev) => [saved, ...prev.filter((item) => String(item.id) !== String(saved.id))].sort((left, right) => left.name.localeCompare(right.name, "uk")));
+      return { success: true, location: saved };
+    } catch (saveError) {
+      console.error("Помилка збереження локації:", saveError);
+      alert("Не вдалося зберегти локацію.");
+      return { success: false };
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
+  const handleDeleteLocation = useCallback(async (id) => {
+    setSaving(true);
+    try {
+      await deleteRecord(COLLECTIONS.locations, id);
+      setLocations((prev) => prev.filter((item) => String(item.id) !== String(id)));
+    } catch (deleteError) {
+      console.error("Помилка видалення локації:", deleteError);
+      alert("Не вдалося видалити локацію.");
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
+  const handleSaveEvent = useCallback(async (draft) => {
+    setSaving(true);
+    try {
+      const saved = normalizeEvent(await saveRecord(COLLECTIONS.events, draft));
+      setEvents((prev) => [saved, ...prev.filter((item) => String(item.id) !== String(saved.id))].sort(sortByUpdatedAt));
+      return { success: true, event: saved };
+    } catch (saveError) {
+      console.error("Помилка збереження події календаря:", saveError);
+      alert("Не вдалося зберегти подію.");
+      return { success: false };
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
+  const handleDeleteEvent = useCallback(async (id) => {
+    setSaving(true);
+    try {
+      await deleteRecord(COLLECTIONS.events, id);
+      setEvents((prev) => prev.filter((item) => String(item.id) !== String(id)));
+    } catch (deleteError) {
+      console.error("Помилка видалення події календаря:", deleteError);
+      alert("Не вдалося видалити подію.");
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
   if (loading) {
     return (
       <div className="card flex min-h-[300px] items-center justify-center gap-3 border border-slate-200 bg-white p-6 text-slate-700 shadow-xl">
@@ -664,6 +785,20 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
           onSaveRoleSetting={handleSaveRoleSetting}
           onDeleteRoleSetting={handleDeleteRoleSetting}
         />
+      ) : currentRoute === "locations-calendar" ? (
+        <CateringLocationsCalendarTab
+          locations={locations}
+          events={events}
+          orders={orders}
+          managers={salesManagers}
+          currentUserName={currentUserName}
+          saving={saving}
+          onSaveEvent={handleSaveEvent}
+          onDeleteEvent={handleDeleteEvent}
+          onSaveOrder={handleSaveOrder}
+          onSaveLocation={handleSaveLocation}
+          onDeleteLocation={handleDeleteLocation}
+        />
       ) : (
         <CateringCrmTab
           mode={currentRoute}
@@ -683,6 +818,9 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
           onDeleteField={handleDeleteField}
           onSaveProposal={handleSaveProposal}
           onDeleteProposal={handleDeleteProposal}
+          locations={locations}
+          onSaveLocation={handleSaveLocation}
+          onDeleteLocation={handleDeleteLocation}
         />
       )}
     </div>

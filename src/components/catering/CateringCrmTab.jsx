@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ClipboardList, ContactRound, Download, FileDown, FileText, Pencil, Plus, Trash2, Upload, Users } from "lucide-react";
+import { ClipboardList, ContactRound, Download, FileDown, FileText, MapPin, Pencil, Plus, Trash2, Upload, Users } from "lucide-react";
 import {
   downloadCateringContactsTemplate,
   exportCateringContactsToExcel,
@@ -236,6 +236,8 @@ const emptyOrder = {
   eventEndDate: "",
   eventTime: "",
   eventEndTime: "",
+  locationId: "",
+  locationName: "",
   paymentType: "",
   discountValue: "",
   status: "new",
@@ -272,6 +274,20 @@ const emptyField = {
   placeholder: "",
   description: "",
   options: "",
+};
+
+const LOCATION_COLOR_PRESETS = [
+  "#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ec4899",
+  "#8b5cf6", "#ef4444", "#14b8a6", "#f97316", "#3b82f6",
+];
+
+const emptyLocation = {
+  id: "",
+  name: "",
+  color: LOCATION_COLOR_PRESETS[0],
+  address: "",
+  capacity: "",
+  notes: "",
 };
 
 const emptyProposal = {
@@ -431,6 +447,9 @@ export default function CateringCrmTab({
   onDeleteField,
   onSaveProposal,
   onDeleteProposal,
+  locations = [],
+  onSaveLocation,
+  onDeleteLocation,
 }) {
   const createDefaultOrder = (managerName) => ({
     ...emptyOrder,
@@ -442,6 +461,8 @@ export default function CateringCrmTab({
   const [orderForm, setOrderForm] = useState(() => createDefaultOrder(currentUserName));
   const [contactForm, setContactForm] = useState(emptyContact);
   const [fieldForm, setFieldForm] = useState(emptyField);
+  const [locationForm, setLocationForm] = useState(emptyLocation);
+  const [showLocationModal, setShowLocationModal] = useState(false);
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
   const [showFieldModal, setShowFieldModal] = useState(false);
@@ -503,6 +524,7 @@ export default function CateringCrmTab({
     setOrderForm(createDefaultOrder(currentUserName));
     setContactForm(emptyContact);
     setFieldForm(emptyField);
+    setLocationForm(emptyLocation);
   }, [mode, currentUserName]);
 
   useEffect(() => {
@@ -1676,6 +1698,27 @@ export default function CateringCrmTab({
                     </div>
 
                     <div>
+                      <label className="mb-1 flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500"><MapPin size={12} /> Місце проведення (локація)</label>
+                      <select
+                        className={baseInput}
+                        value={orderForm.locationId}
+                        onChange={(event) => {
+                          const locationId = event.target.value;
+                          const locationName = locations.find((location) => String(location.id) === String(locationId))?.name || "";
+                          setOrderForm((prev) => ({ ...prev, locationId, locationName }));
+                        }}
+                      >
+                        <option value="">Без локації</option>
+                        {locations.map((location) => (
+                          <option key={location.id} value={location.id}>{location.name}{location.capacity ? ` (до ${location.capacity} гостей)` : ""}</option>
+                        ))}
+                      </select>
+                      {locations.length === 0 && (
+                        <p className="mt-1 text-[11px] text-slate-400">Локацій ще немає — додайте їх у вкладці «Типові поля».</p>
+                      )}
+                    </div>
+
+                    <div>
                       <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Нотатки</label>
                       <textarea className={`${baseInput} min-h-[80px]`} value={orderForm.notes} onChange={(event) => setOrderForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Короткий опис запиту, джерело ліда, деталі брифу" />
                     </div>
@@ -2685,6 +2728,68 @@ export default function CateringCrmTab({
         </div>
       </div>
 
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <MapPin size={18} className="text-rose-500" />
+            <h3 className="text-base font-semibold text-slate-900">Локації заходів</h3>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{locations.length}</span>
+          </div>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-lg bg-rose-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-rose-400"
+            onClick={() => {
+              setLocationForm({ ...emptyLocation, color: LOCATION_COLOR_PRESETS[locations.length % LOCATION_COLOR_PRESETS.length] });
+              setShowLocationModal(true);
+            }}
+          >
+            <Plus size={14} /> Додати локацію
+          </button>
+        </div>
+        <p className="mb-3 text-xs text-slate-500">Локації використовуються у CRM-угодах і відображаються в «Календарі локацій».</p>
+
+        {locations.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-300 px-3 py-8 text-center text-sm text-slate-500">
+            Локацій ще немає. Додайте першу локацію, щоб планувати заходи в календарі.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {locations.map((location) => (
+              <div key={location.id} className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                <span className="mt-0.5 h-9 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: location.color || "#6366f1" }} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-slate-900">{location.name}</p>
+                  {location.address && <p className="truncate text-xs text-slate-500">{location.address}</p>}
+                  {location.capacity && <p className="text-xs text-slate-500">Місткість: {location.capacity}</p>}
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    className="rounded-md border border-slate-300 p-1.5 text-slate-600 hover:bg-white"
+                    onClick={() => {
+                      setLocationForm({ ...emptyLocation, ...location });
+                      setShowLocationModal(true);
+                    }}
+                  >
+                    <Pencil size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-rose-200 p-1.5 text-rose-600 hover:bg-rose-50"
+                    onClick={() => {
+                      if (!window.confirm(`Видалити локацію «${location.name}»?`)) return;
+                      void onDeleteLocation?.(location.id);
+                    }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 shadow-sm">
           <div className="mb-3">
@@ -2921,6 +3026,108 @@ export default function CateringCrmTab({
                 onClick={() => {
                   setFieldForm(emptyField);
                   setShowFieldModal(false);
+                }}
+              >
+                Скасувати
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showLocationModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-center gap-2">
+              <MapPin size={18} className="text-rose-500" />
+              <h3 className="text-lg font-semibold text-slate-900">{locationForm.id ? "Редагування локації" : "Нова локація"}</h3>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Назва локації</label>
+                <input
+                  className={baseInput}
+                  value={locationForm.name}
+                  onChange={(event) => setLocationForm((prev) => ({ ...prev, name: event.target.value }))}
+                  placeholder="Напр.: Банкетна зала, Тераса, Виїзд"
+                  autoFocus
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Адреса</label>
+                  <input
+                    className={baseInput}
+                    value={locationForm.address}
+                    onChange={(event) => setLocationForm((prev) => ({ ...prev, address: event.target.value }))}
+                    placeholder="Місто, вулиця"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Місткість (гостей)</label>
+                  <input
+                    className={baseInput}
+                    value={locationForm.capacity}
+                    onChange={(event) => setLocationForm((prev) => ({ ...prev, capacity: event.target.value }))}
+                    placeholder="120"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Колір у календарі</label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {LOCATION_COLOR_PRESETS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => setLocationForm((prev) => ({ ...prev, color }))}
+                      className={`h-7 w-7 rounded-full border-2 transition ${locationForm.color === color ? "border-slate-900 ring-2 ring-slate-200" : "border-white shadow"}`}
+                      style={{ backgroundColor: color }}
+                      title={color}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={locationForm.color}
+                    onChange={(event) => setLocationForm((prev) => ({ ...prev, color: event.target.value }))}
+                    className="h-7 w-9 cursor-pointer rounded border border-slate-300 bg-white"
+                    title="Власний колір"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Нотатки</label>
+                <textarea
+                  className={`${baseInput} min-h-[70px]`}
+                  value={locationForm.notes}
+                  onChange={(event) => setLocationForm((prev) => ({ ...prev, notes: event.target.value }))}
+                  placeholder="Особливості локації, обладнання, доступ"
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-200 pt-4">
+              <button
+                type="button"
+                className="rounded-lg bg-rose-500 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={saving || !locationForm.name.trim()}
+                onClick={async () => {
+                  const result = await onSaveLocation?.(locationForm);
+                  if (result?.success) {
+                    setLocationForm(emptyLocation);
+                    setShowLocationModal(false);
+                  }
+                }}
+              >
+                {locationForm.id ? "Оновити локацію" : "Додати локацію"}
+              </button>
+              <button
+                type="button"
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                onClick={() => {
+                  setLocationForm(emptyLocation);
+                  setShowLocationModal(false);
                 }}
               >
                 Скасувати
