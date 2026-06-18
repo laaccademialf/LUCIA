@@ -37,6 +37,7 @@ import {
   getCollectionItemApi,
   isCollectionsApiEnabled,
   listCollectionItemsApi,
+  listCollectionItemsConditionalApi,
   replaceInventoryListByRestaurantApi,
   updateCollectionItemApi,
   deleteCollectionItemApi,
@@ -50,6 +51,14 @@ const API_REFRESH_INTERVAL_MS = (() => {
   if (Number.isFinite(raw) && raw >= 1000) return raw;
   return 3000;
 })();
+
+// Умовне завантаження (ETag / If-None-Match) для фонового опитування:
+// сервер віддає 304 без тіла, якщо колекція не змінилась — отже, при кожному
+// циклі (раз на 3 с) реально передаються лише змінені колекції.
+// Вмикається за замовчуванням; вимикається через VITE_BOOKING_CONDITIONAL_FETCH=false.
+const CONDITIONAL_FETCH_ENABLED = String(
+  import.meta.env?.VITE_BOOKING_CONDITIONAL_FETCH ?? "true"
+).trim().toLowerCase() !== "false";
 
 const toTrimmedString = (value) => String(value ?? "").trim();
 
@@ -382,22 +391,46 @@ export const useProductBooking = (enableRealtime = true) => {
   };
 
   const reloadAllApi = async () => {
-    const [productsData, inventoryListProductsData, ordersData, suppliersData, typicalFieldsData, inventoriesData] =
+    // Завантажуємо колекцію умовно (ETag). Повертає { key, changed, data }:
+    // changed=false означає 304 (нічого не змінилось — стан не чіпаємо).
+    // У разі помилки умовного запиту — безпечний фолбек на повне завантаження.
+    const fetchOne = async (remote, key) => {
+      if (CONDITIONAL_FETCH_ENABLED && conditionalSupportedRef.current) {
+        try {
+          const result = await listCollectionItemsConditionalApi(remote, etagsRef.current[key] || "");
+          if (result?.notModified) return { key, changed: false, data: null };
+          if (result?.etag) {
+            etagsRef.current[key] = result.etag;
+          } else {
+            // Сервер не повертає ETag — умовні запити не підтримуються.
+            conditionalSupportedRef.current = false;
+          }
+          return { key, changed: true, data: Array.isArray(result?.data) ? result.data : [] };
+        } catch (err) {
+          console.error(`Помилка умовного завантаження ${remote}:`, err);
+          // падаємо у звичайний шлях нижче
+        }
+      }
+      const data = await safeListCollectionItemsApi(remote);
+      return { key, changed: true, data };
+    };
+
+    const [productsRes, inventoryListProductsRes, ordersRes, suppliersRes, typicalFieldsRes, inventoriesRes] =
       await Promise.all([
-        safeListCollectionItemsApi("bookingProducts"),
-        safeListCollectionItemsApi("inventoryListProducts"),
-        safeListCollectionItemsApi("productOrders"),
-        safeListCollectionItemsApi("bookingSuppliers"),
-        safeListCollectionItemsApi("bookingTypicalFields"),
-        safeListCollectionItemsApi("productInventories"),
+        fetchOne("bookingProducts", "products"),
+        fetchOne("inventoryListProducts", "inventoryListProducts"),
+        fetchOne("productOrders", "orders"),
+        fetchOne("bookingSuppliers", "suppliers"),
+        fetchOne("bookingTypicalFields", "typicalFields"),
+        fetchOne("productInventories", "inventories"),
       ]);
 
-    setCollectionStateIfChanged("products", productsData, setProducts, normalizeProductRecord);
-    setCollectionStateIfChanged("inventoryListProducts", inventoryListProductsData, setInventoryListProducts, normalizeInventoryListProductRecord);
-    setCollectionStateIfChanged("orders", ordersData, setOrders, normalizeOrderRecord);
-    setCollectionStateIfChanged("suppliers", suppliersData, setSuppliers, normalizeSupplierRecord);
-    setCollectionStateIfChanged("typicalFields", typicalFieldsData, setTypicalFields, normalizeTypicalFieldRecord);
-    setCollectionStateIfChanged("inventories", inventoriesData, setInventories, normalizeInventoryRecord);
+    if (productsRes.changed) setCollectionStateIfChanged("products", productsRes.data, setProducts, normalizeProductRecord);
+    if (inventoryListProductsRes.changed) setCollectionStateIfChanged("inventoryListProducts", inventoryListProductsRes.data, setInventoryListProducts, normalizeInventoryListProductRecord);
+    if (ordersRes.changed) setCollectionStateIfChanged("orders", ordersRes.data, setOrders, normalizeOrderRecord);
+    if (suppliersRes.changed) setCollectionStateIfChanged("suppliers", suppliersRes.data, setSuppliers, normalizeSupplierRecord);
+    if (typicalFieldsRes.changed) setCollectionStateIfChanged("typicalFields", typicalFieldsRes.data, setTypicalFields, normalizeTypicalFieldRecord);
+    if (inventoriesRes.changed) setCollectionStateIfChanged("inventories", inventoriesRes.data, setInventories, normalizeInventoryRecord);
   };
 
   const updateProductsState = (updater) => {
@@ -552,6 +585,18 @@ export const useProductBooking = (enableRealtime = true) => {
     typicalFields: "",
     inventories: "",
   });
+  const etagsRef = useRef({
+    products: "",
+    inventoryListProducts: "",
+    orders: "",
+    suppliers: "",
+    typicalFields: "",
+    inventories: "",
+  });
+  // Чи підтримує бекенд умовні запити (ETag). Якщо перша умовна відповідь 200
+  // прийшла без ETag — вимикаємо умовний шлях і повертаємось до кешованого
+  // завантаження, щоб не качати повні відповіді щоцикл проти старого сервера.
+  const conditionalSupportedRef = useRef(true);
 
   const addProduct = async (product, options = {}) => {
     try {

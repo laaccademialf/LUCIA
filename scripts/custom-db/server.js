@@ -295,6 +295,40 @@ const sendJson = (res, status, payload) => {
   });
 };
 
+// Як sendJson, але з підтримкою умовних запитів (ETag / If-None-Match).
+// Якщо клієнт надіслав If-None-Match, що збігається з поточним ETag, віддаємо
+// 304 без тіла — економимо трафік і JSON-парсинг на клієнті під час фонового
+// опитування. Повна сумісність: клієнти без If-None-Match отримують тіло.
+const sendJsonWithEtag = (res, status, payload, etag) => {
+  if (etag) {
+    const req = res.req;
+    const ifNoneMatch = String(req?.headers?.["if-none-match"] || "").trim();
+    if (ifNoneMatch && ifNoneMatch === etag) {
+      setCorsHeaders(res);
+      res.writeHead(304, { ETag: etag });
+      res.end();
+      return;
+    }
+    // Прокидаємо ETag у відповідь, додаючи заголовок до res до виклику sendJson.
+    const originalWriteHead = res.writeHead.bind(res);
+    res.writeHead = (writeStatus, headersObj) => {
+      const merged = { ...(headersObj || {}), ETag: etag };
+      res.writeHead = originalWriteHead;
+      return originalWriteHead(writeStatus, merged);
+    };
+  }
+  sendJson(res, status, payload);
+};
+
+// Дешевий ETag зі «сигнатури» списку (кількість + id|updatedAt кожного запису).
+const computeListEtag = (items) => {
+  const list = Array.isArray(items) ? items : [];
+  const signature = `${list.length}:` + list
+    .map((item) => `${item?.id || ""}|${item?.updatedAt || item?.updated_at || item?.createdAt || ""}`)
+    .join(",");
+  return '"' + crypto.createHash("sha1").update(signature).digest("hex") + '"';
+};
+
 const logSlowAssetsGet = (details) => {
   const elapsedMs = Number(details?.elapsedMs || 0);
   if (elapsedMs < ASSETS_API_SLOW_MS) return;
@@ -4293,7 +4327,8 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
   if (method === "GET" && !itemId) {
     const items = await getCollectionItemsData(collectionName, dbConfig);
     const normalizedItems = await normalizeBookingCollectionResponse(collectionName, items);
-    return sendJson(res, 200, { ok: true, data: normalizedItems });
+    const etag = computeListEtag(Array.isArray(normalizedItems) ? normalizedItems : []);
+    return sendJsonWithEtag(res, 200, { ok: true, data: normalizedItems }, etag);
   }
 
   if (method === "GET" && itemId) {

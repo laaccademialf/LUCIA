@@ -220,6 +220,39 @@ export const listCollectionItemsApi = async (collectionName) => {
   }
 };
 
+// Умовне завантаження списку для фонового опитування. Завжди звертається до
+// мережі (в обхід TTL-кешу), але надсилає If-None-Match із попереднім ETag.
+// На відповідь 304 повертає { notModified: true, etag } — без тіла й парсингу.
+// На 200 повертає { notModified: false, data, etag } і оновлює TTL/session-кеш,
+// щоб інші (кешовані) виклики бачили свіжі дані. Повна сумісність зі старим API.
+export const listCollectionItemsConditionalApi = async (collectionName, prevEtag = "") => {
+  assertEnabled();
+  const cacheKey = buildListCacheKey(collectionName);
+  const requestHeaders = headers();
+  if (prevEtag) requestHeaders["If-None-Match"] = prevEtag;
+
+  const response = await fetch(endpoint(`/api/collections/${encodeURIComponent(collectionName)}`), {
+    method: "GET",
+    headers: requestHeaders,
+    cache: "no-store",
+  });
+
+  if (response.status === 304) {
+    return { notModified: true, etag: prevEtag };
+  }
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`List ${collectionName} failed (${response.status}): ${body || "no body"}`);
+  }
+
+  const etag = String(response.headers.get("ETag") || "").trim();
+  const payload = await response.json();
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+  writeCache(cacheKey, data);
+  return { notModified: false, data, etag };
+};
+
 export const getCollectionItemApi = async (collectionName, id) => {
   assertEnabled();
   const cacheKey = buildItemCacheKey(collectionName, id);
