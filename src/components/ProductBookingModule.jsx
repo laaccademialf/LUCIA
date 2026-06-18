@@ -16,6 +16,7 @@ import {
   getSupplierResponseLabel,
   getSupplierResponseBadgeClass,
 } from "../utils/booking/orderStatus";
+import { buildOrderItemKeys } from "../utils/booking/orderItems";
 
 const loadProductInventoryExcel = () => import("../utils/productInventoryExcel");
 const loadInventoryListExcel = () => import("../utils/inventoryListExcel");
@@ -5795,16 +5796,21 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
   );
 }
 
+// Будує стабільні ключі позицій замовлення (винесено в utils/booking/orderItems
+// для повторного використання та юніт-тестів). Стійко до зміни порядку масиву
+// items під час фонового оновлення даних — на відміну від ключів за індексом.
+
 // Групує позиції замовлення за постачальниками для відображення в «Мої заявки».
 const groupOrderItemsBySupplier = (order) => {
   const items = Array.isArray(order?.items) ? order.items : [];
+  const keys = buildOrderItemKeys(items);
   const map = new Map();
   items.forEach((item, index) => {
     const supplierName = String(item?.supplier || "").trim() || "Без постачальника";
     const key = normalizeSupplierIdentity(supplierName) || supplierName.toLowerCase();
     if (!map.has(key)) map.set(key, { supplier: supplierName, items: [], total: 0 });
     const group = map.get(key);
-    group.items.push({ ...item, _index: index });
+    group.items.push({ ...item, _index: index, _key: keys[index] });
     group.total += toNumber(item.amount);
   });
   return Array.from(map.values()).sort((a, b) => a.supplier.localeCompare(b.supplier, "uk"));
@@ -6560,9 +6566,11 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
 
   const openOrderDetails = (row) => {
     const order = row?.order;
+    const items = Array.isArray(order?.items) ? order.items : [];
+    const itemKeys = buildOrderItemKeys(items);
     const nextDraft = {};
-    (Array.isArray(order?.items) ? order.items : []).forEach((item, index) => {
-      const itemKey = `${String(order?.id || "order")}::${index}`;
+    items.forEach((item, index) => {
+      const itemKey = itemKeys[index];
       const responseStatus = getSupplierResponseStatus(item);
       const supplierConfirmedQty = responseStatus === "accepted"
         ? toNumber(item?.supplierResponseQty || item?.qty)
@@ -6614,8 +6622,10 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
     }
 
     const now = new Date().toISOString();
-    const nextItems = (Array.isArray(sourceOrder.items) ? sourceOrder.items : []).map((item, index) => {
-      const itemKey = `${String(sourceOrder.id)}::${index}`;
+    const sourceItems = Array.isArray(sourceOrder.items) ? sourceOrder.items : [];
+    const itemKeys = buildOrderItemKeys(sourceItems);
+    const nextItems = sourceItems.map((item, index) => {
+      const itemKey = itemKeys[index];
       const draftReturn = returnDrafts[itemKey];
       const isReturned = Boolean(draftReturn?.open);
       const returnReason = isReturned ? String(draftReturn.reason || "").trim() : "";
@@ -7123,12 +7133,12 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
         const canReceive = scopedKey === "confirmed" || scopedKey === "completed" || detailsStatus === "completed";
         const isCompleted = detailsStatus === "completed";
         const receivedTotal = orderDetailsRow.items.reduce((sum, item) => {
-          const itemKey = `${String(orderDetailsRow.order.id)}::${item._index}`;
+          const itemKey = item._key;
           return sum + toNumber(receivingDraft[itemKey]) * toNumber(item.unitPrice);
         }, 0);
         const correctionItems = orderDetailsRow.items.filter((item) => item?.correctionPending);
         const activeReturns = orderDetailsRow.items.reduce((acc, item) => {
-          const itemKey = `${String(orderDetailsRow.order.id)}::${item._index}`;
+          const itemKey = item._key;
           const draft = returnDrafts[itemKey];
           if (!draft?.open) return acc;
           const orderedQty = toNumber(item.qty);
@@ -7222,8 +7232,8 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                   </tr>
                 </thead>
                 <tbody>
-                  {orderDetailsRow.items.map((item, index) => {
-                    const itemKey = `${String(orderDetailsRow.order.id)}::${item._index}`;
+                  {orderDetailsRow.items.map((item) => {
+                    const itemKey = item._key;
                     const actualQty = toNumber(receivingDraft[itemKey]);
                     const variance = actualQty - toNumber(item.qty);
                     const isCorrected = !!item?.correctionPending;
@@ -7234,7 +7244,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                     const actualAfterReturn = Math.max(0, orderedQty - returnQtyVal);
                     const detailColSpan = 4 + (canReceive ? 2 : 0) + (canReceive && !isCompleted ? 1 : 0);
                     return (
-                    <Fragment key={`${orderDetailsRow.rowKey}::${index}`}>
+                    <Fragment key={`${orderDetailsRow.rowKey}::${item._key}`}>
                     <tr className={`border-t border-slate-200 ${isReturning ? "bg-rose-50" : isCorrected ? "bg-amber-50" : ""}`}>
                       <td className="px-3 py-2 text-slate-800">
                         {isCorrected && <AlertTriangle size={12} className="mr-1 inline text-amber-500" />}
