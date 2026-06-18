@@ -27,6 +27,15 @@ import {
   computeNextDeliveryDate,
   formatDateUk,
 } from "../utils/booking/deliveryDates";
+import {
+  toNumber,
+  formatMoney,
+  getErrorMessage,
+  normalizeProductIdentity,
+  formatDateTimeSafe,
+  formatDateTimeCompact,
+  resolveOrderCreatedAt,
+} from "../utils/booking/format";
 
 const loadProductInventoryExcel = () => import("../utils/productInventoryExcel");
 const loadInventoryListExcel = () => import("../utils/inventoryListExcel");
@@ -136,21 +145,6 @@ const SyncIndicator = ({ lastSyncedAt }) => {
   );
 };
 
-const getErrorMessage = (error, fallbackMessage) => {
-  const message = String(error?.message || error || "").trim();
-  return message ? `${fallbackMessage}\n\n${message}` : fallbackMessage;
-};
-
-const toNumber = (value) => {
-  const normalized = String(value ?? "")
-    .replace(/\s+/g, "")
-    .replace(",", ".");
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
-const formatMoney = (value) => `${toNumber(value).toFixed(2)} грн`;
-
 const readJsonFromStorage = (key, fallbackValue) => {
   if (typeof window === "undefined" || !key) return fallbackValue;
   try {
@@ -179,54 +173,6 @@ const removeStorageKey = (key) => {
   } catch {
     // Ignore storage errors.
   }
-};
-
-const normalizeProductIdentity = (value) => {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/\([^)]*\)/g, " ")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-};
-
-const formatDateTimeSafe = (value) => {
-  const raw = String(value || "").trim();
-  if (!raw) return "-";
-  const date = new Date(raw);
-  if (!Number.isNaN(date.getTime())) {
-    return date.toLocaleString("uk-UA");
-  }
-  return raw;
-};
-
-const formatDateTimeCompact = (value) => {
-  const raw = String(value || "").trim();
-  if (!raw) return "-";
-  const date = new Date(raw);
-  if (!Number.isNaN(date.getTime())) {
-    return date.toLocaleString("uk-UA", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-  }
-  return raw;
-};
-
-const resolveOrderCreatedAt = (order) => {
-  if (!order || typeof order !== "object") return "";
-  return String(
-    order.createdAt ||
-    order.created_at ||
-    order.submittedAt ||
-    order.updatedAt ||
-    order.updated_at ||
-    ""
-  ).trim();
 };
 
 const openNativeDatePicker = (event) => {
