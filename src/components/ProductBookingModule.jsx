@@ -36,6 +36,11 @@ import {
   formatDateTimeCompact,
   resolveOrderCreatedAt,
 } from "../utils/booking/format";
+import {
+  readJsonFromStorage,
+  writeJsonToStorage,
+  removeStorageKey,
+} from "../utils/booking/storage";
 
 const loadProductInventoryExcel = () => import("../utils/productInventoryExcel");
 const loadInventoryListExcel = () => import("../utils/inventoryListExcel");
@@ -143,36 +148,6 @@ const SyncIndicator = ({ lastSyncedAt }) => {
       Синхронізовано {relativeLabel}
     </span>
   );
-};
-
-const readJsonFromStorage = (key, fallbackValue) => {
-  if (typeof window === "undefined" || !key) return fallbackValue;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return fallbackValue;
-    const parsed = JSON.parse(raw);
-    return parsed ?? fallbackValue;
-  } catch {
-    return fallbackValue;
-  }
-};
-
-const writeJsonToStorage = (key, value) => {
-  if (typeof window === "undefined" || !key) return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // Ignore storage quota/errors; save flow will still work online.
-  }
-};
-
-const removeStorageKey = (key) => {
-  if (typeof window === "undefined" || !key) return;
-  try {
-    window.localStorage.removeItem(key);
-  } catch {
-    // Ignore storage errors.
-  }
 };
 
 const openNativeDatePicker = (event) => {
