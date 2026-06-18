@@ -6517,15 +6517,14 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
         </div>
       </div>
 
-      {myArchivedOrderRows.length > 0 && (
-        <div className={cardClass}>
-          <div className="mb-3 flex items-center gap-2">
-            <Archive size={16} className="text-slate-500" />
-            <h3 className="text-base font-semibold text-slate-900">Архів замовлень</h3>
-            <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-              {myArchivedOrderRows.length}
-            </span>
-          </div>
+      <div className={cardClass}>
+        <div className="mb-3 flex items-center gap-2">
+          <Archive size={16} className="text-slate-500" />
+          <h3 className="text-base font-semibold text-slate-900">Архів замовлень</h3>
+          <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+            {myArchivedOrderRows.length}
+          </span>
+        </div>
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-slate-700">
@@ -6583,11 +6582,15 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                     </tr>
                   );
                 })}
+                {myArchivedOrderRows.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="px-3 py-6 text-center text-slate-500">Архівних заявок поки немає.</td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
         </div>
-      )}
 
       {orderDetailsRow && (() => {
         const detailsStatus = String(orderDetailsRow.order.status || "");
