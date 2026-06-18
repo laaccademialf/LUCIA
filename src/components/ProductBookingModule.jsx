@@ -6613,11 +6613,17 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
       const draftReturn = returnDrafts[itemKey];
       const isReturned = Boolean(draftReturn?.open);
       const returnReason = isReturned ? String(draftReturn.reason || "").trim() : "";
-      // Повернення завжди повне: повертається вся замовлена кількість позиції.
-      const returnedQty = isReturned ? toNumber(item.qty) : 0;
+      const orderedQty = toNumber(item.qty);
+      // Часткове повернення: користувач вказує кількість (за замовчуванням — вся позиція).
+      const requestedReturnQty = isReturned ? toNumber(draftReturn.qty) : 0;
+      const returnedQty = isReturned ? Math.min(Math.max(0, requestedReturnQty), orderedQty) : 0;
       const hasReturn = isReturned && returnedQty > 0;
-      // Якщо позицію повернуто — фактично прийнято 0 (вона не залишилась у закладі).
-      const actualReceivedQty = hasReturn ? 0 : toNumber(receivingDraft[itemKey]);
+      // Інцидент дозамовлення у менеджера створюється лише якщо потрібна допоставка.
+      const needsRedelivery = hasReturn && Boolean(draftReturn.needsRedelivery);
+      // Фактично прийнято = замовлено − повернено (часткове повернення).
+      const actualReceivedQty = hasReturn
+        ? Math.max(0, orderedQty - returnedQty)
+        : toNumber(receivingDraft[itemKey]);
       return {
         ...item,
         actualReceivedQty,
@@ -6629,7 +6635,8 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
         returnedQty,
         returnReason,
         hasReturn,
-        returnStatus: hasReturn ? "pending" : "",
+        needsRedelivery,
+        returnStatus: hasReturn ? (needsRedelivery ? "pending" : "closed") : "",
         returnedAt: hasReturn ? now : "",
         returnedBy: hasReturn ? (user?.displayName || user?.fullName || user?.email || "Користувач") : "",
         reorderId: hasReturn ? "" : (item.reorderId || ""),
@@ -6648,6 +6655,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
     }
 
     const hasReturns = returnedItems.length > 0;
+    const needsRedeliveryReturns = returnedItems.some((item) => item.needsRedelivery);
     const { id, ...payload } = sourceOrder;
     setSavingReceiving(true);
     const result = await updateOrder(id, {
@@ -6658,7 +6666,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
       completedBy: user?.displayName || user?.fullName || user?.email || "Користувач",
       completedById: user?.uid || user?.email || "",
       receivedAt: now,
-      hasPendingReturns: hasReturns,
+      hasPendingReturns: needsRedeliveryReturns,
       returnsRegisteredAt: hasReturns ? now : (payload.returnsRegisteredAt || ""),
       updatedAt: now,
     });
@@ -6673,9 +6681,11 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
     setOrderDetailsRow(null);
     setReceivingDraft({});
     setReturnDrafts({});
-    alert(hasReturns
+    alert(needsRedeliveryReturns
       ? "Приймання підтверджено. Повернення зафіксовано — менеджер сформує дозамовлення."
-      : "Приймання замовлення підтверджено.");
+      : (hasReturns
+        ? "Приймання підтверджено. Повернення зафіксовано без допоставки — замовлення закрито."
+        : "Приймання замовлення підтверджено."));
   };
 
   return (
@@ -6801,6 +6811,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                 <th className="px-3 py-2 text-left">Зелена картка</th>
                 <th className="px-3 py-2 text-left">Од. вим.</th>
                 <th className="px-3 py-2 text-left">Ціна за од.</th>
+                <th className="px-3 py-2 text-left">Дата поставки</th>
                 <th className="px-3 py-2 text-left">Кількість</th>
                 <th className="px-3 py-2 text-left">До мінімуму</th>
                 <th className="px-3 py-2 text-left">Сума</th>
@@ -6817,6 +6828,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                 const minimumQtyHint = supplierMinimumAmount > 0 && unitPrice > 0
                   ? supplierMinimumAmount / unitPrice
                   : 0;
+                const productDeliveryDate = computeProductDeliveryDate(product);
 
                 return (
                   <tr key={product.id} className="border-t border-slate-200">
@@ -6824,6 +6836,9 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                     <td className="px-3 py-2 font-medium text-slate-900">{product.name}</td>
                     <td className="px-3 py-2">{product.unit || "-"}</td>
                     <td className="px-3 py-2">{formatMoney(product.unitPrice)}</td>
+                    <td className="px-3 py-2 text-xs text-slate-600">
+                      {productDeliveryDate ? formatDateUk(productDeliveryDate) : "—"}
+                    </td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2">
                         <input
@@ -6848,7 +6863,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
               })}
               {filteredProducts.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
+                  <td colSpan={8} className="px-3 py-6 text-center text-slate-500">
                     {restaurantId ? "За поточними фільтрами продукти не знайдено." : "Спочатку оберіть заклад."}
                   </td>
                 </tr>
@@ -7158,6 +7173,9 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                     const isCorrected = !!item?.correctionPending;
                     const returnDraft = returnDrafts[itemKey];
                     const isReturning = Boolean(returnDraft?.open);
+                    const orderedQty = toNumber(item.qty);
+                    const returnQtyVal = isReturning ? Math.min(Math.max(0, toNumber(returnDraft.qty)), orderedQty) : 0;
+                    const actualAfterReturn = Math.max(0, orderedQty - returnQtyVal);
                     return (
                     <tr key={`${orderDetailsRow.rowKey}::${index}`} className={`border-t border-slate-200 ${isReturning ? "bg-rose-50" : isCorrected ? "bg-amber-50" : ""}`}>
                       <td className="px-3 py-2 text-slate-800">
@@ -7181,8 +7199,8 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                         <td className="px-3 py-2 text-right">
                           {isReturning ? (
                             <span className="inline-flex items-center gap-1 text-rose-600">
-                              <span className="line-through text-slate-400">{(receivingDraft[itemKey] ?? "0")}</span>
-                              <span className="font-semibold">0</span>
+                              <span className="line-through text-slate-400">{orderedQty.toFixed(2)}</span>
+                              <span className="font-semibold">{actualAfterReturn.toFixed(2)}</span>
                               <span className="text-xs text-slate-500">{item.unit || ""}</span>
                             </span>
                           ) : (
@@ -7204,7 +7222,7 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                       {canReceive && (
                         isReturning ? (
                           <td className="px-3 py-2 text-right font-semibold text-rose-600">
-                            -{toNumber(item.qty).toFixed(2)}
+                            -{returnQtyVal.toFixed(2)}
                           </td>
                         ) : (
                           <td className={`px-3 py-2 text-right font-medium ${variance === 0 ? "text-slate-500" : variance > 0 ? "text-emerald-600" : "text-rose-600"}`}>
@@ -7215,30 +7233,52 @@ function BookingTab({ products, orders, aplAssignments = [], createOrder, update
                       {canReceive && !isCompleted && (
                         <td className="px-3 py-2">
                           {isReturning ? (
-                            <div className="flex items-center gap-1">
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max={orderedQty}
+                                  step="0.01"
+                                  autoFocus
+                                  className="w-20 rounded border border-rose-300 px-2 py-1 text-right text-xs"
+                                  value={returnDraft.qty ?? ""}
+                                  onChange={(e) => setReturnDrafts((prev) => ({ ...prev, [itemKey]: { ...prev[itemKey], qty: e.target.value } }))}
+                                  title="Кількість до повернення"
+                                />
+                                <span className="text-xs text-slate-500">{item.unit || ""} з {orderedQty.toFixed(2)}</span>
+                                <button
+                                  type="button"
+                                  className="rounded border border-slate-300 px-1.5 py-1 text-xs text-slate-500 hover:bg-slate-100"
+                                  onClick={() => setReturnDrafts((prev) => { const n = { ...prev }; delete n[itemKey]; return n; })}
+                                  title="Скасувати повернення"
+                                >
+                                  <X size={12} />
+                                </button>
+                              </div>
                               <input
                                 type="text"
-                                autoFocus
                                 placeholder="Причина повернення"
-                                className="w-48 rounded border border-rose-300 px-2 py-1 text-xs"
+                                className="w-full rounded border border-rose-300 px-2 py-1 text-xs"
                                 value={returnDraft.reason ?? ""}
                                 onChange={(e) => setReturnDrafts((prev) => ({ ...prev, [itemKey]: { ...prev[itemKey], reason: e.target.value } }))}
                               />
-                              <button
-                                type="button"
-                                className="rounded border border-slate-300 px-1.5 py-1 text-xs text-slate-500 hover:bg-slate-100"
-                                onClick={() => setReturnDrafts((prev) => { const n = { ...prev }; delete n[itemKey]; return n; })}
-                                title="Скасувати повернення"
-                              >
-                                <X size={12} />
-                              </button>
+                              <label className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
+                                <input
+                                  type="checkbox"
+                                  className="h-3.5 w-3.5 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                                  checked={Boolean(returnDraft.needsRedelivery)}
+                                  onChange={(e) => setReturnDrafts((prev) => ({ ...prev, [itemKey]: { ...prev[itemKey], needsRedelivery: e.target.checked } }))}
+                                />
+                                Потрібна допоставка
+                              </label>
                             </div>
                           ) : (
                             <button
                               type="button"
                               className="inline-flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
-                              onClick={() => setReturnDrafts((prev) => ({ ...prev, [itemKey]: { open: true, reason: "" } }))}
-                              title="Повернути всю позицію постачальнику"
+                              onClick={() => setReturnDrafts((prev) => ({ ...prev, [itemKey]: { open: true, qty: orderedQty, reason: "", needsRedelivery: false } }))}
+                              title="Повернути позицію постачальнику (повністю або частково)"
                             >
                               <Trash2 size={12} /> Повернути
                             </button>
@@ -7440,7 +7480,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
       const items = Array.isArray(order?.items) ? order.items : [];
       const pendingReturns = items
         .map((item, index) => ({ item, index }))
-        .filter(({ item }) => item?.hasReturn && toNumber(item?.returnedQty) > 0 && !item?.reorderId);
+        .filter(({ item }) => item?.hasReturn && item?.needsRedelivery && toNumber(item?.returnedQty) > 0 && !item?.reorderId);
       if (pendingReturns.length === 0) continue;
 
       const bySupplier = {};
@@ -8513,6 +8553,7 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
     const previousHistory = Array.isArray(originalItem?.supplierReassignmentHistory) ? originalItem.supplierReassignmentHistory : [];
     const orderedQty = toNumber(originalItem.qty);
     const orderedAmount = orderedQty * toNumber(originalItem.unitPrice);
+    const reassignedSupplierKey = normalizeSupplierIdentity(resolveLineSupplierName(order, originalItem));
     const reassignedItem = {
       ...originalItem,
       supplier: nextSupplier,
@@ -8538,7 +8579,31 @@ function OrdersManagementTab({ orders, products = [], createOrder, updateOrder, 
     };
 
     const nextItems = (order.items || []).map((item, itemIndex) => {
-      if (itemIndex !== issue.itemIndex) return item;
+      if (itemIndex !== issue.itemIndex) {
+        // Постачальник уже опрацював замовлення (позначив проблемну позицію),
+        // тож решту позицій ЦЬОГО ж постачальника, які ще "очікують відповіді",
+        // вважаємо підтвердженими — щоб після перепризначення замовлення
+        // перейшло у статус "Підтверджено" з викресленою позицією.
+        const itemSupplierKey = normalizeSupplierIdentity(resolveLineSupplierName(order, item));
+        if (
+          itemSupplierKey &&
+          itemSupplierKey === reassignedSupplierKey &&
+          item.sentToSupplier &&
+          getSupplierResponseStatus(item) === "pending"
+        ) {
+          const acceptedQty = Math.max(0, toNumber(item.qty));
+          return {
+            ...item,
+            supplierResponseStatus: "accepted",
+            supplierResponseQty: acceptedQty,
+            supplierResponseAmount: acceptedQty * toNumber(item.unitPrice),
+            supplierRespondedAt: now,
+            supplierRespondedBy: user?.displayName || user?.fullName || user?.email || "Закупівлі",
+            supplierRespondedById: user?.uid || user?.email || "",
+          };
+        }
+        return item;
+      }
       return {
         ...item,
         supplier: historyEntry.supplier,

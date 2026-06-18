@@ -42,6 +42,15 @@ import {
   deleteCollectionItemApi,
 } from "../api/collectionsApi";
 
+// Інтервал фонового оновлення даних у режимі API (немає realtime-підписок).
+// Менший інтервал = швидше підхоплюються зміни графіка доставок/замовлень в інших користувачів.
+// Налаштовується через VITE_BOOKING_REFRESH_INTERVAL_MS (за замовчуванням 3000 мс).
+const API_REFRESH_INTERVAL_MS = (() => {
+  const raw = Number(import.meta.env?.VITE_BOOKING_REFRESH_INTERVAL_MS);
+  if (Number.isFinite(raw) && raw >= 1000) return raw;
+  return 3000;
+})();
+
 const toTrimmedString = (value) => String(value ?? "").trim();
 
 const firstNonEmptyString = (...values) => {
@@ -440,7 +449,7 @@ export const useProductBooking = (enableRealtime = true) => {
       // to keep inventories synchronized across users without manual reload.
       apiRefreshIntervalId = setInterval(() => {
         void fetchData({ background: true });
-      }, 10000);
+      }, API_REFRESH_INTERVAL_MS);
 
       const handleVisibilityChange = () => {
         if (typeof document === "undefined" || document.visibilityState !== "visible") return;
