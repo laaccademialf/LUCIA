@@ -41,6 +41,22 @@ import {
   writeJsonToStorage,
   removeStorageKey,
 } from "../utils/booking/storage";
+import {
+  getInventoryEndedByLabel,
+  getMergedFromIds,
+  getMergedIntoId,
+  getMergedSourceDocuments,
+} from "../utils/booking/inventoryMerge";
+import {
+  normalizeComparableToken,
+  sameRestaurant,
+  collectRestaurantTokens,
+  buildRestaurantLookupKey,
+  hasRestaurantTokenOverlap,
+  isInventoryVisibleForUserRestaurant,
+  normalizeRestaurantScopedRecord,
+  buildDerivedRestaurants,
+} from "../utils/booking/restaurantScope";
 
 const loadProductInventoryExcel = () => import("../utils/productInventoryExcel");
 const loadInventoryListExcel = () => import("../utils/inventoryListExcel");
@@ -154,229 +170,6 @@ const openNativeDatePicker = (event) => {
   if (typeof event?.currentTarget?.showPicker === "function") {
     event.currentTarget.showPicker();
   }
-};
-
-const getInventoryEndedByLabel = (inventory) => {
-  const endedBy = String(
-    inventory?.inventorySessionEndedBy ||
-    inventory?.inventory_session_ended_by ||
-    inventory?.sessionEndedBy ||
-    ""
-  ).trim();
-  return endedBy || "-";
-};
-
-const getMergedFromIds = (inventory) => {
-  const direct = inventory?.mergedFromIds ?? inventory?.merged_from_ids;
-  if (Array.isArray(direct)) return direct;
-  if (typeof direct === "string") {
-    const trimmed = direct.trim();
-    if (!trimmed) return [];
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (Array.isArray(parsed)) return parsed;
-    } catch {
-      return trimmed.split(",").map((item) => item.trim()).filter(Boolean);
-    }
-  }
-  return [];
-};
-
-const getMergedIntoId = (inventory) => String(inventory?.mergedIntoId || inventory?.merged_into_id || "").trim();
-
-const getMergedSourceDocuments = (inventory) => {
-  const direct = inventory?.mergedSourceDocuments ?? inventory?.merged_source_documents;
-  if (Array.isArray(direct)) return direct;
-  if (typeof direct === "string") {
-    const trimmed = direct.trim();
-    if (!trimmed) return [];
-    try {
-      const parsed = JSON.parse(trimmed);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-};
-
-const normalizeComparableToken = (value) => String(value || "").trim().toLowerCase();
-
-const sameRestaurant = (productRestaurantId, restaurantId) => normalizeComparableToken(productRestaurantId) === normalizeComparableToken(restaurantId);
-
-const collectRestaurantTokens = (source = {}) => {
-  return new Set(
-    [
-      source?.restaurantId,
-      source?.restaurant_id,
-      source?.restaurant,
-      source?.restaurantName,
-      source?.restaurant_name,
-      source?.restaurantRegNumber,
-      source?.restaurant_reg_number,
-      source?.regNumber,
-      source?.reg_number,
-      source?.id,
-      source?.name,
-      source?.code,
-    ]
-      .map((value) => normalizeComparableToken(value))
-      .filter(Boolean)
-  );
-};
-
-const buildRestaurantLookupKey = (source = {}) => {
-  return Array.from(collectRestaurantTokens(source || {})).sort((left, right) => left.localeCompare(right, "uk")).join("::");
-};
-
-const hasRestaurantTokenOverlap = (leftTokens, rightTokens) => {
-  if (!(leftTokens instanceof Set) || !(rightTokens instanceof Set)) return false;
-  if (!leftTokens.size || !rightTokens.size) return false;
-  for (const token of leftTokens) {
-    if (rightTokens.has(token)) return true;
-  }
-  return false;
-};
-
-const buildUserRestaurantTokens = (user, restaurants = []) => {
-  const userTokens = collectRestaurantTokens(user || {});
-  if (!userTokens.size) return userTokens;
-
-  // Expand tokens from the matched restaurant record so we can compare by id/name/regNumber interchangeably.
-  const matchedRestaurant = (Array.isArray(restaurants) ? restaurants : []).find((item) =>
-    hasRestaurantTokenOverlap(userTokens, collectRestaurantTokens(item || {}))
-  );
-
-  if (matchedRestaurant) {
-    for (const token of collectRestaurantTokens(matchedRestaurant)) {
-      userTokens.add(token);
-    }
-  }
-
-  return userTokens;
-};
-
-const isInventoryVisibleForUserRestaurant = (inventory, user, restaurants = [], isGlobalAdmin = false) => {
-  if (isGlobalAdmin) return true;
-  const scopedRestaurantTokens = new Set();
-  for (const restaurant of Array.isArray(restaurants) ? restaurants : []) {
-    for (const token of collectRestaurantTokens(restaurant || {})) {
-      scopedRestaurantTokens.add(token);
-    }
-  }
-  const userRestaurantTokens = scopedRestaurantTokens.size
-    ? scopedRestaurantTokens
-    : buildUserRestaurantTokens(user, restaurants);
-  const inventoryTokens = collectRestaurantTokens(inventory || {});
-  return hasRestaurantTokenOverlap(userRestaurantTokens, inventoryTokens);
-};
-
-const findRestaurantByAnyReference = (restaurants = [], references = []) => {
-  if (!Array.isArray(restaurants) || restaurants.length === 0) return null;
-
-  const normalizedRefs = Array.from(new Set(references.map((value) => normalizeComparableToken(value)).filter(Boolean)));
-  if (!normalizedRefs.length) return null;
-
-  return restaurants.find((restaurant) => {
-    const candidates = [
-      restaurant?.id,
-      restaurant?.code,
-      restaurant?.regNumber,
-      restaurant?.restaurantCode,
-      restaurant?.name,
-      restaurant?.restaurantName,
-    ]
-      .map((value) => normalizeComparableToken(value))
-      .filter(Boolean);
-
-    return candidates.some((candidate) => normalizedRefs.includes(candidate));
-  }) || null;
-};
-
-const normalizeRestaurantScopedRecord = (record, restaurants = []) => {
-  if (!record || typeof record !== "object") return record;
-
-  const recordRestaurantId = String(record.restaurantId || "").trim();
-  const recordRestaurantName = String(record.restaurantName || "").trim();
-  const recordRestaurantRegNumber = String(record.restaurantRegNumber || "").trim();
-
-  const matchedRestaurant = findRestaurantByAnyReference(restaurants, [
-    recordRestaurantId,
-    recordRestaurantName,
-    recordRestaurantRegNumber,
-    record.restaurant,
-    record.restaurant_id,
-    record.restaurant_name,
-    record.restaurant_reg_number,
-    record.regNumber,
-    record.reg_number,
-  ]);
-
-  if (!matchedRestaurant) return record;
-
-  return {
-    ...record,
-    restaurantId: String(matchedRestaurant.id || recordRestaurantId || "").trim(),
-    restaurantName: String(matchedRestaurant.name || recordRestaurantName || "").trim(),
-    restaurantRegNumber: String(
-      matchedRestaurant.regNumber ||
-      recordRestaurantRegNumber ||
-      matchedRestaurant.code ||
-      matchedRestaurant.restaurantCode ||
-      ""
-    ).trim(),
-  };
-};
-
-const buildDerivedRestaurants = (records = []) => {
-  const restaurantMap = new Map();
-
-  records.forEach((record) => {
-    if (!record || typeof record !== "object") return;
-
-    const id = String(
-      record.restaurantId ||
-      record.restaurant_id ||
-      record.restaurantRegNumber ||
-      record.restaurant_reg_number ||
-      record.regNumber ||
-      record.reg_number ||
-      record.restaurantName ||
-      record.restaurant_name ||
-      record.restaurant ||
-      ""
-    ).trim();
-    const name = String(record.restaurantName || record.restaurant_name || record.restaurant || "").trim();
-    const regNumber = String(
-      record.restaurantRegNumber || record.restaurant_reg_number || record.regNumber || record.reg_number || ""
-    ).trim();
-
-    if (!id && !name && !regNumber) return;
-
-    const key = String(id || regNumber || name).trim().toLowerCase();
-    if (!key) return;
-
-    const existing = restaurantMap.get(key);
-    if (existing) {
-      restaurantMap.set(key, {
-        ...existing,
-        id: existing.id || id || regNumber || name,
-        name: existing.name || name || regNumber || id,
-        regNumber: existing.regNumber || regNumber,
-      });
-      return;
-    }
-
-    restaurantMap.set(key, {
-      id: id || regNumber || name,
-      name: name || regNumber || id,
-      regNumber,
-    });
-  });
-
-  return Array.from(restaurantMap.values()).sort((a, b) =>
-    String(a?.name || a?.regNumber || a?.id || "").localeCompare(String(b?.name || b?.regNumber || b?.id || ""), "uk")
-  );
 };
 
 const hasProcurementAccess = (user) => {
