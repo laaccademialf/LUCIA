@@ -20,6 +20,8 @@ export const UsersTable = ({ currentUser }) => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
   const [editingUser, setEditingUser] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedPositionFilter, setSelectedPositionFilter] = useState("");
+  const [selectedWorkRoleFilter, setSelectedWorkRoleFilter] = useState("");
   const [editForm, setEditForm] = useState({
     displayName: "",
     email: "",
@@ -244,15 +246,39 @@ export const UsersTable = ({ currentUser }) => {
       })
     : users;
   const normalizedSearchQuery = normalizeSearchText(searchQuery);
-  const filteredUsers = normalizedSearchQuery
-    ? visibleUsers.filter((user) => {
-        const userName = normalizeSearchText(user.displayName);
-        if (!userName) return false;
-        if (userName.includes(normalizedSearchQuery)) return true;
-        const searchTokens = normalizedSearchQuery.split(" ").filter(Boolean);
-        return searchTokens.every((token) => userName.includes(token));
-      })
-    : visibleUsers;
+  const availablePositionFilters = Array.from(
+    new Set([
+      ...positions.map((position) => String(position?.name || "").trim()),
+      ...visibleUsers.map((user) => String(user?.position || "").trim()),
+    ].filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, "uk"));
+  const availableWorkRoleFilters = Array.from(
+    new Set([
+      ...workRoles.map((role) => String(role?.name || "").trim()),
+      ...visibleUsers.map((user) => String(user?.workRole || "").trim()),
+    ].filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, "uk"));
+
+  const filteredUsers = visibleUsers.filter((user) => {
+    const hasMatchingSearch = (() => {
+      if (!normalizedSearchQuery) return true;
+      const userName = normalizeSearchText(user.displayName);
+      if (!userName) return false;
+      if (userName.includes(normalizedSearchQuery)) return true;
+      const searchTokens = normalizedSearchQuery.split(" ").filter(Boolean);
+      return searchTokens.every((token) => userName.includes(token));
+    })();
+    if (!hasMatchingSearch) return false;
+
+    if (selectedPositionFilter && String(user?.position || "").trim() !== selectedPositionFilter) {
+      return false;
+    }
+    if (selectedWorkRoleFilter && String(user?.workRole || "").trim() !== selectedWorkRoleFilter) {
+      return false;
+    }
+
+    return true;
+  });
 
   return (
     <div className="card p-6 bg-white border border-slate-200 shadow-xl">
@@ -284,22 +310,58 @@ export const UsersTable = ({ currentUser }) => {
       </div>
 
       <div className="mb-4">
-        <div className="relative">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Пошук за прізвищем та іменем"
-            className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-          />
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+          <div className="relative lg:col-span-2">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Пошук за прізвищем та іменем"
+              className="w-full rounded-lg border border-slate-300 bg-white pl-9 pr-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-2">
+            <select
+              value={selectedPositionFilter}
+              onChange={(e) => setSelectedPositionFilter(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              title="Фільтр за посадою"
+            >
+              <option value="">Всі посади</option>
+              {availablePositionFilters.map((position) => (
+                <option key={position} value={position}>
+                  {position}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={selectedWorkRoleFilter}
+              onChange={(e) => setSelectedWorkRoleFilter(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              title="Фільтр за робочою роллю"
+            >
+              <option value="">Всі робочі ролі</option>
+              {availableWorkRoleFilters.map((workRole) => (
+                <option key={workRole} value={workRole}>
+                  {workRole}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
       {filteredUsers.length === 0 ? (
         <div className="text-center py-12 text-slate-500">
           <Users size={48} className="mx-auto mb-3 opacity-50" />
-          <p>{normalizedSearchQuery ? "Користувачів за таким запитом не знайдено" : "Немає користувачів"}</p>
+          <p>
+            {normalizedSearchQuery || selectedPositionFilter || selectedWorkRoleFilter
+              ? "Користувачів за заданими фільтрами не знайдено"
+              : "Немає користувачів"}
+          </p>
         </div>
       ) : (
         <div className="overflow-x-auto">
