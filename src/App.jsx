@@ -63,7 +63,7 @@ import {
 import { useChecklists } from "./hooks/useChecklists";
 import { useServiceRequests } from "./hooks/useServiceRequests";
 import { logAuditEvent } from "./firebase/audit";
-import { isCollectionsApiEnabled, getCollectionItemApi } from "./api/collectionsApi";
+import { isCollectionsApiEnabled, getCollectionItemApi, listCollectionItemsApi } from "./api/collectionsApi";
 import { batchImportAssetsApi, isAssetsApiEnabled } from "./api/assetsApi";
 import { getLegalNotificationsApi, isLegalApiEnabled } from "./api/legalTasksApi";
 import { isLegalUser, LEGAL_NAV_ID, getLegalUserIdentityKeys, normalizeLegalIdentity } from "./data/legalConstants";
@@ -646,6 +646,8 @@ function App() {
           const { user, loading: authLoading, isAuthenticated } = useAuth();
         // Список ресторанів
         const [restaurants, setRestaurants] = useState([]);
+        // Показники електроенергії (для огляду системи на дашборді)
+        const [electricityReadings, setElectricityReadings] = useState([]);
       const initialNavigationRef = useRef(null);
       if (initialNavigationRef.current === null) {
         initialNavigationRef.current = getNavigationStateFromLocation();
@@ -1402,6 +1404,20 @@ function App() {
     return () => { cancelled = true; };
   }, [user?.role]);
 
+  // Завантаження показників електроенергії для огляду системи на дашборді.
+  useEffect(() => {
+    if (!isCollectionsApiEnabled()) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const readings = await listCollectionItemsApi("electricityReadings");
+        if (cancelled) return;
+        setElectricityReadings(Array.isArray(readings) ? readings : []);
+      } catch { /* колекція може бути порожньою */ }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.uid, user?.id]);
+
   // Допоміжна функція для отримання вкладок для конкретного підрозділу з menuStructure
   const getTabsForSection = (navId) => {
     if (!navId || !Array.isArray(menuStructure)) return [];
@@ -1453,66 +1469,58 @@ function App() {
     return [];
   }, [activeNav, menuStructure, user, userPermissions]);
 
-  const dashboardData = useMemo(() => {
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
+  // Огляд спожитої електроенергії за вчора (A+) по доступних користувачу закладах.
+  const electricityOverview = useMemo(() => {
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
+    const yIso = y.toISOString().slice(0, 10);
+    const isGen = (label) => /генератор/i.test(String(label || ""));
+    const isAplus = (label) => /a\+/i.test(String(label || ""));
 
-    const totalRestaurants = restaurants.length;
-    const totalAssets = assets.length;
-    const activeAssets = assets.filter((item) =>
-      String(item?.status || "").toLowerCase().includes("експлуата")
-    ).length;
-
-    const totalChecklistTemplates = checklistTemplates.length;
-    const todayExecutions = checklistExecutions.filter((item) => String(item?.date || "") === today);
-    const overdueChecklistCount = notifications.length;
-
-    const totalServiceRequests = serviceRequests.length;
-    const openServiceRequests = serviceRequests.filter((item) => {
-      const status = String(item?.status || "").toLowerCase();
-      return status !== "resolved" && status !== "closed";
-    }).length;
-
-    const getMinutes = (timeValue) => {
-      if (!timeValue || !String(timeValue).includes(":")) return null;
-      const [hours, minutes] = String(timeValue).split(":").map(Number);
-      if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
-      return hours * 60 + minutes;
+    const sumFor = (restaurantId) => {
+      let mains = 0;
+      let gen = 0;
+      let hasData = false;
+      for (const rec of electricityReadings) {
+        if (String(rec?.restaurantId || "") !== String(restaurantId)) continue;
+        if (String(rec?.date || "").slice(0, 10) !== yIso) continue;
+        const meters = Array.isArray(rec?.meters) ? rec.meters : [];
+        for (const m of meters) {
+          const label = String(m?.meterNumber || m?.meterId || "");
+          if (!isAplus(label)) continue;
+          const v = Number(m?.consumption ?? m?.currValue);
+          if (!Number.isFinite(v)) continue;
+          hasData = true;
+          if (isGen(label)) gen += v;
+          else mains += v;
+        }
+      }
+      return { mains, gen, hasData };
     };
 
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const dayMap = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
-    const dayKey = dayMap[now.getDay()];
+    const perRestaurant = restaurants.map((r) => {
+      const s = sumFor(r.id);
+      return {
+        id: r.id,
+        name: r.name || "—",
+        mains: s.mains,
+        gen: s.gen,
+        total: s.mains + s.gen,
+        hasData: s.hasData,
+      };
+    });
 
-    const currentlyOpenRestaurants = restaurants.filter((restaurant) => {
-      const daySchedule = restaurant?.schedule?.[dayKey];
-      const from = getMinutes(daySchedule?.from);
-      const to = getMinutes(daySchedule?.to);
-      if (from === null || to === null) return false;
-      return nowMinutes >= from && nowMinutes <= to;
-    }).length;
-
+    const totalMains = perRestaurant.reduce((a, b) => a + b.mains, 0);
+    const totalGen = perRestaurant.reduce((a, b) => a + b.gen, 0);
     return {
-      totalRestaurants,
-      totalAssets,
-      activeAssets,
-      totalChecklistTemplates,
-      todayExecutions: todayExecutions.length,
-      overdueChecklistCount,
-      totalServiceRequests,
-      openServiceRequests,
-      currentlyOpenRestaurants,
-      totalBusinessUnits: businessUnits.length,
+      yIso,
+      perRestaurant,
+      totalMains,
+      totalGen,
+      total: totalMains + totalGen,
+      multiRestaurant: perRestaurant.length > 1,
     };
-  }, [
-    restaurants,
-    assets,
-    checklistTemplates,
-    checklistExecutions,
-    notifications,
-    serviceRequests,
-    businessUnits,
-  ]);
+  }, [electricityReadings, restaurants]);
 
   const menuStructureForPermissions = useMemo(() => {
     // Базова структура навігації
@@ -3059,14 +3067,12 @@ function App() {
         const isDashboardTopTab = topTab === "maindashboard" || topTab === "dashboard-ops";
 
         if (isDashboardNav || (!String(activeNav || "").trim() && isDashboardTopTab)) {
-          const statCards = [
-            { label: "Ресторани", value: dashboardData.totalRestaurants, hint: `Відкрито зараз: ${dashboardData.currentlyOpenRestaurants}` },
-            { label: "Активи", value: dashboardData.totalAssets, hint: `В експлуатації: ${dashboardData.activeAssets}` },
-            { label: "Чеклисти", value: dashboardData.totalChecklistTemplates, hint: `Виконання сьогодні: ${dashboardData.todayExecutions}` },
-            { label: "Сервісні заявки", value: dashboardData.totalServiceRequests, hint: `Відкритих: ${dashboardData.openServiceRequests}` },
-            { label: "Прострочені задачі", value: dashboardData.overdueChecklistCount, hint: "На основі нагадувань" },
-            { label: "Бізнес-напрями", value: dashboardData.totalBusinessUnits, hint: "З довідника активів" },
-          ];
+          const fmtKwh = (n) => `${Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 2 })} кВт·год`;
+          const ov = electricityOverview;
+          const fmtDateUk = (iso) => {
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+            return m ? `${m[3]}.${m[2]}.${m[1]}` : String(iso || "");
+          };
 
           return (
             <div className="space-y-5">
@@ -3074,7 +3080,9 @@ function App() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="text-xl sm:text-2xl font-bold">Огляд системи</h2>
-                    <p className="text-indigo-100 text-sm mt-1">Ключові показники по модулях у реальному часі</p>
+                    <p className="text-indigo-100 text-sm mt-1">
+                      Спожита електроенергія за вчора ({fmtDateUk(ov.yIso)})
+                    </p>
                   </div>
                   <ClockBadgeDateTime
                     prefix="Оновлено:"
@@ -3083,34 +3091,61 @@ function App() {
                 </div>
               </div>
 
+              {/* Загальний підсумок (видно завжди; для кількох закладів — це сума по всіх) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                {statCards.map((card) => (
-                  <div key={card.label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
-                    <p className="text-sm font-semibold text-slate-600">{card.label}</p>
-                    <p className="text-3xl font-bold text-slate-900 mt-1">{card.value}</p>
-                    <p className="text-xs text-slate-500 mt-2">{card.hint}</p>
-                  </div>
-                ))}
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-lg">
+                  <p className="text-sm font-semibold text-emerald-700">
+                    {ov.multiRestaurant ? "Спожито за вчора (усі заклади)" : "Спожито за вчора"}
+                  </p>
+                  <p className="text-3xl font-bold text-emerald-900 mt-1">{fmtKwh(ov.total)}</p>
+                  <p className="text-xs text-emerald-700/80 mt-2">Основні вводи + генератор (A+)</p>
+                </div>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-lg">
+                  <p className="text-sm font-semibold text-amber-700">
+                    {ov.multiRestaurant ? "З генератора за вчора (усі заклади)" : "З генератора за вчора"}
+                  </p>
+                  <p className="text-3xl font-bold text-amber-900 mt-1">{fmtKwh(ov.totalGen)}</p>
+                  <p className="text-xs text-amber-700/80 mt-2">Лише лічильники генератора (A+)</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
+                  <p className="text-sm font-semibold text-slate-600">Основні вводи за вчора</p>
+                  <p className="text-3xl font-bold text-slate-900 mt-1">{fmtKwh(ov.totalMains)}</p>
+                  <p className="text-xs text-slate-500 mt-2">Споживання з мережі (A+)</p>
+                </div>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
-                  <h3 className="text-base font-semibold text-slate-900 mb-3">Фокус на сьогодні</h3>
-                  <ul className="space-y-2 text-sm text-slate-700">
-                    <li className="flex items-center justify-between"><span>Прострочені чеклисти</span><span className="font-bold text-rose-600">{dashboardData.overdueChecklistCount}</span></li>
-                    <li className="flex items-center justify-between"><span>Активні сервісні заявки</span><span className="font-bold text-amber-600">{dashboardData.openServiceRequests}</span></li>
-                    <li className="flex items-center justify-between"><span>Заклади, що працюють зараз</span><span className="font-bold text-emerald-600">{dashboardData.currentlyOpenRestaurants}</span></li>
-                  </ul>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
-                  <h3 className="text-base font-semibold text-slate-900 mb-3">Швидка аналітика</h3>
-                  <div className="space-y-3 text-sm text-slate-700">
-                    <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">Система містить <span className="font-semibold">{dashboardData.totalAssets}</span> активів у <span className="font-semibold">{dashboardData.totalRestaurants}</span> закладах.</div>
-                    <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">Сформовано <span className="font-semibold">{dashboardData.totalChecklistTemplates}</span> шаблонів чеклистів.</div>
-                    <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">У сервісному модулі всього <span className="font-semibold">{dashboardData.totalServiceRequests}</span> заявок.</div>
+              {/* Розбивка по закладах */}
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
+                <h3 className="text-base font-semibold text-slate-900 mb-3">Споживання по закладах за вчора</h3>
+                {ov.perRestaurant.length === 0 ? (
+                  <p className="text-sm text-slate-500">Немає доступних закладів.</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {ov.perRestaurant.map((r) => (
+                      <div key={r.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <p className="text-sm font-semibold text-slate-800 truncate" title={r.name}>{r.name}</p>
+                        {r.hasData ? (
+                          <div className="mt-2 space-y-1 text-sm">
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-600">Спожито</span>
+                              <span className="font-bold text-emerald-700">{fmtKwh(r.total)}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-600">Основні вводи</span>
+                              <span className="font-semibold text-slate-800">{fmtKwh(r.mains)}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-600">Генератор</span>
+                              <span className="font-semibold text-amber-700">{fmtKwh(r.gen)}</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="mt-2 text-xs text-slate-400">Немає показників за вчора</p>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                </div>
+                )}
               </div>
             </div>
           );
@@ -3697,7 +3732,7 @@ function App() {
               <div className="space-y-3">
                 <p className="text-sm font-semibold text-slate-700">⚡ Лічильники електроенергії (Vik-Soft API)</p>
                 <div>
-                  <label className="text-sm font-semibold text-slate-800">EIC коди лічильників</label>
+                  <label className="text-sm font-semibold text-slate-800">EIC коди основних вводів</label>
                   <textarea
                     className={baseInput}
                     rows={2}
@@ -3706,6 +3741,18 @@ function App() {
                       setSelectedRestaurant((p) => ({ ...p, vikSoftEics: e.target.value }))
                     }
                     placeholder="один або кілька EIC через кому, напр. 62Z00000000123U7, 62Z00000000456U2"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-slate-800">EIC коди генератора</label>
+                  <textarea
+                    className={baseInput}
+                    rows={2}
+                    value={selectedRestaurant.vikSoftGeneratorEics || ""}
+                    onChange={(e) =>
+                      setSelectedRestaurant((p) => ({ ...p, vikSoftGeneratorEics: e.target.value }))
+                    }
+                    placeholder="EIC лічильників генератора через кому"
                   />
                 </div>
                 <p className="text-xs text-slate-500">

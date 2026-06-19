@@ -1467,19 +1467,22 @@ const parseEics = (raw) => {
   return [...new Set(String(raw || "").split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean))];
 };
 
-const toAutoMeters = (rows = []) => {
+const toAutoMeters = (rows = [], { isGenerator = false } = {}) => {
   return rows
     .filter((row) => {
       const v = Number(row?.consumption);
-      return Number.isFinite(v) && v !== 0;
+      if (!Number.isFinite(v)) return false;
+      // Генератор зберігаємо завжди (навіть 0 — його могли не вмикати).
+      if (isGenerator) return true;
+      return v !== 0;
     })
     .map((row, idx) => ({
-      meterId: `energo:${row.point || "point"}|${row.direction || "dir"}|${idx}`,
-      meterNumber: `${row.point || ""} ${row.direction || ""}`.trim(),
+      meterId: `energo:${isGenerator ? "gen:" : ""}${row.point || "point"}|${row.direction || "dir"}|${idx}`,
+      meterNumber: `${isGenerator ? "Генератор: " : ""}${row.point || ""} ${row.direction || ""}`.trim(),
       prevValue: "",
       currValue: row.consumption,
       consumption: row.consumption,
-      source: "energocenter",
+      source: isGenerator ? "energocenter-generator" : "energocenter",
     }));
 };
 
@@ -1500,9 +1503,10 @@ const runVikSoftAutoSync = async ({ date, force } = {}) => {
         const id = String(r?.id || "").trim();
         const name = String(r?.name || r?.restaurantName || id || "").trim();
         const eics = parseEics(r?.vikSoftEics || r?.vik_soft_eics || r?.eics);
-        return { id, name, eics };
+        const generatorEics = parseEics(r?.vikSoftGeneratorEics || r?.vik_soft_generator_eics || r?.generatorEics);
+        return { id, name, eics, generatorEics };
       })
-      .filter((r) => r.id && r.eics.length > 0);
+      .filter((r) => r.id && (r.eics.length > 0 || r.generatorEics.length > 0));
 
     if (!targets.length) {
       console.log("[viksoft:auto] no restaurants with vikSoftEics configured");
@@ -1512,30 +1516,49 @@ const runVikSoftAutoSync = async ({ date, force } = {}) => {
     const { fetchEnergoCenterConsumption } = await import("../vikSoftApi.js");
     let okCount = 0;
     let errCount = 0;
+    let skipCount = 0;
 
     for (const restaurant of targets) {
       try {
-        const result = await fetchEnergoCenterConsumption({
-          date: reportDate,
-          force: Boolean(force),
-          eics: restaurant.eics,
-        });
-        if (!result?.ok) {
+        const recordId = `auto-viksoft:${restaurant.id}:${reportDate}`;
+        // Якщо за цю дату запис вже є — не оновлюємо повторно (крім force).
+        if (!force) {
+          const existing = await getCollectionItemData("electricityReadings", recordId, dbConfig).catch(() => null);
+          if (existing) {
+            skipCount += 1;
+            console.log(`[viksoft:auto] ${restaurant.name}: readings for ${reportDate} already exist — skip`);
+            continue;
+          }
+        }
+
+        const mainsResult = restaurant.eics.length
+          ? await fetchEnergoCenterConsumption({ date: reportDate, force: Boolean(force), eics: restaurant.eics })
+          : { ok: true, rows: [] };
+        const genResult = restaurant.generatorEics.length
+          ? await fetchEnergoCenterConsumption({ date: reportDate, force: Boolean(force), eics: restaurant.generatorEics })
+          : { ok: true, rows: [] };
+
+        const mainsOk = restaurant.eics.length ? Boolean(mainsResult?.ok) : true;
+        const genOk = restaurant.generatorEics.length ? Boolean(genResult?.ok) : true;
+        if (!mainsOk && !genOk) {
           errCount += 1;
-          console.warn(`[viksoft:auto] ${restaurant.name}: ${result?.error || "unknown error"}`);
+          console.warn(`[viksoft:auto] ${restaurant.name}: ${mainsResult?.error || genResult?.error || "unknown error"}`);
           continue;
         }
 
-        const meters = toAutoMeters(Array.isArray(result.rows) ? result.rows : []);
+        const meters = [
+          ...toAutoMeters(Array.isArray(mainsResult?.rows) ? mainsResult.rows : []),
+          ...toAutoMeters(Array.isArray(genResult?.rows) ? genResult.rows : [], { isGenerator: true }),
+        ];
         if (!meters.length) {
-          console.log(`[viksoft:auto] ${restaurant.name}: no non-zero readings for ${reportDate}`);
+          console.log(`[viksoft:auto] ${restaurant.name}: no readings for ${reportDate}`);
           continue;
         }
 
         await createCollectionItemData(
           "electricityReadings",
           {
-            id: `auto-viksoft:${restaurant.id}:${reportDate}`,
+            id: recordId,
             restaurantId: restaurant.id,
             restaurantName: restaurant.name,
             date: reportDate,
@@ -1543,9 +1566,9 @@ const runVikSoftAutoSync = async ({ date, force } = {}) => {
             source: "energocenter-auto",
             createdBy: "viksoft-auto-sync",
             responsible: "auto",
-            fetchedAt: result.fetchedAt || new Date().toISOString(),
-            totals: result.totals || null,
-            warnings: Array.isArray(result.warnings) ? result.warnings : undefined,
+            fetchedAt: mainsResult?.fetchedAt || genResult?.fetchedAt || new Date().toISOString(),
+            totals: mainsResult?.totals || genResult?.totals || null,
+            warnings: Array.isArray(mainsResult?.warnings) ? mainsResult.warnings : undefined,
           },
           dbConfig
         );
@@ -1556,8 +1579,8 @@ const runVikSoftAutoSync = async ({ date, force } = {}) => {
       }
     }
 
-    console.log(`[viksoft:auto] done for ${reportDate}: ok=${okCount}, errors=${errCount}, total=${targets.length}`);
-    return { ok: true, reportDate, okCount, errCount, total: targets.length };
+    console.log(`[viksoft:auto] done for ${reportDate}: ok=${okCount}, skipped=${skipCount}, errors=${errCount}, total=${targets.length}`);
+    return { ok: true, reportDate, okCount, errCount, skipCount, total: targets.length };
   } catch (e) {
     console.warn(`[viksoft:auto] fatal: ${e?.message || e}`);
     return { ok: false, error: e?.message || String(e) };

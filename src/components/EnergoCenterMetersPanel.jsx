@@ -42,7 +42,7 @@ const formatDateUk = (iso) => {
   return `${d}.${m}.${y}`;
 };
 
-const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange, eics, onSave, saveLabel = "Автоматичне оновлення", canSave = true } = {}) => {
+const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange, eics, generatorEics, onSave, saveLabel = "Автоматичне оновлення", canSave = true } = {}) => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -58,15 +58,18 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
   useEffect(() => { onDataChangeRef.current = onDataChange; }, [onDataChange]);
 
   const apiEnabled = isEnergoCenterApiEnabled();
-  // Нормалізуємо EIC: масив, або CSV-рядок з картки ресторану.
-  const eicsList = (() => {
+  const toEicArray = (value) => {
     let arr = [];
-    if (Array.isArray(eics)) arr = eics;
-    else if (typeof eics === "string") arr = eics.split(/[,\s;]+/);
+    if (Array.isArray(value)) arr = value;
+    else if (typeof value === "string") arr = value.split(/[,\s;]+/);
     return arr.map((s) => String(s || "").trim()).filter(Boolean);
-  })();
+  };
+  // Нормалізуємо EIC: масив, або CSV-рядок з картки ресторану.
+  const eicsList = toEicArray(eics);
+  const generatorEicsList = toEicArray(generatorEics);
   const eicsKey = eicsList.join("|");
-  const hasEics = eicsList.length > 0;
+  const generatorEicsKey = generatorEicsList.join("|");
+  const hasEics = eicsList.length > 0 || generatorEicsList.length > 0;
 
   const load = useCallback(async ({ force = false } = {}) => {
     if (!apiEnabled) {
@@ -86,16 +89,38 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     setLoading(true);
     setError("");
     try {
-      const result = await fetchEnergoCenterConsumption({
-        signal: controller.signal,
-        date: reportDate,
-        force,
-        eics: eicsList,
-      });
+      // Тягнемо основні вводи та генератор окремими запитами, щоб коректно
+      // промаркувати рядки генератора (вони можуть мати споживання 0).
+      const mainsResult = eicsList.length
+        ? await fetchEnergoCenterConsumption({ signal: controller.signal, date: reportDate, force, eics: eicsList })
+        : { ok: true, rows: [] };
+      const genResult = generatorEicsList.length
+        ? await fetchEnergoCenterConsumption({ signal: controller.signal, date: reportDate, force, eics: generatorEicsList })
+        : { ok: true, rows: [] };
+
+      const mainsRows = (Array.isArray(mainsResult?.rows) ? mainsResult.rows : [])
+        .map((row) => ({ ...row, isGenerator: false }));
+      const genRows = (Array.isArray(genResult?.rows) ? genResult.rows : [])
+        .map((row) => ({
+          ...row,
+          isGenerator: true,
+          point: `Генератор: ${row.point || ""}`.trim(),
+        }));
+
+      const combinedOk = (eicsList.length ? Boolean(mainsResult?.ok) : true)
+        && (generatorEicsList.length ? Boolean(genResult?.ok) : true);
+      const result = {
+        ok: combinedOk,
+        rows: [...mainsRows, ...genRows],
+        fetchedAt: new Date().toISOString(),
+        reportDate: mainsResult?.reportDate || genResult?.reportDate || reportDate,
+        sourceUrl: mainsResult?.sourceUrl || genResult?.sourceUrl || "",
+        error: mainsResult?.error || genResult?.error || "",
+      };
       setData(result);
       if (onDataChangeRef.current) onDataChangeRef.current(result);
-      if (!result?.ok) {
-        setError(result?.error || "Не вдалося отримати дані");
+      if (!result.ok) {
+        setError(result.error || "Не вдалося отримати дані");
       }
       return result;
     } catch (err) {
@@ -107,7 +132,7 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
       if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
     }
-  }, [apiEnabled, reportDate, hasEics, eicsKey]);
+  }, [apiEnabled, reportDate, hasEics, eicsKey, generatorEicsKey]);
 
   // Кнопка «Автоматичне оновлення»: примусово тягне свіжі дані з Vik-Soft і одразу
   // зберігає їх в історію показників (об'єднує два кроки в одну дію).
@@ -145,7 +170,7 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     setError("");
     if (onDataChangeRef.current) onDataChangeRef.current(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reportDate, eicsKey, hasEics, autoLoad]);
+  }, [reportDate, eicsKey, generatorEicsKey, hasEics, autoLoad]);
 
   useEffect(() => {
     return () => {

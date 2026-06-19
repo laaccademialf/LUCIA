@@ -13,6 +13,9 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
     }))
   );
 
+  // Місяць історії, що відображається (YYYY-MM). За замовчуванням — поточний.
+  const [historyMonth, setHistoryMonth] = useState(() => new Date().toISOString().slice(0, 7));
+
   // Оновлення значень лічильника
   const handleMeterChange = (idx, field, value) => {
     setMeterValues(meterValues => {
@@ -42,6 +45,35 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
   };
 
   const existingForDate = history.find((row) => String(row?.date || "") === reportDate);
+
+  // Нормалізація дати запису у вигляд YYYY-MM-DD для сортування/фільтра по місяцю.
+  const rowDateIso = (v) => {
+    const s = String(v || "");
+    return /^\d{4}-\d{2}-\d{2}T/.test(s) ? s.slice(0, 10) : s;
+  };
+  // Сортуємо історію від найновішої дати до найстаршої.
+  const sortedHistory = [...history].sort((a, b) =>
+    String(rowDateIso(b?.date) || b?.createdAt || "").localeCompare(String(rowDateIso(a?.date) || a?.createdAt || ""))
+  );
+  // Доступні місяці (YYYY-MM) за спаданням.
+  const availableMonths = [...new Set(
+    sortedHistory.map((row) => rowDateIso(row?.date).slice(0, 7)).filter((m) => /^\d{4}-\d{2}$/.test(m))
+  )];
+  // Якщо у поточному місяці немає записів — показуємо найновіший доступний.
+  const effectiveMonth = availableMonths.includes(historyMonth)
+    ? historyMonth
+    : (availableMonths[0] || historyMonth);
+  const monthIndex = availableMonths.indexOf(effectiveMonth);
+  const hasOlderMonth = monthIndex >= 0 && monthIndex < availableMonths.length - 1;
+  const hasNewerMonth = monthIndex > 0;
+  const monthLabel = (m) => {
+    const mm = /^(\d{4})-(\d{2})$/.exec(m || "");
+    if (!mm) return m || "";
+    const names = ["січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"];
+    return `${names[Number(mm[2]) - 1] || ""} ${mm[1]}`.trim();
+  };
+  // Записи лише обраного місяця (вже відсортовані за спаданням дати).
+  const visibleHistory = sortedHistory.filter((row) => rowDateIso(row?.date).slice(0, 7) === effectiveMonth);
 
   return (
     <div className="space-y-8">
@@ -119,7 +151,7 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
           // Збираємо колонки лише для цієї групи у порядку першої появи.
           const columns = [];
           const seen = new Set();
-          for (const row of history) {
+          for (const row of visibleHistory) {
             const ms = Array.isArray(row?.meters) ? row.meters : [];
             for (const m of ms) {
               const key = String(m?.meterNumber || m?.meterId || "");
@@ -159,7 +191,7 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
                     </tr>
                   </thead>
                   <tbody>
-                    {history.map((row, idx) => {
+                    {visibleHistory.map((row, idx) => {
                       const ms = Array.isArray(row?.meters) ? row.meters : [];
                       const byCol = new Map();
                       for (const m of ms) {
@@ -200,7 +232,26 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
           );
         };
 
-        return <>{groups.map(renderGroup)}</>;
+        return (
+          <div className="mt-8 space-y-2">
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-2">
+              <button
+                type="button"
+                disabled={!hasOlderMonth}
+                onClick={() => { if (hasOlderMonth) setHistoryMonth(availableMonths[monthIndex + 1]); }}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >← Старіші</button>
+              <span className="text-sm font-semibold text-slate-800">{monthLabel(effectiveMonth)}</span>
+              <button
+                type="button"
+                disabled={!hasNewerMonth}
+                onClick={() => { if (hasNewerMonth) setHistoryMonth(availableMonths[monthIndex - 1]); }}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >Новіші →</button>
+            </div>
+            {groups.map(renderGroup)}
+          </div>
+        );
       })() : (
         <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 mt-8">
           <h4 className="font-semibold text-slate-800 mb-4 text-lg flex items-center gap-2"><Zap size={18} className="text-yellow-400" /> Історія показників</h4>

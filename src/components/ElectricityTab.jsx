@@ -73,6 +73,12 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         .map((s) => s.trim())
         .filter(Boolean)
     : [];
+  const energoGeneratorEics = currentRestaurant
+    ? String(currentRestaurant.vikSoftGeneratorEics || "")
+        .split(/[,\s;]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
 
   // Фільтруємо лічильники електроенергії для поточного ресторану
   const electricityMeters = utilityMeters.filter(m => {
@@ -101,6 +107,20 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
   const handleElectricitySubmit = async (data) => {
     const restaurantId = String(currentRestaurantId || "").trim();
     const restaurant = restaurants.find((item) => String(item?.id || "") === restaurantId);
+    const targetDate = String(data?.date || reportDate || "").trim();
+
+    // Пропускаємо оновлення, якщо за цю дату для цього ресторану запис вже існує.
+    const skipIfExists = data?.skipIfExists !== false; // авто-оновлення передає true за замовчуванням
+    if (skipIfExists && restaurantId && targetDate) {
+      const already = electricityHistory.some((entry) =>
+        String(entry?.restaurantId || "") === restaurantId &&
+        String(entry?.date || "") === targetDate
+      );
+      if (already) {
+        setStatus(`Показники за ${targetDate} вже є в історії — оновлення не потрібне.`);
+        return;
+      }
+    }
 
     // Якщо форма не передала лічильники (немає налаштованих utilityMeters),
     // беремо рядки з EnergoCenter як показники.
@@ -112,7 +132,11 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
       meters = rows
         .filter((row) => {
           const n = Number(row?.consumption);
-          return Number.isFinite(n) && n !== 0;
+          if (!Number.isFinite(n)) return false;
+          // Генератор зберігаємо завжди (навіть 0 — його могли не вмикати).
+          if (row?.isGenerator) return true;
+          // Основні вводи — лише ненульові, щоб не засмічувати історію.
+          return n !== 0;
         })
         .map((row, idx) => ({
           meterId: `energo:${row.point}|${row.direction}|${idx}`,
@@ -120,7 +144,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
           prevValue: "",
           currValue: row.consumption,
           consumption: row.consumption,
-          source: "energocenter",
+          source: row?.isGenerator ? "energocenter-generator" : "energocenter",
         }));
     }
 
@@ -132,10 +156,10 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
     const payload = {
       restaurantId,
       restaurantName: String(restaurant?.name || ""),
-      date: data?.date || reportDate,
+      date: targetDate || reportDate,
       meters,
       responsible: data?.responsible || "",
-      source: meters.some((m) => m.source === "energocenter") ? "energocenter" : "manual",
+      source: meters.some((m) => String(m.source || "").startsWith("energocenter")) ? "energocenter" : "manual",
       createdAt: new Date().toISOString(),
     };
 
@@ -175,13 +199,13 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         <div className="flex items-center gap-2 mb-2">
           <label className="text-sm font-semibold text-slate-700">Заклад:</label>
           <select
-            className="w-64 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition"
+            className="w-64 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition [&>option]:bg-white [&>option]:text-slate-900"
             value={selectedRestaurant}
             onChange={e => setSelectedRestaurant(e.target.value)}
           >
-            <option value="">Всі ресторани</option>
+            <option value="" className="bg-white text-slate-900">Всі ресторани</option>
             {restaurantOptions.map(r => (
-              <option key={r.id} value={r.id}>{r.name}</option>
+              <option key={r.id} value={r.id} className="bg-white text-slate-900">{r.name}</option>
             ))}
           </select>
         </div>
@@ -192,7 +216,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
           Оберіть заклад, щоб завантажити показники з його облікового запису EnergoCenter.
         </p>
       )}
-      {currentRestaurantId && energoEics.length === 0 && (
+      {currentRestaurantId && energoEics.length === 0 && energoGeneratorEics.length === 0 && (
         <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
           У картці закладу не задано ідентифікатори лічильників (eic:/idnode:/objref:). Додайте їх у «Управління ресторанами».
         </p>
@@ -202,12 +226,14 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         onReportDateChange={setReportDate}
         onDataChange={setEnergoData}
         eics={energoEics}
+        generatorEics={energoGeneratorEics}
         saveLabel="Автоматичне оновлення"
         onSave={(payload) => handleElectricitySubmit({
           date: payload?.reportDate || reportDate,
           meters: [],
           energoRows: Array.isArray(payload?.data?.rows) ? payload.data.rows : (Array.isArray(payload?.rows) ? payload.rows : []),
           responsible: user?.displayName || user?.fullName || "",
+          skipIfExists: true,
         })}
         canSave={!user || user.role !== "admin" || Boolean(currentRestaurantId)}
       />

@@ -139,15 +139,23 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
   };
 
   // ---- EIC codes per restaurant ----
-  const [eicDraft, setEicDraft] = useState({}); // {restaurantId: string}
+  const [eicDraft, setEicDraft] = useState({}); // {restaurantId: string} — основні вводи
+  const [genDraft, setGenDraft] = useState({}); // {restaurantId: string} — генератор
   const [eicSaving, setEicSaving] = useState({}); // {restaurantId: bool}
   const [eicMsg, setEicMsg] = useState({}); // {restaurantId: string}
 
   const getEicValue = (r) =>
     eicDraft[r.id] !== undefined ? eicDraft[r.id] : String(r.vikSoftEics || "");
 
+  const getGenValue = (r) =>
+    genDraft[r.id] !== undefined ? genDraft[r.id] : String(r.vikSoftGeneratorEics || "");
+
   const handleEicChange = (rid, val) => {
     setEicDraft((p) => ({ ...p, [rid]: val }));
+  };
+
+  const handleGenChange = (rid, val) => {
+    setGenDraft((p) => ({ ...p, [rid]: val }));
   };
 
   const handleEicSave = async (r) => {
@@ -158,10 +166,26 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
     setEicSaving((p) => ({ ...p, [r.id]: true }));
     setEicMsg((p) => ({ ...p, [r.id]: "" }));
     try {
-      const nextValue = String(eicDraft[r.id] ?? r.vikSoftEics ?? "").trim();
-      await onUpdateRestaurant(r.id, { ...r, vikSoftEics: nextValue });
+      const mainsValue = String(eicDraft[r.id] ?? r.vikSoftEics ?? "").trim();
+      const genValue = String(genDraft[r.id] ?? r.vikSoftGeneratorEics ?? "").trim();
+      // Перезаписуємо ВСІ aliases, інакше нормалізація під час наступного
+      // завантаження підтягне старе значення з vik_soft_eics/eics і «поверне» його.
+      await onUpdateRestaurant(r.id, {
+        ...r,
+        vikSoftEics: mainsValue,
+        vik_soft_eics: mainsValue,
+        eics: mainsValue,
+        vikSoftGeneratorEics: genValue,
+        vik_soft_generator_eics: genValue,
+        generatorEics: genValue,
+      });
       setEicMsg((p) => ({ ...p, [r.id]: "Збережено" }));
       setEicDraft((p) => {
+        const copy = { ...p };
+        delete copy[r.id];
+        return copy;
+      });
+      setGenDraft((p) => {
         const copy = { ...p };
         delete copy[r.id];
         return copy;
@@ -361,7 +385,7 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
       <Section
         icon={<Zap size={20} />}
         title="Ідентифікатори лічильників по ресторанах"
-        subtitle="Можна змішувати формати через кому: eic:..., idnode:..., objref:... . Система автоматично резолвить їх у EIC через vviewtree."
+        subtitle="Окремо вкажіть лічильники основних вводів та генератора. Можна змішувати формати через кому: eic:..., idnode:..., objref:... . Система автоматично резолвить їх у EIC через vviewtree."
       >
         <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -422,14 +446,18 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
                     <Building2 size={14} className="mr-1 inline" />
                     Ресторан
                   </th>
-                  <th className="py-2 pr-3 font-semibold text-slate-700">Ідентифікатори (через кому)</th>
+                  <th className="py-2 pr-3 font-semibold text-slate-700">Основні вводи (через кому)</th>
+                  <th className="py-2 pr-3 font-semibold text-slate-700">Генератор (через кому)</th>
                   <th className="w-40 py-2 font-semibold text-slate-700">Дії</th>
                 </tr>
               </thead>
               <tbody>
                 {restaurants.map((r) => {
                   const cur = getEicValue(r);
-                  const dirty = eicDraft[r.id] !== undefined && String(eicDraft[r.id]) !== String(r.vikSoftEics || "");
+                  const genCur = getGenValue(r);
+                  const mainsDirty = eicDraft[r.id] !== undefined && String(eicDraft[r.id]) !== String(r.vikSoftEics || "");
+                  const genDirty = genDraft[r.id] !== undefined && String(genDraft[r.id]) !== String(r.vikSoftGeneratorEics || "");
+                  const dirty = mainsDirty || genDirty;
                   const msg = eicMsg[r.id];
                   return (
                     <tr key={r.id} className="border-b border-slate-100 align-top">
@@ -446,6 +474,16 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
                         {msg ? (
                           <div className={`mt-1 text-xs ${msg.startsWith("Помилка") ? "text-rose-600" : "text-emerald-600"}`}>{msg}</div>
                         ) : null}
+                      </td>
+                      <td className="py-2 pr-3">
+                        <textarea
+                          rows={2}
+                          className={`${baseInput} font-mono text-xs`}
+                          value={genCur}
+                          placeholder="eic:62Z... (лічильники генератора)"
+                          onChange={(e) => handleGenChange(r.id, e.target.value)}
+                          spellCheck={false}
+                        />
                       </td>
                       <td className="py-2">
                         <button
