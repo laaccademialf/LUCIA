@@ -406,7 +406,11 @@ const buildRequest = (cfg, path, params, token, transport) => {
   }
   const headers = {};
   transport.apply(u, headers, token);
-  return { url: u.toString(), headers };
+  // Vik-Soft НЕ декодує %2C назад у кому: параметр dr=1,2,3,4 має бути з
+  // ЛІТЕРАЛЬНИМИ комами (як у робочому curl). URLSearchParams кодує кому в %2C,
+  // тому повертаємо коми у фінальному URL. Коми безпечні у query-значеннях.
+  const url = u.toString().replace(/%2C/gi, ",");
+  return { url, headers };
 };
 
 // Викликає GET ендпоінт, додаючи токен. Перебирає транспорти, поки не отримає
