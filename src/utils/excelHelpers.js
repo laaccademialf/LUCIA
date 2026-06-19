@@ -14,11 +14,15 @@ export const ASSET_COST_FIELDS = new Set([
 
 const pad2 = (value) => String(value).padStart(2, "0");
 
+// Формати комірок Excel для експорту
+export const EXPORT_DATE_FMT = "dd.mm.yyyy";
+export const EXPORT_COST_FMT = "#,##0.00";
+
 /**
- * Перетворює Excel-серійне число дати (наприклад 46149) у вигляд ДД.ММ.РРРР.
+ * Перетворює Excel-серійне число дати (наприклад 46149) у об'єкт Date.
  * Повертає null, якщо значення не схоже на серійне число дати.
  */
-const formatExcelSerialDate = (serial) => {
+const parseExcelSerialDate = (serial) => {
   if (!Number.isFinite(serial)) return null;
   // Відсікаємо значення, що більше схожі на рік (напр. 2024), ніж на серійну дату.
   // Excel-серійні дати для сучасних дат — це десятки тисяч.
@@ -27,64 +31,87 @@ const formatExcelSerialDate = (serial) => {
   const parsed = XLSX.SSF.parse_date_code(serial);
   if (!parsed || !parsed.y) return null;
 
-  return `${pad2(parsed.d)}.${pad2(parsed.m)}.${parsed.y}`;
+  return new Date(parsed.y, parsed.m - 1, parsed.d);
 };
 
 /**
- * Форматує значення дати у вигляд ДД.ММ.РРРР для експорту.
+ * Перетворює значення дати у об'єкт Date.
  * Підтримує Date, Firestore Timestamp, Excel-серійні числа,
  * ISO (РРРР-ММ-ДД), український (ДД.ММ.РРРР) та американський (ММ/ДД/РРРР) формати.
+ * Повертає null, якщо значення неможливо розпізнати як дату.
  */
-export const formatAssetDateForExport = (value) => {
-  if (value === null || value === undefined || value === "") return "";
-
-  let date = null;
+export const parseAssetDate = (value) => {
+  if (value === null || value === undefined || value === "") return null;
 
   if (value && typeof value === "object" && typeof value.toDate === "function") {
     // Firestore Timestamp
-    date = value.toDate();
-  } else if (value instanceof Date) {
-    date = value;
-  } else if (typeof value === "number") {
-    const serial = formatExcelSerialDate(value);
-    if (serial) return serial;
-    return String(value);
-  } else if (typeof value === "string") {
+    const d = value.toDate();
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === "number") {
+    return parseExcelSerialDate(value);
+  }
+
+  if (typeof value === "string") {
     const trimmed = value.trim();
-    if (!trimmed) return "";
+    if (!trimmed) return null;
 
     // ДД.ММ.РРРР
     let match = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-    if (match) return `${pad2(match[1])}.${pad2(match[2])}.${match[3]}`;
+    if (match) return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
 
     // ISO: РРРР-ММ-ДД (можливо з часом)
     match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-    if (match) return `${pad2(match[3])}.${pad2(match[2])}.${match[1]}`;
+    if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
 
     // Американський: ММ/ДД/РРРР
     match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (match) return `${pad2(match[2])}.${pad2(match[1])}.${match[3]}`;
+    if (match) return new Date(Number(match[3]), Number(match[1]) - 1, Number(match[2]));
 
     // Excel-серійне число, збережене як текст (напр. "46149")
     if (/^\d+([.,]\d+)?$/.test(trimmed)) {
-      const serial = formatExcelSerialDate(parseFloat(trimmed.replace(",", ".")));
+      const serial = parseExcelSerialDate(parseFloat(trimmed.replace(",", ".")));
       if (serial) return serial;
     }
 
     const parsed = new Date(trimmed);
-    if (!Number.isNaN(parsed.getTime())) {
-      date = parsed;
-    } else {
-      return trimmed;
-    }
-  } else {
-    return String(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
-  if (date && !Number.isNaN(date.getTime())) {
+  return null;
+};
+
+/**
+ * Перетворює значення вартості у число.
+ * Повертає null, якщо значення неможливо розпізнати як число.
+ */
+export const parseAssetCost = (value) => {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+
+  const str = String(value).trim();
+  if (!str) return null;
+
+  const num = parseFloat(str.replace(/\s/g, "").replace(",", "."));
+  return Number.isNaN(num) ? null : num;
+};
+
+/**
+ * Форматує значення дати у вигляд ДД.ММ.РРРР (текст) для експорту.
+ * Підтримує Date, Firestore Timestamp, Excel-серійні числа,
+ * ISO (РРРР-ММ-ДД), український (ДД.ММ.РРРР) та американський (ММ/ДД/РРРР) формати.
+ */
+export const formatAssetDateForExport = (value) => {
+  const date = parseAssetDate(value);
+  if (date) {
     return `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.${date.getFullYear()}`;
   }
-
+  if (value === null || value === undefined) return "";
   return String(value);
 };
 
@@ -93,27 +120,75 @@ export const formatAssetDateForExport = (value) => {
  */
 export const formatAssetCostForExport = (value) => {
   if (value === null || value === undefined || value === "") return "";
-
-  const str = String(value).trim();
-  if (!str) return "";
-
-  const num = parseFloat(str.replace(/\s/g, "").replace(",", "."));
-  if (Number.isNaN(num)) return str;
-
+  const num = parseAssetCost(value);
+  if (num === null) return String(value).trim();
   return String(num).replace(".", ",");
 };
 
 /**
+ * Тип поля активу для експорту: "date", "cost" або null.
+ */
+export const getAssetFieldExportType = (key) => {
+  if (ASSET_DATE_FIELDS.has(key)) return "date";
+  if (ASSET_COST_FIELDS.has(key)) return "cost";
+  return null;
+};
+
+/**
  * Нормалізує значення поля активу для експорту з урахуванням типу поля.
+ * Дати повертаються як об'єкти Date, суми — як числа,
+ * щоб у згенерованому Excel вони мали відповідні типи комірок.
  */
 export const formatAssetFieldForExport = (key, value) => {
-  if (ASSET_DATE_FIELDS.has(key)) return formatAssetDateForExport(value);
-  if (ASSET_COST_FIELDS.has(key)) return formatAssetCostForExport(value);
+  if (ASSET_DATE_FIELDS.has(key)) {
+    const date = parseAssetDate(value);
+    if (date) return date;
+    return value === null || value === undefined ? "" : String(value);
+  }
+
+  if (ASSET_COST_FIELDS.has(key)) {
+    if (value === null || value === undefined || value === "") return "";
+    const num = parseAssetCost(value);
+    return num === null ? String(value).trim() : num;
+  }
 
   if (Array.isArray(value)) return value.filter(Boolean).join(", ");
   if (value && typeof value === "object") return JSON.stringify(value);
 
   return value ?? "";
+};
+
+/**
+ * Застосовує формати комірок (дата / число) до аркуша Excel.
+ * @param {object} ws - аркуш XLSX
+ * @param {(header: string) => ("date"|"cost"|null)} resolveHeaderType -
+ *        функція, що за заголовком колонки повертає її тип
+ */
+export const applyAssetCellFormats = (ws, resolveHeaderType) => {
+  if (!ws || !ws["!ref"] || typeof resolveHeaderType !== "function") return;
+
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+  const headerRow = range.s.r;
+
+  for (let col = range.s.c; col <= range.e.c; col++) {
+    const headerCell = ws[XLSX.utils.encode_cell({ r: headerRow, c: col })];
+    const header = headerCell && headerCell.v != null ? String(headerCell.v) : "";
+    const type = resolveHeaderType(header);
+    if (!type) continue;
+
+    for (let row = headerRow + 1; row <= range.e.r; row++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: row, c: col })];
+      if (!cell || cell.v === "" || cell.v == null) continue;
+
+      if (type === "date" && cell.v instanceof Date) {
+        cell.t = "d";
+        cell.z = EXPORT_DATE_FMT;
+      } else if (type === "cost" && typeof cell.v === "number") {
+        cell.t = "n";
+        cell.z = EXPORT_COST_FMT;
+      }
+    }
+  }
 };
 
 export const ASSET_IMPORT_FIELDS = [
@@ -377,14 +452,22 @@ export const exportAssetsToExcel = (assets, filename = "assets.xlsx") => {
   );
 
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [ASSET_IMPORT_FIELDS.reduce((acc, key) => ({ ...acc, [key]: "" }), {})]);
+  const ws = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [ASSET_IMPORT_FIELDS.reduce((acc, key) => ({ ...acc, [key]: "" }), {})], { cellDates: true });
   ws["!cols"] = ASSET_IMPORT_FIELDS.map(() => ({ wch: 18 }));
+  applyAssetCellFormats(ws, getAssetFieldExportType);
 
   XLSX.utils.book_append_sheet(wb, ws, "Активи");
   XLSX.writeFile(wb, filename);
 };
 
-export const exportCustomRowsToExcel = (rows, filename = "assets.xlsx", sheetName = "Активи") => {
+export const exportCustomRowsToExcel = (rows, filename = "assets.xlsx", sheetName = "Активи", columnTypes = null) => {
+  const resolveType =
+    typeof columnTypes === "function"
+      ? columnTypes
+      : columnTypes && typeof columnTypes === "object"
+        ? (header) => columnTypes[header] || null
+        : null;
+
   const safeRows = Array.isArray(rows)
     ? rows
         .filter((row) => row && typeof row === "object")
@@ -392,7 +475,9 @@ export const exportCustomRowsToExcel = (rows, filename = "assets.xlsx", sheetNam
           const normalized = {};
           Object.entries(row).forEach(([key, value]) => {
             let nextValue = value;
-            if (Array.isArray(nextValue)) {
+            if (nextValue instanceof Date) {
+              // зберігаємо як дату
+            } else if (Array.isArray(nextValue)) {
               nextValue = nextValue.filter(Boolean).join(", ");
             } else if (nextValue && typeof nextValue === "object") {
               nextValue = JSON.stringify(nextValue);
@@ -407,7 +492,7 @@ export const exportCustomRowsToExcel = (rows, filename = "assets.xlsx", sheetNam
   const headers = Object.keys(normalizedRows[0] || {});
 
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(normalizedRows, { header: headers });
+  const ws = XLSX.utils.json_to_sheet(normalizedRows, { header: headers, cellDates: true });
 
   ws["!cols"] = headers.map((header) => {
     const maxContent = normalizedRows.reduce((maxLen, row) => {
@@ -416,6 +501,10 @@ export const exportCustomRowsToExcel = (rows, filename = "assets.xlsx", sheetNam
     }, header.length);
     return { wch: Math.min(40, Math.max(12, maxContent + 2)) };
   });
+
+  if (resolveType) {
+    applyAssetCellFormats(ws, resolveType);
+  }
 
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
   XLSX.writeFile(wb, filename);

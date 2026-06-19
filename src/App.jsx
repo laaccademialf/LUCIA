@@ -2578,11 +2578,18 @@ function App() {
   const handleExport = (exportPayload = null) => {
     void (async () => {
       try {
-        const { exportAssetsToExcel, exportCustomRowsToExcel } = await loadExcelHelpers();
+        const { exportAssetsToExcel, exportCustomRowsToExcel, getAssetFieldExportType } = await loadExcelHelpers();
 
         const rows = Array.isArray(exportPayload?.rows) ? exportPayload.rows : null;
         if (rows && rows.length > 0) {
-          exportCustomRowsToExcel(rows);
+          const columnTypes = {};
+          const exportedColumns = Array.isArray(exportPayload?.visibleColumns) ? exportPayload.visibleColumns : [];
+          exportedColumns.forEach((column) => {
+            if (!column || !column.header) return;
+            const type = getAssetFieldExportType(column.key);
+            if (type) columnTypes[column.header] = type;
+          });
+          exportCustomRowsToExcel(rows, "assets.xlsx", "Активи", columnTypes);
           return;
         }
 
