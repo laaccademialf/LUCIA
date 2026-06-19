@@ -64,9 +64,13 @@ const normalizeApiBase = (raw) => {
 const DIRECTION_BY_DR = { 1: "A+", 2: "A-", 3: "R+", 4: "R-" };
 // Звичайні поля у JSON, які зустрічаються в маркетах getsqlmaket.
 const DR_FIELDS = ["dr", "DR", "Dr", "direction", "Direction"];
-// Реальні поля значення в APIGetGr30: val_pokaz (споживання за 30-хв інтервал),
-// fallback val/real_val. Старі узагальнені ключі лишаємо в кінці для сумісності.
-const VALUE_FIELDS = ["val_pokaz", "valPokaz", "VAL_POKAZ", "val", "VAL", "real_val", "REAL_VAL", "v", "V", "value", "Value", "consumption", "Consumption", "kwh", "KWH"];
+// Поле значення в APIGetGr30:
+//   real_val — ФАКТИЧНЕ споживання за 30-хв інтервал (з множником) → сумуємо ЙОГО.
+//   val_pokaz — це «показ» (накопичувальний показник лічильника), сумувати НЕ можна
+//     (дає безглузду суму). val — нормоване значення без множника.
+// Тому пріоритет: real_val → val → (узагальнені ключі для інших маркетів).
+// val_pokaz свідомо НЕ використовуємо як споживання.
+const VALUE_FIELDS = ["real_val", "realVal", "REAL_VAL", "real_val2", "realVal2", "val", "VAL", "v", "V", "value", "Value", "consumption", "Consumption", "kwh", "KWH"];
 const DATE_FIELDS = ["dt", "DT", "date", "Date", "period", "Period", "dtstart", "DtStart"];
 const POINT_FIELDS = ["name", "Name", "point", "Point", "eic_name", "EIC_Name", "objName"];
 
