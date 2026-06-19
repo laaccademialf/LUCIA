@@ -329,7 +329,7 @@ const ElectricityForm = ({
                               </Fragment>
                             );
                           })}
-                          <td className="px-3 py-2 whitespace-nowrap border border-slate-200">{row?.responsible || ""}</td>
+                          <td className="px-3 py-2 whitespace-nowrap border border-slate-200">Керуючий рестораном</td>
                           {onDeleteHistory && (
                             <td className="px-3 py-2 text-right border border-slate-200">
                               <button
