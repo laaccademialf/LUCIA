@@ -64,7 +64,9 @@ const normalizeApiBase = (raw) => {
 const DIRECTION_BY_DR = { 1: "A+", 2: "A-", 3: "R+", 4: "R-" };
 // Звичайні поля у JSON, які зустрічаються в маркетах getsqlmaket.
 const DR_FIELDS = ["dr", "DR", "Dr", "direction", "Direction"];
-const VALUE_FIELDS = ["v", "V", "value", "Value", "consumption", "Consumption", "kwh", "KWH"];
+// Реальні поля значення в APIGetGr30: val_pokaz (споживання за 30-хв інтервал),
+// fallback val/real_val. Старі узагальнені ключі лишаємо в кінці для сумісності.
+const VALUE_FIELDS = ["val_pokaz", "valPokaz", "VAL_POKAZ", "val", "VAL", "real_val", "REAL_VAL", "v", "V", "value", "Value", "consumption", "Consumption", "kwh", "KWH"];
 const DATE_FIELDS = ["dt", "DT", "date", "Date", "period", "Period", "dtstart", "DtStart"];
 const POINT_FIELDS = ["name", "Name", "point", "Point", "eic_name", "EIC_Name", "objName"];
 
@@ -622,13 +624,32 @@ const flattenTreeNodes = (payload, acc = [], seen = new Set()) => {
   return acc;
 };
 
+// Витягти ISO-дату (YYYY-MM-DD) із поля dt запису. Підтримує "2026-06-18T17:00:00"
+// та "18.06.2026". Повертає "" якщо не вдалося.
+const recordDateIso = (rec) => {
+  const raw = String(pluck(rec, DATE_FIELDS) || "").trim();
+  if (!raw) return "";
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = /^(\d{2})\.(\d{2})\.(\d{4})/.exec(raw);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return "";
+};
+
 // Агрегує рядки за добу: повертає масив { point, direction, consumption }.
 // Один EIC = одна "точка обліку" (передаємо її назву через pointName).
-const aggregateForDay = (records, pointName) => {
+// targetDateIso (опц.) — лишити лише записи цієї доби (коли запит робиться
+// діапазоном [D, D+1], бо межовий випадок dtstart=dtend повертає пусто).
+const aggregateForDay = (records, pointName, targetDateIso = "") => {
   // Згрупуємо суми по dr.
   const sumByDr = { 1: 0, 2: 0, 3: 0, 4: 0 };
   const hasByDr = { 1: false, 2: false, 3: false, 4: false };
   for (const rec of records) {
+    if (targetDateIso) {
+      const recIso = recordDateIso(rec);
+      // Якщо дата є й не збігається зі звітною — пропускаємо (відсікаємо сусідню добу).
+      if (recIso && recIso !== targetDateIso) continue;
+    }
     const drRaw = pluck(rec, DR_FIELDS);
     const dr = Number(drRaw);
     if (![1, 2, 3, 4].includes(dr)) continue;
@@ -815,6 +836,15 @@ export const fetchEnergoCenterConsumption = async ({
     ? date
     : getYesterdayIso();
   const reportDateDdMmYyyy = toDdMmYyyy(reportDateIso);
+  // getsqlmaket для одного дня (dtstart=dtend) повертає ПУСТО. Робочий curl
+  // використовує діапазон, тому запитуємо [reportDate, reportDate+1] і фільтруємо
+  // записи по даті в aggregateForDay (лишаємо лише звітну добу).
+  const nextDayIso = (() => {
+    const d = new Date(`${reportDateIso}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
+  })();
+  const nextDayDdMmYyyy = toDdMmYyyy(nextDayIso);
 
   // Нормалізуємо список ідентифікаторів: eic:..., idnode:..., objref:... або bare-token.
   let identifiers = [];
@@ -884,7 +914,7 @@ export const fetchEnergoCenterConsumption = async ({
           const raw = await getSqlMaket({
             eic,
             dtstart: reportDateDdMmYyyy,
-            dtend: reportDateDdMmYyyy,
+            dtend: nextDayDdMmYyyy,
             maket,
           });
           const recs = findRecords(raw);
@@ -907,7 +937,7 @@ export const fetchEnergoCenterConsumption = async ({
       }
       if (usedMaket) maketsUsed.add(usedMaket);
       const pointName = await getPointName(eic);
-      const rows = aggregateForDay(records, pointName);
+      const rows = aggregateForDay(records, pointName, reportDateIso);
       allRows.push(...rows);
     }
 
