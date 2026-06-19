@@ -89,14 +89,17 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     setLoading(true);
     setError("");
     try {
-      // Тягнемо основні вводи та генератор окремими запитами, щоб коректно
-      // промаркувати рядки генератора (вони можуть мати споживання 0).
-      const mainsResult = eicsList.length
-        ? await fetchEnergoCenterConsumption({ signal: controller.signal, date: reportDate, force, eics: eicsList })
-        : { ok: true, rows: [] };
-      const genResult = generatorEicsList.length
-        ? await fetchEnergoCenterConsumption({ signal: controller.signal, date: reportDate, force, eics: generatorEicsList })
-        : { ok: true, rows: [] };
+      // Тягнемо основні вводи та генератор ПАРАЛЕЛЬНО окремими запитами, щоб
+      // коректно промаркувати рядки генератора (вони можуть мати споживання 0)
+      // і при цьому не подвоювати час очікування (інакше ризик 504 від проксі).
+      const [mainsResult, genResult] = await Promise.all([
+        eicsList.length
+          ? fetchEnergoCenterConsumption({ signal: controller.signal, date: reportDate, force, eics: eicsList })
+          : Promise.resolve({ ok: true, rows: [] }),
+        generatorEicsList.length
+          ? fetchEnergoCenterConsumption({ signal: controller.signal, date: reportDate, force, eics: generatorEicsList })
+          : Promise.resolve({ ok: true, rows: [] }),
+      ]);
 
       const mainsRows = (Array.isArray(mainsResult?.rows) ? mainsResult.rows : [])
         .map((row) => ({ ...row, isGenerator: false }));
