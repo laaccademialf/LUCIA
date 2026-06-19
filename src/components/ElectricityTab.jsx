@@ -188,13 +188,19 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
 
     // Пропускаємо оновлення, якщо за цю дату для цього ресторану запис вже існує.
     const skipIfExists = data?.skipIfExists !== false; // авто-оновлення передає true за замовчуванням
-    if (skipIfExists && restaurantId && targetDate) {
+    // Нормалізуємо дату до YYYY-MM-DD (записи можуть зберігати ISO з часом).
+    const normDate = (v) => {
+      const s = String(v || "");
+      return /^\d{4}-\d{2}-\d{2}T/.test(s) ? s.slice(0, 10) : s;
+    };
+    const targetDateNorm = normDate(targetDate);
+    if (skipIfExists && restaurantId && targetDateNorm) {
       const already = electricityHistory.some((entry) =>
         String(entry?.restaurantId || "") === restaurantId &&
-        String(entry?.date || "") === targetDate
+        normDate(entry?.date) === targetDateNorm
       );
       if (already) {
-        setStatus(`Показники за ${targetDate} вже є в історії — оновлення не потрібне.`);
+        setStatus(`Показники за ${targetDateNorm} вже є в історії — оновлення не потрібне.`);
         return;
       }
     }
