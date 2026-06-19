@@ -272,22 +272,41 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
 
   return (
     <div className="grid grid-cols-1 gap-3">
-      <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-        {user?.role === "admin" && (
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="text-sm font-semibold text-slate-700">Заклад:</label>
-            <select
-              className="min-w-[16rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition [&>option]:bg-white [&>option]:text-slate-900"
-              value={selectedRestaurant}
-              onChange={e => setSelectedRestaurant(e.target.value)}
-            >
-              <option value="" className="bg-white text-slate-900">Всі ресторани</option>
-              {restaurantOptions.map(r => (
-                <option key={r.id} value={r.id} className="bg-white text-slate-900">{r.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
+      <div className="sticky top-0 z-20 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {user?.role === "admin" ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-sm font-semibold text-slate-700">Заклад:</label>
+              <select
+                className="min-w-[16rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition [&>option]:bg-white [&>option]:text-slate-900"
+                value={selectedRestaurant}
+                onChange={e => setSelectedRestaurant(e.target.value)}
+              >
+                <option value="" className="bg-white text-slate-900">Всі ресторани</option>
+                {restaurantOptions.map(r => (
+                  <option key={r.id} value={r.id} className="bg-white text-slate-900">{r.name}</option>
+                ))}
+              </select>
+            </div>
+          ) : <div />}
+          <EnergoCenterMetersPanel
+            controlsOnly
+            reportDate={reportDate}
+            onReportDateChange={setReportDate}
+            onDataChange={setEnergoData}
+            eics={energoEics}
+            generatorEics={energoGeneratorEics}
+            saveLabel="Автоматичне оновлення"
+            onSave={(payload) => handleElectricitySubmit({
+              date: payload?.reportDate || reportDate,
+              meters: [],
+              energoRows: Array.isArray(payload?.data?.rows) ? payload.data.rows : (Array.isArray(payload?.rows) ? payload.rows : []),
+              responsible: user?.displayName || user?.fullName || "",
+              skipIfExists: true,
+            })}
+            canSave={!user || user.role !== "admin" || Boolean(currentRestaurantId)}
+          />
+        </div>
         {status && <p className="text-sm text-slate-600 mt-2">{status}</p>}
         {user?.role === "admin" && !currentRestaurantId && (
           <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2">
@@ -300,22 +319,6 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
           </p>
         )}
       </div>
-      <EnergoCenterMetersPanel
-        reportDate={reportDate}
-        onReportDateChange={setReportDate}
-        onDataChange={setEnergoData}
-        eics={energoEics}
-        generatorEics={energoGeneratorEics}
-        saveLabel="Автоматичне оновлення"
-        onSave={(payload) => handleElectricitySubmit({
-          date: payload?.reportDate || reportDate,
-          meters: [],
-          energoRows: Array.isArray(payload?.data?.rows) ? payload.data.rows : (Array.isArray(payload?.rows) ? payload.rows : []),
-          responsible: user?.displayName || user?.fullName || "",
-          skipIfExists: true,
-        })}
-        canSave={!user || user.role !== "admin" || Boolean(currentRestaurantId)}
-      />
       <ElectricityForm
         meters={electricityMeters.map(m => ({
           id: m.id,

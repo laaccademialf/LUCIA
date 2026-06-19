@@ -42,7 +42,7 @@ const formatDateUk = (iso) => {
   return `${d}.${m}.${y}`;
 };
 
-const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange, eics, generatorEics, onSave, saveLabel = "Автоматичне оновлення", canSave = true } = {}) => {
+const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange, eics, generatorEics, onSave, saveLabel = "Автоматичне оновлення", canSave = true, controlsOnly = false } = {}) => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -193,6 +193,31 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
   const rows = Array.isArray(data?.rows) ? data.rows : [];
   const totals = summarizeRowsByDirection(rows);
   const hasNoData = !loading && !error && rows.length === 0 && data && data.ok;
+
+  // Компактний режим: лише дата + кнопка «Оновити дані» (без плитки з картками
+  // й таблицею). Використовується у закріпленій панелі вгорі вкладки.
+  if (controlsOnly) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <DatePickerPopover
+          value={reportDate}
+          max={getYesterdayIso()}
+          onChange={(iso) => setReportDate(iso)}
+        />
+        <button
+          type="button"
+          onClick={onSave ? handleAutoUpdate : () => load({ force: true })}
+          disabled={loading || saving || !hasEics || (onSave && !canSave)}
+          className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-400 transition"
+        >
+          {loading ? "Оновлюю..." : saving ? "Зберігаю..." : "Оновити дані"}
+        </button>
+        {error && (
+          <span className="text-sm text-rose-700">{error}</span>
+        )}
+      </div>
+    );
+  }
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
