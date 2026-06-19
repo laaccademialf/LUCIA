@@ -125,8 +125,10 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     }
   }, [load, onSave, reportDate]);
 
-  // Автопідвантаження при зміні дати АБО закладу (EIC), якщо EIC задані.
-  // Якщо EIC немає — скидаємо дані.
+  // При зміні закладу (EIC) або дати НЕ тягнемо дані автоматично — користувач
+  // запускає оновлення сам кнопкою. Лише скидаємо застарілі дані попереднього
+  // ресторану/дати, щоб не показувати чужі показники. Авто-завантаження
+  // вмикається лише явно через проп autoLoad.
   useEffect(() => {
     if (!hasEics) {
       setData(null);
@@ -134,9 +136,16 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
       if (onDataChangeRef.current) onDataChangeRef.current(null);
       return;
     }
-    void load();
+    if (autoLoad) {
+      void load();
+      return;
+    }
+    // Скидаємо показники попереднього вибору — чекаємо натискання кнопки.
+    setData(null);
+    setError("");
+    if (onDataChangeRef.current) onDataChangeRef.current(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reportDate, eicsKey, hasEics]);
+  }, [reportDate, eicsKey, hasEics, autoLoad]);
 
   useEffect(() => {
     return () => {
