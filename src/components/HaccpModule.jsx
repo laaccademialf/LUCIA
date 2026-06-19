@@ -27,6 +27,7 @@ import { useHaccp } from "../hooks/useHaccp";
 import DatePickerPopover from "./DatePickerPopover";
 import DateRangePickerPopover from "./DateRangePickerPopover";
 import { isCollectionsApiEnabled, listCollectionItemsApi } from "../api/collectionsApi";
+import { addLegalNotificationApi, isLegalApiEnabled } from "../api/legalTasksApi";
 import {
   RATING_BY_VALUE,
   RATING_SCALE,
@@ -252,6 +253,15 @@ const getUserDisplayLabel = (userRow) => {
   return name || email;
 };
 
+const getUserIdentity = (userRow) => {
+  const id = String(userRow?.uid || userRow?.id || userRow?.userId || "").trim();
+  if (id) return id;
+  return String(userRow?.email || userRow?.user_email || "").trim().toLowerCase();
+};
+
+const getActorIdentity = (user) =>
+  String(user?.uid || user?.id || user?.userId || user?.email || "").trim().toLowerCase();
+
 const isEstablishmentManagerUser = (userRow) => {
   const roleValue = String(userRow?.role || "").toLowerCase();
   const workRoleValue = String(userRow?.workRole || userRow?.work_role || userRow?.work_role_name || "").toLowerCase();
@@ -262,6 +272,7 @@ const isEstablishmentManagerUser = (userRow) => {
 
 function HaccpReportTab({ user, restaurants, templates, audits }) {
   const ALL_LOCATIONS_VALUE = "__ALL__";
+  const ALL_TEMPLATES_VALUE = "__ALL_TEMPLATES__";
   const isAdmin = user?.role === "admin";
   const userRestaurantIds = getUserRestaurantIds(user);
 
@@ -279,11 +290,13 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   const [galleryLightboxPhoto, setGalleryLightboxPhoto] = useState(null);
   const [periodFrom, setPeriodFrom] = useState("");
   const [periodTo, setPeriodTo] = useState("");
+  const [selectedTemplateId, setSelectedTemplateId] = useState(ALL_TEMPLATES_VALUE);
   const [actionPlanByItem, setActionPlanByItem] = useState({});
   const [planDialogContext, setPlanDialogContext] = useState(null);
   const [planDialogSource, setPlanDialogSource] = useState("critical");
   const [planDialogDeadline, setPlanDialogDeadline] = useState("");
   const [planDialogResponsible, setPlanDialogResponsible] = useState("");
+  const [planDialogResponsibleIds, setPlanDialogResponsibleIds] = useState([]);
   const [planDialogComment, setPlanDialogComment] = useState("");
   const [usersForResponsible, setUsersForResponsible] = useState([]);
   const [loadingResponsibleUsers, setLoadingResponsibleUsers] = useState(false);
@@ -376,6 +389,34 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       .sort((a, b) => getAuditSortKey(b) - getAuditSortKey(a));
   }, [audits, availableRestaurants, isAdmin, selectedRestaurantId]);
 
+  const availableTemplateOptions = useMemo(() => {
+    const templateNameById = new Map(
+      (Array.isArray(templates) ? templates : []).map((template) => [
+        String(template?.id || ""),
+        String(template?.title || template?.name || "").trim(),
+      ])
+    );
+
+    const options = new Map();
+    (auditsByLocation || []).forEach((audit) => {
+      const templateId = String(audit?.templateId || "").trim();
+      if (!templateId) return;
+      const auditTemplateName = String(audit?.templateName || "").trim();
+      const templateName = auditTemplateName || templateNameById.get(templateId) || "Без назви шаблону";
+      options.set(templateId, templateName);
+    });
+
+    return Array.from(options.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "uk"));
+  }, [auditsByLocation, templates]);
+
+  useEffect(() => {
+    if (selectedTemplateId === ALL_TEMPLATES_VALUE) return;
+    const exists = availableTemplateOptions.some((option) => String(option.id) === String(selectedTemplateId));
+    if (!exists) setSelectedTemplateId(ALL_TEMPLATES_VALUE);
+  }, [availableTemplateOptions, selectedTemplateId]);
+
   const availablePeriodBounds = useMemo(() => {
     const dates = auditsByLocation
       .map((audit) => String(audit?.date || "").slice(0, 10))
@@ -400,19 +441,24 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     const fromCandidate = periodFrom || "";
     const toCandidate = periodTo || "";
 
-    if (!fromCandidate && !toCandidate) return auditsByLocation;
+    const auditsByLocationAndTemplate = (auditsByLocation || []).filter((audit) => {
+      if (selectedTemplateId === ALL_TEMPLATES_VALUE) return true;
+      return String(audit?.templateId || "") === String(selectedTemplateId || "");
+    });
+
+    if (!fromCandidate && !toCandidate) return auditsByLocationAndTemplate;
 
     const fromKey = fromCandidate && toCandidate && fromCandidate > toCandidate ? toCandidate : fromCandidate;
     const toKey = fromCandidate && toCandidate && fromCandidate > toCandidate ? fromCandidate : toCandidate;
 
-    return auditsByLocation.filter((audit) => {
+    return auditsByLocationAndTemplate.filter((audit) => {
       const dayKey = String(audit?.date || "").slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return false;
       if (fromKey && dayKey < fromKey) return false;
       if (toKey && dayKey > toKey) return false;
       return true;
     });
-  }, [auditsByLocation, periodFrom, periodTo]);
+  }, [auditsByLocation, periodFrom, periodTo, selectedTemplateId]);
 
   const templatesById = useMemo(() => {
     const map = new Map();
@@ -441,6 +487,14 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       }),
     [auditsForMetrics, templatesById]
   );
+
+  const metricsById = useMemo(() => {
+    const map = new Map();
+    (metrics || []).forEach((item) => {
+      map.set(String(item?.id || ""), item);
+    });
+    return map;
+  }, [metrics]);
 
   const criticalDetails = useMemo(() => {
     return metrics
@@ -511,27 +565,64 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   const traffic = scoreTrafficLight(avgScore);
   const criticalCount = metrics.reduce((acc, item) => acc + (Number(item.critical) || 0), 0);
 
-  const responsibleOptions = useMemo(() => {
-    const allowedLocationIds = selectedRestaurantId === ALL_LOCATIONS_VALUE
-      ? new Set(availableRestaurants.map((row) => String(row?.id || "")).filter(Boolean))
-      : new Set([String(selectedRestaurantId || "")].filter(Boolean));
-
-    const labels = (Array.isArray(usersForResponsible) ? usersForResponsible : [])
-      .filter((userRow) => {
-        if (!allowedLocationIds.size) return true;
-        const ids = parseUserRestaurantIds(userRow);
-        return ids.some((id) => allowedLocationIds.has(String(id || "")));
-      })
+  const managersByRestaurantId = useMemo(() => {
+    const knownRestaurants = Array.isArray(availableRestaurants) ? availableRestaurants : [];
+    const map = new Map();
+    (Array.isArray(usersForResponsible) ? usersForResponsible : [])
       .filter((userRow) => isEstablishmentManagerUser(userRow))
-      .map(getUserDisplayLabel)
-      .filter(Boolean);
+      .forEach((userRow) => {
+        const userId = getUserIdentity(userRow);
+        const label = getUserDisplayLabel(userRow);
+        if (!userId || !label) return;
+        const restaurantIds = parseUserRestaurantIds(userRow)
+          .map((scopeValue) => {
+            const raw = String(scopeValue || "").trim();
+            if (!raw) return "";
+            const resolvedId = resolveRestaurantIdFromScope(knownRestaurants, raw);
+            return String(resolvedId || raw).trim();
+          })
+          .filter(Boolean);
 
-    return Array.from(new Set(labels)).sort((a, b) => a.localeCompare(b, "uk"));
-  }, [availableRestaurants, selectedRestaurantId, usersForResponsible]);
+        restaurantIds.forEach((restaurantId) => {
+          if (!restaurantId) return;
+          const current = map.get(restaurantId) || [];
+          if (!current.some((entry) => String(entry.userId) === String(userId))) {
+            current.push({ userId, label });
+            map.set(restaurantId, current);
+          }
+        });
+      });
 
-  const defaultResponsibleManager = useMemo(
-    () => String(responsibleOptions?.[0] || "").trim(),
-    [responsibleOptions]
+    Array.from(map.keys()).forEach((restaurantId) => {
+      const sorted = (map.get(restaurantId) || []).slice().sort((a, b) => a.label.localeCompare(b.label, "uk"));
+      map.set(restaurantId, sorted);
+    });
+
+    return map;
+  }, [availableRestaurants, usersForResponsible]);
+
+  const planDialogResponsibleCandidates = useMemo(() => {
+    if (!planDialogContext?.auditId) return [];
+    const audit = metricsById.get(String(planDialogContext.auditId || "")) || null;
+    const restaurantIdFromAudit = String(audit?.restaurantId || "").trim();
+    if (restaurantIdFromAudit) {
+      return managersByRestaurantId.get(restaurantIdFromAudit) || [];
+    }
+
+    if (selectedRestaurantId && selectedRestaurantId !== ALL_LOCATIONS_VALUE) {
+      return managersByRestaurantId.get(String(selectedRestaurantId || "")) || [];
+    }
+    return [];
+  }, [ALL_LOCATIONS_VALUE, managersByRestaurantId, metricsById, planDialogContext, selectedRestaurantId]);
+
+  const defaultResponsibleManagers = useMemo(
+    () => (planDialogResponsibleCandidates || []).map((entry) => String(entry.label || "").trim()).filter(Boolean),
+    [planDialogResponsibleCandidates]
+  );
+
+  const defaultResponsibleManagerIds = useMemo(
+    () => (planDialogResponsibleCandidates || []).map((entry) => String(entry.userId || "").trim()).filter(Boolean),
+    [planDialogResponsibleCandidates]
   );
 
   const dynamics = useMemo(() => {
@@ -619,6 +710,12 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     return String(match?.name || "—");
   }, [availableRestaurants, selectedRestaurantId]);
 
+  const selectedTemplateLabel = useMemo(() => {
+    if (selectedTemplateId === ALL_TEMPLATES_VALUE) return "Всі шаблони";
+    const match = availableTemplateOptions.find((item) => String(item?.id || "") === String(selectedTemplateId || ""));
+    return String(match?.name || "—");
+  }, [availableTemplateOptions, selectedTemplateId]);
+
   const actionPlanEntries = useMemo(() => {
     return criticalItemsFlat
       .map((item) => {
@@ -643,30 +740,55 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     const itemTitle = String(item?.title || "Пункт без назви");
     const planKey = getCriticalPlanKey(auditId, itemId);
     const saved = actionPlanByItem?.[planKey] || {};
+    const savedResponsibleList = Array.isArray(saved?.responsibles)
+      ? saved.responsibles.map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
+    const savedResponsibleIds = Array.isArray(saved?.responsibleIds)
+      ? saved.responsibleIds.map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
+
+    const audit = metricsById.get(String(auditId || "")) || null;
+    const restaurantId = String(audit?.restaurantId || "").trim();
+    const restaurantManagers = restaurantId ? (managersByRestaurantId.get(restaurantId) || []) : [];
+    const defaultResponsibleList = restaurantManagers.map((entry) => entry.label).filter(Boolean);
+    const defaultResponsibleIdsList = restaurantManagers.map((entry) => entry.userId).filter(Boolean);
+
     setPlanDialogContext({ planKey, auditId: String(auditId || ""), auditLabel: String(auditLabel || ""), itemId, itemTitle });
     setPlanDialogDeadline(String(saved?.deadline || todayDate()));
-    setPlanDialogResponsible(String(saved?.responsible || defaultResponsibleManager || ""));
+    setPlanDialogResponsible(savedResponsibleList.length
+      ? savedResponsibleList.join(", ")
+      : String(saved?.responsible || defaultResponsibleList.join(", ") || "")
+    );
+    setPlanDialogResponsibleIds(savedResponsibleIds.length ? savedResponsibleIds : defaultResponsibleIdsList);
     setPlanDialogComment(String(saved?.comment || ""));
   };
 
   useEffect(() => {
     if (!planDialogContext) return;
     if (String(planDialogResponsible || "").trim()) return;
-    if (!defaultResponsibleManager) return;
-    setPlanDialogResponsible(defaultResponsibleManager);
-  }, [defaultResponsibleManager, planDialogContext, planDialogResponsible]);
+    if (!defaultResponsibleManagers.length) return;
+    setPlanDialogResponsible(defaultResponsibleManagers.join(", "));
+    setPlanDialogResponsibleIds(defaultResponsibleManagerIds);
+  }, [defaultResponsibleManagerIds, defaultResponsibleManagers, planDialogContext, planDialogResponsible]);
 
-  const savePlanDialog = () => {
+  const savePlanDialog = async () => {
     if (!planDialogContext?.planKey) return;
     const comment = String(planDialogComment || "").trim();
     const deadline = String(planDialogDeadline || "").trim();
     const responsible = String(planDialogResponsible || "").trim();
+    const responsibleIds = Array.isArray(planDialogResponsibleIds)
+      ? planDialogResponsibleIds.map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
+    const responsibleList = responsible
+      .split(",")
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
 
     if (!deadline) {
       alert("Вкажіть дедлайн виконання.");
       return;
     }
-    if (!responsible) {
+    if (!responsible || !responsibleList.length || !responsibleIds.length) {
       alert("Для обраної локації не знайдено керуючого закладу.");
       return;
     }
@@ -680,6 +802,8 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       [planDialogContext.planKey]: {
         deadline,
         responsible,
+        responsibles: responsibleList,
+        responsibleIds,
         comment,
         auditId: planDialogContext.auditId,
         auditLabel: planDialogContext.auditLabel,
@@ -689,9 +813,45 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       },
     }));
 
+    if (isLegalApiEnabled()) {
+      const actorUserId = getActorIdentity(user);
+      const audit = metricsById.get(String(planDialogContext.auditId || "")) || null;
+      const locationName = String(audit?.restaurantName || "локація");
+      const auditDate = formatDisplayDate(audit?.date);
+      const title = "HACCP: новий план дій";
+      const body = `${locationName} · ${auditDate}: ${planDialogContext.itemTitle}. Дедлайн: ${formatDisplayDate(deadline)}.`;
+
+      await Promise.all(
+        responsibleIds.map(async (targetUserId) => {
+          try {
+            await addLegalNotificationApi({
+              taskId: String(planDialogContext.planKey || ""),
+              taskTitle: String(planDialogContext.itemTitle || "План дій HACCP"),
+              title,
+              body,
+              targetUserId: String(targetUserId || "").trim().toLowerCase(),
+              targetRole: "",
+              actorUserId,
+              actionTab: "haccpmainrepirt",
+              actionUrl: "haccpreport",
+              source: "haccp",
+              createdAt: new Date().toISOString(),
+            });
+          } catch (error) {
+            console.warn("Не вдалося створити HACCP-сповіщення:", error);
+          }
+        })
+      );
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("lucia:notifications-updated"));
+      }
+    }
+
     setPlanDialogContext(null);
     setPlanDialogDeadline("");
     setPlanDialogResponsible("");
+    setPlanDialogResponsibleIds([]);
     setPlanDialogComment("");
 
     if (planDialogSource === "critical") {
@@ -712,6 +872,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
 
       const summaryRows = [
         { Показник: "Локація", Значення: selectedLocationLabel },
+        { Показник: "Шаблон", Значення: selectedTemplateLabel },
         {
           Показник: "Період",
           Значення: `${periodFromMonth && periodFromYear ? `${periodFromMonth}.${periodFromYear}` : "—"} - ${periodToMonth && periodToYear ? `${periodToMonth}.${periodToYear}` : "—"}`,
@@ -793,7 +954,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             <ShieldCheck size={18} className="text-emerald-600" />
             <h2 className="text-lg font-semibold whitespace-nowrap">Звіт з аудитів</h2>
           </div>
-          <div className="flex flex-1 flex-wrap items-center gap-3 min-w-[220px]">
+          <div className="flex flex-wrap items-center gap-3 min-w-[220px]">
             <div className="flex items-center gap-2">
               <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Локація</label>
               <select
@@ -804,6 +965,19 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                 <option value="">Оберіть локацію</option>
                 <option value={ALL_LOCATIONS_VALUE}>Всі локації</option>
                 {availableRestaurants.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Шаблон</label>
+              <select
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+                value={selectedTemplateId}
+                onChange={(e) => setSelectedTemplateId(e.target.value)}
+              >
+                <option value={ALL_TEMPLATES_VALUE}>Всі шаблони</option>
+                {availableTemplateOptions.map((item) => (
                   <option key={item.id} value={item.id}>{item.name}</option>
                 ))}
               </select>
@@ -821,6 +995,13 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
               </div>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => { void handleExportExcel(); }}
+            className="inline-flex h-10 min-w-[240px] flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+          >
+            <Download size={16} /> Вивантажити звіт
+          </button>
         </div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -838,13 +1019,6 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => { void handleExportExcel(); }}
-          className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
-        >
-          <Download size={16} /> Вивантажити звіт в Excel
-        </button>
       </div>
 
       {!filteredAudits.length ? (
@@ -1179,6 +1353,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             setPlanDialogContext(null);
             setPlanDialogDeadline("");
             setPlanDialogResponsible("");
+            setPlanDialogResponsibleIds([]);
             setPlanDialogComment("");
           }}
         >
@@ -1209,7 +1384,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                   placeholder="Керуючого не знайдено"
                 />
                 {loadingResponsibleUsers ? <p className="mt-1 text-xs text-slate-500">Завантаження користувачів...</p> : null}
-                {!loadingResponsibleUsers && !defaultResponsibleManager ? <p className="mt-1 text-xs text-amber-600">Для обраної локації не знайдено керуючого.</p> : null}
+                {!loadingResponsibleUsers && !defaultResponsibleManagers.length ? <p className="mt-1 text-xs text-amber-600">Для цієї локації не знайдено керуючого.</p> : null}
               </div>
             </div>
 
@@ -1229,6 +1404,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                   setPlanDialogContext(null);
                   setPlanDialogDeadline("");
                   setPlanDialogResponsible("");
+                  setPlanDialogResponsibleIds([]);
                   setPlanDialogComment("");
                 }}
                 className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
@@ -2025,11 +2201,11 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
 
   return (
     <div className="space-y-4">
-      <div className={cardClass}>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+      <div className="card border border-slate-200 bg-white px-5 py-4 text-slate-900 shadow-xl">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <ClipboardCheck size={18} className="text-emerald-600" />
-            <h2 className="text-lg font-semibold">Аудит HACCP</h2>
+            <h2 className="text-lg font-semibold">Аудит</h2>
           </div>
           {isCompleted ? (
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
@@ -2042,8 +2218,9 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
           ) : null}
         </div>
 
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-12 xl:items-stretch">
-          <div className="space-y-3 xl:col-span-3">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start">
+          <div className="min-w-0 xl:basis-[520px] xl:flex-none">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-[150px_220px_auto]">
             <div>
               <label className="text-sm font-semibold text-slate-800">Заклад</label>
               <select
@@ -2088,27 +2265,28 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
               </div>
             </div>
           </div>
+          </div>
 
           {effectiveRestaurantId && selectedTemplate ? (
-            <div className="xl:col-span-9">
-              <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-slate-50 px-5 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1 xl:min-w-[460px] xl:self-start">
+              <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-slate-50 px-5 py-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <p className="text-sm font-semibold text-slate-800">Підсумкова оцінка</p>
-                    <div className="mt-1 flex items-center gap-3">
+                    <div className="mt-0.5 flex items-center gap-2.5">
                       <span className="text-4xl font-extrabold text-slate-900">{roundPercent(scores.totalPercent)}%</span>
                       <ScoreBadge percent={scores.totalPercent} />
                     </div>
                   </div>
                   <div className="text-left text-sm text-slate-600 sm:text-right">
                     <p>Оцінено пунктів: <span className="font-semibold text-slate-900">{scores.assessedItems} з {scores.totalItems}</span></p>
-                    <div className="mt-1"><WeightSumBadge sum={sectionWeightSum} label="Ваги розділів" /></div>
+                    <div className="mt-0.5"><WeightSumBadge sum={sectionWeightSum} label="Ваги розділів" /></div>
                   </div>
                 </div>
-                <div className="mt-4 h-3 w-full overflow-hidden rounded-full bg-white">
+                <div className="mt-2.5 h-3 w-full overflow-hidden rounded-full bg-white">
                   <div className={`h-full rounded-full transition-all ${gradeBandFor(scores.totalPercent).barClass}`} style={{ width: `${Math.min(100, Math.max(0, roundPercent(scores.totalPercent)))}%` }} />
                 </div>
-                <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
+                <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-slate-500">
                   {RATING_SCALE.map((rating) => (
                     <span key={rating.value} className="inline-flex items-center gap-1.5">
                       <span className={`h-2.5 w-2.5 rounded-full ${rating.dotClass}`} /> {rating.label} — {Number.isFinite(rating.percent) ? `${rating.percent}%` : "не враховується"}

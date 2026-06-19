@@ -839,8 +839,8 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
-  // Юридичні сповіщення (центр сповіщень): polling серверної колекції legalNotifications,
-  // фільтрація за поточним користувачем (особисто або як співробітник юр.відділу).
+  // Серверні сповіщення (центр сповіщень): polling колекції legalNotifications,
+  // фільтрація за поточним користувачем (персональні/рольові) для legal+haccp джерел.
   useEffect(() => {
     if (!user || !isLegalApiEnabled()) {
       setLegalCenterNotifications([]);
@@ -858,7 +858,7 @@ function App() {
         const mapped = (Array.isArray(items) ? items : [])
           .filter((item) => {
             const source = String(item?.source || "").trim();
-            if (source && source !== "legal") return false;
+            if (source && source !== "legal" && source !== "haccp") return false;
             const targetUserId = normalizeLegalIdentity(item?.targetUserId);
             const targetRole = String(item?.targetRole || "");
             if (targetUserId && currentUserIdentityKeys.includes(targetUserId)) return true;
@@ -869,19 +869,21 @@ function App() {
           .slice(0, 50)
           .map((item) => {
             const key = `legal_${String(item.id || item.createdAt || Math.random().toString(36).slice(2))}`;
+            const source = String(item?.source || "legal").trim() || "legal";
+            const isHaccp = source === "haccp";
             return {
               key,
               id: key,
-              type: "legal",
-              title: String(item.title || "Юридична задача"),
+              type: source,
+              title: String(item.title || (isHaccp ? "HACCP сповіщення" : "Юридична задача")),
               time: item.createdAt
                 ? new Date(item.createdAt).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })
                 : "щойно",
               body: String(item.body || ""),
               createdAt: String(item.createdAt || ""),
               read: false,
-              actionUrl: LEGAL_NAV_ID,
-              actionTab: String(item.actionTab || "legalrequest"),
+              actionUrl: String(item.actionUrl || (isHaccp ? "haccpreport" : LEGAL_NAV_ID)),
+              actionTab: String(item.actionTab || (isHaccp ? "haccpmainrepirt" : "legalrequest")),
               priority: "normal",
             };
           });
