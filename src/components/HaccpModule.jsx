@@ -724,6 +724,10 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     }, 0);
   }, [criticalItemsFlat, actionPlanByItem]);
 
+  const completedCriticalCount = Math.max(0, criticalCount - pendingCriticalCount);
+  const showCompletedCriticalMetrics = availableRestaurants.length >= 2;
+  const displayedCriticalCount = showCompletedCriticalMetrics ? criticalCount : pendingCriticalCount;
+
   const managersByRestaurantId = useMemo(() => {
     const knownRestaurants = Array.isArray(availableRestaurants) ? availableRestaurants : [];
     const map = new Map();
@@ -1283,11 +1287,11 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
               <p className="text-sm font-semibold text-slate-800">Порушення</p>
               <div className="mt-2 flex items-center gap-3">
                 <div className="inline-flex items-center rounded-xl border border-red-300 bg-red-600 px-3 py-2 text-3xl font-extrabold text-white shadow-sm">
-                  {pendingCriticalCount}
+                  {displayedCriticalCount}
                 </div>
-                {pendingCriticalCount < criticalCount ? (
+                {showCompletedCriticalMetrics && completedCriticalCount > 0 ? (
                   <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                    {criticalCount - pendingCriticalCount} виконано
+                    {completedCriticalCount} виконано
                   </span>
                 ) : null}
                 <p className="text-xs text-slate-500">Натисніть, щоб переглянути перелік порушень.</p>
