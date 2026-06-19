@@ -578,20 +578,54 @@ const parseNumber = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
-// Знайти у будь-якій структурі (масив/обʼєкт) масив записів з показниками.
-const findRecords = (payload) => {
-  if (!payload) return [];
-  if (Array.isArray(payload)) return payload;
+// Знайти у будь-якій структурі (масив/обʼєкт/рядок) масив записів getsqlmaket.
+// Запис впізнаємо за полями dr / val_pokaz / eiccode / dt. Робимо РЕКУРСИВНО і
+// стійко до рядка (інколи відповідь приходить як text, який треба JSON.parse),
+// щоб не залежати від точної форми обгортки відповіді API.
+const RECORD_HINT_KEYS = ["dr", "DR", "Dr", "val_pokaz", "valPokaz", "VAL_POKAZ", "val", "VAL", "eiccode", "EICCODE", "dt", "DT"];
+const looksLikeRecord = (o) =>
+  o && typeof o === "object" && !Array.isArray(o) &&
+  RECORD_HINT_KEYS.some((k) => o[k] !== undefined);
+
+const findRecords = (payload, seen = new Set()) => {
+  if (payload === null || payload === undefined) return [];
+  // Рядок — спробувати розпарсити як JSON (відповідь могла прийти як text).
+  if (typeof payload === "string") {
+    const s = payload.trim();
+    if (!s || (s[0] !== "[" && s[0] !== "{")) return [];
+    try { return findRecords(JSON.parse(s), seen); } catch { return []; }
+  }
   if (typeof payload !== "object") return [];
-  // Поширені обгортки.
-  for (const k of ["data", "Data", "rows", "Rows", "result", "Result", "items", "Items", "value", "Value"]) {
-    if (Array.isArray(payload[k])) return payload[k];
+  if (seen.has(payload)) return [];
+  seen.add(payload);
+
+  if (Array.isArray(payload)) {
+    // Прямий масив записів — найпоширеніший випадок getsqlmaket.
+    if (payload.length && payload.some(looksLikeRecord)) {
+      return payload.filter((x) => x && typeof x === "object");
+    }
+    // Масив-обгортка (напр. [{ data:[...] }]) — шукаємо всередині.
+    const nested = [];
+    for (const item of payload) nested.push(...findRecords(item, seen));
+    return nested;
   }
-  // Якщо payload — об'єкт з вкладеним масивом — беремо перший знайдений.
+
+  // Об'єкт: спершу відомі обгортки, потім рекурсивно по всіх значеннях —
+  // повертаємо найбільший знайдений масив записів.
+  for (const k of ["data", "Data", "rows", "Rows", "result", "Result", "items", "Items", "value", "Value", "table", "Table", "records", "Records"]) {
+    if (payload[k] !== undefined) {
+      const r = findRecords(payload[k], seen);
+      if (r.length) return r;
+    }
+  }
+  let best = [];
   for (const v of Object.values(payload)) {
-    if (Array.isArray(v) && v.length && typeof v[0] === "object") return v;
+    if (v && typeof v === "object") {
+      const r = findRecords(v, seen);
+      if (r.length > best.length) best = r;
+    }
   }
-  return [];
+  return best;
 };
 
 // Ключі, за якими впізнаємо вузол дерева vviewtree.
