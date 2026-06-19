@@ -1,5 +1,121 @@
 import * as XLSX from "xlsx";
 
+// Поля активу, які містять дату
+export const ASSET_DATE_FIELDS = new Set(["purchaseYear", "commissionDate", "auditDate"]);
+
+// Поля активу, які містять грошову вартість
+export const ASSET_COST_FIELDS = new Set([
+  "initialCost",
+  "marketValueNew",
+  "marketValueUsed",
+  "residualValuePerUnit",
+  "residualValue",
+]);
+
+const pad2 = (value) => String(value).padStart(2, "0");
+
+/**
+ * Перетворює Excel-серійне число дати (наприклад 46149) у вигляд ДД.ММ.РРРР.
+ * Повертає null, якщо значення не схоже на серійне число дати.
+ */
+const formatExcelSerialDate = (serial) => {
+  if (!Number.isFinite(serial)) return null;
+  // Відсікаємо значення, що більше схожі на рік (напр. 2024), ніж на серійну дату.
+  // Excel-серійні дати для сучасних дат — це десятки тисяч.
+  if (serial < 20000 || serial > 80000) return null;
+
+  const parsed = XLSX.SSF.parse_date_code(serial);
+  if (!parsed || !parsed.y) return null;
+
+  return `${pad2(parsed.d)}.${pad2(parsed.m)}.${parsed.y}`;
+};
+
+/**
+ * Форматує значення дати у вигляд ДД.ММ.РРРР для експорту.
+ * Підтримує Date, Firestore Timestamp, Excel-серійні числа,
+ * ISO (РРРР-ММ-ДД), український (ДД.ММ.РРРР) та американський (ММ/ДД/РРРР) формати.
+ */
+export const formatAssetDateForExport = (value) => {
+  if (value === null || value === undefined || value === "") return "";
+
+  let date = null;
+
+  if (value && typeof value === "object" && typeof value.toDate === "function") {
+    // Firestore Timestamp
+    date = value.toDate();
+  } else if (value instanceof Date) {
+    date = value;
+  } else if (typeof value === "number") {
+    const serial = formatExcelSerialDate(value);
+    if (serial) return serial;
+    return String(value);
+  } else if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+
+    // ДД.ММ.РРРР
+    let match = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+    if (match) return `${pad2(match[1])}.${pad2(match[2])}.${match[3]}`;
+
+    // ISO: РРРР-ММ-ДД (можливо з часом)
+    match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (match) return `${pad2(match[3])}.${pad2(match[2])}.${match[1]}`;
+
+    // Американський: ММ/ДД/РРРР
+    match = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (match) return `${pad2(match[2])}.${pad2(match[1])}.${match[3]}`;
+
+    // Excel-серійне число, збережене як текст (напр. "46149")
+    if (/^\d+([.,]\d+)?$/.test(trimmed)) {
+      const serial = formatExcelSerialDate(parseFloat(trimmed.replace(",", ".")));
+      if (serial) return serial;
+    }
+
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) {
+      date = parsed;
+    } else {
+      return trimmed;
+    }
+  } else {
+    return String(value);
+  }
+
+  if (date && !Number.isNaN(date.getTime())) {
+    return `${pad2(date.getDate())}.${pad2(date.getMonth() + 1)}.${date.getFullYear()}`;
+  }
+
+  return String(value);
+};
+
+/**
+ * Форматує грошову вартість для експорту з комою як роздільником дробової частини.
+ */
+export const formatAssetCostForExport = (value) => {
+  if (value === null || value === undefined || value === "") return "";
+
+  const str = String(value).trim();
+  if (!str) return "";
+
+  const num = parseFloat(str.replace(/\s/g, "").replace(",", "."));
+  if (Number.isNaN(num)) return str;
+
+  return String(num).replace(".", ",");
+};
+
+/**
+ * Нормалізує значення поля активу для експорту з урахуванням типу поля.
+ */
+export const formatAssetFieldForExport = (key, value) => {
+  if (ASSET_DATE_FIELDS.has(key)) return formatAssetDateForExport(value);
+  if (ASSET_COST_FIELDS.has(key)) return formatAssetCostForExport(value);
+
+  if (Array.isArray(value)) return value.filter(Boolean).join(", ");
+  if (value && typeof value === "object") return JSON.stringify(value);
+
+  return value ?? "";
+};
+
 export const ASSET_IMPORT_FIELDS = [
   "invNumber",
   "invNumber1C",
@@ -255,7 +371,7 @@ export const downloadRestaurantTemplate = () => {
 export const exportAssetsToExcel = (assets, filename = "assets.xlsx") => {
   const rows = assets.map((asset) =>
     ASSET_IMPORT_FIELDS.reduce((acc, key) => {
-      acc[key] = asset?.[key] ?? "";
+      acc[key] = formatAssetFieldForExport(key, asset?.[key] ?? "");
       return acc;
     }, {})
   );

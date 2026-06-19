@@ -14,6 +14,7 @@ import ColumnVisibilityDropdown from "./ColumnVisibilityDropdown";
 import clsx from "clsx";
 import { printAssetQrLabel, printBatchQrLabels } from "../utils/printQrLabel";
 import { Printer } from "lucide-react";
+import { formatAssetFieldForExport } from "../utils/excelHelpers";
 
 // High-contrast badges on light backgrounds for readability
 const decisionColors = {
@@ -373,13 +374,7 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
 
       exportableColumns.forEach((column) => {
         const rawValue = readAssetField(item, column.key);
-        let normalized = rawValue;
-
-        if (Array.isArray(normalized)) {
-          normalized = normalized.filter(Boolean).join(", ");
-        } else if (normalized && typeof normalized === "object") {
-          normalized = JSON.stringify(normalized);
-        }
+        const normalized = formatAssetFieldForExport(column.key, rawValue);
 
         row[column.header] = normalized ?? "";
       });
