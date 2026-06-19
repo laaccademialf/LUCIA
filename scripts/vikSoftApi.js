@@ -233,14 +233,18 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Обгортка з ретраями на ТРАНЗИТНІ мережеві збої (status 0: timeout / reset / DNS).
 // HTTP-помилки (4xx/5xx) НЕ ретраїмо — вони детерміновані й обробляються вище.
-const tryRequest = async (url, init = {}) => {
+// retries: скільки ДОДАТКОВИХ спроб робити (default = REQUEST_NETWORK_RETRIES).
+// Під час перебору транспортів токена передаємо retries:0, щоб «неправильні»
+// транспорти не множили таймаути й проксі не впав у 504.
+const tryRequest = async (url, init = {}, { retries = REQUEST_NETWORK_RETRIES } = {}) => {
+  const maxRetries = Math.max(0, Number(retries) || 0);
   let last = null;
-  for (let attempt = 0; attempt <= REQUEST_NETWORK_RETRIES; attempt += 1) {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     last = await tryRequestOnce(url, init);
     // Успіх або детермінована HTTP-відповідь (є статус) — повертаємо одразу.
     if (last.status !== 0) return last;
     // Транзитний мережевий збій — бекоф і повтор (якщо лишились спроби).
-    if (attempt < REQUEST_NETWORK_RETRIES) {
+    if (attempt < maxRetries) {
       const delay = REQUEST_RETRY_BASE_DELAY_MS * (attempt + 1);
       await sleep(delay);
     }
@@ -329,7 +333,9 @@ const login = async (cfg) => {
     const init = method === "POST"
       ? { method: "POST", headers: { "Content-Length": "0" } }
       : { method: "GET" };
-    const res = await tryRequest(url, init);
+    // Логін — лише 1 додаткова спроба на мережевий збій, щоб не множити латентність
+    // (інакше POST+GET × ретраї × таймаут можуть перевищити таймаут проксі → 504).
+    const res = await tryRequest(url, init, { retries: 1 });
     attempts.push({ method, status: res.status, ct: res.ct, body: (res.body || "").slice(0, 200), error: res.error });
     if (res.ok) {
       const token = extractToken(res.json !== null ? res.json : res.body);
@@ -375,18 +381,20 @@ export const invalidateVikSoftToken = () => {
 };
 
 // ---- Auto-detect транспорту токена ----
-// Vik-Soft документація не уточнює — спершу пробуємо найімовірніші варіанти,
-// запам'ятовуємо який спрацював і використовуємо його далі.
+// Vik-Soft документація не уточнює — але підтверджено робочим curl, що працює
+// саме `Authorization: Token <token>`. Тому ставимо його ПЕРШИМ (далі bearer,
+// потім query-варіанти як фолбек). Це критично для латентності: «неправильні»
+// транспорти можуть зависати, а проксі перед сервером має короткий таймаут.
 const TOKEN_TRANSPORTS = [
+  { name: "header:auth-token", apply: (u, h, t) => { h.Authorization = `Token ${t}`; } },
+  { name: "header:bearer", apply: (u, h, t) => { h.Authorization = `Bearer ${t}`; } },
+  { name: "header:token", apply: (u, h, t) => { h.Token = t; } },
+  { name: "header:x-token", apply: (u, h, t) => { h["X-Token"] = t; } },
   { name: "query:token", apply: (u, h, t) => { u.searchParams.set("token", t); } },
   { name: "query:session", apply: (u, h, t) => { u.searchParams.set("session", t); } },
   { name: "query:sId", apply: (u, h, t) => { u.searchParams.set("sId", t); } },
   { name: "query:sid", apply: (u, h, t) => { u.searchParams.set("sid", t); } },
   { name: "query:key", apply: (u, h, t) => { u.searchParams.set("key", t); } },
-  { name: "header:auth-token", apply: (u, h, t) => { h.Authorization = `Token ${t}`; } },
-  { name: "header:bearer", apply: (u, h, t) => { h.Authorization = `Bearer ${t}`; } },
-  { name: "header:token", apply: (u, h, t) => { h.Token = t; } },
-  { name: "header:x-token", apply: (u, h, t) => { h["X-Token"] = t; } },
 ];
 let tokenTransport = null; // запам'ятовуємо вдалий варіант
 
@@ -414,28 +422,39 @@ const apiGet = async (path, params = {}) => {
     return /unauthorized|not\s*logged|invalid\s*(token|session)|access\s*denied|forbidden|wrong\s*token/.test(body);
   };
 
-  const tryTransport = async (transport) => {
+  const tryTransport = async (transport, { retries = 0 } = {}) => {
     const req = buildRequest(cfg, path, params, token, transport);
-    const res = await tryRequest(req.url, { headers: req.headers });
+    const res = await tryRequest(req.url, { headers: req.headers }, { retries });
     return { transport, res };
   };
 
-  // 1) Якщо вже знаємо вдалий транспорт — спробуємо його першим.
+  // 1) Якщо вже знаємо вдалий транспорт — пробуємо його першим з ПОВНИМИ
+  //    мережевими ретраями. Решту (на випадок зміни API) — швидко, без ретраїв.
+  if (tokenTransport) {
+    const { res } = await tryTransport(tokenTransport, { retries: REQUEST_NETWORK_RETRIES });
+    if (res.ok && !looksLikeAuthError(res) && !hasEmbeddedApiError(res)) {
+      return res.json !== null ? res.json : res.body;
+    }
+    if (!looksLikeAuthError(res) && res.status !== 0) {
+      throw new Error(`HTTP ${res.status} ${path} :: ${(res.body || "").slice(0, 500)}`);
+    }
+  }
+
   const order = tokenTransport
-    ? [tokenTransport, ...TOKEN_TRANSPORTS.filter((t) => t !== tokenTransport)]
+    ? TOKEN_TRANSPORTS.filter((t) => t !== tokenTransport)
     : TOKEN_TRANSPORTS;
 
   const tried = [];
   for (const t of order) {
-    const { res } = await tryTransport(t);
+    // Перебір — швидкий fail (retries:0), щоб не множити таймаути.
+    const { res } = await tryTransport(t, { retries: 0 });
     tried.push({ name: t.name, status: res.status, body: (res.body || "").slice(0, 120) });
     if (res.ok && !looksLikeAuthError(res) && !hasEmbeddedApiError(res)) {
       tokenTransport = t;
       return res.json !== null ? res.json : res.body;
     }
-    // Якщо просто auth error — пробуємо інший транспорт.
-    if (!looksLikeAuthError(res)) {
-      // Інша помилка (500, 400 і т.п.) — далі пробувати немає сенсу, повертаємо її.
+    // Якщо це не auth-error і є статус (детермінована HTTP-помилка) — далі немає сенсу.
+    if (!looksLikeAuthError(res) && res.status !== 0) {
       throw new Error(`HTTP ${res.status} ${path} :: ${(res.body || "").slice(0, 500)}`);
     }
   }
