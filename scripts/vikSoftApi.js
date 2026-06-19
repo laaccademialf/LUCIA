@@ -569,6 +569,36 @@ const findRecords = (payload) => {
   return [];
 };
 
+// Ключі, за якими впізнаємо вузол дерева vviewtree.
+const NODE_NAME_KEYS = ["nodename", "nodeName", "NODENAME", "name", "Name", "objName"];
+const NODE_EIC_KEYS = ["eiccode", "EICCODE", "eic", "EIC", "Eic"];
+const NODE_ID_KEYS = ["idnode", "idNode", "IDNODE", "id", "ID"];
+const NODE_OBJREF_KEYS = ["objref", "objRef", "OBJREF"];
+
+const looksLikeTreeNode = (o) =>
+  o && typeof o === "object" && !Array.isArray(o) &&
+  (NODE_NAME_KEYS.some((k) => o[k] != null) ||
+    NODE_EIC_KEYS.some((k) => o[k] != null) ||
+    NODE_ID_KEYS.some((k) => o[k] != null) ||
+    NODE_OBJREF_KEYS.some((k) => o[k] != null));
+
+// Рекурсивно зібрати ВСІ вузли дерева vviewtree (будь-яка вкладеність: ресторан → вводи).
+// findRecords бере лише верхній рівень — для дерева цього недостатньо.
+const flattenTreeNodes = (payload, acc = [], seen = new Set()) => {
+  if (!payload || typeof payload !== "object") return acc;
+  if (seen.has(payload)) return acc;
+  seen.add(payload);
+  if (Array.isArray(payload)) {
+    for (const item of payload) flattenTreeNodes(item, acc, seen);
+    return acc;
+  }
+  if (looksLikeTreeNode(payload)) acc.push(payload);
+  for (const v of Object.values(payload)) {
+    if (v && typeof v === "object") flattenTreeNodes(v, acc, seen);
+  }
+  return acc;
+};
+
 // Агрегує рядки за добу: повертає масив { point, direction, consumption }.
 // Один EIC = одна "точка обліку" (передаємо її назву через pointName).
 const aggregateForDay = (records, pointName) => {
@@ -659,7 +689,7 @@ const normalizeIdentifier = (raw) => {
 const refreshTreeIndex = async () => {
   try {
     const tree = await vviewtree();
-    const records = findRecords(tree);
+    const records = flattenTreeNodes(tree);
     const byEic = new Map();
     const byIdnode = new Map();
     const byObjref = new Map();
@@ -892,7 +922,7 @@ export const listVikSoftMeters = async () => {
   }
   try {
     const tree = await vviewtree();
-    const records = findRecords(tree);
+    const records = flattenTreeNodes(tree);
     const toStr = (v) => String(v == null ? "" : v).trim();
     const meters = records
       .map((node) => ({
@@ -928,7 +958,7 @@ export const debugVikSoft = async ({ eic, date } = {}) => {
   } catch (e) { out.tokenError = e?.message || String(e); }
   try {
     out.tree = await vviewtree();
-    const records = findRecords(out.tree);
+    const records = flattenTreeNodes(out.tree);
     const toStr = (v) => String(v == null ? "" : v).trim();
     const treeMeters = records
       .map((node) => ({
