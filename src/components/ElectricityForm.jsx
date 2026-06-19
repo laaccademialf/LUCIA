@@ -89,9 +89,9 @@ const ElectricityForm = ({
   const visibleHistory = sortedHistory.filter((row) => rowDateIso(row?.date).slice(0, 7) === effectiveMonth);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       {existingForDate && (
-        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
           Для дати {reportDate} вже існує запис в історії. Збереження створить ще один.
         </p>
       )}
@@ -216,34 +216,34 @@ const ElectricityForm = ({
 
           if (columns.length === 0) {
             return (
-              <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-3">
-                <h4 className="font-semibold text-slate-800 mb-3 text-base flex items-center gap-2">
-                  <Zap size={16} className="text-yellow-400" /> Історія показників — {group.title}
+              <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-3 mt-2">
+                <h4 className="font-semibold text-slate-800 text-sm flex items-center gap-2">
+                  <Zap size={14} className="text-yellow-400" /> Історія показників — {group.title}
                 </h4>
-                <p className="text-slate-500 text-sm">Немає даних</p>
+                <p className="text-slate-500 text-sm mt-1">Немає даних</p>
               </div>
             );
           }
 
           return (
-            <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-3">
-              <h4 className="font-semibold text-slate-800 mb-3 text-base flex items-center gap-2">
-                <Zap size={16} className="text-yellow-400" /> Історія показників — {group.title}
+            <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 mt-2">
+              <h4 className="font-semibold text-slate-800 mb-2 text-sm flex items-center gap-1.5">
+                <Zap size={14} className="text-yellow-400" /> Історія показників — {group.title}
               </h4>
               {canEditReadings && !canEditCoefficients && (
-                <p className="mb-3 text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                <p className="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
                   Оберіть конкретний заклад угорі, щоб редагувати коефіцієнти трансформації (вони індивідуальні для кожного лічильника закладу).
                 </p>
               )}
               <div className="overflow-x-auto">
-                <table className="w-full text-sm border-collapse">
+                <table className="w-full text-xs border-collapse">
                   <thead className="bg-slate-100 border-b border-slate-200">
                     <tr>
-                      <th className="px-3 py-2 text-left whitespace-nowrap align-bottom border border-slate-200" rowSpan={2}>Дата</th>
+                      <th className="px-2 py-1 text-left whitespace-nowrap align-bottom border border-slate-200" rowSpan={2}>Дата</th>
                       {columns.map((c) => (
-                        <th key={c} className="px-3 py-2 text-center whitespace-nowrap border border-slate-200" colSpan={2}>
+                        <th key={c} className="px-2 py-1 text-center whitespace-nowrap border border-slate-200" colSpan={2}>
                           <div className="font-semibold">{c}</div>
-                          <div className="mt-0.5 flex items-center justify-center gap-1 text-[11px] font-normal text-slate-500">
+                          <div className="flex items-center justify-center gap-1 text-[10px] font-normal text-slate-500">
                             <span>К-т трансформації:</span>
                             {canEditCoefficients ? (
                               <input
@@ -253,7 +253,7 @@ const ElectricityForm = ({
                                 defaultValue={coefficients?.[c] ?? ""}
                                 placeholder="1"
                                 onBlur={(e) => onCoefficientChange?.(c, e.target.value)}
-                                className="w-14 rounded border border-slate-300 px-1 py-0.5 text-right text-[11px]"
+                                className="w-12 rounded border border-slate-300 px-1 py-0 text-right text-[10px]"
                                 title="Коефіцієнт трансформації (індивідуальний для лічильника цього закладу)"
                               />
                             ) : (
@@ -262,13 +262,13 @@ const ElectricityForm = ({
                           </div>
                         </th>
                       ))}
-                      {onDeleteHistory && <th className="px-3 py-2 border border-slate-200" rowSpan={2}></th>}
+                      {onDeleteHistory && <th className="px-2 py-1 border border-slate-200" rowSpan={2}></th>}
                     </tr>
                     <tr>
                       {columns.map((c) => (
                         <Fragment key={`sub-${c}`}>
-                          <th className="px-3 py-1.5 text-right whitespace-nowrap text-[11px] font-medium text-slate-500 border border-slate-200">Показник</th>
-                          <th className="px-3 py-1.5 text-right whitespace-nowrap text-[11px] font-medium text-slate-500 border border-slate-200">Споживання</th>
+                          <th className="px-2 py-0.5 text-right whitespace-nowrap text-[10px] font-medium text-slate-500 border border-slate-200">Показник</th>
+                          <th className="px-2 py-0.5 text-right whitespace-nowrap text-[10px] font-medium text-slate-500 border border-slate-200">Споживання</th>
                         </Fragment>
                       ))}
                     </tr>
@@ -287,14 +287,14 @@ const ElectricityForm = ({
                       const recReadings = readingMap.get(String(row?.id));
                       return (
                         <tr key={row?.id || idx} className="border-t border-slate-100">
-                          <td className="px-3 py-2 whitespace-nowrap border border-slate-200">{fmtDate(row?.date)}</td>
+                          <td className="px-2 py-0.5 whitespace-nowrap border border-slate-200">{fmtDate(row?.date)}</td>
                           {columns.map((c) => {
                             const m = byCol.get(c);
                             if (!m) {
                               return (
                                 <Fragment key={c}>
-                                  <td className="px-3 py-2 text-right tabular-nums border border-slate-200">—</td>
-                                  <td className="px-3 py-2 text-right tabular-nums border border-slate-200">—</td>
+                                  <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200">—</td>
+                                  <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200">—</td>
                                 </Fragment>
                               );
                             }
@@ -302,7 +302,7 @@ const ElectricityForm = ({
                             const overridden = Number.isFinite(Number(m?.readingOverride));
                             return (
                               <Fragment key={c}>
-                                <td className="px-3 py-2 text-right tabular-nums border border-slate-200">
+                                <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200">
                                   {canEditReadings ? (
                                     <input
                                       key={`${row?.id}|${c}|${readingStr}|${overridden ? "o" : ""}`}
@@ -315,25 +315,25 @@ const ElectricityForm = ({
                                           onReadingOverride?.(row?.id, c, v);
                                         }
                                       }}
-                                      className={`w-20 rounded border px-1 py-0.5 text-right text-xs ${overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-700" : "border-slate-300"}`}
+                                      className={`w-16 rounded border px-1 py-0 text-right text-[11px] ${overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-700" : "border-slate-300"}`}
                                       title="Показник (натисніть, щоб відредагувати; правка перерахує наступні дати)"
                                     />
                                   ) : (
                                     <span className={overridden ? "font-semibold text-amber-700" : ""}>{readingStr}</span>
                                   )}
                                 </td>
-                                <td className="px-3 py-2 text-right tabular-nums border border-slate-200">
+                                <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200">
                                   {m.consumption ?? m.currValue ?? "—"}
                                 </td>
                               </Fragment>
                             );
                           })}
                           {onDeleteHistory && (
-                            <td className="px-3 py-2 text-right border border-slate-200">
+                            <td className="px-2 py-0.5 text-right border border-slate-200">
                               <button
                                 type="button"
                                 onClick={() => onDeleteHistory(row?.id)}
-                                className="text-rose-600 hover:text-rose-800 text-xs font-semibold"
+                                className="text-rose-600 hover:text-rose-800 text-[11px] font-semibold"
                               >Видалити</button>
                             </td>
                           )}
@@ -348,29 +348,29 @@ const ElectricityForm = ({
         };
 
         return (
-          <div className="mt-3 space-y-2">
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-2">
+          <div className="mt-2 space-y-2">
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-1.5">
               <button
                 type="button"
                 disabled={!hasOlderMonth}
                 onClick={() => { if (hasOlderMonth) setHistoryMonth(availableMonths[monthIndex + 1]); }}
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               >← Старіші</button>
               <span className="text-sm font-semibold text-slate-800">{monthLabel(effectiveMonth)}</span>
               <button
                 type="button"
                 disabled={!hasNewerMonth}
                 onClick={() => { if (hasNewerMonth) setHistoryMonth(availableMonths[monthIndex - 1]); }}
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
               >Новіші →</button>
             </div>
             {groups.map(renderGroup)}
           </div>
         );
       })() : (
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-3">
-          <h4 className="font-semibold text-slate-800 mb-3 text-base flex items-center gap-2"><Zap size={16} className="text-yellow-400" /> Історія показників</h4>
-          <p className="text-slate-500">Немає даних</p>
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mt-2">
+          <h4 className="font-semibold text-slate-800 text-sm flex items-center gap-2"><Zap size={14} className="text-yellow-400" /> Історія показників</h4>
+          <p className="text-slate-500 text-sm mt-1">Немає даних</p>
         </div>
       )}
     </div>
