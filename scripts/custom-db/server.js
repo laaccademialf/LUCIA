@@ -187,6 +187,19 @@ const VIKSOFT_AUTO_SYNC_INTERVAL_MS = Math.max(
 const VIKSOFT_AUTO_SYNC_FORCE =
   String(process.env.LUCIA_VIKSOFT_AUTO_SYNC_FORCE || "false").trim().toLowerCase() === "true";
 
+// Щоденний серверний імпорт о фіксованій годині за київським часом (за замовчуванням 03:00).
+// Незалежний від інтервального VIKSOFT_AUTO_SYNC_* і увімкнений типово.
+const VIKSOFT_DAILY_SYNC_ENABLED =
+  String(process.env.LUCIA_VIKSOFT_DAILY_SYNC_ENABLED || "true").trim().toLowerCase() !== "false";
+const VIKSOFT_DAILY_SYNC_HOUR = (() => {
+  const h = Number.parseInt(String(process.env.LUCIA_VIKSOFT_DAILY_SYNC_HOUR ?? "3"), 10);
+  return Number.isFinite(h) && h >= 0 && h <= 23 ? h : 3;
+})();
+const VIKSOFT_DAILY_SYNC_MINUTE = (() => {
+  const m = Number.parseInt(String(process.env.LUCIA_VIKSOFT_DAILY_SYNC_MINUTE ?? "0"), 10);
+  return Number.isFinite(m) && m >= 0 && m <= 59 ? m : 0;
+})();
+
 // Чи дозволяти dev-origins (localhost / 127.0.0.1 / *.app.github.dev / *.github.dev),
 // які не входять у фіксований CORS-allowlist. За замовчуванням увімкнено.
 const ALLOW_DEV_ORIGINS =
@@ -1551,6 +1564,59 @@ const runVikSoftAutoSync = async ({ date, force } = {}) => {
   } finally {
     viksoftAutoSyncRunning = false;
   }
+};
+
+// Поточний час у зоні Europe/Kyiv (через Intl, без зовнішніх залежностей).
+const getKyivNowParts = () => {
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Kyiv",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
+  return {
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+  };
+};
+
+// Скільки мілісекунд до наступного настання targetHour:targetMinute за київським часом.
+const msUntilNextKyivTime = (targetHour, targetMinute) => {
+  const { hour, minute, second } = getKyivNowParts();
+  const nowSec = hour * 3600 + minute * 60 + second;
+  const targetSec = targetHour * 3600 + targetMinute * 60;
+  let deltaSec = targetSec - nowSec;
+  if (deltaSec <= 0) deltaSec += 24 * 3600;
+  return deltaSec * 1000;
+};
+
+let viksoftDailyTimer = null;
+const scheduleViksoftDailySync = () => {
+  const ms = msUntilNextKyivTime(VIKSOFT_DAILY_SYNC_HOUR, VIKSOFT_DAILY_SYNC_MINUTE);
+  const hh = String(VIKSOFT_DAILY_SYNC_HOUR).padStart(2, "0");
+  const mm = String(VIKSOFT_DAILY_SYNC_MINUTE).padStart(2, "0");
+  console.log(
+    `[viksoft:daily] next run in ~${Math.round(ms / 60000)}m (target ${hh}:${mm} Europe/Kyiv)`
+  );
+  if (viksoftDailyTimer) clearTimeout(viksoftDailyTimer);
+  viksoftDailyTimer = setTimeout(async () => {
+    try {
+      console.log("[viksoft:daily] scheduled run started");
+      await runVikSoftAutoSync({ force: VIKSOFT_AUTO_SYNC_FORCE });
+    } catch (e) {
+      console.warn(`[viksoft:daily] run error: ${e?.message || e}`);
+    } finally {
+      // Переплановуємо на наступну добу.
+      scheduleViksoftDailySync();
+    }
+  }, ms);
+  if (typeof viksoftDailyTimer.unref === "function") viksoftDailyTimer.unref();
 };
 
 const mysqlPoolCache = new Map();
@@ -5159,6 +5225,17 @@ server.listen(PORT, HOST, () => {
     }, VIKSOFT_AUTO_SYNC_INTERVAL_MS);
   } else {
     console.log("[viksoft:auto] disabled (set LUCIA_VIKSOFT_AUTO_SYNC_ENABLED=true to enable)");
+  }
+
+  // Щоденний імпорт о 03:00 за київським часом (типово увімкнено).
+  // Тягне показники по ВСІХ ресторанах з налаштованими лічильниками і зберігає в історію.
+  if (VIKSOFT_DAILY_SYNC_ENABLED) {
+    const hh = String(VIKSOFT_DAILY_SYNC_HOUR).padStart(2, "0");
+    const mm = String(VIKSOFT_DAILY_SYNC_MINUTE).padStart(2, "0");
+    console.log(`[viksoft:daily] enabled (target ${hh}:${mm} Europe/Kyiv, force=${VIKSOFT_AUTO_SYNC_FORCE})`);
+    scheduleViksoftDailySync();
+  } else {
+    console.log("[viksoft:daily] disabled (set LUCIA_VIKSOFT_DAILY_SYNC_ENABLED=true to enable)");
   }
 
   if (PUBLIC_REGISTER_ENABLED) {

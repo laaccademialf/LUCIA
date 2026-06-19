@@ -22,6 +22,18 @@ const REQUEST_TIMEOUT_MS = Math.max(
   Number.parseInt(String(process.env.VIKSOFT_REQUEST_TIMEOUT_MS || "20000"), 10) || 20000
 );
 
+// Кількість додаткових спроб при ТРАНЗИТНИХ мережевих збоях (timeout / connection reset / DNS).
+// Vik-Soft хоститься на зовнішньому IP і періодично «відвалюється» — кілька ретраїв з бекофом
+// прибирають більшість «часті помилки з конектом».
+const REQUEST_NETWORK_RETRIES = Math.max(
+  0,
+  Number.parseInt(String(process.env.VIKSOFT_NETWORK_RETRIES || "2"), 10) || 2
+);
+const REQUEST_RETRY_BASE_DELAY_MS = Math.max(
+  100,
+  Number.parseInt(String(process.env.VIKSOFT_RETRY_BASE_DELAY_MS || "600"), 10) || 600
+);
+
 // Макети getsqlmaket, які пробуємо по черзі, поки не отримаємо записи.
 // Налаштовується через env VIKSOFT_MAKET (через кому). За замовчуванням —
 // APIGetGr30 (30-хв графік, фінальна специфікація), із fallback на APIGetD_GR.
@@ -187,7 +199,7 @@ const fetchJson = async (url, init = {}) => {
 
 // Спробувати «сирий» запит, повернути детальний звіт для логіну/діагностики.
 // Сюди НЕ кидаємо виключення — повертаємо { ok, status, body, json, ct, url, error }.
-const tryRequest = async (url, init = {}) => {
+const tryRequestOnce = async (url, init = {}) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error("timeout")), REQUEST_TIMEOUT_MS);
   try {
@@ -215,6 +227,25 @@ const tryRequest = async (url, init = {}) => {
   } finally {
     clearTimeout(timer);
   }
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Обгортка з ретраями на ТРАНЗИТНІ мережеві збої (status 0: timeout / reset / DNS).
+// HTTP-помилки (4xx/5xx) НЕ ретраїмо — вони детерміновані й обробляються вище.
+const tryRequest = async (url, init = {}) => {
+  let last = null;
+  for (let attempt = 0; attempt <= REQUEST_NETWORK_RETRIES; attempt += 1) {
+    last = await tryRequestOnce(url, init);
+    // Успіх або детермінована HTTP-відповідь (є статус) — повертаємо одразу.
+    if (last.status !== 0) return last;
+    // Транзитний мережевий збій — бекоф і повтор (якщо лишились спроби).
+    if (attempt < REQUEST_NETWORK_RETRIES) {
+      const delay = REQUEST_RETRY_BASE_DELAY_MS * (attempt + 1);
+      await sleep(delay);
+    }
+  }
+  return last;
 };
 
 // Деякі інсталяції Vik-Soft повертають HTTP 200, але фактичну помилку в errors[].
@@ -409,17 +440,43 @@ const apiGet = async (path, params = {}) => {
     }
   }
 
-  // 2) Усі транспорти повернули auth-error — можливо токен застарів. Оновимо й повторимо один раз.
+  // 2) Усі транспорти повернули auth-error. Дві ймовірні причини:
+  //    (а) токен ЩОЙНО виданий і ще не активувався на боці Vik-Soft (звідси баг
+  //        «перший запит падає, другий проходить»); (б) токен застарів.
+  //    Стратегія: спершу кілька повторів з НАЯВНИМ токеном і наростаючою
+  //    затримкою (він «дозріває»), а якщо й далі auth-error — релогін і ще раунд.
+  //    Усе в межах ОДНОГО виклику, щоб користувач не бачив випадкову помилку.
+  const RETRY_DELAYS_MS = [400, 1000, 2000];
+
+  const retryRound = async (label) => {
+    for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
+      await sleep(RETRY_DELAYS_MS[attempt]);
+      let sawNonAuthError = false;
+      for (const t of TOKEN_TRANSPORTS) {
+        const { res } = await tryTransport(t);
+        tried.push({ name: `${t.name}+${label}${attempt + 1}`, status: res.status, body: (res.body || "").slice(0, 120) });
+        if (res.ok && !looksLikeAuthError(res) && !hasEmbeddedApiError(res)) {
+          tokenTransport = t;
+          return res.json !== null ? res.json : res.body;
+        }
+        if (!looksLikeAuthError(res)) sawNonAuthError = true;
+      }
+      // Якщо жоден транспорт не дав auth-помилки — проблема не в токені, не чекаємо.
+      if (sawNonAuthError) break;
+    }
+    return undefined;
+  };
+
+  // 2a) Дозрівання поточного токена.
+  const matured = await retryRound("wait");
+  if (matured !== undefined) return matured;
+
+  // 2b) Релогін і повторний раунд (на випадок справді протермінованого токена).
   invalidateVikSoftToken();
   token = await getToken();
-  for (const t of TOKEN_TRANSPORTS) {
-    const { res } = await tryTransport(t);
-    tried.push({ name: t.name + "+retry", status: res.status, body: (res.body || "").slice(0, 120) });
-    if (res.ok && !looksLikeAuthError(res) && !hasEmbeddedApiError(res)) {
-      tokenTransport = t;
-      return res.json !== null ? res.json : res.body;
-    }
-  }
+  const relogged = await retryRound("relogin");
+  if (relogged !== undefined) return relogged;
+
   const detail = tried.map((x) => `${x.name}→${x.status}${x.body ? ` (${x.body})` : ""}`).join(" || ");
   throw new Error(`Vik-Soft ${path}: жоден транспорт токена не спрацював. Спроби: ${detail}`);
 };

@@ -1,12 +1,10 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { Zap, Save, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Settings, Bug, Building2, Eye, EyeOff } from "lucide-react";
+import { Zap, Save, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Settings, Building2, Eye, EyeOff } from "lucide-react";
 import {
   getVikSoftSettings,
   saveVikSoftSettings,
   testVikSoftConnection,
-  getVikSoftDebug,
   getVikSoftMeters,
-  triggerVikSoftSync,
   getVikSoftApiClientContext,
 } from "../api/vikSoftSettingsApi";
 
@@ -177,36 +175,6 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
   };
 
   // ---- Diagnostics ----
-  const allEics = useMemo(() => {
-    const seen = new Set();
-    const list = [];
-    for (const r of restaurants) {
-      const v = String(r.vikSoftEics || "");
-      const codes = v.split(/[,\s;]+/).map((s) => s.trim()).filter(Boolean);
-      for (const c of codes) {
-        if (seen.has(c)) continue;
-        seen.add(c);
-        list.push({ eic: c, restaurant: r.name });
-      }
-    }
-    return list;
-  }, [restaurants]);
-
-  const [debugEic, setDebugEic] = useState("");
-  const [debugDate, setDebugDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10);
-  });
-  const [debugLoading, setDebugLoading] = useState(false);
-  const [debugOut, setDebugOut] = useState(null);
-  const [debugErr, setDebugErr] = useState("");
-
-  const debugTreeMeters = useMemo(() => {
-    if (!Array.isArray(debugOut?.treeMeters)) return [];
-    return debugOut.treeMeters;
-  }, [debugOut]);
-
   // ---- Mapping Module: список лічильників Vik-Soft (nodename + eiccode) ----
   const [metersLoading, setMetersLoading] = useState(false);
   const [metersErr, setMetersErr] = useState("");
@@ -234,47 +202,6 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
       [m.nodename, m.eiccode, m.idnode, m.objref].some((v) => String(v || "").toLowerCase().includes(q))
     );
   }, [metersData, metersFilter]);
-
-  // ---- Data Fetcher: ручна синхронізація / бекфіл історії ----
-  const isoDaysAgo = (n) => {
-    const d = new Date();
-    d.setDate(d.getDate() - n);
-    return d.toISOString().slice(0, 10);
-  };
-  const [syncFrom, setSyncFrom] = useState(() => isoDaysAgo(7));
-  const [syncTo, setSyncTo] = useState(() => isoDaysAgo(1));
-  const [syncForce, setSyncForce] = useState(false);
-  const [syncLoading, setSyncLoading] = useState(false);
-  const [syncErr, setSyncErr] = useState("");
-  const [syncResult, setSyncResult] = useState(null);
-
-  const handleSync = async () => {
-    setSyncLoading(true);
-    setSyncErr("");
-    setSyncResult(null);
-    try {
-      const out = await triggerVikSoftSync({ from: syncFrom, to: syncTo, force: syncForce });
-      setSyncResult(out);
-    } catch (e) {
-      setSyncErr(e?.message || String(e));
-    } finally {
-      setSyncLoading(false);
-    }
-  };
-
-  const handleDebug = async () => {
-    setDebugLoading(true);
-    setDebugErr("");
-    setDebugOut(null);
-    try {
-      const out = await getVikSoftDebug({ eic: debugEic || undefined, date: debugDate || undefined });
-      setDebugOut(out);
-    } catch (e) {
-      setDebugErr(e?.message || String(e));
-    } finally {
-      setDebugLoading(false);
-    }
-  };
 
   // ---- Render ----
   const sourceLabel = !effective
@@ -540,127 +467,6 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
         )}
       </Section>
 
-      {/* Синхронізація споживання (Data Fetcher) */}
-      <Section
-        icon={<RefreshCw size={20} />}
-        title="Синхронізація споживання"
-        subtitle="Підтягнути показники з Vik-Soft у вкладку «Електроенергія». Діапазон дат — для бекфілу історії (максимум 60 днів за раз)."
-      >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-          <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-700">Від</span>
-            <input className={baseInput} type="date" value={syncFrom} onChange={(e) => setSyncFrom(e.target.value)} />
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-700">До</span>
-            <input className={baseInput} type="date" value={syncTo} onChange={(e) => setSyncTo(e.target.value)} />
-          </label>
-          <label className="flex items-end gap-2 text-sm">
-            <input type="checkbox" checked={syncForce} onChange={(e) => setSyncForce(e.target.checked)} />
-            <span className="font-medium text-slate-700">Ігнорувати кеш</span>
-          </label>
-          <div className="flex items-end">
-            <button type="button" className={btnPrimary} disabled={syncLoading} onClick={handleSync}>
-              <RefreshCw size={16} className={syncLoading ? "animate-spin" : ""} />
-              {syncLoading ? "Синхронізація…" : "Синхронізувати"}
-            </button>
-          </div>
-        </div>
-        {syncErr ? (
-          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">{syncErr}</div>
-        ) : null}
-        {syncResult ? (
-          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-            Готово: днів — {syncResult.days}, збережено записів — {syncResult.okCount}, помилок — {syncResult.errCount}.
-            Дані зʼявляться у вкладці «Електроенергія» в історії по відповідних датах.
-          </div>
-        ) : null}
-      </Section>
-
-      {/* Debug / диагностика */}
-      <Section
-        icon={<Bug size={20} />}
-        title="Діагностика API"
-        subtitle="Тестовий запит — повертає raw payload з Vik-Soft (дерево обʼєктів + дані за добу). Можна вказати eic:/idnode:/objref:."
-      >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-700">Ідентифікатор (опційно)</span>
-            {allEics.length ? (
-              <select className={baseInput} value={debugEic} onChange={(e) => setDebugEic(e.target.value)}>
-                <option value="">— тільки дерево обʼєктів —</option>
-                {allEics.map((e) => (
-                  <option key={e.eic} value={e.eic}>{e.eic} ({e.restaurant})</option>
-                ))}
-              </select>
-            ) : (
-              <input
-                className={baseInput}
-                type="text"
-                value={debugEic}
-                onChange={(e) => setDebugEic(e.target.value)}
-                placeholder="eic:... / idnode:... / objref:..."
-                spellCheck={false}
-              />
-            )}
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-700">Дата</span>
-            <input className={baseInput} type="date" value={debugDate} onChange={(e) => setDebugDate(e.target.value)} />
-          </label>
-          <div className="flex items-end">
-            <button type="button" className={btnPrimary} disabled={debugLoading} onClick={handleDebug}>
-              <RefreshCw size={16} className={debugLoading ? "animate-spin" : ""} />
-              {debugLoading ? "Запит…" : "Виконати запит"}
-            </button>
-          </div>
-        </div>
-
-        {debugErr ? (
-          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{debugErr}</div>
-        ) : null}
-
-        {debugOut ? (
-          <>
-            {debugOut?.treeSummary ? (
-              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                Дерево лічильників: всього {debugOut.treeSummary.totalNodes || 0},
-                з EIC: {debugOut.treeSummary.withEic || 0},
-                без EIC: {debugOut.treeSummary.withoutEic || 0}
-              </div>
-            ) : null}
-
-            {debugTreeMeters.length ? (
-              <div className="mt-3 max-h-64 overflow-auto rounded-lg border border-slate-200">
-                <table className="min-w-full text-xs">
-                  <thead className="bg-slate-100 text-slate-700">
-                    <tr>
-                      <th className="px-2 py-1 text-left font-semibold">idnode</th>
-                      <th className="px-2 py-1 text-left font-semibold">objref</th>
-                      <th className="px-2 py-1 text-left font-semibold">eiccode</th>
-                      <th className="px-2 py-1 text-left font-semibold">name</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {debugTreeMeters.map((m, idx) => (
-                      <tr key={`${m.idnode}-${m.objref}-${idx}`} className="border-t border-slate-100">
-                        <td className="px-2 py-1 font-mono text-slate-800">{m.idnode || "—"}</td>
-                        <td className="px-2 py-1 font-mono text-slate-800">{m.objref || "—"}</td>
-                        <td className="px-2 py-1 font-mono text-slate-800">{m.eiccode || "—"}</td>
-                        <td className="px-2 py-1 text-slate-800">{m.name || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
-
-            <pre className="mt-3 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-900 p-3 text-xs text-emerald-200">
-{JSON.stringify(debugOut, null, 2)}
-            </pre>
-          </>
-        ) : null}
-      </Section>
     </div>
   );
 };

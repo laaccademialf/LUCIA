@@ -106,7 +106,9 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
     // беремо рядки з EnergoCenter як показники.
     let meters = Array.isArray(data?.meters) ? data.meters.filter((m) => m && (m.currValue !== "" || m.consumption)) : [];
     if (meters.length === 0) {
-      const rows = Array.isArray(energoData?.rows) ? energoData.rows : [];
+      const rows = Array.isArray(data?.energoRows) && data.energoRows.length
+        ? data.energoRows
+        : (Array.isArray(energoData?.rows) ? energoData.rows : []);
       meters = rows
         .filter((row) => {
           const n = Number(row?.consumption);
@@ -200,9 +202,11 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         onReportDateChange={setReportDate}
         onDataChange={setEnergoData}
         eics={energoEics}
-        onSave={() => handleElectricitySubmit({
-          date: reportDate,
+        saveLabel="Автоматичне оновлення"
+        onSave={(payload) => handleElectricitySubmit({
+          date: payload?.reportDate || reportDate,
           meters: [],
+          energoRows: Array.isArray(payload?.data?.rows) ? payload.data.rows : (Array.isArray(payload?.rows) ? payload.rows : []),
           responsible: user?.displayName || user?.fullName || "",
         })}
         canSave={!user || user.role !== "admin" || Boolean(currentRestaurantId)}

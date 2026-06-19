@@ -42,8 +42,9 @@ const formatDateUk = (iso) => {
   return `${d}.${m}.${y}`;
 };
 
-const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange, eics, onSave, saveLabel = "Зберегти показники", canSave = true } = {}) => {
+const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp, onReportDateChange, onDataChange, eics, onSave, saveLabel = "Автоматичне оновлення", canSave = true } = {}) => {
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
   const [internalDate, setInternalDate] = useState(getYesterdayIso());
@@ -70,13 +71,13 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
   const load = useCallback(async ({ force = false } = {}) => {
     if (!apiEnabled) {
       setError("API не налаштовано (VITE_DATA_API_BASE_URL).");
-      return;
+      return null;
     }
     if (!hasEics) {
       setError("Не задано EIC коди лічильників. Додайте їх у картці закладу.");
       setData(null);
       if (onDataChangeRef.current) onDataChangeRef.current(null);
-      return;
+      return null;
     }
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
@@ -96,15 +97,33 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
       if (!result?.ok) {
         setError(result?.error || "Не вдалося отримати дані");
       }
+      return result;
     } catch (err) {
-      if (err?.name === "AbortError") return;
+      if (err?.name === "AbortError") return null;
       setError(err?.message || String(err));
       setData((prev) => prev || { ok: false, fetchedAt: new Date().toISOString(), rows: [] });
+      return null;
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
     }
   }, [apiEnabled, reportDate, hasEics, eicsKey]);
+
+  // Кнопка «Автоматичне оновлення»: примусово тягне свіжі дані з Vik-Soft і одразу
+  // зберігає їх в історію показників (об'єднує два кроки в одну дію).
+  const handleAutoUpdate = useCallback(async () => {
+    const result = await load({ force: true });
+    if (!result?.ok) return;
+    const rows = Array.isArray(result.rows) ? result.rows : [];
+    if (rows.length === 0) return;
+    if (!onSave) return;
+    setSaving(true);
+    try {
+      await onSave({ rows, reportDate, data: result });
+    } finally {
+      setSaving(false);
+    }
+  }, [load, onSave, reportDate]);
 
   // Автопідвантаження при зміні дати АБО закладу (EIC), якщо EIC задані.
   // Якщо EIC немає — скидаємо дані.
@@ -151,19 +170,19 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
           <button
             type="button"
             onClick={() => load({ force: true })}
-            disabled={loading}
-            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-400 transition"
+            disabled={loading || saving}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 transition"
           >
             {loading ? "Оновлюю..." : "Оновити дані"}
           </button>
           {onSave && (
             <button
               type="button"
-              onClick={() => onSave({ rows, reportDate, data })}
-              disabled={!canSave || loading || rows.length === 0}
+              onClick={handleAutoUpdate}
+              disabled={!canSave || loading || saving || !hasEics}
               className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-400 transition"
             >
-              {saveLabel}
+              {saving ? "Зберігаю..." : saveLabel}
             </button>
           )}
         </div>
