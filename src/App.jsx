@@ -3091,61 +3091,20 @@ function App() {
                 </div>
               </div>
 
-              {/* Загальний підсумок (видно завжди; для кількох закладів — це сума по всіх) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-lg">
-                  <p className="text-sm font-semibold text-emerald-700">
+              {/* Загальний підсумок: лише «Спожито» та «З генератора» */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 shadow-sm">
+                  <p className="text-xs font-semibold text-emerald-700">
                     {ov.multiRestaurant ? "Спожито за вчора (усі заклади)" : "Спожито за вчора"}
                   </p>
-                  <p className="text-3xl font-bold text-emerald-900 mt-1">{fmtKwh(ov.total)}</p>
-                  <p className="text-xs text-emerald-700/80 mt-2">Основні вводи + генератор (A+)</p>
+                  <p className="text-2xl font-bold text-emerald-900 mt-0.5">{fmtKwh(ov.total)}</p>
                 </div>
-                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-lg">
-                  <p className="text-sm font-semibold text-amber-700">
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 shadow-sm">
+                  <p className="text-xs font-semibold text-amber-700">
                     {ov.multiRestaurant ? "З генератора за вчора (усі заклади)" : "З генератора за вчора"}
                   </p>
-                  <p className="text-3xl font-bold text-amber-900 mt-1">{fmtKwh(ov.totalGen)}</p>
-                  <p className="text-xs text-amber-700/80 mt-2">Лише лічильники генератора (A+)</p>
+                  <p className="text-2xl font-bold text-amber-900 mt-0.5">{fmtKwh(ov.totalGen)}</p>
                 </div>
-                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
-                  <p className="text-sm font-semibold text-slate-600">Основні вводи за вчора</p>
-                  <p className="text-3xl font-bold text-slate-900 mt-1">{fmtKwh(ov.totalMains)}</p>
-                  <p className="text-xs text-slate-500 mt-2">Споживання з мережі (A+)</p>
-                </div>
-              </div>
-
-              {/* Розбивка по закладах */}
-              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
-                <h3 className="text-base font-semibold text-slate-900 mb-3">Споживання по закладах за вчора</h3>
-                {ov.perRestaurant.length === 0 ? (
-                  <p className="text-sm text-slate-500">Немає доступних закладів.</p>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                    {ov.perRestaurant.map((r) => (
-                      <div key={r.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                        <p className="text-sm font-semibold text-slate-800 truncate" title={r.name}>{r.name}</p>
-                        {r.hasData ? (
-                          <div className="mt-2 space-y-1 text-sm">
-                            <div className="flex items-center justify-between">
-                              <span className="text-slate-600">Спожито</span>
-                              <span className="font-bold text-emerald-700">{fmtKwh(r.total)}</span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-slate-600">Основні вводи</span>
-                              <span className="font-semibold text-slate-800">{fmtKwh(r.mains)}</span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-slate-600">Генератор</span>
-                              <span className="font-semibold text-amber-700">{fmtKwh(r.gen)}</span>
-                            </div>
-                          </div>
-                        ) : (
-                          <p className="mt-2 text-xs text-slate-400">Немає показників за вчора</p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             </div>
           );
