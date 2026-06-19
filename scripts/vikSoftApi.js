@@ -692,9 +692,10 @@ const normalizeIdentifier = (raw) => {
     return { kind: "eic", value };
   }
 
-  // Без префікса: числові значення трактуємо як idnode, решту — як eic.
-  if (/^\d+$/.test(s)) return { kind: "idnode", value: s };
-  return { kind: "eic", value: s };
+  // Без префікса тип неоднозначний: і EIC, і idnode — числові (напр. EIC 5578115
+  // vs idnode 27381). Тому позначаємо як "auto" і визначаємо реальний тип нижче,
+  // звіряючись із деревом vviewtree (byEic/byIdnode/byObjref).
+  return { kind: "auto", value: s };
 };
 
 const refreshTreeIndex = async () => {
@@ -755,6 +756,26 @@ const resolveIdentifiersToEics = async (inputs = []) => {
       eic = String(hit?.eic || "").trim();
       if (!eic) unresolved.push({ input: String(input), kind: id.kind, value: id.value, reason: "no_eic_for_objref" });
       else resolved.push({ input: String(input), kind: id.kind, value: id.value, eic });
+    } else if (id.kind === "auto") {
+      // Голий токен (найчастіше EIC, бо користувач копіює зі стовпця eiccode).
+      // Визначаємо тип за деревом: EIC → idnode → objref. Якщо ніде немає —
+      // трактуємо напряму як EIC (getsqlmaket приймає eic, як у робочому curl),
+      // щоб працювало навіть коли дерево тимчасово недоступне.
+      if (treeIndex.byEic.has(id.value)) {
+        eic = id.value;
+        resolved.push({ input: String(input), kind: "eic", value: id.value, eic });
+      } else if (treeIndex.byIdnode.has(id.value)) {
+        eic = String(treeIndex.byIdnode.get(id.value)?.eic || "").trim();
+        if (!eic) unresolved.push({ input: String(input), kind: "idnode", value: id.value, reason: "no_eic_for_idnode" });
+        else resolved.push({ input: String(input), kind: "idnode", value: id.value, eic });
+      } else if (treeIndex.byObjref.has(id.value)) {
+        eic = String(treeIndex.byObjref.get(id.value)?.eic || "").trim();
+        if (!eic) unresolved.push({ input: String(input), kind: "objref", value: id.value, reason: "no_eic_for_objref" });
+        else resolved.push({ input: String(input), kind: "objref", value: id.value, eic });
+      } else {
+        eic = id.value;
+        resolved.push({ input: String(input), kind: "eic", value: id.value, eic, reason: "assumed_eic" });
+      }
     }
 
     if (eic && !seen.has(eic)) {
