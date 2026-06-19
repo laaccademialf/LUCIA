@@ -319,24 +319,31 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
           </p>
         )}
       </div>
-      <ElectricityForm
-        meters={electricityMeters.map(m => ({
-          id: m.id,
-          number: m.number,
-          prevValue: resolvePrevValue(m),
-        }))}
-        history={filteredHistory}
-        onSubmit={handleElectricitySubmit}
-        responsible={user?.displayName || user?.fullName || ""}
-        reportDate={reportDate}
-        energoRows={Array.isArray(energoData?.rows) ? energoData.rows : []}
-        onDeleteHistory={handleDeleteHistory}
-        coefficients={meterCoefficients}
-        canEditCoefficients={isAdmin && Boolean(currentRestaurantId)}
-        canEditReadings={isAdmin}
-        onCoefficientChange={handleCoefficientChange}
-        onReadingOverride={handleReadingOverride}
-      />
+      {isAdmin && !currentRestaurantId ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <p className="text-base font-semibold text-slate-700">Оберіть ресторан</p>
+          <p className="mt-1 text-sm text-slate-500">Виберіть заклад угорі, щоб переглянути показники та історію.</p>
+        </div>
+      ) : (
+        <ElectricityForm
+          meters={electricityMeters.map(m => ({
+            id: m.id,
+            number: m.number,
+            prevValue: resolvePrevValue(m),
+          }))}
+          history={filteredHistory}
+          onSubmit={handleElectricitySubmit}
+          responsible={user?.displayName || user?.fullName || ""}
+          reportDate={reportDate}
+          energoRows={Array.isArray(energoData?.rows) ? energoData.rows : []}
+          onDeleteHistory={handleDeleteHistory}
+          coefficients={meterCoefficients}
+          canEditCoefficients={isAdmin && Boolean(currentRestaurantId)}
+          canEditReadings={isAdmin}
+          onCoefficientChange={handleCoefficientChange}
+          onReadingOverride={handleReadingOverride}
+        />
+      )}
     </div>
   );
 };
