@@ -96,11 +96,7 @@ const ElectricityForm = ({
         </p>
       )}
 
-      {meterValues.length === 0 && energoRows.length === 0 && (
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-          Немає даних для збереження: спершу отримайте показники з EnergoCenter або налаштуйте лічильники в розділі «Управління утилітами».
-        </div>
-      )}
+      {meterValues.length === 0 && energoRows.length === 0 && null}
 
       {/* Лічильники */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -214,21 +210,57 @@ const ElectricityForm = ({
             }
           }
 
+          // Компактний фільтр місяця — праворуч у заголовку.
+          const monthNav = (
+            <span className="flex items-center gap-1 text-[11px] font-normal text-slate-600">
+              <button
+                type="button"
+                disabled={!hasOlderMonth}
+                onClick={() => { if (hasOlderMonth) setHistoryMonth(availableMonths[monthIndex + 1]); }}
+                className="rounded border border-slate-300 bg-white px-1.5 py-0.5 font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                title="Старіші"
+              >←</button>
+              <span className="min-w-[88px] text-center font-semibold text-slate-800">{monthLabel(effectiveMonth)}</span>
+              <button
+                type="button"
+                disabled={!hasNewerMonth}
+                onClick={() => { if (hasNewerMonth) setHistoryMonth(availableMonths[monthIndex - 1]); }}
+                className="rounded border border-slate-300 bg-white px-1.5 py-0.5 font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                title="Новіші"
+              >→</button>
+            </span>
+          );
+
           if (columns.length === 0) {
             return (
               <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-3 mt-2">
-                <h4 className="font-semibold text-slate-800 text-sm flex items-center gap-2">
-                  <Zap size={14} className="text-yellow-400" /> Історія показників — {group.title}
+                <h4 className="font-semibold text-slate-800 text-sm flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2"><Zap size={14} className="text-yellow-400" /> Історія показників — {group.title}</span>
+                  {monthNav}
                 </h4>
                 <p className="text-slate-500 text-sm mt-1">Немає даних</p>
               </div>
             );
           }
 
+          // Підсумок споживання за місяць по кожному лічильнику (колонці).
+          const monthTotals = new Map();
+          for (const row of visibleHistory) {
+            const ms = Array.isArray(row?.meters) ? row.meters : [];
+            for (const m of ms) {
+              const key = String(m?.meterNumber || m?.meterId || "");
+              if (!key || !group.match(key)) continue;
+              const val = Number(m?.consumption ?? m?.currValue);
+              if (!Number.isFinite(val)) continue;
+              monthTotals.set(key, (monthTotals.get(key) || 0) + val);
+            }
+          }
+
           return (
             <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 mt-2">
-              <h4 className="font-semibold text-slate-800 mb-2 text-sm flex items-center gap-1.5">
-                <Zap size={14} className="text-yellow-400" /> Історія показників — {group.title}
+              <h4 className="font-semibold text-slate-800 mb-2 text-sm flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5"><Zap size={14} className="text-yellow-400" /> Історія показників — {group.title}</span>
+                {monthNav}
               </h4>
               {canEditReadings && !canEditCoefficients && (
                 <p className="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
@@ -271,6 +303,16 @@ const ElectricityForm = ({
                           <th className="px-2 py-0.5 text-right whitespace-nowrap text-[10px] font-medium text-slate-500 border border-slate-200">Споживання</th>
                         </Fragment>
                       ))}
+                    </tr>
+                    <tr className="bg-indigo-50 font-semibold text-indigo-900">
+                      <td className="px-2 py-0.5 whitespace-nowrap border border-slate-200">Разом за місяць</td>
+                      {columns.map((c) => (
+                        <Fragment key={`tot-${c}`}>
+                          <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200 text-slate-400">—</td>
+                          <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200">{fmtNum(monthTotals.get(c) || 0)}</td>
+                        </Fragment>
+                      ))}
+                      {onDeleteHistory && <td className="px-2 py-0.5 border border-slate-200"></td>}
                     </tr>
                   </thead>
                   <tbody>
@@ -349,21 +391,6 @@ const ElectricityForm = ({
 
         return (
           <div className="mt-2 space-y-2">
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-1.5">
-              <button
-                type="button"
-                disabled={!hasOlderMonth}
-                onClick={() => { if (hasOlderMonth) setHistoryMonth(availableMonths[monthIndex + 1]); }}
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-              >← Старіші</button>
-              <span className="text-sm font-semibold text-slate-800">{monthLabel(effectiveMonth)}</span>
-              <button
-                type="button"
-                disabled={!hasNewerMonth}
-                onClick={() => { if (hasNewerMonth) setHistoryMonth(availableMonths[monthIndex - 1]); }}
-                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-              >Новіші →</button>
-            </div>
             {groups.map(renderGroup)}
           </div>
         );
