@@ -70,6 +70,41 @@ function MenuStructureEditor({ menuStructure, saveMenuStructure, loading, error 
     } : s));
   };
 
+  // Перейменування (змінюється лише label, id лишається незмінним)
+  const renameSection = (sectionIdx) => {
+    const current = draft[sectionIdx];
+    const label = prompt("Нова назва розділу:", current.label);
+    if (label == null) return;
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    setDraft(draft.map((s, i) => i === sectionIdx ? { ...s, label: trimmed } : s));
+  };
+  const renameChild = (sectionIdx, childIdx) => {
+    const current = draft[sectionIdx].children[childIdx];
+    const label = prompt("Нова назва підрозділу:", current.label);
+    if (label == null) return;
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    setDraft(draft.map((s, i) => i === sectionIdx ? {
+      ...s,
+      children: s.children.map((c, j) => j === childIdx ? { ...c, label: trimmed } : c)
+    } : s));
+  };
+  const renameTab = (sectionIdx, childIdx, tabIdx) => {
+    const current = draft[sectionIdx].children[childIdx].tabLabels[tabIdx];
+    const label = prompt("Нова назва вкладки:", current.label);
+    if (label == null) return;
+    const trimmed = label.trim();
+    if (!trimmed) return;
+    setDraft(draft.map((s, i) => i === sectionIdx ? {
+      ...s,
+      children: s.children.map((c, j) => j === childIdx ? {
+        ...c,
+        tabLabels: c.tabLabels.map((t, k) => k === tabIdx ? { ...t, label: trimmed } : t)
+      } : c)
+    } : s));
+  };
+
   const addSection = () => {
     const id = prompt("ID розділу (латиницею, без пробілів):");
     if (!id) return;
@@ -114,6 +149,7 @@ function MenuStructureEditor({ menuStructure, saveMenuStructure, loading, error 
             <span className="font-bold text-lg">{section.label} <span className="text-xs text-slate-400">({section.id})</span></span>
             <button className="ml-1 px-2 py-1 rounded bg-slate-300 text-slate-700 text-xs" onClick={() => moveSection(i, i-1)} disabled={i===0}>↑</button>
             <button className="ml-1 px-2 py-1 rounded bg-slate-300 text-slate-700 text-xs" onClick={() => moveSection(i, i+1)} disabled={i===draft.length-1}>↓</button>
+            <button className="ml-2 px-2 py-1 rounded bg-amber-500 text-white text-xs" onClick={() => renameSection(i)}>Перейменувати</button>
             <button className="ml-2 px-2 py-1 rounded bg-red-600 text-white text-xs" onClick={() => deleteSection(i)}>Видалити</button>
           </div>
           <button className="mb-2 px-3 py-1 rounded bg-blue-600 text-white text-xs" onClick={() => addChild(i)}>Додати підрозділ</button>
@@ -123,6 +159,7 @@ function MenuStructureEditor({ menuStructure, saveMenuStructure, loading, error 
                 <span className="font-semibold">{child.label} <span className="text-xs text-slate-400">({child.id})</span></span>
                 <button className="ml-1 px-2 py-0.5 rounded bg-slate-300 text-slate-700 text-xs" onClick={() => moveChild(i, j, j-1)} disabled={j===0}>↑</button>
                 <button className="ml-1 px-2 py-0.5 rounded bg-slate-300 text-slate-700 text-xs" onClick={() => moveChild(i, j, j+1)} disabled={j===section.children.length-1}>↓</button>
+                <button className="ml-2 px-2 py-0.5 rounded bg-amber-500 text-white text-xs" onClick={() => renameChild(i, j)}>Перейменувати</button>
                 <button className="ml-2 px-2 py-0.5 rounded bg-red-500 text-white text-xs" onClick={() => deleteChild(i, j)}>Видалити</button>
               </div>
               <button className="mb-1 px-2 py-0.5 rounded bg-indigo-600 text-white text-xs" onClick={() => addTab(i, j)}>Додати вкладку</button>
@@ -132,6 +169,7 @@ function MenuStructureEditor({ menuStructure, saveMenuStructure, loading, error 
                     {tab.label} <span className="text-slate-400">({tab.id})</span>
                     <button className="ml-1 px-1 rounded bg-slate-300 text-slate-700 text-xs" onClick={() => moveTab(i, j, k, k-1)} disabled={k===0}>↑</button>
                     <button className="ml-1 px-1 rounded bg-slate-300 text-slate-700 text-xs" onClick={() => moveTab(i, j, k, k+1)} disabled={k===child.tabLabels.length-1}>↓</button>
+                    <button className="ml-1 px-1 rounded bg-amber-500 text-white text-xs" onClick={() => renameTab(i, j, k)} title="Перейменувати вкладку">✎</button>
                     <button className="ml-1 px-1 rounded bg-red-400 text-white text-xs" onClick={() => deleteTab(i, j, k)} title="Видалити вкладку">×</button>
                   </span>
                 ))}
