@@ -725,8 +725,26 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   }, [criticalItemsFlat, actionPlanByItem]);
 
   const completedCriticalCount = Math.max(0, criticalCount - pendingCriticalCount);
-  const showCompletedCriticalMetrics = availableRestaurants.length >= 2;
+  const showCompletedCriticalMetrics =
+    availableRestaurants.length >= 2 &&
+    selectedRestaurantId === ALL_LOCATIONS_VALUE;
   const displayedCriticalCount = showCompletedCriticalMetrics ? criticalCount : pendingCriticalCount;
+
+  const actionPlanDynamics = useMemo(() => {
+    const total = criticalItemsFlat.length;
+    if (!total) return null;
+    const fixed = completedCriticalCount;
+    const pending = pendingCriticalCount;
+    return {
+      mode: "plans",
+      percent: roundPercent((fixed / total) * 100),
+      fixed,
+      total,
+      improved: fixed,
+      worsened: 0,
+      unchanged: pending,
+    };
+  }, [completedCriticalCount, criticalItemsFlat.length, pendingCriticalCount]);
 
   const managersByRestaurantId = useMemo(() => {
     const knownRestaurants = Array.isArray(availableRestaurants) ? availableRestaurants : [];
@@ -826,6 +844,8 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       latest,
     };
   }, [trendSeries]);
+
+  const displayedDynamics = actionPlanDynamics || dynamics;
 
   const technicalInfo = useMemo(() => {
     if (!metrics.length) {
@@ -1258,19 +1278,25 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
 
             <div className={cardClass}>
               <p className="text-sm font-semibold text-slate-800">Динаміка виправлень</p>
-              {dynamics ? (
+              {displayedDynamics ? (
                 <>
-                  <div className="mt-2 text-4xl font-extrabold text-slate-900">{dynamics.percent}%</div>
-                  <p className="mt-1 text-sm text-slate-600">Усунено {dynamics.fixed} з {dynamics.total} помилок від найстаршого до найновішого обраного чек-листа.</p>
+                  <div className="mt-2 text-4xl font-extrabold text-slate-900">{displayedDynamics.percent}%</div>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {displayedDynamics.mode === "plans"
+                      ? `Виконано ${displayedDynamics.fixed} з ${displayedDynamics.total} порушень за статусами планів дій.`
+                      : `Усунено ${displayedDynamics.fixed} з ${displayedDynamics.total} помилок від найстаршого до найновішого обраного чек-листа.`}
+                  </p>
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                     <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 font-semibold text-emerald-700">
-                      <ArrowUp size={12} /> Покращено: {dynamics.improved}
+                      <ArrowUp size={12} /> {displayedDynamics.mode === "plans" ? `Виконано: ${displayedDynamics.improved}` : `Покращено: ${displayedDynamics.improved}`}
                     </span>
-                    <span className="inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-50 px-2 py-1 font-semibold text-red-700">
-                      <ArrowDown size={12} /> Погіршено: {dynamics.worsened}
-                    </span>
+                    {displayedDynamics.mode === "plans" ? null : (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-red-300 bg-red-50 px-2 py-1 font-semibold text-red-700">
+                        <ArrowDown size={12} /> Погіршено: {displayedDynamics.worsened}
+                      </span>
+                    )}
                     <span className="inline-flex items-center rounded-full border border-slate-300 bg-slate-50 px-2 py-1 font-semibold text-slate-700">
-                      Без змін: {dynamics.unchanged}
+                      {displayedDynamics.mode === "plans" ? `Невиконано: ${displayedDynamics.unchanged}` : `Без змін: ${displayedDynamics.unchanged}`}
                     </span>
                   </div>
                 </>
