@@ -26,7 +26,13 @@ import {
 import { useHaccp } from "../hooks/useHaccp";
 import DatePickerPopover from "./DatePickerPopover";
 import DateRangePickerPopover from "./DateRangePickerPopover";
-import { isCollectionsApiEnabled, listCollectionItemsApi } from "../api/collectionsApi";
+import {
+  createCollectionItemApi,
+  isCollectionsApiEnabled,
+  listCollectionItemsApi,
+  listCollectionItemsConditionalApi,
+  updateCollectionItemApi,
+} from "../api/collectionsApi";
 import { addLegalNotificationApi, isLegalApiEnabled } from "../api/legalTasksApi";
 import {
   RATING_BY_VALUE,
@@ -221,6 +227,88 @@ const collectIssueItemIds = (responses) => {
 
 const getPhotoSrc = (photo) => String(photo?.url || photo?.dataUrl || "").trim();
 const getCriticalPlanKey = (auditId, itemId) => `${String(auditId || "")}::${String(itemId || "")}`;
+const ACTION_PLANS_COLLECTION = "haccpActionPlans";
+
+const readLocalActionPlans = (storageKey, user) => {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") return parsed;
+    }
+
+    const legacyKey = `haccp.report.actionPlan.${String(user?.id || user?.email || "default")}`;
+    const legacyRaw = window.localStorage.getItem(legacyKey);
+    if (!legacyRaw) return {};
+    const legacyParsed = JSON.parse(legacyRaw);
+    return legacyParsed && typeof legacyParsed === "object" ? legacyParsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const writeLocalActionPlans = (storageKey, plans) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(plans || {}));
+  } catch {
+    // ignore localStorage write errors
+  }
+};
+
+const normalizeActionPlanRows = (rows) => {
+  const next = {};
+  (Array.isArray(rows) ? rows : []).forEach((row) => {
+    const auditId = String(row?.auditId || "").trim();
+    const itemId = String(row?.itemId || "").trim();
+    const planKey = String(row?.planKey || getCriticalPlanKey(auditId, itemId)).trim();
+    if (!planKey) return;
+
+    next[planKey] = {
+      _docId: String(row?.id || row?._docId || "").trim(),
+      deadline: String(row?.deadline || "").trim(),
+      responsible: String(row?.responsible || "").trim(),
+      responsibles: Array.isArray(row?.responsibles)
+        ? row.responsibles.map((value) => String(value || "").trim()).filter(Boolean)
+        : [],
+      responsibleIds: Array.isArray(row?.responsibleIds)
+        ? row.responsibleIds.map((value) => String(value || "").trim()).filter(Boolean)
+        : [],
+      comment: String(row?.comment || "").trim(),
+      status: String(row?.status || "in_progress").trim() || "in_progress",
+      auditId,
+      auditLabel: String(row?.auditLabel || "").trim(),
+      itemId,
+      itemTitle: String(row?.itemTitle || row?.title || "").trim(),
+      violationComment: String(row?.violationComment || "").trim(),
+      restaurantId: String(row?.restaurantId || "").trim(),
+      restaurantName: String(row?.restaurantName || "").trim(),
+      updatedAt: String(row?.updatedAt || "").trim(),
+      createdAt: String(row?.createdAt || "").trim(),
+    };
+  });
+  return next;
+};
+
+const buildActionPlanRowPayload = (planKey, plan) => ({
+  planKey: String(planKey || "").trim(),
+  deadline: String(plan?.deadline || "").trim(),
+  responsible: String(plan?.responsible || "").trim(),
+  responsibles: Array.isArray(plan?.responsibles) ? plan.responsibles.map((value) => String(value || "").trim()).filter(Boolean) : [],
+  responsibleIds: Array.isArray(plan?.responsibleIds) ? plan.responsibleIds.map((value) => String(value || "").trim()).filter(Boolean) : [],
+  comment: String(plan?.comment || "").trim(),
+  status: String(plan?.status || "in_progress").trim() || "in_progress",
+  auditId: String(plan?.auditId || "").trim(),
+  auditLabel: String(plan?.auditLabel || "").trim(),
+  itemId: String(plan?.itemId || "").trim(),
+  itemTitle: String(plan?.itemTitle || "").trim(),
+  violationComment: String(plan?.violationComment || "").trim(),
+  restaurantId: String(plan?.restaurantId || "").trim(),
+  restaurantName: String(plan?.restaurantName || "").trim(),
+  updatedAt: String(plan?.updatedAt || new Date().toISOString()).trim(),
+  createdAt: String(plan?.createdAt || new Date().toISOString()).trim(),
+});
 
 const parseUserRestaurantIds = (userRow) => {
   const raw = userRow?.restaurants ?? userRow?.restaurant_ids ?? userRow?.restaurantIds;
@@ -274,6 +362,8 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   const ALL_LOCATIONS_VALUE = "__ALL__";
   const ALL_TEMPLATES_VALUE = "__ALL_TEMPLATES__";
   const isAdmin = user?.role === "admin";
+  const isManager = isEstablishmentManagerUser(user);
+  const canCreatePlan = isAdmin || (!isManager && Boolean(user?.role));
   const userRestaurantIds = getUserRestaurantIds(user);
 
   const availableRestaurants = useMemo(() => {
@@ -298,35 +388,62 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   const [planDialogResponsible, setPlanDialogResponsible] = useState("");
   const [planDialogResponsibleIds, setPlanDialogResponsibleIds] = useState([]);
   const [planDialogComment, setPlanDialogComment] = useState("");
+  const [planDialogStatus, setPlanDialogStatus] = useState("in_progress");
   const [usersForResponsible, setUsersForResponsible] = useState([]);
   const [loadingResponsibleUsers, setLoadingResponsibleUsers] = useState(false);
+  const actionPlansEtagRef = useRef("");
 
   const actionPlanStorageKey = useMemo(
-    () => `haccp.report.actionPlan.${String(user?.id || user?.email || "default")}`,
-    [user?.email, user?.id]
+    () => "haccp.report.actionPlan",
+    []
   );
 
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(actionPlanStorageKey);
-      if (!raw) {
-        setActionPlanByItem({});
-        return;
-      }
-      const parsed = JSON.parse(raw);
-      setActionPlanByItem(parsed && typeof parsed === "object" ? parsed : {});
-    } catch {
-      setActionPlanByItem({});
-    }
-  }, [actionPlanStorageKey]);
+  const loadActionPlans = async ({ conditional = false, seedLocal = false } = {}) => {
+    const localPlans = readLocalActionPlans(actionPlanStorageKey, user);
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(actionPlanStorageKey, JSON.stringify(actionPlanByItem || {}));
-    } catch {
-      // localStorage може бути недоступним у приватних режимах браузера
+    if (!isCollectionsApiEnabled()) {
+      setActionPlanByItem(localPlans);
+      return localPlans;
     }
-  }, [actionPlanByItem, actionPlanStorageKey]);
+
+    try {
+      let rows = [];
+      if (conditional) {
+        const result = await listCollectionItemsConditionalApi(ACTION_PLANS_COLLECTION, actionPlansEtagRef.current);
+        if (result?.notModified) return null;
+        actionPlansEtagRef.current = String(result?.etag || "").trim();
+        rows = Array.isArray(result?.data) ? result.data : [];
+      } else {
+        rows = await listCollectionItemsApi(ACTION_PLANS_COLLECTION);
+        actionPlansEtagRef.current = "";
+      }
+
+      let nextPlans = normalizeActionPlanRows(rows);
+
+      if (seedLocal) {
+        const missingLocalEntries = Object.entries(localPlans).filter(([planKey]) => !nextPlans[planKey]);
+        if (missingLocalEntries.length) {
+          for (const [planKey, plan] of missingLocalEntries) {
+            await createCollectionItemApi(ACTION_PLANS_COLLECTION, buildActionPlanRowPayload(planKey, plan));
+          }
+          rows = await listCollectionItemsApi(ACTION_PLANS_COLLECTION);
+          nextPlans = normalizeActionPlanRows(rows);
+        }
+      }
+
+      setActionPlanByItem((prev) => {
+        const prevJson = JSON.stringify(prev || {});
+        const nextJson = JSON.stringify(nextPlans || {});
+        return prevJson === nextJson ? prev : nextPlans;
+      });
+      writeLocalActionPlans(actionPlanStorageKey, nextPlans);
+      return nextPlans;
+    } catch (error) {
+      console.error("Не вдалося завантажити плани дій HACCP:", error);
+      setActionPlanByItem(localPlans);
+      return localPlans;
+    }
+  };
 
   useEffect(() => {
     if (!planDialogContext) return undefined;
@@ -336,6 +453,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
         setPlanDialogDeadline("");
         setPlanDialogResponsible("");
         setPlanDialogComment("");
+        setPlanDialogStatus("in_progress");
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -366,6 +484,33 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncPlans = async (options = {}) => {
+      const result = await loadActionPlans(options);
+      if (cancelled) return;
+      return result;
+    };
+
+    void syncPlans({ seedLocal: true });
+
+    const interval = setInterval(() => {
+      void syncPlans({ conditional: true });
+    }, 5000);
+
+    const handleFocus = () => {
+      void syncPlans({ conditional: true });
+    };
+
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [actionPlanStorageKey, user]);
 
   useEffect(() => {
     if (selectedRestaurantId === ALL_LOCATIONS_VALUE) return;
@@ -513,9 +658,10 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             const rating = value === null || value === undefined ? null : RATING_BY_VALUE[value];
             return Boolean(rating && (rating.value === 0 || rating.value === 1));
           })
-          .map(([itemId]) => ({
+          .map(([itemId, response]) => ({
             itemId,
             title: itemTitleById.get(String(itemId)) || `Пункт ${itemId}`,
+            violationComment: String(response?.comment || "").trim(),
           }));
 
         if (!items.length) return null;
@@ -538,6 +684,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           auditLabel: String(group.auditLabel || ""),
           itemId: String(item.itemId || ""),
           itemTitle: String(item.title || "Пункт без назви"),
+          violationComment: String(item.violationComment || ""),
         }))
       ),
     [criticalDetails]
@@ -546,13 +693,17 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   const criticalDialogItems = useMemo(
     () =>
       criticalDetails.flatMap((group) =>
-        (group?.items || []).map((entry) => ({
-          auditId: String(group.auditId || ""),
-          auditLabel: String(group.auditLabel || ""),
-          itemId: String(entry?.itemId || ""),
-          title: String(entry?.title || "Пункт без назви"),
-          hasPlan: Boolean(String(actionPlanByItem?.[getCriticalPlanKey(group.auditId, entry?.itemId)]?.comment || "").trim()),
-        }))
+        (group?.items || [])
+          .map((entry) => ({
+            auditId: String(group.auditId || ""),
+            auditLabel: String(group.auditLabel || ""),
+            itemId: String(entry?.itemId || ""),
+            title: String(entry?.title || "Пункт без назви"),
+            violationComment: String(entry?.violationComment || ""),
+            hasPlan: Boolean(String(actionPlanByItem?.[getCriticalPlanKey(group.auditId, entry?.itemId)]?.comment || "").trim()),
+            status: String(actionPlanByItem?.[getCriticalPlanKey(group.auditId, entry?.itemId)]?.status || "in_progress"),
+          }))
+          .filter((entry) => entry.status !== "done")
       ),
     [actionPlanByItem, criticalDetails]
   );
@@ -564,6 +715,14 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     : 0;
   const traffic = scoreTrafficLight(avgScore);
   const criticalCount = metrics.reduce((acc, item) => acc + (Number(item.critical) || 0), 0);
+
+  const pendingCriticalCount = useMemo(() => {
+    return criticalItemsFlat.reduce((acc, item) => {
+      const plan = actionPlanByItem?.[item.planKey];
+      const isDone = String(plan?.status || "") === "done";
+      return isDone ? acc : acc + 1;
+    }, 0);
+  }, [criticalItemsFlat, actionPlanByItem]);
 
   const managersByRestaurantId = useMemo(() => {
     const knownRestaurants = Array.isArray(availableRestaurants) ? availableRestaurants : [];
@@ -726,20 +885,30 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           ...item,
           comment,
           updatedAt: String(saved?.updatedAt || ""),
+          status: String(saved?.status || "in_progress"),
         };
       })
       .filter(Boolean)
       .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
   }, [actionPlanByItem, criticalItemsFlat]);
 
+  const actionPlanMetrics = useMemo(() => {
+    const total = actionPlanEntries.length;
+    const done = actionPlanEntries.filter((entry) => entry.status === "done").length;
+    const pending = total - done;
+    return { total, done, pending };
+  }, [actionPlanEntries]);
+
   const openPlanDialog = (auditId, auditLabel, item, source = "critical") => {
     setShowCriticalDetails(false);
     setShowActionPlanDetails(false);
     setPlanDialogSource(source === "plan" ? "plan" : "critical");
+
     const itemId = String(item?.itemId || "");
-    const itemTitle = String(item?.title || "Пункт без назви");
+    const itemTitle = String(item?.itemTitle || item?.title || "Пункт без назви");
     const planKey = getCriticalPlanKey(auditId, itemId);
-    const saved = actionPlanByItem?.[planKey] || {};
+    const latestPlans = actionPlanByItem || {};
+    const saved = latestPlans?.[planKey] || {};
     const savedResponsibleList = Array.isArray(saved?.responsibles)
       ? saved.responsibles.map((value) => String(value || "").trim()).filter(Boolean)
       : [];
@@ -753,7 +922,14 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     const defaultResponsibleList = restaurantManagers.map((entry) => entry.label).filter(Boolean);
     const defaultResponsibleIdsList = restaurantManagers.map((entry) => entry.userId).filter(Boolean);
 
-    setPlanDialogContext({ planKey, auditId: String(auditId || ""), auditLabel: String(auditLabel || ""), itemId, itemTitle });
+    setPlanDialogContext({
+      planKey,
+      auditId: String(auditId || ""),
+      auditLabel: String(auditLabel || ""),
+      itemId,
+      itemTitle,
+      violationComment: String(item?.violationComment || "").trim(),
+    });
     setPlanDialogDeadline(String(saved?.deadline || todayDate()));
     setPlanDialogResponsible(savedResponsibleList.length
       ? savedResponsibleList.join(", ")
@@ -761,6 +937,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     );
     setPlanDialogResponsibleIds(savedResponsibleIds.length ? savedResponsibleIds : defaultResponsibleIdsList);
     setPlanDialogComment(String(saved?.comment || ""));
+    setPlanDialogStatus(String(saved?.status || "in_progress"));
   };
 
   useEffect(() => {
@@ -797,25 +974,55 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       return;
     }
 
+    const audit = metricsById.get(String(planDialogContext.auditId || "")) || null;
+    const nextPlan = {
+      ...(actionPlanByItem?.[planDialogContext.planKey] || {}),
+      deadline,
+      responsible,
+      responsibles: responsibleList,
+      responsibleIds,
+      comment,
+      status: planDialogStatus,
+      auditId: planDialogContext.auditId,
+      auditLabel: planDialogContext.auditLabel,
+      itemId: planDialogContext.itemId,
+      itemTitle: planDialogContext.itemTitle,
+      violationComment: String(planDialogContext.violationComment || "").trim(),
+      restaurantId: String(audit?.restaurantId || "").trim(),
+      restaurantName: String(audit?.restaurantName || "").trim(),
+      updatedAt: new Date().toISOString(),
+      createdAt: String(actionPlanByItem?.[planDialogContext.planKey]?.createdAt || new Date().toISOString()),
+    };
+
+    try {
+      if (isCollectionsApiEnabled()) {
+        const existingDocId = String(actionPlanByItem?.[planDialogContext.planKey]?._docId || "").trim();
+        const payload = buildActionPlanRowPayload(planDialogContext.planKey, nextPlan);
+        if (existingDocId) {
+          await updateCollectionItemApi(ACTION_PLANS_COLLECTION, existingDocId, payload);
+          nextPlan._docId = existingDocId;
+        } else {
+          const createdId = await createCollectionItemApi(ACTION_PLANS_COLLECTION, payload);
+          nextPlan._docId = createdId;
+        }
+      }
+    } catch (error) {
+      console.error("Не вдалося зберегти план дій HACCP:", error);
+      alert("Не вдалося зберегти план дій. Спробуйте ще раз.");
+      return;
+    }
+
     setActionPlanByItem((prev) => ({
       ...(prev || {}),
-      [planDialogContext.planKey]: {
-        deadline,
-        responsible,
-        responsibles: responsibleList,
-        responsibleIds,
-        comment,
-        auditId: planDialogContext.auditId,
-        auditLabel: planDialogContext.auditLabel,
-        itemId: planDialogContext.itemId,
-        itemTitle: planDialogContext.itemTitle,
-        updatedAt: new Date().toISOString(),
-      },
+      [planDialogContext.planKey]: nextPlan,
     }));
+    writeLocalActionPlans(actionPlanStorageKey, {
+      ...(actionPlanByItem || {}),
+      [planDialogContext.planKey]: nextPlan,
+    });
 
     if (isLegalApiEnabled()) {
       const actorUserId = getActorIdentity(user);
-      const audit = metricsById.get(String(planDialogContext.auditId || "")) || null;
       const locationName = String(audit?.restaurantName || "локація");
       const auditDate = formatDisplayDate(audit?.date);
       const title = "HACCP: новий план дій";
@@ -853,6 +1060,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     setPlanDialogResponsible("");
     setPlanDialogResponsibleIds([]);
     setPlanDialogComment("");
+    setPlanDialogStatus("in_progress");
 
     if (planDialogSource === "critical") {
       setShowCriticalDetails(true);
@@ -1075,15 +1283,23 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
               <p className="text-sm font-semibold text-slate-800">Порушення</p>
               <div className="mt-2 flex items-center gap-3">
                 <div className="inline-flex items-center rounded-xl border border-red-300 bg-red-600 px-3 py-2 text-3xl font-extrabold text-white shadow-sm">
-                  {criticalCount}
+                  {pendingCriticalCount}
                 </div>
+                {pendingCriticalCount < criticalCount ? (
+                  <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                    {criticalCount - pendingCriticalCount} виконано
+                  </span>
+                ) : null}
                 <p className="text-xs text-slate-500">Натисніть, щоб переглянути перелік порушень.</p>
               </div>
             </button>
 
             <button
               type="button"
-              onClick={() => setShowActionPlanDetails(true)}
+              onClick={async () => {
+                await loadActionPlans();
+                setShowActionPlanDetails(true);
+              }}
               className={`${cardClass} flex h-full flex-col text-left`}
             >
               <div className="flex items-start justify-between gap-2">
@@ -1091,10 +1307,29 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                 <ListChecks size={16} className="text-emerald-600" />
               </div>
               <div className="mt-2 flex items-center gap-3">
-                <div className="inline-flex items-center rounded-xl border border-emerald-300 bg-emerald-600 px-3 py-2 text-3xl font-extrabold text-white shadow-sm">
-                  {actionPlanEntries.length}
-                </div>
-                <p className="text-xs text-slate-500">Натисніть, щоб переглянути внесені пункти плану дій.</p>
+                {actionPlanMetrics.total === 0 ? (
+                  <div className="inline-flex items-center rounded-xl border border-slate-300 bg-slate-100 px-3 py-2 text-3xl font-extrabold text-slate-600 shadow-sm">
+                    —
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    {actionPlanMetrics.done > 0 ? (
+                      <div className="inline-flex items-center rounded-xl border border-emerald-300 bg-emerald-600 px-2 py-1 text-lg font-extrabold text-white shadow-sm">
+                        {actionPlanMetrics.done}
+                      </div>
+                    ) : null}
+                    {actionPlanMetrics.pending > 0 ? (
+                      <div className="inline-flex items-center rounded-xl border border-amber-300 bg-amber-500 px-2 py-1 text-lg font-extrabold text-white shadow-sm">
+                        {actionPlanMetrics.pending}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+                <p className="text-xs text-slate-500">
+                  {actionPlanMetrics.total === 0
+                    ? "Активних планів дій немає."
+                    : `${actionPlanMetrics.done} виконано ${actionPlanMetrics.pending > 0 ? `/ ${actionPlanMetrics.pending} невиконано` : "/ всі завершені"}`}
+                </p>
               </div>
             </button>
           </div>
@@ -1276,30 +1511,57 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             <div className="flex items-center justify-between gap-3">
               <p className="text-base font-semibold text-slate-900">Порушення</p>
               <div className="inline-flex items-center rounded-xl border border-red-300 bg-red-600 px-3 py-1.5 text-lg font-extrabold text-white shadow-sm">
-                {criticalCount}
+                {pendingCriticalCount}
               </div>
             </div>
-            <p className="mt-1 text-xs text-slate-500">Натисніть на порушення, щоб додати/оновити план дій.</p>
+            <p className="mt-1 text-xs text-slate-500">Коментарі технолога та статус наявності плану дій.</p>
 
             <div className="mt-3 max-h-[60vh] overflow-y-auto rounded-lg border border-red-200 bg-red-50 p-3">
               {criticalDialogItems.length ? (
                 <div className="space-y-2">
-                  {criticalDialogItems.map((entry) => (
-                    <button
-                      key={`${entry.auditId}_${entry.itemId}`}
-                      type="button"
-                      onClick={() => openPlanDialog(entry.auditId, entry.auditLabel, { itemId: entry.itemId, title: entry.title }, "critical")}
-                      className="w-full rounded border border-red-200 bg-white px-3 py-2 text-left hover:bg-red-50"
-                    >
-                      <p className="text-xs font-semibold text-red-800">{entry.auditLabel}</p>
-                      <div className="mt-1 flex items-start justify-between gap-2">
-                        <p className="text-sm text-red-900">{entry.title}</p>
-                        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${entry.hasPlan ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-red-300 bg-white text-red-700"}`}>
-                          {entry.hasPlan ? "План є" : "Додати план"}
-                        </span>
+                  {criticalDialogItems.map((entry) => {
+                    const planStatus = String(actionPlanByItem?.[getCriticalPlanKey(entry.auditId, entry.itemId)]?.status || "");
+                    const isDone = planStatus === "done";
+                    const hasPlan = entry.hasPlan;
+                    if (canCreatePlan) {
+                      return (
+                        <button
+                          key={`${entry.auditId}_${entry.itemId}`}
+                          type="button"
+                          onClick={() => openPlanDialog(entry.auditId, entry.auditLabel, entry, "critical")}
+                          className={`w-full rounded border bg-white px-3 py-2 text-left hover:bg-red-50 ${isDone ? "border-emerald-200 opacity-60" : "border-red-200"}`}
+                        >
+                          <p className="text-xs font-semibold text-red-800">{entry.auditLabel}</p>
+                          <div className="mt-1 flex items-start justify-between gap-2">
+                            <p className="text-sm text-red-900">{entry.title}</p>
+                            <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${isDone ? "border-emerald-300 bg-emerald-50 text-emerald-700" : hasPlan ? "border-amber-300 bg-amber-50 text-amber-700" : "border-red-300 bg-white text-red-700"}`}>
+                              {isDone ? "Виконано" : hasPlan ? "План в процесі" : "Потребує плану"}
+                            </span>
+                          </div>
+                          <p className="mt-2 rounded bg-red-50 px-2 py-1 text-xs text-red-800">
+                            {entry.violationComment || "Коментар порушення відсутній"}
+                          </p>
+                        </button>
+                      );
+                    }
+                    return (
+                      <div
+                        key={`${entry.auditId}_${entry.itemId}`}
+                        className={`w-full rounded border bg-white px-3 py-2 ${isDone ? "border-emerald-200 opacity-60" : "border-red-200"}`}
+                      >
+                        <p className="text-xs font-semibold text-red-800">{entry.auditLabel}</p>
+                        <div className="mt-1 flex items-start justify-between gap-2">
+                          <p className="text-sm text-red-900">{entry.title}</p>
+                          <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${isDone ? "border-emerald-300 bg-emerald-50 text-emerald-700" : hasPlan ? "border-amber-300 bg-amber-50 text-amber-700" : "border-red-300 bg-white text-red-700"}`}>
+                            {isDone ? "Виконано" : hasPlan ? "В процесі" : "Потребує плану"}
+                          </span>
+                        </div>
+                        <p className="mt-2 rounded bg-red-50 px-2 py-1 text-xs text-red-800">
+                          {entry.violationComment || "Коментар порушення відсутній"}
+                        </p>
                       </div>
-                    </button>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="text-sm text-slate-600">Порушень не знайдено.</p>
@@ -1327,10 +1589,15 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                     <button
                       key={entry.planKey}
                       type="button"
-                      onClick={() => openPlanDialog(entry.auditId, entry.auditLabel, { itemId: entry.itemId, title: entry.itemTitle }, "plan")}
+                      onClick={() => openPlanDialog(entry.auditId, entry.auditLabel, entry, "plan")}
                       className="w-full rounded border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50"
                     >
-                      <p className="text-xs font-semibold text-slate-500">{entry.auditLabel} · {entry.itemTitle}</p>
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-xs font-semibold text-slate-500">{entry.auditLabel} · {entry.itemTitle}</p>
+                        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${entry.status === "done" ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-amber-300 bg-amber-50 text-amber-700"}`}>
+                          {entry.status === "done" ? "Виконано" : "В процесі"}
+                        </span>
+                      </div>
                       <p className="mt-1 text-xs text-slate-600">
                         Дедлайн: {actionPlanByItem?.[entry.planKey]?.deadline ? formatDisplayDate(actionPlanByItem[entry.planKey].deadline) : "—"} · Відповідальний: {actionPlanByItem?.[entry.planKey]?.responsible || "—"}
                       </p>
@@ -1355,12 +1622,20 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             setPlanDialogResponsible("");
             setPlanDialogResponsibleIds([]);
             setPlanDialogComment("");
+            setPlanDialogStatus("in_progress");
           }}
         >
           <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
             <p className="text-base font-semibold text-slate-900">План дій для порушення</p>
             <p className="mt-1 text-xs text-slate-500">{planDialogContext.auditLabel}</p>
             <p className="mt-1 text-sm font-semibold text-slate-700">{planDialogContext.itemTitle}</p>
+
+            {String(planDialogContext?.violationComment || "").trim() ? (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Порушення / коментар технолога</p>
+                <p className="mt-1 text-sm text-amber-900">{planDialogContext.violationComment}</p>
+              </div>
+            ) : null}
 
             <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div>
@@ -1388,7 +1663,19 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
               </div>
             </div>
 
-            <label className="mt-3 block text-sm font-semibold text-slate-800">Коментар / план дій</label>
+            <div className="mt-3">
+              <label className="block text-sm font-semibold text-slate-800">Статус</label>
+              <select
+                value={planDialogStatus}
+                onChange={(event) => setPlanDialogStatus(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+              >
+                <option value="in_progress">В процесі</option>
+                <option value="done">Виконано</option>
+              </select>
+            </div>
+
+            <label className="mt-3 block text-sm font-semibold text-slate-800">План дій керуючого</label>
             <textarea
               value={planDialogComment}
               onChange={(event) => setPlanDialogComment(event.target.value)}
@@ -1406,6 +1693,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                   setPlanDialogResponsible("");
                   setPlanDialogResponsibleIds([]);
                   setPlanDialogComment("");
+                  setPlanDialogStatus("in_progress");
                 }}
                 className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
               >
