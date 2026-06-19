@@ -428,23 +428,64 @@ const apiGet = async (path, params = {}) => {
     return { transport, res };
   };
 
-  // 1) Якщо вже знаємо вдалий транспорт — пробуємо його першим з ПОВНИМИ
-  //    мережевими ретраями. Решту (на випадок зміни API) — швидко, без ретраїв.
+  // Наростаючі затримки для «дозрівання» свіжого токена (він активується на
+  // боці Vik-Soft не миттєво — звідси баг «перший запит падає, другий проходить»).
+  const RETRY_DELAYS_MS = [400, 1000, 2000];
+  const tried = [];
+
+  // Повторює задані транспорти з наростаючою затримкою, поки токен «дозріє».
+  // Зупиняється раніше, якщо побачив не-auth помилку (проблема не в токені).
+  const runMaturation = async (transports, label) => {
+    for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
+      await sleep(RETRY_DELAYS_MS[attempt]);
+      let sawNonAuthError = false;
+      for (const t of transports) {
+        const { res } = await tryTransport(t);
+        tried.push({ name: `${t.name}+${label}${attempt + 1}`, status: res.status, body: (res.body || "").slice(0, 120) });
+        if (res.ok && !looksLikeAuthError(res) && !hasEmbeddedApiError(res)) {
+          tokenTransport = t;
+          return res.json !== null ? res.json : res.body;
+        }
+        if (!looksLikeAuthError(res)) sawNonAuthError = true;
+      }
+      if (sawNonAuthError) break;
+    }
+    return undefined;
+  };
+
+  // 1) Якщо вже знаємо вдалий транспорт — це найшвидший шлях. Пробуємо його з
+  //    ПОВНИМИ мережевими ретраями. На auth-помилці (токен ще не активний/застарів)
+  //    одразу дозріваємо САМЕ цей транспорт — БЕЗ перебору решти. Перебір
+  //    «неправильних» транспортів — це зайві round-trip'и до Vik-Soft, які
+  //    разом із затримками дозрівання перевищують таймаут проксі → 504.
   if (tokenTransport) {
     const { res } = await tryTransport(tokenTransport, { retries: REQUEST_NETWORK_RETRIES });
     if (res.ok && !looksLikeAuthError(res) && !hasEmbeddedApiError(res)) {
       return res.json !== null ? res.json : res.body;
     }
+    tried.push({ name: tokenTransport.name, status: res.status, body: (res.body || "").slice(0, 120) });
     if (!looksLikeAuthError(res) && res.status !== 0) {
       throw new Error(`HTTP ${res.status} ${path} :: ${(res.body || "").slice(0, 500)}`);
     }
+    if (looksLikeAuthError(res)) {
+      const known = tokenTransport;
+      const matured = await runMaturation([known], "wait");
+      if (matured !== undefined) return matured;
+      // Релогін і ще раунд дозрівання саме цього транспорту.
+      invalidateVikSoftToken();
+      token = await getToken();
+      const relogged = await runMaturation([known], "relogin");
+      if (relogged !== undefined) return relogged;
+      // Якщо й після релогіну не вийшло — можливо, API змінило транспорт.
+      // Падаємо у повний перебір нижче як останній засіб.
+    }
   }
 
+  // 2) Транспорт невідомий або перестав працювати — повний перебір (швидкий fail).
   const order = tokenTransport
     ? TOKEN_TRANSPORTS.filter((t) => t !== tokenTransport)
     : TOKEN_TRANSPORTS;
 
-  const tried = [];
   const authErrorTransports = [];
   for (const t of order) {
     // Перебір — швидкий fail (retries:0), щоб не множити таймаути.
@@ -458,53 +499,20 @@ const apiGet = async (path, params = {}) => {
     // на дозрівання нижче. Решта (напр. query:sid → 400 «Bad Request») просто
     // неправильні й до дозрівання не потрапляють.
     if (looksLikeAuthError(res)) authErrorTransports.push(t);
-    // ВАЖЛИВО: НЕ кидаємо виняток на детермінованій HTTP-помилці (напр. 400)
-    // від «неправильного» транспорту. Свіжий токен ще не активний — правильний
-    // транспорт (header:auth-token) повертає 401/403, а query-варіант може дати
-    // 400 «Bad Request». Якщо кинути тут — ніколи не дійдемо до дозрівання токена
-    // нижче, де header:auth-token повториться після паузи й спрацює. Тож просто
-    // фіксуємо спробу й продовжуємо до етапу maturation.
+    // НЕ кидаємо виняток на детермінованій HTTP-помилці (напр. 400) від
+    // «неправильного» транспорту — інакше не дійдемо до дозрівання.
   }
 
-  // 2) Усі транспорти повернули auth-error. Дві ймовірні причини:
-  //    (а) токен ЩОЙНО виданий і ще не активувався на боці Vik-Soft (звідси баг
-  //        «перший запит падає, другий проходить»); (б) токен застарів.
-  //    Стратегія: спершу кілька повторів з НАЯВНИМ токеном і наростаючою
-  //    затримкою (він «дозріває»), а якщо й далі auth-error — релогін і ще раунд.
-  //    Усе в межах ОДНОГО виклику, щоб користувач не бачив випадкову помилку.
-  const RETRY_DELAYS_MS = [400, 1000, 2000];
-
-  // Дозрівання повторює лише транспорти, що давали auth-помилку (заблоковані
-  // токеном). Якщо таких не було — пробуємо всі (на випадок іншого розкладу API).
+  // 3) Дозрівання токена для перебраних транспортів, далі релогін і ще раунд.
+  //    Якщо auth-помилок не було взагалі — пробуємо всі (інший розклад API).
   const maturationTransports = authErrorTransports.length ? authErrorTransports : TOKEN_TRANSPORTS;
 
-  const retryRound = async (label) => {
-    for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
-      await sleep(RETRY_DELAYS_MS[attempt]);
-      let sawNonAuthError = false;
-      for (const t of maturationTransports) {
-        const { res } = await tryTransport(t);
-        tried.push({ name: `${t.name}+${label}${attempt + 1}`, status: res.status, body: (res.body || "").slice(0, 120) });
-        if (res.ok && !looksLikeAuthError(res) && !hasEmbeddedApiError(res)) {
-          tokenTransport = t;
-          return res.json !== null ? res.json : res.body;
-        }
-        if (!looksLikeAuthError(res)) sawNonAuthError = true;
-      }
-      // Якщо жоден транспорт не дав auth-помилки — проблема не в токені, не чекаємо.
-      if (sawNonAuthError) break;
-    }
-    return undefined;
-  };
-
-  // 2a) Дозрівання поточного токена.
-  const matured = await retryRound("wait");
+  const matured = await runMaturation(maturationTransports, "wait");
   if (matured !== undefined) return matured;
 
-  // 2b) Релогін і повторний раунд (на випадок справді протермінованого токена).
   invalidateVikSoftToken();
   token = await getToken();
-  const relogged = await retryRound("relogin");
+  const relogged = await runMaturation(maturationTransports, "relogin");
   if (relogged !== undefined) return relogged;
 
   const detail = tried.map((x) => `${x.name}→${x.status}${x.body ? ` (${x.body})` : ""}`).join(" || ");
