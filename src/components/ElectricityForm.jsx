@@ -262,7 +262,6 @@ const ElectricityForm = ({
                           </div>
                         </th>
                       ))}
-                      <th className="px-3 py-2 text-left whitespace-nowrap align-bottom border border-slate-200" rowSpan={2}>Відповідальний</th>
                       {onDeleteHistory && <th className="px-3 py-2 border border-slate-200" rowSpan={2}></th>}
                     </tr>
                     <tr>
@@ -329,7 +328,6 @@ const ElectricityForm = ({
                               </Fragment>
                             );
                           })}
-                          <td className="px-3 py-2 whitespace-nowrap border border-slate-200">Керуючий рестораном</td>
                           {onDeleteHistory && (
                             <td className="px-3 py-2 text-right border border-slate-200">
                               <button
