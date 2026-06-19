@@ -137,21 +137,34 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     }
   }, [apiEnabled, reportDate, hasEics, eicsKey, generatorEicsKey]);
 
-  // Кнопка «Автоматичне оновлення»: примусово тягне свіжі дані з Vik-Soft і одразу
-  // зберігає їх в історію показників (об'єднує два кроки в одну дію).
+  // Кнопка збереження: зберігає вже завантажені дані в історію показників.
+  // Якщо дані ще не тягнули (порожньо) — спершу робить запит, потім зберігає.
+  // Не робимо зайвого повторного запиту, якщо дані вже є — це уникає ще одного
+  // ризику 504 від проксі та гарантує, що показані дані = збережені дані.
   const handleAutoUpdate = useCallback(async () => {
-    const result = await load({ force: true });
-    if (!result?.ok) return;
+    let result = data;
+    const loadedRows = Array.isArray(data?.rows) ? data.rows : [];
+    if (!data?.ok || loadedRows.length === 0) {
+      result = await load({ force: true });
+    }
+    if (!result?.ok) {
+      setError(result?.error || "Не вдалося отримати дані для збереження");
+      return;
+    }
     const rows = Array.isArray(result.rows) ? result.rows : [];
-    if (rows.length === 0) return;
+    if (rows.length === 0) {
+      setError("Немає показників для збереження за обрану дату.");
+      return;
+    }
     if (!onSave) return;
     setSaving(true);
+    setError("");
     try {
       await onSave({ rows, reportDate, data: result });
     } finally {
       setSaving(false);
     }
-  }, [load, onSave, reportDate]);
+  }, [data, load, onSave, reportDate]);
 
   // При зміні закладу (EIC) або дати НЕ тягнемо дані автоматично — користувач
   // запускає оновлення сам кнопкою. Лише скидаємо застарілі дані попереднього
@@ -219,7 +232,7 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
               disabled={!canSave || loading || saving || !hasEics}
               className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-400 transition"
             >
-              {saving ? "Зберігаю..." : saveLabel}
+              {saving ? "Зберігаю..." : (rows.length > 0 ? "Зберегти в історію" : saveLabel)}
             </button>
           )}
         </div>
