@@ -2,7 +2,20 @@ import { useState } from "react";
 import { Zap } from "lucide-react";
 
 // Компонент для введення та перегляду історії показників електроенергії
-const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = "", reportDate = "", energoRows = [], onDeleteHistory }) => {
+const ElectricityForm = ({
+  meters = [],
+  onSubmit,
+  history = [],
+  responsible = "",
+  reportDate = "",
+  energoRows = [],
+  onDeleteHistory,
+  coefficients = {},
+  canEditCoefficients = false,
+  canEditReadings = false,
+  onCoefficientChange,
+  onReadingOverride,
+}) => {
   const [meterValues, setMeterValues] = useState(
     meters.map(m => ({
       meterId: m.id,
@@ -141,6 +154,45 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
 
         const isGenerator = (label = "") => /генератор/i.test(String(label));
 
+        // Коефіцієнт трансформації лічильника (за замовчуванням 1).
+        const coeffOf = (key) => {
+          const c = Number(coefficients?.[key]);
+          return Number.isFinite(c) && c > 0 ? c : 1;
+        };
+        // Округлення для відображення показника.
+        const fmtNum = (n) => {
+          if (!Number.isFinite(n)) return "—";
+          return String(Math.round(n * 100) / 100);
+        };
+        // Ланцюжок показників: за зростанням дати накопичуємо споживання/коефіцієнт.
+        // Якщо є ручна правка (readingOverride) — показник = правці, а наступні
+        // дати продовжують додаватись уже від виправленого значення.
+        const ascHistory = [...history].sort((a, b) =>
+          String(rowDateIso(a?.date) || a?.createdAt || "").localeCompare(String(rowDateIso(b?.date) || b?.createdAt || ""))
+        );
+        const readingMap = new Map(); // recordId -> Map(meterKey -> reading)
+        const running = new Map();    // meterKey -> last reading
+        for (const rec of ascHistory) {
+          const ms = Array.isArray(rec?.meters) ? rec.meters : [];
+          const perRec = new Map();
+          for (const m of ms) {
+            const key = String(m?.meterNumber || m?.meterId || "");
+            if (!key) continue;
+            const override = Number(m?.readingOverride);
+            let reading;
+            if (Number.isFinite(override)) {
+              reading = override;
+            } else {
+              const consumption = Number(m?.consumption ?? m?.currValue) || 0;
+              const prev = running.has(key) ? running.get(key) : null;
+              reading = (prev == null ? 0 : prev) + consumption / coeffOf(key);
+            }
+            perRec.set(key, reading);
+            running.set(key, reading);
+          }
+          readingMap.set(String(rec?.id), perRec);
+        }
+
         // Розділяємо групи: «Мережа» та «Генератор» на основі назви точки.
         const groups = [
           { key: "grid", title: "Мережа", match: (label) => !isGenerator(label) },
@@ -177,6 +229,7 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
             <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-3">
               <h4 className="font-semibold text-slate-800 mb-3 text-base flex items-center gap-2">
                 <Zap size={16} className="text-yellow-400" /> Історія показників — {group.title}
+                <span className="text-[11px] font-normal text-slate-400">(споживання / показник)</span>
               </h4>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -184,7 +237,26 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
                     <tr>
                       <th className="px-3 py-2 text-left whitespace-nowrap">Дата</th>
                       {columns.map((c) => (
-                        <th key={c} className="px-3 py-2 text-right whitespace-nowrap">{c}</th>
+                        <th key={c} className="px-3 py-2 text-right whitespace-nowrap align-bottom">
+                          <div className="font-semibold">{c}</div>
+                          <div className="mt-0.5 flex items-center justify-end gap-1 text-[11px] font-normal text-slate-500">
+                            <span>К-т:</span>
+                            {canEditCoefficients ? (
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                defaultValue={coefficients?.[c] ?? ""}
+                                placeholder="1"
+                                onBlur={(e) => onCoefficientChange?.(c, e.target.value)}
+                                className="w-14 rounded border border-slate-300 px-1 py-0.5 text-right text-[11px]"
+                                title="Коефіцієнт трансформації"
+                              />
+                            ) : (
+                              <span>{coefficients?.[c] ?? 1}</span>
+                            )}
+                          </div>
+                        </th>
                       ))}
                       <th className="px-3 py-2 text-left whitespace-nowrap">Відповідальний</th>
                       {onDeleteHistory && <th className="px-3 py-2"></th>}
@@ -201,14 +273,38 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
                       }
                       // Пропускаємо записи, які не мають жодного значення в цій групі.
                       if (byCol.size === 0) return null;
+                      const recReadings = readingMap.get(String(row?.id));
                       return (
                         <tr key={row?.id || idx} className="border-t border-slate-100">
                           <td className="px-3 py-2 whitespace-nowrap">{fmtDate(row?.date)}</td>
                           {columns.map((c) => {
                             const m = byCol.get(c);
+                            if (!m) return <td key={c} className="px-3 py-2 text-right tabular-nums">—</td>;
+                            const readingStr = fmtNum(recReadings?.get(c));
+                            const overridden = Number.isFinite(Number(m?.readingOverride));
                             return (
-                              <td key={c} className="px-3 py-2 text-right tabular-nums">
-                                {m ? (m.consumption ?? m.currValue ?? "—") : "—"}
+                              <td key={c} className="px-3 py-2 text-right tabular-nums align-top">
+                                <div>{m.consumption ?? m.currValue ?? "—"}</div>
+                                <div className="mt-0.5 text-[11px] text-slate-500">
+                                  {canEditReadings ? (
+                                    <input
+                                      key={`${row?.id}|${c}|${readingStr}|${overridden ? "o" : ""}`}
+                                      type="number"
+                                      step="0.01"
+                                      defaultValue={readingStr === "—" ? "" : readingStr}
+                                      onBlur={(e) => {
+                                        const v = e.target.value;
+                                        if (String(v) !== (readingStr === "—" ? "" : readingStr)) {
+                                          onReadingOverride?.(row?.id, c, v);
+                                        }
+                                      }}
+                                      className={`w-16 rounded border px-1 py-0.5 text-right text-[11px] ${overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-700" : "border-slate-300"}`}
+                                      title="Показник (натисніть, щоб відредагувати; правка перерахує наступні дати)"
+                                    />
+                                  ) : (
+                                    <span className={overridden ? "font-semibold text-amber-700" : ""}>П: {readingStr}</span>
+                                  )}
+                                </div>
                               </td>
                             );
                           })}

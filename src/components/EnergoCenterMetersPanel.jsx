@@ -137,16 +137,12 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     }
   }, [apiEnabled, reportDate, hasEics, eicsKey, generatorEicsKey]);
 
-  // Кнопка збереження: зберігає вже завантажені дані в історію показників.
-  // Якщо дані ще не тягнули (порожньо) — спершу робить запит, потім зберігає.
-  // Не робимо зайвого повторного запиту, якщо дані вже є — це уникає ще одного
-  // ризику 504 від проксі та гарантує, що показані дані = збережені дані.
+  // Кнопка «Оновити дані»: тягне показники з EnergoCenter за обрану дату ТА
+  // зберігає їх в історію (ручний запасний варіант на випадок, якщо нічний
+  // авто-запис о 03:00 не спрацював). Якщо записи за цю дату вже є —
+  // onSave (skipIfExists) сам пропустить збереження й не перезапише наявні.
   const handleAutoUpdate = useCallback(async () => {
-    let result = data;
-    const loadedRows = Array.isArray(data?.rows) ? data.rows : [];
-    if (!data?.ok || loadedRows.length === 0) {
-      result = await load({ force: true });
-    }
+    const result = await load({ force: true });
     if (!result?.ok) {
       setError(result?.error || "Не вдалося отримати дані для збереження");
       return;
@@ -164,7 +160,7 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
     } finally {
       setSaving(false);
     }
-  }, [data, load, onSave, reportDate]);
+  }, [load, onSave, reportDate]);
 
   // При зміні закладу (EIC) або дати НЕ тягнемо дані автоматично — користувач
   // запускає оновлення сам кнопкою. Лише скидаємо застарілі дані попереднього
@@ -219,22 +215,12 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
           />
           <button
             type="button"
-            onClick={() => load({ force: true })}
-            disabled={loading || saving}
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 transition"
+            onClick={onSave ? handleAutoUpdate : () => load({ force: true })}
+            disabled={loading || saving || !hasEics || (onSave && !canSave)}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-400 transition"
           >
-            {loading ? "Оновлюю..." : "Оновити дані"}
+            {loading ? "Оновлюю..." : saving ? "Зберігаю..." : "Оновити дані"}
           </button>
-          {onSave && (
-            <button
-              type="button"
-              onClick={handleAutoUpdate}
-              disabled={!canSave || loading || saving || !hasEics}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-slate-400 transition"
-            >
-              {saving ? "Зберігаю..." : (rows.length > 0 ? "Зберегти в історію" : saveLabel)}
-            </button>
-          )}
         </div>
       </header>
 

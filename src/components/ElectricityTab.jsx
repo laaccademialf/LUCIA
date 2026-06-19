@@ -4,8 +4,10 @@ import EnergoCenterMetersPanel from "./EnergoCenterMetersPanel";
 import {
   createCollectionItemApi,
   deleteCollectionItemApi,
+  getCollectionItemApi,
   isCollectionsApiEnabled,
   listCollectionItemsApi,
+  updateCollectionItemApi,
 } from "../api/collectionsApi";
 
 const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
@@ -20,6 +22,8 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
     return d.toISOString().slice(0, 10);
   });
   const [energoData, setEnergoData] = useState(null);
+  // Коефіцієнти трансформації лічильників поточного закладу: { [meterNumber]: number }.
+  const [meterCoefficients, setMeterCoefficients] = useState({});
 
   // Скидання вибору ресторану при зміні списку ресторанів
   useEffect(() => {
@@ -67,6 +71,79 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
   // Вибраний ресторан: для адміна — з селектора, для керуючого — його ресторан
   const currentRestaurantId = user?.role === "admin" ? selectedRestaurant : user?.restaurant;
   const currentRestaurant = restaurants.find((r) => String(r?.id || "") === String(currentRestaurantId || ""));
+  const isAdmin = user?.role === "admin";
+
+  // Завантаження коефіцієнтів трансформації лічильників для вибраного закладу.
+  useEffect(() => {
+    let cancelled = false;
+    setMeterCoefficients({});
+    const rid = String(currentRestaurantId || "").trim();
+    if (!rid || !isCollectionsApiEnabled()) return;
+    (async () => {
+      try {
+        const doc = await getCollectionItemApi("electricitySettings", rid);
+        if (cancelled) return;
+        const coeffs = doc && typeof doc.coefficients === "object" && doc.coefficients ? doc.coefficients : {};
+        setMeterCoefficients(coeffs);
+      } catch { /* налаштувань ще немає */ }
+    })();
+    return () => { cancelled = true; };
+  }, [currentRestaurantId]);
+
+  // Зміна коефіцієнта трансформації лічильника (лише адмін, лише для вибраного закладу).
+  const handleCoefficientChange = async (meterNumber, rawValue) => {
+    const rid = String(currentRestaurantId || "").trim();
+    if (!rid) return;
+    const num = Number(String(rawValue).replace(",", "."));
+    const next = { ...meterCoefficients };
+    if (!Number.isFinite(num) || num <= 0) {
+      delete next[meterNumber];
+    } else {
+      next[meterNumber] = num;
+    }
+    setMeterCoefficients(next);
+    try {
+      if (isCollectionsApiEnabled()) {
+        // createCollectionItemApi з явним id робить upsert (перезапис за id).
+        await createCollectionItemApi("electricitySettings", {
+          id: rid,
+          restaurantId: rid,
+          coefficients: next,
+        });
+      }
+    } catch (error) {
+      setStatus(`Не вдалося зберегти коефіцієнт: ${error?.message || error}`);
+    }
+  };
+
+  // Ручна правка показника лічильника за дату (лише адмін). Зберігається як
+  // readingOverride на відповідному запису; наступні показники перераховуються.
+  const handleReadingOverride = async (recordId, meterNumber, rawValue) => {
+    const rec = electricityHistory.find((r) => String(r?.id || "") === String(recordId));
+    if (!rec) return;
+    const value = String(rawValue).trim().replace(",", ".");
+    const override = value === "" ? null : Number(value);
+    const meters = (Array.isArray(rec.meters) ? rec.meters : []).map((m) => {
+      const key = String(m?.meterNumber || m?.meterId || "");
+      if (key !== meterNumber) return m;
+      const nextMeter = { ...m };
+      if (override === null || !Number.isFinite(override)) delete nextMeter.readingOverride;
+      else nextMeter.readingOverride = override;
+      return nextMeter;
+    });
+    const updated = { ...rec, meters };
+    setElectricityHistory((prev) => prev.map((r) => (String(r?.id) === String(recordId) ? updated : r)));
+    try {
+      if (isCollectionsApiEnabled() && !String(recordId).startsWith("local_")) {
+        await updateCollectionItemApi("electricityReadings", recordId, { meters });
+      } else {
+        setLocalFallbackHistory((prev) => prev.map((r) => (String(r?.id) === String(recordId) ? updated : r)));
+      }
+    } catch (error) {
+      setStatus(`Не вдалося зберегти показник: ${error?.message || error}`);
+    }
+  };
+
   const energoEics = currentRestaurant
     ? String(currentRestaurant.vikSoftEics || "")
         .split(/[,\s;]+/)
@@ -251,6 +328,11 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
         reportDate={reportDate}
         energoRows={Array.isArray(energoData?.rows) ? energoData.rows : []}
         onDeleteHistory={handleDeleteHistory}
+        coefficients={meterCoefficients}
+        canEditCoefficients={isAdmin && Boolean(currentRestaurantId)}
+        canEditReadings={isAdmin}
+        onCoefficientChange={handleCoefficientChange}
+        onReadingOverride={handleReadingOverride}
       />
     </div>
   );
