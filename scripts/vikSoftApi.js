@@ -445,6 +445,7 @@ const apiGet = async (path, params = {}) => {
     : TOKEN_TRANSPORTS;
 
   const tried = [];
+  const authErrorTransports = [];
   for (const t of order) {
     // Перебір — швидкий fail (retries:0), щоб не множити таймаути.
     const { res } = await tryTransport(t, { retries: 0 });
@@ -453,10 +454,16 @@ const apiGet = async (path, params = {}) => {
       tokenTransport = t;
       return res.json !== null ? res.json : res.body;
     }
-    // Якщо це не auth-error і є статус (детермінована HTTP-помилка) — далі немає сенсу.
-    if (!looksLikeAuthError(res) && res.status !== 0) {
-      throw new Error(`HTTP ${res.status} ${path} :: ${(res.body || "").slice(0, 500)}`);
-    }
+    // Транспорт, заблокований неактивним/застарілим токеном (401/403), — кандидат
+    // на дозрівання нижче. Решта (напр. query:sid → 400 «Bad Request») просто
+    // неправильні й до дозрівання не потрапляють.
+    if (looksLikeAuthError(res)) authErrorTransports.push(t);
+    // ВАЖЛИВО: НЕ кидаємо виняток на детермінованій HTTP-помилці (напр. 400)
+    // від «неправильного» транспорту. Свіжий токен ще не активний — правильний
+    // транспорт (header:auth-token) повертає 401/403, а query-варіант може дати
+    // 400 «Bad Request». Якщо кинути тут — ніколи не дійдемо до дозрівання токена
+    // нижче, де header:auth-token повториться після паузи й спрацює. Тож просто
+    // фіксуємо спробу й продовжуємо до етапу maturation.
   }
 
   // 2) Усі транспорти повернули auth-error. Дві ймовірні причини:
@@ -467,11 +474,15 @@ const apiGet = async (path, params = {}) => {
   //    Усе в межах ОДНОГО виклику, щоб користувач не бачив випадкову помилку.
   const RETRY_DELAYS_MS = [400, 1000, 2000];
 
+  // Дозрівання повторює лише транспорти, що давали auth-помилку (заблоковані
+  // токеном). Якщо таких не було — пробуємо всі (на випадок іншого розкладу API).
+  const maturationTransports = authErrorTransports.length ? authErrorTransports : TOKEN_TRANSPORTS;
+
   const retryRound = async (label) => {
     for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
       await sleep(RETRY_DELAYS_MS[attempt]);
       let sawNonAuthError = false;
-      for (const t of TOKEN_TRANSPORTS) {
+      for (const t of maturationTransports) {
         const { res } = await tryTransport(t);
         tried.push({ name: `${t.name}+${label}${attempt + 1}`, status: res.status, body: (res.body || "").slice(0, 120) });
         if (res.ok && !looksLikeAuthError(res) && !hasEmbeddedApiError(res)) {
