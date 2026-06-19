@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { Zap } from "lucide-react";
 
 // Компонент для введення та перегляду історії показників електроенергії
@@ -229,18 +229,22 @@ const ElectricityForm = ({
             <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-3">
               <h4 className="font-semibold text-slate-800 mb-3 text-base flex items-center gap-2">
                 <Zap size={16} className="text-yellow-400" /> Історія показників — {group.title}
-                <span className="text-[11px] font-normal text-slate-400">(споживання / показник)</span>
               </h4>
+              {canEditReadings && !canEditCoefficients && (
+                <p className="mb-3 text-[12px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                  Оберіть конкретний заклад угорі, щоб редагувати коефіцієнти трансформації (вони індивідуальні для кожного лічильника закладу).
+                </p>
+              )}
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm border-collapse">
                   <thead className="bg-slate-100 border-b border-slate-200">
                     <tr>
-                      <th className="px-3 py-2 text-left whitespace-nowrap">Дата</th>
+                      <th className="px-3 py-2 text-left whitespace-nowrap align-bottom border border-slate-200" rowSpan={2}>Дата</th>
                       {columns.map((c) => (
-                        <th key={c} className="px-3 py-2 text-right whitespace-nowrap align-bottom">
+                        <th key={c} className="px-3 py-2 text-center whitespace-nowrap border border-slate-200" colSpan={2}>
                           <div className="font-semibold">{c}</div>
-                          <div className="mt-0.5 flex items-center justify-end gap-1 text-[11px] font-normal text-slate-500">
-                            <span>К-т:</span>
+                          <div className="mt-0.5 flex items-center justify-center gap-1 text-[11px] font-normal text-slate-500">
+                            <span>К-т трансформації:</span>
                             {canEditCoefficients ? (
                               <input
                                 type="number"
@@ -250,16 +254,24 @@ const ElectricityForm = ({
                                 placeholder="1"
                                 onBlur={(e) => onCoefficientChange?.(c, e.target.value)}
                                 className="w-14 rounded border border-slate-300 px-1 py-0.5 text-right text-[11px]"
-                                title="Коефіцієнт трансформації"
+                                title="Коефіцієнт трансформації (індивідуальний для лічильника цього закладу)"
                               />
                             ) : (
-                              <span>{coefficients?.[c] ?? 1}</span>
+                              <span className="font-semibold text-slate-700">{coefficients?.[c] ?? 1}</span>
                             )}
                           </div>
                         </th>
                       ))}
-                      <th className="px-3 py-2 text-left whitespace-nowrap">Відповідальний</th>
-                      {onDeleteHistory && <th className="px-3 py-2"></th>}
+                      <th className="px-3 py-2 text-left whitespace-nowrap align-bottom border border-slate-200" rowSpan={2}>Відповідальний</th>
+                      {onDeleteHistory && <th className="px-3 py-2 border border-slate-200" rowSpan={2}></th>}
+                    </tr>
+                    <tr>
+                      {columns.map((c) => (
+                        <Fragment key={`sub-${c}`}>
+                          <th className="px-3 py-1.5 text-right whitespace-nowrap text-[11px] font-medium text-slate-500 border border-slate-200">Показник</th>
+                          <th className="px-3 py-1.5 text-right whitespace-nowrap text-[11px] font-medium text-slate-500 border border-slate-200">Споживання</th>
+                        </Fragment>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
@@ -276,16 +288,22 @@ const ElectricityForm = ({
                       const recReadings = readingMap.get(String(row?.id));
                       return (
                         <tr key={row?.id || idx} className="border-t border-slate-100">
-                          <td className="px-3 py-2 whitespace-nowrap">{fmtDate(row?.date)}</td>
+                          <td className="px-3 py-2 whitespace-nowrap border border-slate-200">{fmtDate(row?.date)}</td>
                           {columns.map((c) => {
                             const m = byCol.get(c);
-                            if (!m) return <td key={c} className="px-3 py-2 text-right tabular-nums">—</td>;
+                            if (!m) {
+                              return (
+                                <Fragment key={c}>
+                                  <td className="px-3 py-2 text-right tabular-nums border border-slate-200">—</td>
+                                  <td className="px-3 py-2 text-right tabular-nums border border-slate-200">—</td>
+                                </Fragment>
+                              );
+                            }
                             const readingStr = fmtNum(recReadings?.get(c));
                             const overridden = Number.isFinite(Number(m?.readingOverride));
                             return (
-                              <td key={c} className="px-3 py-2 text-right tabular-nums align-top">
-                                <div>{m.consumption ?? m.currValue ?? "—"}</div>
-                                <div className="mt-0.5 text-[11px] text-slate-500">
+                              <Fragment key={c}>
+                                <td className="px-3 py-2 text-right tabular-nums border border-slate-200">
                                   {canEditReadings ? (
                                     <input
                                       key={`${row?.id}|${c}|${readingStr}|${overridden ? "o" : ""}`}
@@ -298,19 +316,22 @@ const ElectricityForm = ({
                                           onReadingOverride?.(row?.id, c, v);
                                         }
                                       }}
-                                      className={`w-16 rounded border px-1 py-0.5 text-right text-[11px] ${overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-700" : "border-slate-300"}`}
+                                      className={`w-20 rounded border px-1 py-0.5 text-right text-xs ${overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-700" : "border-slate-300"}`}
                                       title="Показник (натисніть, щоб відредагувати; правка перерахує наступні дати)"
                                     />
                                   ) : (
-                                    <span className={overridden ? "font-semibold text-amber-700" : ""}>П: {readingStr}</span>
+                                    <span className={overridden ? "font-semibold text-amber-700" : ""}>{readingStr}</span>
                                   )}
-                                </div>
-                              </td>
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums border border-slate-200">
+                                  {m.consumption ?? m.currValue ?? "—"}
+                                </td>
+                              </Fragment>
                             );
                           })}
-                          <td className="px-3 py-2 whitespace-nowrap">{row?.responsible || ""}</td>
+                          <td className="px-3 py-2 whitespace-nowrap border border-slate-200">{row?.responsible || ""}</td>
                           {onDeleteHistory && (
-                            <td className="px-3 py-2 text-right">
+                            <td className="px-3 py-2 text-right border border-slate-200">
                               <button
                                 type="button"
                                 onClick={() => onDeleteHistory(row?.id)}
