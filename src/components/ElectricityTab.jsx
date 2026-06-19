@@ -342,7 +342,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
           responsible={user?.displayName || user?.fullName || ""}
           reportDate={reportDate}
           energoRows={Array.isArray(energoData?.rows) ? energoData.rows : []}
-          onDeleteHistory={handleDeleteHistory}
+          onDeleteHistory={isAdmin ? handleDeleteHistory : undefined}
           coefficients={meterCoefficients}
           canEditCoefficients={isAdmin && Boolean(currentRestaurantId)}
           canEditReadings={isAdmin}
