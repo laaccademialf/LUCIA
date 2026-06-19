@@ -76,7 +76,7 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
   const visibleHistory = sortedHistory.filter((row) => rowDateIso(row?.date).slice(0, 7) === effectiveMonth);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-4">
       {existingForDate && (
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
           Для дати {reportDate} вже існує запис в історії. Збереження створить ще один.
@@ -164,9 +164,9 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
 
           if (columns.length === 0) {
             return (
-              <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-6 mt-8">
-                <h4 className="font-semibold text-slate-800 mb-4 text-lg flex items-center gap-2">
-                  <Zap size={18} className="text-yellow-400" /> Історія показників — {group.title}
+              <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-3">
+                <h4 className="font-semibold text-slate-800 mb-3 text-base flex items-center gap-2">
+                  <Zap size={16} className="text-yellow-400" /> Історія показників — {group.title}
                 </h4>
                 <p className="text-slate-500 text-sm">Немає даних</p>
               </div>
@@ -174,9 +174,9 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
           }
 
           return (
-            <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-6 mt-8">
-              <h4 className="font-semibold text-slate-800 mb-4 text-lg flex items-center gap-2">
-                <Zap size={18} className="text-yellow-400" /> Історія показників — {group.title}
+            <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-3">
+              <h4 className="font-semibold text-slate-800 mb-3 text-base flex items-center gap-2">
+                <Zap size={16} className="text-yellow-400" /> Історія показників — {group.title}
               </h4>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -233,7 +233,7 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
         };
 
         return (
-          <div className="mt-8 space-y-2">
+          <div className="mt-3 space-y-2">
             <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-2">
               <button
                 type="button"
@@ -253,8 +253,8 @@ const ElectricityForm = ({ meters = [], onSubmit, history = [], responsible = ""
           </div>
         );
       })() : (
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 mt-8">
-          <h4 className="font-semibold text-slate-800 mb-4 text-lg flex items-center gap-2"><Zap size={18} className="text-yellow-400" /> Історія показників</h4>
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mt-3">
+          <h4 className="font-semibold text-slate-800 mb-3 text-base flex items-center gap-2"><Zap size={16} className="text-yellow-400" /> Історія показників</h4>
           <p className="text-slate-500">Немає даних</p>
         </div>
       )}

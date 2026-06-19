@@ -184,9 +184,9 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <header className="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <header className="flex flex-wrap items-center justify-between gap-3 mb-3">
         <div>
-          <h3 className="text-lg font-semibold text-slate-900">Лічильники EnergoCenter</h3>
+          <h3 className="text-base font-semibold text-slate-900">Лічильники EnergoCenter</h3>
           {data?.fetchedAt && (
             <p className="text-xs text-slate-500">
               Останнє оновлення: {formatDateTime(data.fetchedAt)}
@@ -232,10 +232,10 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
         {ENERGOCENTER_DIRECTIONS.map((dir) => (
           <div
             key={dir}
-            className={`rounded-lg border px-3 py-2 ${DIRECTION_COLORS[dir] || "bg-slate-50 border-slate-200 text-slate-700"}`}
+            className={`rounded-lg border px-2.5 py-1.5 ${DIRECTION_COLORS[dir] || "bg-slate-50 border-slate-200 text-slate-700"}`}
           >
-            <div className="text-xs font-semibold uppercase tracking-wide opacity-80">{dir}</div>
-            <div className="text-lg font-bold">{formatNumber(totals[dir])}</div>
+            <div className="text-[10px] font-semibold uppercase tracking-wide opacity-80">{dir}</div>
+            <div className="text-base font-bold leading-tight">{formatNumber(totals[dir])}</div>
           </div>
         ))}
       </div>
