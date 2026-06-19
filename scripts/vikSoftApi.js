@@ -34,6 +34,33 @@ const REQUEST_RETRY_BASE_DELAY_MS = Math.max(
   Number.parseInt(String(process.env.VIKSOFT_RETRY_BASE_DELAY_MS || "600"), 10) || 600
 );
 
+// Скільки EIC опитувати ОДНОЧАСНО в межах одного запиту закладу. Раніше всі EIC
+// тягнулися послідовно — для закладів з багатьма основними лічильниками + генератором
+// сумарний час перевищував таймаут nginx-проксі (504 «помилка отримання даних»).
+// Паралелізм безпечний: токен і дерево кешуються через singleflight.
+const EIC_FETCH_CONCURRENCY = Math.max(
+  1,
+  Number.parseInt(String(process.env.VIKSOFT_EIC_CONCURRENCY || "6"), 10) || 6
+);
+
+// Обмежений за одночасністю map: виконує worker(item, index) для кожного елемента,
+// але не більше `limit` одночасно. Повертає масив результатів у вихідному порядку.
+const mapWithConcurrency = async (items, limit, worker) => {
+  const list = Array.isArray(items) ? items : [];
+  const results = new Array(list.length);
+  let cursor = 0;
+  const runNext = async () => {
+    while (cursor < list.length) {
+      const idx = cursor;
+      cursor += 1;
+      results[idx] = await worker(list[idx], idx);
+    }
+  };
+  const pool = Array.from({ length: Math.min(Math.max(1, limit), list.length || 1) }, () => runNext());
+  await Promise.all(pool);
+  return results;
+};
+
 // Макети getsqlmaket, які пробуємо по черзі, поки не отримаємо записи.
 // Налаштовується через env VIKSOFT_MAKET (через кому). За замовчуванням —
 // APIGetGr30 (30-хв графік, фінальна специфікація), із fallback на APIGetD_GR.
@@ -942,7 +969,9 @@ export const fetchEnergoCenterConsumption = async ({
     const allRows = [];
     const errors = [];
     const maketsUsed = new Set();
-    for (const eic of eics) {
+    // Опитуємо EIC паралельно (обмежено EIC_FETCH_CONCURRENCY), щоб великий
+    // перелік лічильників (основні + генератор) не перевищував таймаут проксі.
+    const perEic = await mapWithConcurrency(eics, EIC_FETCH_CONCURRENCY, async (eic) => {
       let records = [];
       let usedMaket = null;
       let lastErr = null;
@@ -966,17 +995,25 @@ export const fetchEnergoCenterConsumption = async ({
         }
       }
       if (!records.length) {
-        errors.push(
-          lastErr
+        return {
+          error: lastErr
             ? `EIC ${eic}: ${lastErr?.message || lastErr}`
-            : `EIC ${eic}: немає даних за ${reportDateDdMmYyyy} (макети: ${MAKET_CANDIDATES.join(", ")})`
-        );
-        continue;
+            : `EIC ${eic}: немає даних за ${reportDateDdMmYyyy} (макети: ${MAKET_CANDIDATES.join(", ")})`,
+        };
       }
-      if (usedMaket) maketsUsed.add(usedMaket);
       const pointName = await getPointName(eic);
       const rows = aggregateForDay(records, pointName, reportDateIso);
-      allRows.push(...rows);
+      return { rows, usedMaket };
+    });
+
+    for (const res of perEic) {
+      if (!res) continue;
+      if (res.error) {
+        errors.push(res.error);
+        continue;
+      }
+      if (res.usedMaket) maketsUsed.add(res.usedMaket);
+      if (Array.isArray(res.rows)) allRows.push(...res.rows);
     }
 
     if (allRows.length === 0 && errors.length) {
