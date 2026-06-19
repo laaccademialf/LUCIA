@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { useHaccp } from "../hooks/useHaccp";
 import DatePickerPopover from "./DatePickerPopover";
+import DateRangePickerPopover from "./DateRangePickerPopover";
 import { isCollectionsApiEnabled, listCollectionItemsApi } from "../api/collectionsApi";
 import {
   RATING_BY_VALUE,
@@ -217,21 +218,6 @@ const collectIssueItemIds = (responses) => {
   return ids;
 };
 
-const MONTH_OPTIONS_UA = [
-  { value: "01", label: "Січень" },
-  { value: "02", label: "Лютий" },
-  { value: "03", label: "Березень" },
-  { value: "04", label: "Квітень" },
-  { value: "05", label: "Травень" },
-  { value: "06", label: "Червень" },
-  { value: "07", label: "Липень" },
-  { value: "08", label: "Серпень" },
-  { value: "09", label: "Вересень" },
-  { value: "10", label: "Жовтень" },
-  { value: "11", label: "Листопад" },
-  { value: "12", label: "Грудень" },
-];
-
 const getPhotoSrc = (photo) => String(photo?.url || photo?.dataUrl || "").trim();
 const getCriticalPlanKey = (auditId, itemId) => `${String(auditId || "")}::${String(itemId || "")}`;
 
@@ -291,10 +277,8 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   const [showCriticalDetails, setShowCriticalDetails] = useState(false);
   const [showActionPlanDetails, setShowActionPlanDetails] = useState(false);
   const [galleryLightboxPhoto, setGalleryLightboxPhoto] = useState(null);
-  const [periodFromMonth, setPeriodFromMonth] = useState("");
-  const [periodFromYear, setPeriodFromYear] = useState("");
-  const [periodToMonth, setPeriodToMonth] = useState("");
-  const [periodToYear, setPeriodToYear] = useState("");
+  const [periodFrom, setPeriodFrom] = useState("");
+  const [periodTo, setPeriodTo] = useState("");
   const [actionPlanByItem, setActionPlanByItem] = useState({});
   const [planDialogContext, setPlanDialogContext] = useState(null);
   const [planDialogSource, setPlanDialogSource] = useState("critical");
@@ -392,41 +376,29 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       .sort((a, b) => getAuditSortKey(b) - getAuditSortKey(a));
   }, [audits, availableRestaurants, isAdmin, selectedRestaurantId]);
 
-  const availablePeriodYears = useMemo(() => {
-    return Array.from(
-      new Set(
-        auditsByLocation
-          .map((audit) => String(audit?.date || "").slice(0, 4))
-          .filter((year) => /^\d{4}$/.test(year))
-      )
-    ).sort((a, b) => a.localeCompare(b));
+  const availablePeriodBounds = useMemo(() => {
+    const dates = auditsByLocation
+      .map((audit) => String(audit?.date || "").slice(0, 10))
+      .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+      .sort((a, b) => a.localeCompare(b));
+    if (!dates.length) return { min: "", max: "" };
+    return { min: dates[0], max: dates[dates.length - 1] };
   }, [auditsByLocation]);
 
   useEffect(() => {
-    const monthValues = auditsByLocation
-      .map((audit) => String(audit?.date || "").slice(0, 7))
-      .filter((value) => /^\d{4}-\d{2}$/.test(value))
-      .sort((a, b) => a.localeCompare(b));
-    if (!monthValues.length) {
-      if (periodFromMonth) setPeriodFromMonth("");
-      if (periodFromYear) setPeriodFromYear("");
-      if (periodToMonth) setPeriodToMonth("");
-      if (periodToYear) setPeriodToYear("");
+    const { min, max } = availablePeriodBounds;
+    if (!min || !max) {
+      if (periodFrom) setPeriodFrom("");
+      if (periodTo) setPeriodTo("");
       return;
     }
-
-    const [firstYear, firstMonth] = monthValues[0].split("-");
-    const [lastYear, lastMonth] = monthValues[monthValues.length - 1].split("-");
-
-    if (!periodFromYear) setPeriodFromYear(firstYear);
-    if (!periodFromMonth) setPeriodFromMonth(firstMonth);
-    if (!periodToYear) setPeriodToYear(lastYear);
-    if (!periodToMonth) setPeriodToMonth(lastMonth);
-  }, [auditsByLocation, periodFromMonth, periodFromYear, periodToMonth, periodToYear]);
+    if (!periodFrom) setPeriodFrom(min);
+    if (!periodTo) setPeriodTo(max);
+  }, [availablePeriodBounds, periodFrom, periodTo]);
 
   const filteredAudits = useMemo(() => {
-    const fromCandidate = periodFromYear && periodFromMonth ? `${periodFromYear}-${periodFromMonth}` : "";
-    const toCandidate = periodToYear && periodToMonth ? `${periodToYear}-${periodToMonth}` : "";
+    const fromCandidate = periodFrom || "";
+    const toCandidate = periodTo || "";
 
     if (!fromCandidate && !toCandidate) return auditsByLocation;
 
@@ -434,13 +406,13 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     const toKey = fromCandidate && toCandidate && fromCandidate > toCandidate ? fromCandidate : toCandidate;
 
     return auditsByLocation.filter((audit) => {
-      const monthKey = String(audit?.date || "").slice(0, 7);
-      if (!/^\d{4}-\d{2}$/.test(monthKey)) return false;
-      if (fromKey && monthKey < fromKey) return false;
-      if (toKey && monthKey > toKey) return false;
+      const dayKey = String(audit?.date || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return false;
+      if (fromKey && dayKey < fromKey) return false;
+      if (toKey && dayKey > toKey) return false;
       return true;
     });
-  }, [auditsByLocation, periodFromMonth, periodFromYear, periodToMonth, periodToYear]);
+  }, [auditsByLocation, periodFrom, periodTo]);
 
   const templatesById = useMemo(() => {
     const map = new Map();
@@ -816,16 +788,19 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   return (
     <div className="space-y-4">
       <div className={cardClass}>
-        <div className="mb-4 flex items-center gap-2">
-          <ShieldCheck size={18} className="text-emerald-600" />
-          <h2 className="text-lg font-semibold">HACCP звіт</h2>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <div className="space-y-3">
-            <div>
-              <label className="text-sm font-semibold text-slate-800">Локація</label>
-              <select className={inputClass} value={selectedRestaurantId} onChange={(e) => setSelectedRestaurantId(e.target.value)}>
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <ShieldCheck size={18} className="text-emerald-600" />
+            <h2 className="text-lg font-semibold whitespace-nowrap">Звіт з аудитів</h2>
+          </div>
+          <div className="flex flex-1 flex-wrap items-center gap-3 min-w-[220px]">
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Локація</label>
+              <select
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+                value={selectedRestaurantId}
+                onChange={(e) => setSelectedRestaurantId(e.target.value)}
+              >
                 <option value="">Оберіть локацію</option>
                 <option value={ALL_LOCATIONS_VALUE}>Всі локації</option>
                 {availableRestaurants.map((item) => (
@@ -833,71 +808,43 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                 ))}
               </select>
             </div>
-
-            <div>
-              <label className="text-sm font-semibold text-slate-800">Період від</label>
-              <div className="mt-1 grid grid-cols-2 gap-2">
-                <select className={inputClass.replace("mt-1 ", "")} value={periodFromMonth} onChange={(e) => setPeriodFromMonth(e.target.value)}>
-                  <option value="">Місяць</option>
-                  {MONTH_OPTIONS_UA.map((month) => (
-                    <option key={month.value} value={month.value}>{month.label}</option>
-                  ))}
-                </select>
-                <select className={inputClass.replace("mt-1 ", "")} value={periodFromYear} onChange={(e) => setPeriodFromYear(e.target.value)}>
-                  <option value="">Рік</option>
-                  {availablePeriodYears.map((year) => (
-                    <option key={year} value={year}>{year}</option>
-                  ))}
-                </select>
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Період</label>
+              <div className="w-64">
+                <DateRangePickerPopover
+                  from={periodFrom}
+                  to={periodTo}
+                  onChange={({ from, to }) => { setPeriodFrom(from); setPeriodTo(to); }}
+                  min={availablePeriodBounds.min || undefined}
+                  max={availablePeriodBounds.max || undefined}
+                />
               </div>
             </div>
-
-            <div>
-              <label className="text-sm font-semibold text-slate-800">Період до</label>
-              <div className="mt-1 grid grid-cols-2 gap-2">
-                <select className={inputClass.replace("mt-1 ", "")} value={periodToMonth} onChange={(e) => setPeriodToMonth(e.target.value)}>
-                  <option value="">Місяць</option>
-                  {MONTH_OPTIONS_UA.map((month) => (
-                    <option key={month.value} value={month.value}>{month.label}</option>
-                  ))}
-                </select>
-                <select className={inputClass.replace("mt-1 ", "")} value={periodToYear} onChange={(e) => setPeriodToYear(e.target.value)}>
-                  <option value="">Рік</option>
-                  {availablePeriodYears.map((year) => (
-                    <option key={year} value={year}>{year}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-          </div>
-
-          <div>
-            <p className="text-sm font-semibold text-slate-800">Технічна інформація</p>
-            <div className="mt-2 grid grid-cols-1 gap-2 text-sm md:grid-cols-3">
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 min-h-[72px]">
-                <p className="text-xs text-slate-500">Дата перевірок</p>
-                <p className="font-semibold text-slate-900">{technicalInfo.dateLabel}</p>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 min-h-[72px]">
-                <p className="text-xs text-slate-500">Технолог(и)</p>
-                <p className="font-semibold text-slate-900">{technicalInfo.technologistLabel}</p>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 min-h-[72px]">
-                <p className="text-xs text-slate-500">Локація</p>
-                <p className="font-semibold text-slate-900">{technicalInfo.locationLabel}</p>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => { void handleExportExcel(); }}
-              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
-            >
-              <Download size={16} /> Вивантажити звіт в Excel
-            </button>
           </div>
         </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Дата перевірок</p>
+            <p className="font-semibold text-slate-900">{technicalInfo.dateLabel}</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Технолог(и)</p>
+            <p className="font-semibold text-slate-900">{technicalInfo.technologistLabel}</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-500">Локація</p>
+            <p className="font-semibold text-slate-900">{technicalInfo.locationLabel}</p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => { void handleExportExcel(); }}
+          className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
+        >
+          <Download size={16} /> Вивантажити звіт в Excel
+        </button>
       </div>
 
       {!filteredAudits.length ? (
