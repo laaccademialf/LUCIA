@@ -292,14 +292,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // retries: скільки ДОДАТКОВИХ спроб робити (default = REQUEST_NETWORK_RETRIES).
 // Під час перебору транспортів токена передаємо retries:0, щоб «неправильні»
 // транспорти не множили таймаути й проксі не впав у 504.
+// Транзитні HTTP-статуси шлюзу: сервер Vik-Soft нестабільний і періодично віддає
+// 502/503/504 навіть коли логін щойно вдався. Такі відповіді повторюємо так само,
+// як мережеві збої (status 0), щоб піймати «живі» моменти в межах дедлайну.
+const TRANSIENT_HTTP_STATUSES = new Set([502, 503, 504]);
 const tryRequest = async (url, init = {}, { retries = REQUEST_NETWORK_RETRIES, timeoutMs } = {}) => {
   const maxRetries = Math.max(0, Number(retries) || 0);
   let last = null;
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     last = await tryRequestOnce(url, init, { timeoutMs });
-    // Успіх або детермінована HTTP-відповідь (є статус) — повертаємо одразу.
-    if (last.status !== 0) return last;
-    // Транзитний мережевий збій — бекоф і повтор (якщо лишились спроби).
+    // Успіх або детермінована HTTP-відповідь (не шлюзова помилка) — повертаємо одразу.
+    const transient = last.status === 0 || TRANSIENT_HTTP_STATUSES.has(last.status);
+    if (!transient) return last;
+    // Транзитний збій (мережа або шлюз) — бекоф і повтор (якщо лишились спроби).
     if (attempt < maxRetries) {
       const delay = REQUEST_RETRY_BASE_DELAY_MS * (attempt + 1);
       await sleep(delay);
