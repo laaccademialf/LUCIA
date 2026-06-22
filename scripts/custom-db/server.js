@@ -4907,11 +4907,30 @@ const server = http.createServer(async (req, res) => {
         .split(/[,\s;]+/)
         .map((s) => s.trim())
         .filter(Boolean);
-      const result = await fetchEnergoCenterConsumption({
-        date,
-        force,
-        eics,
+      // Жорсткий дедлайн НИЖЧЕ за таймаут nginx-проксі: якщо Vik-Soft не відповів
+      // вчасно, повертаємо ЗРОЗУМІЛУ JSON-відповідь замість «голого» 504 від nginx.
+      // Налаштовується через env VIKSOFT_ENDPOINT_DEADLINE_MS (типово 45 с).
+      const DEADLINE_MS = Math.max(
+        10000,
+        Number.parseInt(String(process.env.VIKSOFT_ENDPOINT_DEADLINE_MS || "45000"), 10) || 45000
+      );
+      let deadlineTimer;
+      const deadline = new Promise((resolve) => {
+        deadlineTimer = setTimeout(() => resolve({ __timedOut: true }), DEADLINE_MS);
       });
+      const result = await Promise.race([
+        fetchEnergoCenterConsumption({ date, force, eics }),
+        deadline,
+      ]).finally(() => clearTimeout(deadlineTimer));
+      if (result && result.__timedOut) {
+        return sendJson(res, 504, {
+          ok: false,
+          fetchedAt: new Date().toISOString(),
+          rows: [],
+          timedOut: true,
+          error: `Vik-Soft не відповів за ${Math.round(DEADLINE_MS / 1000)} с. Дані могли не оновитися — спробуйте ще раз пізніше або скористайтеся збереженими показниками (нічна синхронізація).`,
+        });
+      }
       const status = result?.ok ? 200 : 502;
       return sendJson(res, status, result);
     } catch (error) {
