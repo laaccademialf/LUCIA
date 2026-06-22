@@ -17,17 +17,23 @@
 
 const DEFAULT_API_BASE = "http://194.183.165.59:8765";
 const DEFAULT_DR = "1,2,3,4"; // A+, A-, R+, R-
+// Сервер Vik-Soft нестабільний (то відповідає, то зависає). Для флапаючого сервера
+// КОРОТКИЙ таймаут + БІЛЬШЕ ретраїв ефективніше за довгий таймаут: так у межах
+// дедлайну ендпоінта (45 с) ми робимо більше спроб і маємо більше шансів «зловити»
+// момент, коли сервер відповідає. Запити споживання (один EIC/доба) — легкі, тож
+// 10 с з головою вистачає на здорову відповідь; якщо зависло — швидко перериваємо й
+// повторюємо. Налаштовується через VIKSOFT_REQUEST_TIMEOUT_MS.
 const REQUEST_TIMEOUT_MS = Math.max(
   5000,
-  Number.parseInt(String(process.env.VIKSOFT_REQUEST_TIMEOUT_MS || "20000"), 10) || 20000
+  Number.parseInt(String(process.env.VIKSOFT_REQUEST_TIMEOUT_MS || "10000"), 10) || 10000
 );
 
 // Кількість додаткових спроб при ТРАНЗИТНИХ мережевих збоях (timeout / connection reset / DNS).
 // Vik-Soft хоститься на зовнішньому IP і періодично «відвалюється» — кілька ретраїв з бекофом
-// прибирають більшість «часті помилки з конектом».
+// прибирають більшість «часті помилки з конектом». 3 спроби × 10 с ≈ 35 с (вкладається в дедлайн).
 const REQUEST_NETWORK_RETRIES = Math.max(
   0,
-  Number.parseInt(String(process.env.VIKSOFT_NETWORK_RETRIES || "2"), 10) || 2
+  Number.parseInt(String(process.env.VIKSOFT_NETWORK_RETRIES || "3"), 10) || 3
 );
 const REQUEST_RETRY_BASE_DELAY_MS = Math.max(
   100,
