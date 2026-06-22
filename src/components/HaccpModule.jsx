@@ -3176,8 +3176,10 @@ function SectionEditor({ section, index, totalSections, isAdmin, onChange, onRem
 
 const emptyTemplateForm = () => ({ name: "", description: "", isActive: true, restaurantIds: [], sections: [] });
 
-function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemplate, removeTemplate }) {
+function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemplate, removeTemplate, userPermissions = {} }) {
   const isAdmin = user?.role === "admin";
+  // Користувач може редагувати шаблони, якщо він адміністратор або має дозвіл на вкладку редагування шаблонів
+  const hasTemplateEditAccess = isAdmin || Boolean(userPermissions["ops-checklists"]);
   const availableRestaurants = restaurants || [];
 
   const [editingId, setEditingId] = useState(null);
@@ -3316,7 +3318,7 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
   };
 
   const saveTemplate = async () => {
-    if (!isAdmin || saving) return;
+    if (!hasTemplateEditAccess || saving) return;
     if (!form.name.trim()) {
       alert("Вкажіть назву шаблону.");
       return;
@@ -3388,9 +3390,9 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
             </div>
           </div>
 
-          {!isAdmin ? (
+          {!hasTemplateEditAccess ? (
             <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              Налаштування шаблонів доступне лише адміністратору.
+              Редагування шаблонів доступне лише для адміністраторів та користувачів з дозволом на управління аудитами.
             </div>
           ) : (
             <div className="mb-4 flex flex-wrap gap-2">
@@ -3424,8 +3426,8 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
                       {template.isActive === false ? <span className="rounded bg-slate-200 px-2 py-1 text-[11px] text-slate-700">Неактивний</span> : null}
-                      <button type="button" onClick={() => startEdit(template)} className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">
-                        {isAdmin ? "Редагувати" : "Переглянути"}
+                      <button type="button" onClick={() => startEdit(template)} disabled={!hasTemplateEditAccess} className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 disabled:opacity-60 disabled:cursor-not-allowed">
+                        {hasTemplateEditAccess ? "Редагувати" : "Переглянути"}
                       </button>
                       {isAdmin ? (
                         <button type="button" onClick={() => deleteTemplate(template)} className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-200">
@@ -3439,7 +3441,7 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
             })}
             {!templates.length ? (
               <div className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">
-                Шаблони ще не створені. {isAdmin ? "Натисніть «Зі стандартного», щоб почати швидко." : ""}
+                Шаблони ще не створені. {hasTemplateEditAccess ? "Натисніть «Зі стандартного», щоб почати швидко." : ""}
               </div>
             ) : null}
           </div>
@@ -3459,14 +3461,14 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="md:col-span-2">
               <label className="text-sm font-semibold text-slate-800">Назва шаблону *</label>
-              <input className={inputClass} value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} disabled={!isAdmin} placeholder="Напр. Аудит безпечності харчових продуктів" />
+              <input className={inputClass} value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} disabled={!hasTemplateEditAccess} placeholder="Напр. Аудит безпечності харчових продуктів" />
             </div>
             <div className="md:col-span-2">
               <label className="text-sm font-semibold text-slate-800">Опис</label>
-              <input className={inputClass} value={form.description} onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))} disabled={!isAdmin} placeholder="Короткий опис призначення аудиту" />
+              <input className={inputClass} value={form.description} onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))} disabled={!hasTemplateEditAccess} placeholder="Короткий опис призначення аудиту" />
             </div>
             <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input type="checkbox" checked={Boolean(form.isActive)} onChange={(e) => setForm((prev) => ({ ...prev, isActive: e.target.checked }))} disabled={!isAdmin} />
+              <input type="checkbox" checked={Boolean(form.isActive)} onChange={(e) => setForm((prev) => ({ ...prev, isActive: e.target.checked }))} disabled={!hasTemplateEditAccess} />
               Активний
             </label>
           </div>
@@ -3477,7 +3479,7 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
             <div className="mt-2 grid max-h-32 grid-cols-1 gap-1 overflow-auto rounded-lg border border-slate-200 p-2 sm:grid-cols-2">
               {availableRestaurants.map((item) => (
                 <label key={item.id} className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" checked={form.restaurantIds.map(String).includes(String(item.id))} onChange={() => toggleRestaurant(item.id)} disabled={!isAdmin} />
+                  <input type="checkbox" checked={form.restaurantIds.map(String).includes(String(item.id))} onChange={() => toggleRestaurant(item.id)} disabled={!hasTemplateEditAccess} />
                   <span className="truncate">{item.name}</span>
                 </label>
               ))}
@@ -3489,10 +3491,10 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
             <div className="mb-2 flex items-center justify-between">
               <p className="text-sm font-semibold text-slate-800">Розділи та пункти</p>
               <div className="flex items-center gap-1.5">
-                <button type="button" onClick={distributeSectionWeights} disabled={!isAdmin || !form.sections.length} className="rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-40">
+                <button type="button" onClick={distributeSectionWeights} disabled={!hasTemplateEditAccess || !form.sections.length} className="rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-40">
                   Рівні ваги розділів
                 </button>
-                <button type="button" onClick={addSection} disabled={!isAdmin} className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40">
+                <button type="button" onClick={addSection} disabled={!hasTemplateEditAccess} className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40">
                   <Plus size={13} /> Розділ
                 </button>
               </div>
@@ -3505,7 +3507,7 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
                   section={section}
                   index={index}
                   totalSections={sortedFormSections.length}
-                  isAdmin={isAdmin}
+                  isAdmin={hasTemplateEditAccess}
                   onChange={updateSection}
                   onRemove={removeSection}
                   onMove={moveSection}
@@ -3519,7 +3521,7 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
             </div>
           </div>
 
-          {isAdmin ? (
+          {hasTemplateEditAccess ? (
             <div className="mt-4 flex justify-end gap-2">
               {editingId ? (
                 <button type="button" onClick={startCreate} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
@@ -3541,7 +3543,7 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
 /* Кореневий компонент модуля                                          */
 /* ------------------------------------------------------------------ */
 
-export default function HaccpModule({ topTab, user, restaurants, forceMode = "" }) {
+export default function HaccpModule({ topTab, user, restaurants, forceMode = "", userPermissions = {} }) {
   const mode = forceMode || normalizeHaccpTab(topTab);
   const {
     templates,
@@ -3581,6 +3583,7 @@ export default function HaccpModule({ topTab, user, restaurants, forceMode = "" 
         createTemplate={createTemplate}
         updateTemplate={updateTemplate}
         removeTemplate={removeTemplate}
+        userPermissions={userPermissions}
       />
     );
   }

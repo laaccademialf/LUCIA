@@ -3946,7 +3946,7 @@ function App() {
       if (checklistTabKey.includes("haccp")) {
         return (
           <div className="grid grid-cols-1">
-            <HaccpModule topTab={topTab} restaurants={restaurants} user={user} />
+            <HaccpModule topTab={topTab} restaurants={restaurants} user={user} userPermissions={userPermissions} />
           </div>
         );
       }
@@ -3965,7 +3965,7 @@ function App() {
     ) {
       return (
         <div className="grid grid-cols-1">
-          <HaccpModule topTab={topTab} restaurants={restaurants} user={user} forceMode="report" />
+          <HaccpModule topTab={topTab} restaurants={restaurants} user={user} userPermissions={userPermissions} forceMode="report" />
         </div>
       );
     }

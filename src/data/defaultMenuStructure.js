@@ -51,7 +51,7 @@ export const DEFAULT_MENU_STRUCTURE = [
         tabLabels: [
           { id: "openingchecklist", label: "Чеклисти" },
           { id: "haccpaudit", label: "HACCP" },
-          { id: "haccptemplates", label: "Шаблони HACCP" },
+          { id: "haccptemplates", label: "Шаблони Аудитів" },
           { id: "settingchecklists", label: "Налаштування чеклистів" },
         ],
       },
