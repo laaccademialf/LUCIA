@@ -953,6 +953,13 @@ const resolveIdentifiersToEics = async (inputs = []) => {
     }
 
     if (eic && !seen.has(eic)) {
+      // Захист: НІКОЛИ не надсилаємо не-ASCII (кирилицю) у параметрі eic. Якщо в
+      // картці закладу в полі лічильника випадково опинилась кирилиця — відсікаємо
+      // її тут із зрозумілою причиною, замість того щоб слати на сервер Vik-Soft.
+      if (!/^[\x20-\x7E]+$/.test(eic)) {
+        unresolved.push({ input: String(input), kind: id.kind, value: id.value, reason: "non_ascii_eic" });
+        continue;
+      }
       seen.add(eic);
       eics.push(eic);
     }
