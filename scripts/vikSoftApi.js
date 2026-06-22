@@ -43,6 +43,18 @@ const EIC_FETCH_CONCURRENCY = Math.max(
   Number.parseInt(String(process.env.VIKSOFT_EIC_CONCURRENCY || "6"), 10) || 6
 );
 
+// Режим використання дерева об'єктів (vviewtree).
+//   "auto" (типово): тягнемо дерево ЛИШЕ якщо серед ідентифікаторів є idnode:/objref:,
+//     які потрібно резолвити в EIC. Якщо всі ідентифікатори — це EIC (як їх дає
+//     провайдер по кожному ресторану) — дерево НЕ завантажуємо взагалі. Це прибирає
+//     найповільнішу частину запиту (велике дерево) і усуває 504.
+//   "never": ніколи не тягнемо дерево (idnode/objref не резолвляться; назва точки = EIC).
+//   "always": завжди тягнемо (стара поведінка).
+const VIKSOFT_TREE_MODE = (() => {
+  const v = String(process.env.VIKSOFT_USE_TREE || "auto").trim().toLowerCase();
+  return ["auto", "never", "always"].includes(v) ? v : "auto";
+})();
+
 // Обмежений за одночасністю map: виконує worker(item, index) для кожного елемента,
 // але не більше `limit` одночасно. Повертає масив результатів у вихідному порядку.
 const mapWithConcurrency = async (items, limit, worker) => {
@@ -750,8 +762,12 @@ export const aggregateConsumption = (rows) => {
   return totals;
 };
 
-// ---- Result cache (5 хвилин, ключ = дата + EIC список) ----
-const RESULT_TTL_MS = 5 * 60 * 1000;
+// ---- Result cache (ключ = дата + EIC список) ----
+// Минулі дати не змінюються, тож тримаємо результат довго (типово 6 год).
+const RESULT_TTL_MS = Math.max(
+  30 * 1000,
+  Number.parseInt(String(process.env.VIKSOFT_RESULT_TTL_MS || String(6 * 60 * 60 * 1000)), 10) || 6 * 60 * 60 * 1000
+);
 const resultCache = new Map();
 const cacheKey = (eics, reportDateIso) => `${[...eics].sort().join("|")}::${reportDateIso}`;
 const getCached = (eics, iso) => {
@@ -773,7 +789,12 @@ const treeIndex = {
   byObjref: new Map(),
   fetchedAt: 0,
 };
-const TREE_TTL_MS = 5 * 60 * 1000;
+// Дерево змінюється рідко — тримаємо індекс довго (типово 6 год), щоб не
+// перезавантажувати його на кожен запит. Налаштовується через env.
+const TREE_TTL_MS = Math.max(
+  60 * 1000,
+  Number.parseInt(String(process.env.VIKSOFT_TREE_TTL_MS || String(6 * 60 * 60 * 1000)), 10) || 6 * 60 * 60 * 1000
+);
 
 const normalizeIdentifier = (raw) => {
   const s = String(raw || "").trim();
@@ -829,17 +850,27 @@ const ensureTreeIndexFresh = async () => {
 };
 
 const resolveIdentifiersToEics = async (inputs = []) => {
-  await ensureTreeIndexFresh();
+  // Спершу нормалізуємо всі ідентифікатори, щоб зрозуміти, чи взагалі потрібне дерево.
+  const normalized = [];
+  for (const input of inputs) {
+    const id = normalizeIdentifier(input);
+    if (id) normalized.push({ input, id });
+  }
+
+  // Дерево потрібне ЛИШЕ для резолву idnode:/objref: у EIC. Якщо всі ідентифікатори —
+  // це EIC (або голі токени, які трактуємо як EIC), дерево не тягнемо взагалі.
+  const needsTree = normalized.some(({ id }) => id.kind === "idnode" || id.kind === "objref");
+  const useTree =
+    VIKSOFT_TREE_MODE === "always" ||
+    (VIKSOFT_TREE_MODE !== "never" && needsTree);
+  if (useTree) await ensureTreeIndexFresh();
 
   const eics = [];
   const unresolved = [];
   const resolved = [];
   const seen = new Set();
 
-  for (const input of inputs) {
-    const id = normalizeIdentifier(input);
-    if (!id) continue;
-
+  for (const { input, id } of normalized) {
     let eic = "";
     if (id.kind === "eic") {
       eic = id.value;
@@ -856,9 +887,8 @@ const resolveIdentifiersToEics = async (inputs = []) => {
       else resolved.push({ input: String(input), kind: id.kind, value: id.value, eic });
     } else if (id.kind === "auto") {
       // Голий токен (найчастіше EIC, бо користувач копіює зі стовпця eiccode).
-      // Визначаємо тип за деревом: EIC → idnode → objref. Якщо ніде немає —
-      // трактуємо напряму як EIC (getsqlmaket приймає eic, як у робочому curl),
-      // щоб працювало навіть коли дерево тимчасово недоступне.
+      // Якщо дерево завантажене — звіряємось (EIC → idnode → objref). Якщо ні —
+      // трактуємо напряму як EIC (getsqlmaket приймає eic, як у робочому curl).
       if (treeIndex.byEic.has(id.value)) {
         eic = id.value;
         resolved.push({ input: String(input), kind: "eic", value: id.value, eic });
@@ -885,8 +915,9 @@ const resolveIdentifiersToEics = async (inputs = []) => {
   return { eics, unresolved, resolved };
 };
 
-const getPointName = async (eic) => {
-  if (!treeIndex.byEic.has(eic) || Date.now() - treeIndex.fetchedAt > TREE_TTL_MS) await refreshTreeIndex();
+const getPointName = (eic) => {
+  // Назва точки — суто косметична. Дерево заради неї не тягнемо: якщо в індексі вже
+  // є назва (дерево раніше завантажене) — повертаємо її, інакше показуємо сам EIC.
   return treeIndex.byEic.get(eic)?.name || eic;
 };
 
@@ -963,9 +994,8 @@ export const fetchEnergoCenterConsumption = async ({
   }
 
   try {
-    // Спершу оновимо індекс дерева, щоб мати назви точок.
-    if (treeIndex.byEic.size === 0) await refreshTreeIndex();
-
+    // Дерево НЕ завантажуємо примусово: назви точок беруться з кешу, якщо є, інакше
+    // показуємо EIC. Дерево тягнеться лише у resolveIdentifiersToEics за потреби.
     const allRows = [];
     const errors = [];
     const maketsUsed = new Set();
@@ -1001,7 +1031,7 @@ export const fetchEnergoCenterConsumption = async ({
             : `EIC ${eic}: немає даних за ${reportDateDdMmYyyy} (макети: ${MAKET_CANDIDATES.join(", ")})`,
         };
       }
-      const pointName = await getPointName(eic);
+      const pointName = getPointName(eic);
       const rows = aggregateForDay(records, pointName, reportDateIso);
       return { rows, usedMaket };
     });
