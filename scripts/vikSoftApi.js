@@ -89,6 +89,11 @@ const MAKET_CANDIDATES = (() => {
   return [...new Set(merged)];
 })();
 
+// Запам'ятовуємо макет, який реально повернув дані (як tokenTransport). У сталому
+// режимі це робить 1 запит на EIC замість перебору 2 макетів — критично для
+// ресторанів з кількома лічильниками на флапаючому сервері.
+let learnedMaket = null;
+
 // Нормалізує базу API: приймає як чисту базу, так і випадково вставлений повний URL
 // (напр. ".../api/v1/login?user=...&pass=...") — лишає тільки origin (scheme+host+port).
 const normalizeApiBase = (raw) => {
@@ -250,9 +255,9 @@ const fetchJson = async (url, init = {}) => {
 
 // Спробувати «сирий» запит, повернути детальний звіт для логіну/діагностики.
 // Сюди НЕ кидаємо виключення — повертаємо { ok, status, body, json, ct, url, error }.
-const tryRequestOnce = async (url, init = {}) => {
+const tryRequestOnce = async (url, init = {}, { timeoutMs = REQUEST_TIMEOUT_MS } = {}) => {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("timeout")), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs);
   try {
     const r = await fetch(url, { ...init, signal: controller.signal });
     const ct = String(r.headers.get("content-type") || "").toLowerCase();
@@ -272,7 +277,7 @@ const tryRequestOnce = async (url, init = {}) => {
     };
   } catch (e) {
     const msg = e?.name === "AbortError"
-      ? `Request timeout after ${REQUEST_TIMEOUT_MS}ms`
+      ? `Request timeout after ${timeoutMs}ms`
       : (e?.message || String(e));
     return { ok: false, status: 0, url, error: msg };
   } finally {
@@ -287,11 +292,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // retries: скільки ДОДАТКОВИХ спроб робити (default = REQUEST_NETWORK_RETRIES).
 // Під час перебору транспортів токена передаємо retries:0, щоб «неправильні»
 // транспорти не множили таймаути й проксі не впав у 504.
-const tryRequest = async (url, init = {}, { retries = REQUEST_NETWORK_RETRIES } = {}) => {
+const tryRequest = async (url, init = {}, { retries = REQUEST_NETWORK_RETRIES, timeoutMs } = {}) => {
   const maxRetries = Math.max(0, Number(retries) || 0);
   let last = null;
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    last = await tryRequestOnce(url, init);
+    last = await tryRequestOnce(url, init, { timeoutMs });
     // Успіх або детермінована HTTP-відповідь (є статус) — повертаємо одразу.
     if (last.status !== 0) return last;
     // Транзитний мережевий збій — бекоф і повтор (якщо лишились спроби).
@@ -412,6 +417,7 @@ const getToken = async () => {
   if (!cfg.user || !cfg.password) {
     throw new Error("Не задано VIKSOFT_USER / VIKSOFT_PASSWORD у env");
   }
+  startTokenWarmer();
   if (cachedToken && Date.now() < cachedToken.expiresAt) return cachedToken.value;
   if (loginPromise) return loginPromise;
   loginPromise = (async () => {
@@ -429,6 +435,33 @@ const getToken = async () => {
 export const invalidateVikSoftToken = () => {
   cachedToken = null;
   tokenTransport = null;
+};
+
+// ---- Прогрів токена ----
+// Логін на флапаючому сервері може зависати; якщо він трапляється у критичному шляху
+// запиту користувача — це таймаут. Тому фоном оновлюємо токен ДО спливання TTL.
+// Старий токен лишається валідним, поки тягнеться новий (прогрів на 8 хв < TTL 10 хв).
+const TOKEN_WARM_INTERVAL_MS = Math.max(
+  60 * 1000,
+  Number.parseInt(String(process.env.VIKSOFT_TOKEN_WARM_MS || String(8 * 60 * 1000)), 10) || 8 * 60 * 1000
+);
+let tokenWarmTimer = null;
+const refreshTokenInBackground = async () => {
+  try {
+    const cfg = getConfig();
+    if (!cfg.user || !cfg.password) return;
+    const { token, method } = await login(cfg);
+    if (token) cachedToken = { value: token, expiresAt: Date.now() + TOKEN_TTL_MS, loginMethod: method };
+  } catch (e) {
+    console.warn(`[viksoft] token warm failed: ${e?.message || e}`);
+  }
+};
+const startTokenWarmer = () => {
+  if (tokenWarmTimer) return;
+  if (String(process.env.VIKSOFT_TOKEN_WARM || "1") === "0") return;
+  tokenWarmTimer = setInterval(refreshTokenInBackground, TOKEN_WARM_INTERVAL_MS);
+  // Не тримати процес живим лише через цей таймер.
+  if (typeof tokenWarmTimer.unref === "function") tokenWarmTimer.unref();
 };
 
 // ---- Auto-detect транспорту токена ----
@@ -466,7 +499,7 @@ const buildRequest = (cfg, path, params, token, transport) => {
 
 // Викликає GET ендпоінт, додаючи токен. Перебирає транспорти, поки не отримає
 // успіх (200 + контент, який виглядає як корисний JSON чи не-порожній текст без помилки авторизації).
-const apiGet = async (path, params = {}) => {
+const apiGet = async (path, params = {}, { timeoutMs } = {}) => {
   const cfg = getConfig();
   let token = await getToken();
 
@@ -479,7 +512,7 @@ const apiGet = async (path, params = {}) => {
 
   const tryTransport = async (transport, { retries = 0 } = {}) => {
     const req = buildRequest(cfg, path, params, token, transport);
-    const res = await tryRequest(req.url, { headers: req.headers }, { retries });
+    const res = await tryRequest(req.url, { headers: req.headers }, { retries, timeoutMs });
     return { transport, res };
   };
 
@@ -575,8 +608,15 @@ const apiGet = async (path, params = {}) => {
 };
 
 // GET /api/v1/vviewtree?eType=1&sId=0 → дерево/список EIC кодів.
+// Дерево — великий payload, тож даємо йому ДОВШИЙ таймаут, ніж легкому getsqlmaket
+// (інакше «Показати лічильники» падає з 504 на 10-секундному таймауті). Це ручна
+// адмін-дія, не у критичному шляху споживання. Налаштовується через env.
+const TREE_REQUEST_TIMEOUT_MS = Math.max(
+  REQUEST_TIMEOUT_MS,
+  Number.parseInt(String(process.env.VIKSOFT_TREE_REQUEST_TIMEOUT_MS || "30000"), 10) || 30000
+);
 export const vviewtree = async ({ eType = 1, sId = 0 } = {}) => {
-  return apiGet("/api/v1/vviewtree", { eType, sId });
+  return apiGet("/api/v1/vviewtree", { eType, sId }, { timeoutMs: TREE_REQUEST_TIMEOUT_MS });
 };
 
 // GET /api/v1/getsqlmaket?maket=APIGetD_GR&eic=...&dr=1,2,3,4&dtstart=DD.MM.YYYY&dtend=DD.MM.YYYY&type=json
@@ -1011,8 +1051,12 @@ export const fetchEnergoCenterConsumption = async ({
       let records = [];
       let usedMaket = null;
       let lastErr = null;
-      // Пробуємо макети по черзі (APIGetGr30 -> APIGetD_GR), поки не буде даних.
-      for (const maket of MAKET_CANDIDATES) {
+      // Спершу пробуємо вже вивчений макет (1 запит на EIC). Якщо його ще не
+      // знаємо — перебираємо кандидатів (APIGetGr30 -> APIGetD_GR).
+      const maketOrder = learnedMaket
+        ? [learnedMaket, ...MAKET_CANDIDATES.filter((m) => m !== learnedMaket)]
+        : MAKET_CANDIDATES;
+      for (const maket of maketOrder) {
         try {
           const raw = await getSqlMaket({
             eic,
@@ -1024,8 +1068,12 @@ export const fetchEnergoCenterConsumption = async ({
           if (recs.length) {
             records = recs;
             usedMaket = maket;
+            learnedMaket = maket; // запам'ятовуємо робочий макет
             break;
           }
+          // Валідна відповідь, але порожня. Якщо це вже вивчений макет — у цього EIC
+          // просто немає даних за добу; інші макети не пробуємо (зайві запити).
+          if (learnedMaket && maket === learnedMaket) break;
         } catch (e) {
           lastErr = e;
         }
