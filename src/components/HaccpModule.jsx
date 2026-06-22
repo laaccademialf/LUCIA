@@ -106,6 +106,19 @@ const compressImage = (file) =>
     img.src = objectUrl;
   });
 
+const snapshotAuditTemplate = (template) => {
+  if (!template) return null;
+  try {
+    return JSON.parse(JSON.stringify(template));
+  } catch {
+    return {
+      id: template?.id || "",
+      name: template?.name || "",
+      sections: Array.isArray(template?.sections) ? template.sections : [],
+    };
+  }
+};
+
 const formatDisplayDate = (value) => {
   if (!value) return "—";
 
@@ -619,10 +632,11 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     () =>
       auditsForMetrics.map((audit) => {
         const responses = audit?.responses && typeof audit.responses === "object" ? audit.responses : {};
-        const template = templatesById.get(String(audit?.templateId || "")) || null;
+        const templateSnapshot = audit?.templateSnapshot && typeof audit.templateSnapshot === "object" ? audit.templateSnapshot : null;
+        const template = templateSnapshot || templatesById.get(String(audit?.templateId || "")) || null;
+        const computedScore = computeHaccpScores(template, responses).totalPercent;
         const scoreValue = Number(audit?.totalPercent);
-        const fallbackScore = computeHaccpScores(template, responses).totalPercent;
-        const score = Number.isFinite(scoreValue) ? scoreValue : fallbackScore;
+        const score = templateSnapshot ? computedScore : Number.isFinite(scoreValue) ? scoreValue : computedScore;
         return {
           ...audit,
           gallery: Array.isArray(audit?.gallery) ? audit.gallery : [],
@@ -646,7 +660,9 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   const criticalDetails = useMemo(() => {
     return metrics
       .map((audit) => {
-        const template = templatesById.get(String(audit?.templateId || "")) || null;
+        const template = audit?.templateSnapshot && typeof audit.templateSnapshot === "object"
+          ? audit.templateSnapshot
+          : templatesById.get(String(audit?.templateId || "")) || null;
         const itemTitleById = new Map();
         (template?.sections || []).forEach((section) => {
           (section?.items || []).forEach((item) => {
@@ -901,6 +917,17 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     return String(match?.name || "—");
   }, [availableTemplateOptions, selectedTemplateId]);
 
+  const scoreCardTitle = useMemo(() => {
+    if (selectedTemplateId === ALL_TEMPLATES_VALUE) return "HACCP Score";
+    return selectedTemplateLabel || "HACCP Score";
+  }, [selectedTemplateId, selectedTemplateLabel]);
+
+  const scoreCardSubtitle = useMemo(() => {
+    return selectedTemplateId === ALL_TEMPLATES_VALUE
+      ? "Середня оцінка за обраними чек-листами."
+      : `Середня оцінка за шаблоном «${selectedTemplateLabel}».`;
+  }, [selectedTemplateId, selectedTemplateLabel]);
+
   const periodFromMonth = useMemo(() => {
     const datePart = String(periodFrom || "").slice(5, 7);
     return datePart || null;
@@ -1143,7 +1170,9 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
 
       const detailsRows = [];
       trendSeries.forEach((auditItem) => {
-        const templateForItem = templatesById.get(String(auditItem?.templateId || "")) || null;
+        const templateForItem = auditItem?.templateSnapshot && typeof auditItem.templateSnapshot === "object"
+          ? auditItem.templateSnapshot
+          : templatesById.get(String(auditItem?.templateId || "")) || null;
         const galleryById = new Map(
           (Array.isArray(auditItem?.gallery) ? auditItem.gallery : [])
             .filter((photo) => getPhotoSrc(photo))
@@ -1291,7 +1320,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
         <>
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <div className={cardClass}>
-              <p className="text-sm font-semibold text-slate-800">HACCP Score</p>
+              <p className="text-sm font-semibold text-slate-800">{scoreCardTitle}</p>
               <div className="mt-2 flex items-center gap-3">
                 <span className="text-4xl font-extrabold text-slate-900">{roundPercent(avgScore)}%</span>
                 <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-bold ${traffic.className}`}>
@@ -1301,7 +1330,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
               <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
                 <div className={`h-full rounded-full transition-all ${gradeBandFor(avgScore).barClass}`} style={{ width: `${Math.min(100, Math.max(0, roundPercent(avgScore)))}%` }} />
               </div>
-              <p className="mt-2 text-xs text-slate-500">Середня оцінка за обраними чек-листами.</p>
+              <p className="mt-2 text-xs text-slate-500">{scoreCardSubtitle}</p>
             </div>
 
             <div className={cardClass}>
@@ -2416,6 +2445,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
     const payload = {
       templateId: selectedTemplateId,
       templateName: selectedTemplate?.name || "",
+      templateSnapshot: snapshotAuditTemplate(selectedTemplate),
       restaurantId: effectiveRestaurantId,
       restaurantName: selectedRestaurant?.name || "",
       date: selectedDate,
@@ -2535,6 +2565,9 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
 
   const historyPreviewTemplate = useMemo(() => {
     if (!historyAuditPreview) return null;
+    if (historyAuditPreview?.templateSnapshot && typeof historyAuditPreview.templateSnapshot === "object") {
+      return historyAuditPreview.templateSnapshot;
+    }
     return (templates || []).find((template) => String(template?.id || "") === String(historyAuditPreview?.templateId || "")) || null;
   }, [historyAuditPreview, templates]);
 
@@ -2663,7 +2696,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
         <div className={cardClass}>
           <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
             {applicableTemplates.length === 0
-              ? "Для цього закладу немає призначених шаблонів аудиту. Створіть або призначте шаблон у вкладці «Шаблони HACCP»."
+              ? "Для цього закладу немає призначених шаблонів аудиту. Створіть або призначте шаблон у вкладці «Шаблони Аудитів»."
               : "Оберіть заклад і шаблон, щоб почати аудит."}
           </div>
         </div>
@@ -3351,7 +3384,7 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
           <div className="mb-4 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <ShieldCheck size={18} className="text-emerald-600" />
-              <h2 className="text-lg font-semibold">Шаблони HACCP</h2>
+              <h2 className="text-lg font-semibold">Шаблони Аудитів</h2>
             </div>
           </div>
 
