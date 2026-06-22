@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   AlertTriangle,
   ArrowDown,
@@ -389,6 +390,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   const [planDialogResponsibleIds, setPlanDialogResponsibleIds] = useState([]);
   const [planDialogComment, setPlanDialogComment] = useState("");
   const [planDialogStatus, setPlanDialogStatus] = useState("in_progress");
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [usersForResponsible, setUsersForResponsible] = useState([]);
   const [loadingResponsibleUsers, setLoadingResponsibleUsers] = useState(false);
   const actionPlansEtagRef = useRef("");
@@ -899,6 +901,26 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     return String(match?.name || "—");
   }, [availableTemplateOptions, selectedTemplateId]);
 
+  const periodFromMonth = useMemo(() => {
+    const datePart = String(periodFrom || "").slice(5, 7);
+    return datePart || null;
+  }, [periodFrom]);
+
+  const periodFromYear = useMemo(() => {
+    const datePart = String(periodFrom || "").slice(0, 4);
+    return datePart || null;
+  }, [periodFrom]);
+
+  const periodToMonth = useMemo(() => {
+    const datePart = String(periodTo || "").slice(5, 7);
+    return datePart || null;
+  }, [periodTo]);
+
+  const periodToYear = useMemo(() => {
+    const datePart = String(periodTo || "").slice(0, 4);
+    return datePart || null;
+  }, [periodTo]);
+
   const actionPlanEntries = useMemo(() => {
     return criticalItemsFlat
       .map((item) => {
@@ -1094,13 +1116,8 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   };
 
   const handleExportExcel = async () => {
-    if (!auditsForMetrics.length) {
-      alert("Немає даних для експорту.");
-      return;
-    }
-
     try {
-      const XLSX = await import("xlsx");
+      setIsExportingExcel(true);
 
       const summaryRows = [
         { Показник: "Локація", Значення: selectedLocationLabel },
@@ -1167,14 +1184,24 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), "Підсумок");
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(checklistRows), "Чек-листи");
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detailsRows), "Пункти та коментарі");
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.json_to_sheet(checklistRows.length ? checklistRows : [{ Повідомлення: "Немає чек-листів у вибраному періоді" }]),
+        "Чек-листи"
+      );
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.json_to_sheet(detailsRows.length ? detailsRows : [{ Повідомлення: "Немає пунктів для деталізації" }]),
+        "Пункти та коментарі"
+      );
 
       const fileStamp = new Date().toISOString().slice(0, 10);
       XLSX.writeFile(wb, `HACCP_report_${fileStamp}.xlsx`);
     } catch (error) {
       console.error("Не вдалося експортувати звіт:", error);
       alert("Не вдалося експортувати звіт у Excel.");
+    } finally {
+      setIsExportingExcel(false);
     }
   };
 
@@ -1229,10 +1256,11 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           </div>
           <button
             type="button"
+            disabled={isExportingExcel}
             onClick={() => { void handleExportExcel(); }}
-            className="inline-flex h-10 min-w-[240px] flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+            className="inline-flex h-10 min-w-[240px] flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            <Download size={16} /> Вивантажити звіт
+            <Download size={16} /> {isExportingExcel ? "Вивантаження..." : "Вивантажити звіт"}
           </button>
         </div>
 
@@ -2480,12 +2508,26 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
   };
 
   const restaurantAudits = useMemo(() => {
-    const restaurantId = String(effectiveRestaurantId || "");
+    const restaurantId = String(effectiveRestaurantId || "").trim();
+    const templateId = String(selectedTemplateId || "").trim();
+    const selectedDateKey = String(selectedDate || "").slice(0, 10);
+
+    if (!restaurantId) return [];
+
     return (audits || [])
-      .filter((audit) => String(audit.restaurantId || "") === restaurantId)
-      .filter((audit) => String(audit.status || "") === "completed")
-      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
-  }, [audits, effectiveRestaurantId]);
+      .filter((audit) => String(audit?.status || "") === "completed")
+      .filter((audit) => String(audit?.restaurantId || "").trim() === restaurantId)
+      .filter((audit) => {
+        if (!templateId) return true;
+        return String(audit?.templateId || "").trim() === templateId;
+      })
+      .filter((audit) => {
+        if (!selectedDateKey) return true;
+        const auditDateKey = String(audit?.date || "").slice(0, 10);
+        return auditDateKey === selectedDateKey;
+      })
+      .sort((a, b) => getAuditSortKey(b) - getAuditSortKey(a));
+  }, [audits, effectiveRestaurantId, selectedDate, selectedTemplateId]);
 
   const openHistoryAuditPreview = (audit) => {
     setHistoryAuditPreview(audit || null);
@@ -2907,7 +2949,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                 </tbody>
               </table>
             ) : (
-              <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">Для цього закладу ще немає аудитів.</p>
+              <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">Для обраних фільтрів (локація, тип аудиту, дата) аудитів не знайдено.</p>
             )}
           </div>
         ) : null}
