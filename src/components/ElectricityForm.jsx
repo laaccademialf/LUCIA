@@ -167,35 +167,29 @@ const ElectricityForm = ({
           String(rowDateIso(a?.date) || a?.createdAt || "").localeCompare(String(rowDateIso(b?.date) || b?.createdAt || ""))
         );
         const readingMap = new Map(); // recordId -> Map(meterKey -> reading)
-        const consumptionMap = new Map(); // recordId -> Map(meterKey -> споживання, похідне від показників)
         const running = new Map();    // meterKey -> last reading
         for (const rec of ascHistory) {
           const ms = Array.isArray(rec?.meters) ? rec.meters : [];
           const perRec = new Map();
-          const perCons = new Map();
           for (const m of ms) {
             const key = String(m?.meterNumber || m?.meterId || "");
             if (!key) continue;
             const override = Number(m?.readingOverride);
-            const storedConsumption = Number(m?.consumption ?? m?.currValue) || 0;
             const prev = running.has(key) ? running.get(key) : null;
             let reading;
-            let consumption;
             if (Number.isFinite(override)) {
-              // Ручна правка показника: показник = правці, а споживання
-              // перераховуємо за формулою (показник − попередній) × коеф.
+              // Ручна правка: показник = правці, а наступні дати
+              // продовжують накопичуватись уже від виправленого значення.
               reading = override;
-              consumption = prev == null ? storedConsumption : (reading - prev) * coeffOf(key);
             } else {
-              reading = (prev == null ? 0 : prev) + storedConsumption / coeffOf(key);
-              consumption = storedConsumption;
+              // Показник = попередній показник + споживання / коеф трансформації.
+              const consumption = Number(m?.consumption ?? m?.currValue) || 0;
+              reading = (prev == null ? 0 : prev) + consumption / coeffOf(key);
             }
             perRec.set(key, reading);
-            perCons.set(key, consumption);
             running.set(key, reading);
           }
           readingMap.set(String(rec?.id), perRec);
-          consumptionMap.set(String(rec?.id), perCons);
         }
 
         // Розділяємо групи: «Мережа» та «Генератор» на основі назви точки.
@@ -253,16 +247,13 @@ const ElectricityForm = ({
           }
 
           // Підсумок споживання за місяць по кожному лічильнику (колонці).
-          // Беремо похідне споживання (consumptionMap), щоб правка показника
-          // одразу відображалась у підсумку.
           const monthTotals = new Map();
           for (const row of visibleHistory) {
-            const recCons = consumptionMap.get(String(row?.id));
             const ms = Array.isArray(row?.meters) ? row.meters : [];
             for (const m of ms) {
               const key = String(m?.meterNumber || m?.meterId || "");
               if (!key || !group.match(key)) continue;
-              const val = Number(recCons?.get(key));
+              const val = Number(m?.consumption ?? m?.currValue);
               if (!Number.isFinite(val)) continue;
               monthTotals.set(key, (monthTotals.get(key) || 0) + val);
             }
@@ -339,7 +330,6 @@ const ElectricityForm = ({
                       // Пропускаємо записи, які не мають жодного значення в цій групі.
                       if (byCol.size === 0) return null;
                       const recReadings = readingMap.get(String(row?.id));
-                      const recConsumptions = consumptionMap.get(String(row?.id));
                       return (
                         <tr key={row?.id || idx} className="border-t border-slate-100">
                           <td className="px-2 py-0.5 whitespace-nowrap border border-slate-200">{fmtDate(row?.date)}</td>
@@ -378,7 +368,7 @@ const ElectricityForm = ({
                                   )}
                                 </td>
                                 <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200">
-                                  {fmtNum(recConsumptions?.get(c))}
+                                  {m.consumption ?? m.currValue ?? "—"}
                                 </td>
                               </Fragment>
                             );
