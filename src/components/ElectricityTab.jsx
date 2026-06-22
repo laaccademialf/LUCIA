@@ -67,11 +67,27 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
   }, [localFallbackHistory]);
 
   // Визначаємо список ресторанів для селектора
-  const restaurantOptions = user?.role === "admin" ? restaurants : restaurants.filter(r => r.id === user?.restaurant);
-  // Вибраний ресторан: для адміна — з селектора, для керуючого — його ресторан
-  const currentRestaurantId = user?.role === "admin" ? selectedRestaurant : user?.restaurant;
-  const currentRestaurant = restaurants.find((r) => String(r?.id || "") === String(currentRestaurantId || ""));
   const isAdmin = user?.role === "admin";
+  // Не-адмін може відповідати за кілька закладів: беремо user.restaurants (масив),
+  // інакше — єдиний user.restaurant.
+  const userRestaurantIds = (Array.isArray(user?.restaurants) && user.restaurants.length
+    ? user.restaurants
+    : (user?.restaurant ? [user.restaurant] : [])
+  ).map((id) => String(id));
+  const restaurantOptions = isAdmin
+    ? restaurants
+    : restaurants.filter((r) => userRestaurantIds.includes(String(r.id)));
+  const hasMultipleOptions = restaurantOptions.length > 1;
+  // Селектор: адміну — завжди; не-адміну — лише якщо закладів кілька.
+  const showRestaurantSelector = isAdmin || hasMultipleOptions;
+  // Поточний заклад: адмін — з селектора (порожньо = всі); не-адмін з кількома —
+  // з селектора з дефолтом на перший; не-адмін з одним — його єдиний заклад.
+  const currentRestaurantId = isAdmin
+    ? selectedRestaurant
+    : (hasMultipleOptions
+        ? (selectedRestaurant || String(restaurantOptions[0]?.id || ""))
+        : String(restaurantOptions[0]?.id || user?.restaurant || ""));
+  const currentRestaurant = restaurants.find((r) => String(r?.id || "") === String(currentRestaurantId || ""));
 
   // Завантаження коефіцієнтів трансформації лічильників для вибраного закладу.
   useEffect(() => {
@@ -280,15 +296,15 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
     <div className="grid grid-cols-1 gap-2">
       <div className="sticky top-10 z-20 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          {user?.role === "admin" ? (
+          {showRestaurantSelector ? (
             <div className="flex flex-wrap items-center gap-2">
               <label className="text-sm font-semibold text-slate-700">Заклад:</label>
               <select
                 className="min-w-[16rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none transition [&>option]:bg-white [&>option]:text-slate-900"
-                value={selectedRestaurant}
+                value={isAdmin ? selectedRestaurant : currentRestaurantId}
                 onChange={e => setSelectedRestaurant(e.target.value)}
               >
-                <option value="" className="bg-white text-slate-900">Всі ресторани</option>
+                {isAdmin && <option value="" className="bg-white text-slate-900">Всі ресторани</option>}
                 {restaurantOptions.map(r => (
                   <option key={r.id} value={r.id} className="bg-white text-slate-900">{r.name}</option>
                 ))}
