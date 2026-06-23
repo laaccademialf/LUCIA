@@ -423,7 +423,6 @@ const getToken = async () => {
   if (!cfg.user || !cfg.password) {
     throw new Error("Не задано VIKSOFT_USER / VIKSOFT_PASSWORD у env");
   }
-  startTokenWarmer();
   if (cachedToken && Date.now() < cachedToken.expiresAt) return cachedToken.value;
   if (loginPromise) return loginPromise;
   loginPromise = (async () => {
@@ -443,33 +442,6 @@ export const invalidateVikSoftToken = () => {
   tokenTransport = null;
 };
 
-// ---- Прогрів токена ----
-// Логін на флапаючому сервері може зависати; якщо він трапляється у критичному шляху
-// запиту користувача — це таймаут. Тому фоном оновлюємо токен ДО спливання TTL.
-// Старий токен лишається валідним, поки тягнеться новий (прогрів на 8 хв < TTL 10 хв).
-const TOKEN_WARM_INTERVAL_MS = Math.max(
-  60 * 1000,
-  Number.parseInt(String(process.env.VIKSOFT_TOKEN_WARM_MS || String(8 * 60 * 1000)), 10) || 8 * 60 * 1000
-);
-let tokenWarmTimer = null;
-const refreshTokenInBackground = async () => {
-  try {
-    const cfg = getConfig();
-    if (!cfg.user || !cfg.password) return;
-    const { token, method } = await login(cfg);
-    if (token) cachedToken = { value: token, expiresAt: Date.now() + TOKEN_TTL_MS, loginMethod: method };
-  } catch (e) {
-    console.warn(`[viksoft] token warm failed: ${e?.message || e}`);
-  }
-};
-const startTokenWarmer = () => {
-  if (tokenWarmTimer) return;
-  if (String(process.env.VIKSOFT_TOKEN_WARM || "1") === "0") return;
-  tokenWarmTimer = setInterval(refreshTokenInBackground, TOKEN_WARM_INTERVAL_MS);
-  // Не тримати процес живим лише через цей таймер.
-  if (typeof tokenWarmTimer.unref === "function") tokenWarmTimer.unref();
-};
-
 // ---- Auto-detect транспорту токена ----
 // Vik-Soft документація не уточнює — але підтверджено робочим curl, що працює
 // саме `Authorization: Token <token>`. Тому ставимо його ПЕРШИМ (далі bearer,
@@ -486,7 +458,7 @@ const TOKEN_TRANSPORTS = [
   { name: "query:sid", apply: (u, h, t) => { u.searchParams.set("sid", t); } },
   { name: "query:key", apply: (u, h, t) => { u.searchParams.set("key", t); } },
 ];
-let tokenTransport = null; // запам'ятовуємо вдалий варіант
+let tokenTransport = TOKEN_TRANSPORTS[0]; // header:auth-token підтверджено робочим — стартуємо з нього, щоб не перебирати решту
 
 const buildRequest = (cfg, path, params, token, transport) => {
   const u = new URL(`${cfg.apiBase}${path}`);
@@ -558,7 +530,15 @@ const apiGet = async (path, params = {}, { timeoutMs } = {}) => {
       return res.json !== null ? res.json : res.body;
     }
     tried.push({ name: tokenTransport.name, status: res.status, body: (res.body || "").slice(0, 120) });
-    if (!looksLikeAuthError(res) && res.status !== 0) {
+    if (!looksLikeAuthError(res)) {
+      // Не auth-помилка: або детермінований HTTP-статус, або таймаут (status 0).
+      // У ОБОХ випадках перебір решти транспортів + релогін лише навантажать
+      // зависаючий модуль Vik-Soft зайвими запитами (включно з ПОВТОРНИМ логіном),
+      // хоча токен і транспорт правильні. Тому падаємо одразу — повтор робить
+      // рівень вище (tryRequest уже повторив мережеві збої / дедлайн ендпойнта).
+      if (res.status === 0) {
+        throw new Error(`Vik-Soft ${path}: таймаут — сервер не відповів вчасно`);
+      }
       throw new Error(`HTTP ${res.status} ${path} :: ${(res.body || "").slice(0, 500)}`);
     }
     if (looksLikeAuthError(res)) {
