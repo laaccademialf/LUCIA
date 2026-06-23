@@ -3564,7 +3564,9 @@ function InventoryJournalTab({ inventories, restaurants, user, deleteInventory }
                                           </tr>
                                         </thead>
                                         <tbody>
-                                          {(Array.isArray(sourceDoc?.items) ? sourceDoc.items : []).map((item, itemIndex) => (
+                                          {[...(Array.isArray(sourceDoc?.items) ? sourceDoc.items : [])]
+                                            .sort((left, right) => String(left?.productName || "").localeCompare(String(right?.productName || ""), "uk"))
+                                            .map((item, itemIndex) => (
                                             <tr key={`${sourceDoc?.id || index}_${itemIndex}`} className="border-t border-slate-100">
                                               <td className="px-2 py-1">{item?.productName || "-"}</td>
                                               <td className="px-2 py-1">{item?.code1C || "-"}</td>
