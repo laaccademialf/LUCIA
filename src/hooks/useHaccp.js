@@ -11,8 +11,6 @@ import { uploadHaccpPhotosApi } from "../api/haccpPhotosApi";
 const TEMPLATES_COLLECTION = "haccpTemplates";
 const AUDITS_COLLECTION = "haccpAudits";
 
-const isCompletedAudit = (payload) => String(payload?.status || "").trim() === "completed";
-
 const collectUploadTargets = (payload) => {
   const targets = [];
 
@@ -75,8 +73,6 @@ const rewriteUploadedPhotos = (payload, uploadedPhotos = []) => {
 };
 
 const uploadAuditPhotosIfNeeded = async (payload) => {
-  if (!isCompletedAudit(payload)) return payload;
-
   const targets = collectUploadTargets(payload);
   if (!targets.length) return payload;
 

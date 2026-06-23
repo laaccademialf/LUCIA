@@ -1286,6 +1286,16 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
         // During repeated inventory edits, change history/photos can exceed TEXT size.
         await ensureMySqlLongTextColumns(conn, tableName, ["inventory_change_history", "photos"]);
       }
+      if (collection === "productInventories") {
+        // Merged inventory payloads can exceed TEXT limit (64KB), especially merged_source_documents.
+        await ensureMySqlLongTextColumns(conn, tableName, [
+          "items",
+          "user_contributions",
+          "contributors",
+          "merged_from_ids",
+          "merged_source_documents",
+        ]);
+      }
       const columnsAfterEnsure = await getMySqlColumns(conn, tableName);
       const columnTypes = await getMySqlColumnTypes(conn, tableName);
       const scalarColumns = Object.keys(flat).filter((col) => columnsAfterEnsure.has(col));

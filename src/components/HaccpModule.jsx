@@ -58,8 +58,8 @@ const compactInputClass =
 const MAX_PHOTOS_PER_ITEM = 5;
 const MAX_GALLERY_PHOTOS = 60;
 const MAX_PHOTO_SIZE = 15 * 1024 * 1024;
-const PHOTO_MAX_DIMENSION = 1600;
-const PHOTO_JPEG_QUALITY = 0.72;
+const PHOTO_MAX_DIMENSION = 1280;
+const PHOTO_JPEG_QUALITY = 0.68;
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 
