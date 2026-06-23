@@ -4909,10 +4909,12 @@ const server = http.createServer(async (req, res) => {
         .filter(Boolean);
       // Жорсткий дедлайн НИЖЧЕ за таймаут nginx-проксі: якщо Vik-Soft не відповів
       // вчасно, повертаємо ЗРОЗУМІЛУ JSON-відповідь замість «голого» 504 від nginx.
-      // Налаштовується через env VIKSOFT_ENDPOINT_DEADLINE_MS (типово 45 с).
+      // Налаштовується через env VIKSOFT_ENDPOINT_DEADLINE_MS (типово 58 с — майже
+      // хвилина, але лишається під типовим nginx proxy_read_timeout 60 с, щоб
+      // користувач бачив наше повідомлення, а не голий 504).
       const DEADLINE_MS = Math.max(
         10000,
-        Number.parseInt(String(process.env.VIKSOFT_ENDPOINT_DEADLINE_MS || "45000"), 10) || 45000
+        Number.parseInt(String(process.env.VIKSOFT_ENDPOINT_DEADLINE_MS || "58000"), 10) || 58000
       );
       let deadlineTimer;
       const deadline = new Promise((resolve) => {
