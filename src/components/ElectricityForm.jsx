@@ -155,10 +155,10 @@ const ElectricityForm = ({
           const c = Number(coefficients?.[key]);
           return Number.isFinite(c) && c > 0 ? c : 1;
         };
-        // Округлення для відображення показника.
+        // Округлення лише для ВІДОБРАЖЕННЯ: розрахунки лишають повну точність.
         const fmtNum = (n) => {
           if (!Number.isFinite(n)) return "—";
-          return String(Math.round(n * 100) / 100);
+          return Number(n).toFixed(2);
         };
         // Ланцюжок показників: за зростанням дати накопичуємо споживання/коефіцієнт.
         // Якщо є ручна правка (readingOverride) — показник = правці, а наступні
@@ -302,8 +302,8 @@ const ElectricityForm = ({
                     <tr>
                       {columns.map((c) => (
                         <Fragment key={`sub-${c}`}>
-                          <th className="px-2 py-0.5 text-right whitespace-nowrap text-[10px] font-medium text-slate-500 border border-slate-200">Показник</th>
-                          <th className="px-2 py-0.5 text-right whitespace-nowrap text-[10px] font-medium text-slate-500 border border-slate-200">Споживання</th>
+                          <th className="min-w-[7rem] px-2 py-0.5 text-right whitespace-nowrap text-[10px] font-medium text-slate-500 border border-slate-200">Показник</th>
+                          <th className="min-w-[7rem] px-2 py-0.5 text-right whitespace-nowrap text-[10px] font-medium text-slate-500 border border-slate-200">Споживання</th>
                         </Fragment>
                       ))}
                     </tr>
@@ -311,8 +311,8 @@ const ElectricityForm = ({
                       <td className="px-2 py-0.5 whitespace-nowrap border border-slate-200">Разом за місяць</td>
                       {columns.map((c) => (
                         <Fragment key={`tot-${c}`}>
-                          <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200 text-slate-400">—</td>
-                          <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200">{fmtNum(monthTotals.get(c) || 0)}</td>
+                          <td className="min-w-[7rem] px-2 py-0.5 text-right tabular-nums border border-slate-200 text-slate-400">—</td>
+                          <td className="min-w-[7rem] px-2 py-0.5 text-right tabular-nums border border-slate-200">{fmtNum(monthTotals.get(c) || 0)}</td>
                         </Fragment>
                       ))}
                       {onDeleteHistory && <td className="px-2 py-0.5 border border-slate-200"></td>}
@@ -338,8 +338,8 @@ const ElectricityForm = ({
                             if (!m) {
                               return (
                                 <Fragment key={c}>
-                                  <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200">—</td>
-                                  <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200">—</td>
+                                  <td className="min-w-[7rem] px-2 py-0.5 text-right tabular-nums border border-slate-200">—</td>
+                                  <td className="min-w-[7rem] px-2 py-0.5 text-right tabular-nums border border-slate-200">—</td>
                                 </Fragment>
                               );
                             }
@@ -347,7 +347,7 @@ const ElectricityForm = ({
                             const overridden = Number.isFinite(Number(m?.readingOverride));
                             return (
                               <Fragment key={c}>
-                                <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200">
+                                <td className="min-w-[7rem] px-2 py-0.5 text-right tabular-nums border border-slate-200">
                                   {canEditReadings ? (
                                     <input
                                       key={`${row?.id}|${c}|${readingStr}|${overridden ? "o" : ""}`}
@@ -355,20 +355,26 @@ const ElectricityForm = ({
                                       step="0.01"
                                       defaultValue={readingStr === "—" ? "" : readingStr}
                                       onBlur={(e) => {
-                                        const v = e.target.value;
-                                        if (String(v) !== (readingStr === "—" ? "" : readingStr)) {
-                                          onReadingOverride?.(row?.id, c, v);
+                                        const v = String(e.target.value || "").trim().replace(",", ".");
+                                        const current = Number(recReadings?.get(c));
+                                        if (v === "") {
+                                          if (Number.isFinite(current)) onReadingOverride?.(row?.id, c, "");
+                                          return;
                                         }
+                                        const next = Number(v);
+                                        if (!Number.isFinite(next)) return;
+                                        if (Number.isFinite(current) && Math.abs(next - current) < 1e-9) return;
+                                        onReadingOverride?.(row?.id, c, v);
                                       }}
-                                      className={`w-16 rounded border px-1 py-0 text-right text-[11px] ${overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-700" : "border-slate-300"}`}
+                                      className={`w-24 rounded border px-1 py-0 text-right text-[11px] ${overridden ? "border-amber-400 bg-amber-50 font-semibold text-amber-700" : "border-slate-300"}`}
                                       title="Показник (натисніть, щоб відредагувати; правка перерахує наступні дати)"
                                     />
                                   ) : (
                                     <span className={overridden ? "font-semibold text-amber-700" : ""}>{readingStr}</span>
                                   )}
                                 </td>
-                                <td className="px-2 py-0.5 text-right tabular-nums border border-slate-200">
-                                  {m.consumption ?? m.currValue ?? "—"}
+                                <td className="min-w-[7rem] px-2 py-0.5 text-right tabular-nums border border-slate-200">
+                                  {fmtNum(Number(m?.consumption ?? m?.currValue))}
                                 </td>
                               </Fragment>
                             );
