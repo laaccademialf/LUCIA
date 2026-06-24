@@ -2782,7 +2782,6 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
                       </div>
                       <button
                         type="button"
-                        onPointerDown={(event) => handleCalcButtonPress(event, product.id, product.name)}
                         onClick={(event) => handleCalcButtonPress(event, product.id, product.name)}
                         className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 shadow-sm transition hover:bg-indigo-100 hover:text-indigo-800"
                         title="Відкрити калькулятор"
@@ -2925,33 +2924,33 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               </div>
             </div>
             <div className="grid grid-cols-4 gap-2.5">
-              <button onClick={calcClear} className="h-16 rounded-full bg-[#5f6065] text-2xl font-medium text-white transition hover:bg-[#6a6b70]">C</button>
-              <button onClick={calcBackspace} className="h-16 rounded-full bg-[#5f6065] text-2xl font-medium text-white transition hover:bg-[#6a6b70]">⌫</button>
+              <button type="button" onClick={calcClear} className="h-16 rounded-full bg-[#5f6065] text-2xl font-medium text-white transition hover:bg-[#6a6b70]">C</button>
+              <button type="button" onClick={calcBackspace} className="h-16 rounded-full bg-[#5f6065] text-2xl font-medium text-white transition hover:bg-[#6a6b70]">⌫</button>
               <div className="h-16" />
-              <button onClick={() => calcOperation("/")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">÷</button>
+              <button type="button" onClick={() => calcOperation("/")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">÷</button>
 
-              <button onClick={() => calcInput(7)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">7</button>
-              <button onClick={() => calcInput(8)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">8</button>
-              <button onClick={() => calcInput(9)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">9</button>
-              <button onClick={() => calcOperation("*")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">×</button>
+              <button type="button" onClick={() => calcInput(7)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">7</button>
+              <button type="button" onClick={() => calcInput(8)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">8</button>
+              <button type="button" onClick={() => calcInput(9)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">9</button>
+              <button type="button" onClick={() => calcOperation("*")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">×</button>
 
-              <button onClick={() => calcInput(4)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">4</button>
-              <button onClick={() => calcInput(5)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">5</button>
-              <button onClick={() => calcInput(6)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">6</button>
-              <button onClick={() => calcOperation("-")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">−</button>
+              <button type="button" onClick={() => calcInput(4)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">4</button>
+              <button type="button" onClick={() => calcInput(5)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">5</button>
+              <button type="button" onClick={() => calcInput(6)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">6</button>
+              <button type="button" onClick={() => calcOperation("-")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">−</button>
 
-              <button onClick={() => calcInput(1)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">1</button>
-              <button onClick={() => calcInput(2)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">2</button>
-              <button onClick={() => calcInput(3)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">3</button>
-              <button onClick={() => calcOperation("+")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">+</button>
+              <button type="button" onClick={() => calcInput(1)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">1</button>
+              <button type="button" onClick={() => calcInput(2)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">2</button>
+              <button type="button" onClick={() => calcInput(3)} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">3</button>
+              <button type="button" onClick={() => calcOperation("+")} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">+</button>
 
-              <button onClick={() => calcInput(0)} className="col-span-2 h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">0</button>
-              <button onClick={calcDot} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">,</button>
-              <button onClick={calcEquals} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">=</button>
+              <button type="button" onClick={() => calcInput(0)} className="col-span-2 h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">0</button>
+              <button type="button" onClick={calcDot} className="h-16 rounded-full bg-[#2f3136] text-3xl font-normal text-white transition hover:bg-[#3a3d43]">,</button>
+              <button type="button" onClick={calcEquals} className="h-16 rounded-full bg-[#ff9f0a] text-3xl font-medium text-white transition hover:bg-[#ffb340]">=</button>
             </div>
             <div className="mt-4 flex gap-2.5">
-              <button onClick={closeCalcModal} className="flex-1 rounded-xl border border-slate-600 bg-[#1f2532] px-3 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-[#2a3244]">Скасувати</button>
-              <button onClick={calcSave} className="flex-1 rounded-xl bg-emerald-600 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500">OK</button>
+              <button type="button" onClick={closeCalcModal} className="flex-1 rounded-xl border border-slate-600 bg-[#1f2532] px-3 py-2.5 text-sm font-semibold text-slate-200 transition hover:bg-[#2a3244]">Скасувати</button>
+              <button type="button" onClick={calcSave} className="flex-1 rounded-xl bg-emerald-600 px-3 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500">OK</button>
             </div>
           </div>
         </div>
