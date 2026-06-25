@@ -140,6 +140,11 @@ const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shad
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
 const INVENTORY_DRAFT_STORAGE_PREFIX = "lucia_inventory_draft_v1__";
 const INVENTORY_OFFLINE_QUEUE_STORAGE_KEY = "lucia_inventory_offline_queue_v1";
+const INVENTORY_PRODUCTS_CACHE_PREFIX = "lucia_inventory_products_cache_v1__";
+const getInventoryProductsCacheKey = (restaurantId) => {
+  const normalizedRestaurantId = String(restaurantId || "").trim() || "none";
+  return `${INVENTORY_PRODUCTS_CACHE_PREFIX}${normalizedRestaurantId}`;
+};
 
 const SyncIndicator = ({ lastSyncedAt }) => {
   const [, forceTick] = useState(0);
@@ -1467,6 +1472,11 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const quantityInputRefs = useRef({});
   const pendingRestoreRef = useRef(null);
   const isFlushingOfflineQueueRef = useRef(false);
+  const syncStatusTimeoutRef = useRef(null);
+  const [isOfflineMode, setIsOfflineMode] = useState(() => {
+    if (typeof navigator === "undefined") return false;
+    return navigator.onLine === false;
+  });
   const [activeRowProductId, setActiveRowProductId] = useState(null);
   const [restaurantId, setRestaurantId] = useState(isGlobalAdmin ? "" : String(user?.restaurant || ""));
   // quantities = accumulated/committed totals per productId (used for saving & green highlight)
@@ -1479,9 +1489,11 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const [stockTakingPlace, setStockTakingPlace] = useState("");
   const [activeSession, setActiveSession] = useState(null);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [syncStatusMessage, setSyncStatusMessage] = useState("");
   const [showAddProductModal, setShowAddProductModal] = useState(false);
   const [addProductName, setAddProductName] = useState("");
   const [manualProducts, setManualProducts] = useState({});
+  const [cachedProductsForRestaurant, setCachedProductsForRestaurant] = useState([]);
   // Calculator modal state
   const [calcModal, setCalcModal] = useState({
     isOpen: false,
@@ -1554,6 +1566,24 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     const normalizedRestaurantId = String(restaurantId || "").trim() || "none";
     return `${INVENTORY_DRAFT_STORAGE_PREFIX}${currentUserId}__${normalizedRestaurantId}`;
   }, [currentUserId, restaurantId]);
+
+  const inventoryProductsCacheKey = useMemo(() => {
+    return getInventoryProductsCacheKey(restaurantId);
+  }, [restaurantId]);
+
+  const showSyncStatus = useCallback((message, ttlMs = 5000) => {
+    setSyncStatusMessage(String(message || "").trim());
+    if (syncStatusTimeoutRef.current) {
+      clearTimeout(syncStatusTimeoutRef.current);
+      syncStatusTimeoutRef.current = null;
+    }
+    if (ttlMs > 0) {
+      syncStatusTimeoutRef.current = setTimeout(() => {
+        setSyncStatusMessage("");
+        syncStatusTimeoutRef.current = null;
+      }, ttlMs);
+    }
+  }, []);
 
   const readOfflineQueue = useCallback(() => {
     const queue = readJsonFromStorage(INVENTORY_OFFLINE_QUEUE_STORAGE_KEY, []);
@@ -1628,9 +1658,13 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       }
     } finally {
       isFlushingOfflineQueueRef.current = false;
-      setPendingSyncCount(readOfflineQueue().length);
+      const remainingQueueCount = readOfflineQueue().length;
+      setPendingSyncCount(remainingQueueCount);
+      if (remainingQueueCount === 0) {
+        showSyncStatus("Останні зміни синхронізовано", 3500);
+      }
     }
-  }, [createInventory, updateInventory, readOfflineQueue, removeOfflineQueueItem]);
+  }, [createInventory, updateInventory, readOfflineQueue, removeOfflineQueueItem, showSyncStatus]);
 
   useEffect(() => {
     setPendingSyncCount(readOfflineQueue().length);
@@ -1638,6 +1672,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
 
   useEffect(() => {
     const handleOnline = () => {
+      showSyncStatus("Відновлено з'єднання, синхронізую зміни…", 3000);
       void flushOfflineQueue();
     };
 
@@ -1652,7 +1687,81 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
         window.removeEventListener("online", handleOnline);
       }
     };
-  }, [flushOfflineQueue]);
+  }, [flushOfflineQueue, showSyncStatus]);
+
+  useEffect(() => {
+    if (!pendingSyncCount) return;
+
+    const retryId = setInterval(() => {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      void flushOfflineQueue();
+    }, 15000);
+
+    return () => {
+      clearInterval(retryId);
+    };
+  }, [pendingSyncCount, flushOfflineQueue]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleOnline = () => setIsOfflineMode(false);
+    const handleOffline = () => setIsOfflineMode(true);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!restaurantId) {
+      setCachedProductsForRestaurant([]);
+      return;
+    }
+
+    const cached = readJsonFromStorage(inventoryProductsCacheKey, []);
+    const normalizedCached = Array.isArray(cached)
+      ? cached.filter((item) => item && typeof item === "object" && String(item?.id || "").trim())
+      : [];
+    setCachedProductsForRestaurant(normalizedCached);
+  }, [restaurantId, inventoryProductsCacheKey]);
+
+  const serverScopedProducts = useMemo(() => {
+    const selectedRestaurantId = String(restaurantId || "");
+    if (!selectedRestaurantId) return [];
+    return products.filter((item) => item.isActive !== false && sameRestaurant(item.restaurantId, selectedRestaurantId));
+  }, [products, restaurantId]);
+
+  useEffect(() => {
+    if (isOfflineMode) return;
+    if (!Array.isArray(products) || products.length === 0) return;
+
+    const productsByRestaurant = new Map();
+    products.forEach((item) => {
+      if (item?.isActive === false) return;
+      const rid = String(item?.restaurantId || "").trim();
+      if (!rid) return;
+      if (!productsByRestaurant.has(rid)) productsByRestaurant.set(rid, []);
+      productsByRestaurant.get(rid).push(item);
+    });
+
+    productsByRestaurant.forEach((items, rid) => {
+      if (!Array.isArray(items) || items.length === 0) return;
+      writeJsonToStorage(getInventoryProductsCacheKey(rid), items);
+    });
+  }, [isOfflineMode, products]);
+
+  useEffect(() => {
+    if (!restaurantId) return;
+    if (!Array.isArray(serverScopedProducts) || serverScopedProducts.length === 0) return;
+
+    writeJsonToStorage(inventoryProductsCacheKey, serverScopedProducts);
+    setCachedProductsForRestaurant(serverScopedProducts);
+  }, [restaurantId, serverScopedProducts, inventoryProductsCacheKey]);
 
   useEffect(() => {
     if (isGlobalAdmin) return;
@@ -1704,10 +1813,28 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
   const scopedProducts = useMemo(() => {
     const selectedRestaurantId = String(restaurantId || "");
     if (!selectedRestaurantId) return [];
-    const baseProducts = products.filter((item) => item.isActive !== false && sameRestaurant(item.restaurantId, selectedRestaurantId));
-    const manualProductsList = Object.values(manualProducts).filter((item) => sameRestaurant(item.restaurantId, selectedRestaurantId));
-    return [...baseProducts, ...manualProductsList];
-  }, [products, restaurantId, manualProducts]);
+
+    const baseProducts = (isOfflineMode && serverScopedProducts.length === 0)
+      ? cachedProductsForRestaurant
+      : serverScopedProducts;
+
+    const mergedById = new Map();
+    (Array.isArray(baseProducts) ? baseProducts : []).forEach((item) => {
+      const id = String(item?.id || "").trim();
+      if (!id) return;
+      mergedById.set(id, item);
+    });
+
+    Object.values(manualProducts)
+      .filter((item) => sameRestaurant(item.restaurantId, selectedRestaurantId))
+      .forEach((item) => {
+        const id = String(item?.id || "").trim();
+        if (!id) return;
+        mergedById.set(id, item);
+      });
+
+    return Array.from(mergedById.values());
+  }, [restaurantId, isOfflineMode, serverScopedProducts, cachedProductsForRestaurant, manualProducts]);
 
   useEffect(() => {
     const pendingRestore = pendingRestoreRef.current;
@@ -1761,6 +1888,61 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       updatedAt: new Date().toISOString(),
     });
   }, [inventoryDraftStorageKey, restaurantId, inventoryDate, editingInventoryId, stockTakingPlace, quantities, inputValues]);
+
+  useEffect(() => {
+    if (!restaurantId || typeof window === "undefined") return;
+
+    const persistDraftSnapshot = () => {
+      const hasDraftData =
+        Object.keys(quantities || {}).length > 0 ||
+        Object.keys(inputValues || {}).length > 0 ||
+        Boolean(String(stockTakingPlace || "").trim()) ||
+        Boolean(String(editingInventoryId || "").trim());
+
+      if (!hasDraftData) {
+        removeStorageKey(inventoryDraftStorageKey);
+        return;
+      }
+
+      writeJsonToStorage(inventoryDraftStorageKey, {
+        restaurantId: String(restaurantId || ""),
+        inventoryDate,
+        editingInventoryId: String(editingInventoryId || ""),
+        stockTakingPlace: String(stockTakingPlace || ""),
+        quantities,
+        inputValues,
+        updatedAt: new Date().toISOString(),
+      });
+    };
+
+    const handleOffline = () => {
+      persistDraftSnapshot();
+      showSyncStatus("Працюєте офлайн. Зміни збережено локально", 4500);
+    };
+
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [
+    restaurantId,
+    inventoryDraftStorageKey,
+    inventoryDate,
+    editingInventoryId,
+    stockTakingPlace,
+    quantities,
+    inputValues,
+    showSyncStatus,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (syncStatusTimeoutRef.current) {
+        clearTimeout(syncStatusTimeoutRef.current);
+        syncStatusTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const keywordSuggestions = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -2184,11 +2366,15 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
       });
 
       const isOfflineNow = typeof navigator !== "undefined" && navigator.onLine === false;
-      alert(
+      showSyncStatus(
         isOfflineNow
-          ? "Інтернет-з'єднання відсутнє. Дані інвентаризації збережено локально та поставлено в чергу синхронізації."
-          : "Не вдалося зберегти інвентаризацію на сервері. Дані збережено локально та буде повторена синхронізація."
+          ? "Офлайн: зміни збережено локально, синхронізація виконається автоматично"
+          : "Сервер тимчасово недоступний. Повторюю синхронізацію у фоні",
+        6000
       );
+      if (!isOfflineNow) {
+        void flushOfflineQueue();
+      }
       return;
     }
 
@@ -2199,6 +2385,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
     }
     setInputValues({});
     // Do NOT clear quantities — user can keep adding to the same inventory.
+    setSyncStatusMessage("");
     alert(editingInventoryId ? "Інвентаризацію оновлено." : "Інвентаризацію збережено.");
   };
 
@@ -2713,6 +2900,7 @@ function InventoryTab({ products, inventories, restaurants, user, createInventor
               {editingInventoryId && <span className="rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">Ред. режим</span>}
               {filledLines.length > 0 && <span className="ml-1">· {filledLines.length} поз.</span>}
               {pendingSyncCount > 0 && <span className="ml-1 text-amber-700">· Очікує синхронізації: {pendingSyncCount}</span>}
+              {syncStatusMessage && <span className="ml-1 text-slate-600">· {syncStatusMessage}</span>}
             </div>
             <div className="flex items-center gap-1.5">
               {editingInventoryId && (
