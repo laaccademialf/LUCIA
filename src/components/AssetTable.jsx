@@ -513,81 +513,18 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
   }, [setFilters, visibleFilterKeys]);
 
   const renderFilterByKey = (key) => {
-    if (key === "businessUnit") {
-      const selectedLocations = normalizeFilterValues(filters.location);
-
-      return (
-        <MultiFilterSelect
-          key={key}
-          label="Локація"
-          values={selectedLocations}
-          options={filterOptionsByKey.businessUnit || []}
-          onChange={(vals) => setFilters((f) => ({ ...f, location: vals }))}
-        />
-      );
-    }
-
-    if (key === "locationName") {
-      const selectedLocationNames = normalizeFilterValues(filters.locationName);
-
-      return (
-        <MultiFilterSelect
-          key={key}
-          label="Локація (детально)"
-          values={selectedLocationNames}
-          options={filterOptionsByKey.locationName || []}
-          onChange={(vals) => setFilters((f) => ({ ...f, locationName: vals }))}
-        />
-      );
-    }
-
-    if (key === "category") {
-      return (
-        <FilterSelect
-          key={key}
-          label="Категорія"
-          value={filters.category || ""}
-          options={filterOptionsByKey.category || []}
-          onChange={(val) => setFilters((f) => ({ ...f, category: val }))}
-        />
-      );
-    }
-
-    if (key === "status") {
-      return (
-        <FilterSelect
-          key={key}
-          label="Статус"
-          value={filters.status || ""}
-          options={filterOptionsByKey.status || []}
-          onChange={(val) => setFilters((f) => ({ ...f, status: val }))}
-        />
-      );
-    }
-
-    if (key === "decision") {
-      return (
-        <FilterSelect
-          key={key}
-          label="Рішення"
-          value={filters.decision || ""}
-          options={filterOptionsByKey.decision || []}
-          onChange={(val) => setFilters((f) => ({ ...f, decision: val }))}
-        />
-      );
-    }
-
     const label = ALL_FIELD_DEFS.find((f) => f.key === key)?.header || key;
-    const filterKey = key;
+    const filterKey = filterKeyMap[key] || key;
     const options = filterOptionsByKey[key] || [];
+    const selectedValues = normalizeFilterValues(filters[filterKey]);
 
     return (
-      <FilterSelect
+      <MultiFilterSelect
         key={key}
         label={label}
-        value={filters[filterKey] || ""}
+        values={selectedValues}
         options={options}
-        onChange={(val) => setFilters((f) => ({ ...f, [filterKey]: val }))}
+        onChange={(vals) => setFilters((f) => ({ ...f, [filterKey]: vals }))}
       />
     );
   };
@@ -953,33 +890,6 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
         </div>
       )}
     </div>
-  );
-}
-
-function FilterSelect({ label, value, options, onChange }) {
-  const displayLabel = label || '';
-  const mobileLabel = label ? label.slice(0, 3) : '';
-  
-  return (
-    <label className="flex flex-col gap-1 text-xs">
-      <span className="inline-flex items-center gap-1 text-gray-900 font-semibold uppercase tracking-wide text-[11px]">
-        <SlidersHorizontal size={14} className="sm:size-4" />
-        <span className="hidden sm:inline">{displayLabel}</span>
-        <span className="sm:hidden">{mobileLabel}</span>
-      </span>
-      <select
-        className="w-full px-2.5 py-1.5 sm:py-2 bg-white border border-gray-300 rounded-md text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-150 appearance-none cursor-pointer text-xs sm:text-sm [&>option]:bg-white [&>option]:text-gray-900"
-        value={value}
-        onChange={(e) => onChange(e.target.value || "")}
-      >
-        <option value="" className="bg-white text-gray-900">Усі</option>
-        {options.map((opt) => (
-          <option key={opt} value={opt} className="bg-white text-gray-900">
-            {opt}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 
