@@ -9,7 +9,7 @@ import {
   getPaginationRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { ArrowDownZA, ArrowUpAZ, Download, FileDown, Pencil, Trash2, Upload, SlidersHorizontal, X, RotateCcw } from "lucide-react";
+import { ArrowDownZA, ArrowUpAZ, Download, FileDown, Pencil, Trash2, Upload, SlidersHorizontal, X, RotateCcw, Check, ChevronDown } from "lucide-react";
 import ColumnVisibilityDropdown from "./ColumnVisibilityDropdown";
 import clsx from "clsx";
 import { printAssetQrLabel, printBatchQrLabels } from "../utils/printQrLabel";
@@ -70,6 +70,17 @@ const matchesSearchQuery = (asset, normalizedQuery) => {
     .join(" ");
 
   return pool.includes(normalizedQuery);
+};
+
+const normalizeFilterValues = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean);
+  }
+
+  const normalized = String(value || "").trim();
+  return normalized ? [normalized] : [];
 };
 
 const ALL_FIELD_DEFS = [
@@ -279,6 +290,16 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
 
     return data.filter((item) => {
       const byFilters = Object.entries(filters).every(([key, val]) => {
+        if (Array.isArray(val)) {
+          const selectedValues = normalizeFilterValues(val);
+          if (selectedValues.length === 0) return true;
+
+          // Масив у фільтрі означає множинний вибір значень.
+          if (key === "location") return selectedValues.includes(String(item.businessUnit || ""));
+          if (key === "locationName") return selectedValues.includes(String(item.locationName || ""));
+          return selectedValues.includes(String(item[key] || ""));
+        }
+
         if (!val) return true;
         // Спеціальна логіка для "location" (businessUnit)
         if (key === "location") return item.businessUnit === val;
@@ -493,13 +514,29 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
 
   const renderFilterByKey = (key) => {
     if (key === "businessUnit") {
+      const selectedLocations = normalizeFilterValues(filters.location);
+
       return (
-        <FilterSelect
+        <MultiFilterSelect
           key={key}
           label="Локація"
-          value={filters.location || ""}
+          values={selectedLocations}
           options={filterOptionsByKey.businessUnit || []}
-          onChange={(val) => setFilters((f) => ({ ...f, location: val }))}
+          onChange={(vals) => setFilters((f) => ({ ...f, location: vals }))}
+        />
+      );
+    }
+
+    if (key === "locationName") {
+      const selectedLocationNames = normalizeFilterValues(filters.locationName);
+
+      return (
+        <MultiFilterSelect
+          key={key}
+          label="Локація (детально)"
+          values={selectedLocationNames}
+          options={filterOptionsByKey.locationName || []}
+          onChange={(vals) => setFilters((f) => ({ ...f, locationName: vals }))}
         />
       );
     }
@@ -942,6 +979,96 @@ function FilterSelect({ label, value, options, onChange }) {
           </option>
         ))}
       </select>
+    </label>
+  );
+}
+
+function MultiFilterSelect({ label, values, options, onChange }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef(null);
+  const displayLabel = label || "";
+  const mobileLabel = label ? label.slice(0, 3) : "";
+  const selectedValues = Array.isArray(values) ? values : [];
+
+  useEffect(() => {
+    const handleOutsideClick = (event) => {
+      if (!containerRef.current) return;
+      if (containerRef.current.contains(event.target)) return;
+      setIsOpen(false);
+    };
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
+
+  const selectedSet = new Set(selectedValues);
+
+  const toggleOption = (option) => {
+    if (selectedSet.has(option)) {
+      onChange(selectedValues.filter((value) => value !== option));
+      return;
+    }
+    onChange([...selectedValues, option]);
+  };
+
+  const triggerText =
+    selectedValues.length === 0
+      ? "Усі"
+      : selectedValues.length === 1
+        ? selectedValues[0]
+        : `Вибрано: ${selectedValues.length}`;
+
+  return (
+    <label ref={containerRef} className="relative flex flex-col gap-1 text-xs">
+      <span className="inline-flex items-center gap-1 text-gray-900 font-semibold uppercase tracking-wide text-[11px]">
+        <SlidersHorizontal size={14} className="sm:size-4" />
+        <span className="hidden sm:inline">{displayLabel}</span>
+        <span className="sm:hidden">{mobileLabel}</span>
+      </span>
+
+      <button
+        type="button"
+        className="w-full px-2.5 py-1.5 sm:py-2 bg-white border border-gray-300 rounded-md text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-150 text-xs sm:text-sm flex items-center justify-between gap-2"
+        onClick={() => setIsOpen((prev) => !prev)}
+      >
+        <span className="truncate text-left">{triggerText}</span>
+        <ChevronDown size={14} className={isOpen ? "rotate-180 transition-transform" : "transition-transform"} />
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-0 right-0 top-full z-40 mt-1 rounded-md border border-slate-200 bg-white shadow-lg">
+          <div className="max-h-52 overflow-auto py-1">
+            <button
+              type="button"
+              className="w-full px-2.5 py-1.5 text-left text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50"
+              onClick={() => onChange([])}
+            >
+              Усі
+            </button>
+            {options.map((opt) => {
+              const isSelected = selectedSet.has(opt);
+              return (
+                <button
+                  type="button"
+                  key={opt}
+                  className="w-full px-2.5 py-1.5 text-left text-xs sm:text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                  onClick={() => toggleOption(opt)}
+                >
+                  <span
+                    className={clsx(
+                      "inline-flex h-4 w-4 items-center justify-center rounded border",
+                      isSelected ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-300 bg-white text-transparent"
+                    )}
+                  >
+                    <Check size={12} />
+                  </span>
+                  <span className="truncate">{opt}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </label>
   );
 }
