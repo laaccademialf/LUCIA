@@ -123,16 +123,26 @@ const ALL_FIELD_DEFS = [
   { key: "actions", header: "Дії" },
 ];
 
-export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, canEditAsset = null, editDisabledReason = "Редагування тимчасово недоступне", getEditDisabledReason = null, getRowClassName = null, mobileCardMode = false, isAssetInventorizedInSession = null, showInventoryStateFilter = false, inventoryStateFilterValue = undefined, onInventoryStateFilterChange = null, onUnmarkInventorized = null }) {
+export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExport, onImport, onDownloadTemplate, headerTitle = "Облік активів", headerSubtitle = "Швидкі фільтри та експорт", hideLocationFilter = false, isAdminOnly = false, canEdit = true, canEditAsset = null, editDisabledReason = "Редагування тимчасово недоступне", getEditDisabledReason = null, getRowClassName = null, mobileCardMode = false, isAssetInventorizedInSession = null, showInventoryStateFilter = false, inventoryStateFilterValue = undefined, onInventoryStateFilterChange = null, searchQueryValue = undefined, onSearchQueryChange = null, onUnmarkInventorized = null }) {
   // Стан для видимих колонок
   const fileInputRef = useRef(null);
   const defaultVisible = ["invNumber", "name", "category", "locationName", "status", "decision", "actions"];
   const [visibleColumns, setVisibleColumns] = useState(defaultVisible);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [showDesktopFilters, setShowDesktopFilters] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQueryInternal, setSearchQueryInternal] = useState("");
+  const searchQuery = searchQueryValue ?? searchQueryInternal;
   const [inventoryStateFilterInternal, setInventoryStateFilterInternal] = useState("all");
   const inventoryStateFilter = inventoryStateFilterValue ?? inventoryStateFilterInternal;
+  const setSearchQuery = useCallback((nextValue) => {
+    const normalizedNext = String(nextValue || "");
+    if (typeof onSearchQueryChange === "function") {
+      onSearchQueryChange(normalizedNext);
+    }
+    if (searchQueryValue === undefined) {
+      setSearchQueryInternal(normalizedNext);
+    }
+  }, [onSearchQueryChange, searchQueryValue]);
   const setInventoryStateFilter = useCallback((nextValue) => {
     const normalizedNext = String(nextValue || "all");
     if (typeof onInventoryStateFilterChange === "function") {

@@ -576,6 +576,7 @@ function App() {
                       const submitAssetLockRef = useRef(false);
                       // Стан для фільтрів таблиці активів
                       const [filters, setFilters] = useState({});
+                      const [assetTableSearchQuery, setAssetTableSearchQuery] = useState("");
                       const [assetTableInventoryStateFilter, setAssetTableInventoryStateFilter] = useState("all");
                       // Стан для центрів відповідальності (business units)
                       const [businessUnits, setBusinessUnits] = useState([]);
@@ -4233,6 +4234,8 @@ function App() {
                   showInventoryStateFilter={shouldShowInventoryStateFilter}
                   inventoryStateFilterValue={assetTableInventoryStateFilter}
                   onInventoryStateFilterChange={setAssetTableInventoryStateFilter}
+                  searchQueryValue={assetTableSearchQuery}
+                  onSearchQueryChange={setAssetTableSearchQuery}
                   getRowClassName={getInventoryRowClassName}
                   onDelete={user?.role === 'admin' ? handleDeleteAsset : null}
                   onUnmarkInventorized={user?.role === 'admin' ? handleUnmarkInventorized : null}
