@@ -112,11 +112,11 @@ const buildZplPayload = ({ invNumber, name, qrValue, printerConfig }) => {
   // QR: magnification 3, ~69 dots (21 modules + 2 quiet zone × 3)
   const qrMag = 3;
   const qrSize = 75; // approximate QR block size with quiet zone
-  const qrX = ox + 4;
+  const qrX = ox + 16; // ~2mm left margin so the QR is not clipped off the edge
   const qrY = 20; // slightly below top edge
 
   // Text area: right of QR
-  const textX = ox + qrX + qrSize + 4;
+  const textX = qrX + qrSize + 4;
   const textW = PW - textX - 2; // remaining width for text
 
   // Name: multi-line, font with line gap to prevent overlap
