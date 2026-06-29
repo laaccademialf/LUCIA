@@ -258,9 +258,15 @@ const trySilentPrint = async (payload, printerConfig) => {
     });
 
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      console.warn("Silent print HTTP error:", res.status, body);
-      throw new Error(body.error || `HTTP ${res.status}`);
+      const text = await res.text().catch(() => "");
+      let body = {};
+      try {
+        body = text ? JSON.parse(text) : {};
+      } catch {
+        body = {};
+      }
+      console.warn("Silent print HTTP error:", res.status, text || body);
+      throw new Error(body.error || text || `HTTP ${res.status}`);
     }
     return true;
   } catch (err) {

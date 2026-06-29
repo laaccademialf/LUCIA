@@ -5238,7 +5238,9 @@ const server = http.createServer(async (req, res) => {
     try {
       const dbConfig = getAssetsRuntimeConfig();
       const { profile } = await resolveAuthContext(req, dbConfig);
+      console.log(`[print-label] request from ${String(req.headers.origin || "no-origin")} ip=${String(req.socket?.remoteAddress || "unknown")} auth=${isAuthorized(req) ? "token" : profile ? "session" : "none"}`);
       if (!isAuthorized(req) && !profile) {
+        console.warn("[print-label] unauthorized request");
         return sendJson(res, 401, { ok: false, error: "Unauthorized" });
       }
 
@@ -5260,6 +5262,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const buffer = Buffer.from(rawData, "base64");
+      console.log(`[print-label] forwarding to printer ${printerIp}:${printerPort} bytes=${buffer.length}`);
 
       await new Promise((resolve, reject) => {
         const socket = new net.Socket();
@@ -5274,6 +5277,7 @@ const server = http.createServer(async (req, res) => {
         socket.on("error", (err) => reject(err));
       });
 
+      console.log(`[print-label] success ${printerIp}:${printerPort}`);
       return sendJson(res, 200, { ok: true });
     } catch (error) {
       console.error("[print-label] error:", error.message);
