@@ -176,14 +176,14 @@ const buildZplPayload = ({ invNumber, name, qrValue, printerConfig }) => {
   // Name: multi-line, font with line gap to prevent overlap
   const nameH = 15;
   const nameW = 14;
-  const nameMaxLines = 4;
-  const nameLineGap = 6; // extra spacing between lines
-  const nameY = 6;
+  const nameMaxLines = 3;
+  const nameLineGap = 4; // extra spacing between lines
+  const nameY = 22; // ~2.75mm from top edge to avoid clipping
 
-  // Inv number: below name with extra gap for long names
+  // Inv number: below name
   const invH = 18;
   const invW = 16;
-  const invY = nameY + (nameH + nameLineGap) * nameMaxLines + 10;
+  const invY = nameY + (nameH + nameLineGap) * nameMaxLines + 6;
 
   const zpl =
     `^XA\n` +
