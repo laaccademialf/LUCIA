@@ -399,6 +399,22 @@ const playChecklistAlertTone = () => {
   }
 };
 
+// Чи має користувач доступ до вкладки "Адміністрування заявок" (Сервісні заявки).
+// Тільки таким користувачам приходять сповіщення про нові сервісні заявки.
+const isServiceAdminUser = (user, userPermissions) => {
+  if (!user) return false;
+  if (String(user?.role || "").toLowerCase() === "admin") return true;
+  const allowed = userPermissions?.["ops-maintenance"];
+  if (allowed === true) return true;
+  if (Array.isArray(allowed)) {
+    return allowed.some((tabId) => {
+      const value = String(tabId || "").toLowerCase();
+      return value.includes("admin") || value.includes("process") || value.includes("оброб");
+    });
+  }
+  return false;
+};
+
 const getNotificationReadAndDismissedSets = () => {
   try {
     const readRaw = JSON.parse(localStorage.getItem("lucia_notification_read_ids") || "[]");
@@ -852,6 +868,7 @@ function App() {
 
     const currentUserIdentityKeys = getLegalUserIdentityKeys(user);
     const userIsLegal = isLegalUser(user);
+    const userIsServiceAdmin = isServiceAdminUser(user, userPermissions);
     let cancelled = false;
 
     const loadLegal = async () => {
@@ -861,11 +878,12 @@ function App() {
         const mapped = (Array.isArray(items) ? items : [])
           .filter((item) => {
             const source = String(item?.source || "").trim();
-            if (source && source !== "legal" && source !== "haccp") return false;
+            if (source && source !== "legal" && source !== "haccp" && source !== "service") return false;
             const targetUserId = normalizeLegalIdentity(item?.targetUserId);
             const targetRole = String(item?.targetRole || "");
             if (targetUserId && currentUserIdentityKeys.includes(targetUserId)) return true;
             if (targetRole === "legal" && userIsLegal) return true;
+            if (targetRole === "serviceadmin" && userIsServiceAdmin) return true;
             return false;
           })
           .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
@@ -874,19 +892,22 @@ function App() {
             const key = `legal_${String(item.id || item.createdAt || Math.random().toString(36).slice(2))}`;
             const source = String(item?.source || "legal").trim() || "legal";
             const isHaccp = source === "haccp";
+            const isService = source === "service";
+            const fallbackTitle = isHaccp ? "HACCP сповіщення" : isService ? "Сервісна заявка" : "Юридична задача";
             return {
               key,
               id: key,
               type: source,
-              title: String(item.title || (isHaccp ? "HACCP сповіщення" : "Юридична задача")),
+              title: String(item.title || fallbackTitle),
               time: item.createdAt
                 ? new Date(item.createdAt).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" })
                 : "щойно",
               body: String(item.body || ""),
               createdAt: String(item.createdAt || ""),
               read: false,
-              actionUrl: String(item.actionUrl || (isHaccp ? "haccpreport" : LEGAL_NAV_ID)),
-              actionTab: String(item.actionTab || (isHaccp ? "haccpmainrepirt" : "legalrequest")),
+              actionUrl: String(item.actionUrl || (isHaccp ? "haccpreport" : isService ? "ops-maintenance" : LEGAL_NAV_ID)),
+              actionTab: String(item.actionTab || (isHaccp ? "haccpmainrepirt" : isService ? "Processingofapplications" : "legalrequest")),
+              targetRequestId: isService ? String(item.taskId || "") : "",
               priority: "normal",
             };
           });
@@ -904,7 +925,7 @@ function App() {
       window.removeEventListener("lucia:notifications-updated", loadLegal);
       clearInterval(timer);
     };
-  }, [user]);
+  }, [user, userPermissions]);
 
   useEffect(() => {
     if (!user) {
@@ -915,7 +936,6 @@ function App() {
       notificationSoundInitializedRef.current = false;
       return;
     }
-
     const currentUserIdentityKeys = getLegalUserIdentityKeys(user);
     const userIsLegal = isLegalUser(user);
 
@@ -4984,6 +5004,15 @@ function App() {
             if (notification.actionTab) {
               handleTopTabChange(notification.actionTab);
             }
+          }
+          // Сервісна заявка — відкрити деталі заявки діалоговим вікном
+          if (notification.targetRequestId) {
+            const requestId = String(notification.targetRequestId);
+            setTimeout(() => {
+              window.dispatchEvent(
+                new CustomEvent("lucia:open-service-request", { detail: { requestId } })
+              );
+            }, 300);
           }
           // Закрити панель при кліцінні
           setNotificationPanelOpen(false);

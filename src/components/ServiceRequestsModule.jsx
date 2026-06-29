@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Wrench, ClipboardList, Upload, Trash2, Send, Inbox, LayoutGrid, Table2, Search, Archive, User2, X, CalendarDays } from "lucide-react";
 import { useServiceRequests } from "../hooks/useServiceRequests";
 import { getUsers } from "../firebase/users";
+import { addLegalNotificationApi, isLegalApiEnabled } from "../api/legalTasksApi";
 
 const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100";
@@ -283,6 +284,32 @@ function RequestFormTab({ user, restaurants, createRequest, requests = [] }) {
     if (!result.success) {
       alert("Не вдалося створити заявку.");
       return;
+    }
+
+    // Сповіщення тільки для користувачів з доступом до "Адміністрування заявок".
+    if (isLegalApiEnabled()) {
+      const urgencyLabel = getUrgencyLabel(form.urgency);
+      const restaurantLabel = selectedRestaurant?.name || form.location.trim() || "Без локації";
+      try {
+        await addLegalNotificationApi({
+          taskId: String(result.id || ""),
+          taskTitle: payload.title,
+          title: "Нова сервісна заявка",
+          body: `${payload.title} · ${restaurantLabel} · Терміновість: ${urgencyLabel}`,
+          targetUserId: "",
+          targetRole: "serviceadmin",
+          actorUserId: String(user?.uid || user?.email || "").trim().toLowerCase(),
+          actionTab: "Processingofapplications",
+          actionUrl: "ops-maintenance",
+          source: "service",
+          createdAt: new Date().toISOString(),
+        });
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("lucia:notifications-updated"));
+        }
+      } catch (error) {
+        console.warn("Не вдалося створити сповіщення сервісної заявки:", error);
+      }
     }
 
     setForm({
@@ -712,6 +739,18 @@ function AdminRequestsTab({ requests, restaurants, user, canManage, updateReques
   const [archiveDragOver, setArchiveDragOver] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
   const draggedRef = useRef(null);
+
+  // Відкриття конкретної заявки з кліку по сповіщенню (центр сповіщень).
+  useEffect(() => {
+    const openById = (event) => {
+      const requestId = String(event?.detail?.requestId || "").trim();
+      if (!requestId) return;
+      const target = (requests || []).find((item) => String(item.id) === requestId);
+      if (target) setSelectedRequest(target);
+    };
+    window.addEventListener("lucia:open-service-request", openById);
+    return () => window.removeEventListener("lucia:open-service-request", openById);
+  }, [requests]);
 
   const requestSearchPoolById = useMemo(() => {
     const index = new Map();
