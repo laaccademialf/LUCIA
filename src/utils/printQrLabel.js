@@ -73,8 +73,12 @@ const getApiBaseUrl = () => {
 
     const raw = localStorage.getItem("lucia_runtime_custom_config");
     if (raw) {
-      const cfg = JSON.parse(raw);
-      if (cfg.apiBaseUrl) return normalizeApiBase(cfg.apiBaseUrl);
+      try {
+        const cfg = JSON.parse(raw);
+        if (cfg.apiBaseUrl) return normalizeApiBase(cfg.apiBaseUrl);
+      } catch {
+        // Ignore malformed runtime config and continue with safe fallbacks.
+      }
     }
 
     if (typeof window !== "undefined" && window.location?.origin) {
@@ -365,23 +369,37 @@ export const printAssetQrLabel = async ({ invNumber, name, qrValue, restaurant }
   const zpl = buildZplPayload({ invNumber: nInv, name: nName, qrValue: nQr, printerConfig: cfg });
 
   const reasons = [];
+  const apiBase = getApiBaseUrl();
+
+  if (!cfg.proxyUrl) {
+    reasons.push("Proxy: URL не налаштовано");
+  }
+  if (!apiBase) {
+    reasons.push("Сервер: API base URL не налаштовано");
+  }
 
   // 1) Print proxy: browser → LAN proxy → raw TCP to printer
-  try {
-    const ok = await tryLocalProxyPrint(zpl, cfg);
-    if (ok) return;
-  } catch (err) {
-    reasons.push(`Proxy: ${err.message || err}`);
+  if (cfg.proxyUrl) {
+    try {
+      const ok = await tryLocalProxyPrint(zpl, cfg);
+      if (ok) return;
+      reasons.push("Proxy: запит не пройшов");
+    } catch (err) {
+      reasons.push(`Proxy: ${err.message || err}`);
+    }
   }
 
   // 2) Server route: browser → server API → raw TCP to printer
-  try {
-    const ok = await trySilentPrint(zpl, cfg);
-    if (ok) return;
-  } catch (err) {
-    reasons.push(`Сервер: ${err.message || err}`);
-    if (Number(err?.status) === 401 || Number(err?.status) === 403 || /unauthorized/i.test(String(err?.message || ""))) {
-      throw err;
+  if (apiBase) {
+    try {
+      const ok = await trySilentPrint(zpl, cfg);
+      if (ok) return;
+      reasons.push("Сервер: запит не пройшов");
+    } catch (err) {
+      reasons.push(`Сервер: ${err.message || err}`);
+      if (Number(err?.status) === 401 || Number(err?.status) === 403 || /unauthorized/i.test(String(err?.message || ""))) {
+        throw err;
+      }
     }
   }
 
