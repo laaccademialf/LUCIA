@@ -187,8 +187,8 @@ const uint8ToBase64 = (bytes) => {
 const tryLocalProxyPrint = async (payload, printerConfig) => {
   const { ip, port, proxyUrl } = printerConfig || getPrinterConfig();
 
-  if (!ip) { console.warn("Local proxy print skipped: no printer IP"); return false; }
-  if (!proxyUrl) { console.warn("Local proxy print skipped: no proxy URL"); return false; }
+  if (!ip) return false;
+  if (!proxyUrl) return false;
 
   console.log(`Local proxy: ${proxyUrl}/print → ${ip}:${port} (${payload.length} bytes)`);
 
@@ -227,8 +227,8 @@ const trySilentPrint = async (payload, printerConfig) => {
   const apiBase = getApiBaseUrl();
   const { ip, port } = printerConfig || getPrinterConfig();
 
-  if (!apiBase) { console.warn("Silent print skipped: no API base URL"); return false; }
-  if (!ip) { console.warn("Silent print skipped: no printer IP configured"); return false; }
+  if (!apiBase) return false;
+  if (!ip) return false;
 
   console.log(`Silent print: ${apiBase}/api/print-label → ${ip}:${port} (${payload.length} bytes)`);
 
