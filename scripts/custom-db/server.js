@@ -4820,15 +4820,15 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (pathname === "/settings/firebase-runtime" && method === "GET") {
+  if ((pathname === "/settings/firebase-runtime" || pathname === "/api/settings/firebase-runtime") && method === "GET") {
     return handleGetRuntimeSettings(req, res);
   }
 
-  if (pathname === "/settings/firebase-runtime" && method === "PUT") {
+  if ((pathname === "/settings/firebase-runtime" || pathname === "/api/settings/firebase-runtime") && method === "PUT") {
     return handlePutRuntimeSettings(req, res);
   }
 
-  if (pathname === "/settings/firebase-runtime" && method === "DELETE") {
+  if ((pathname === "/settings/firebase-runtime" || pathname === "/api/settings/firebase-runtime") && method === "DELETE") {
     return handleDeleteRuntimeSettings(req, res);
   }
 
