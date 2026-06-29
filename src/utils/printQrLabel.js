@@ -178,7 +178,7 @@ const buildZplPayload = ({ invNumber, name, qrValue, printerConfig }) => {
   const nameW = 14;
   const nameMaxLines = 3;
   const nameLineGap = 4; // extra spacing between lines
-  const nameY = 22; // ~2.75mm from top edge to avoid clipping
+  const nameY = 54; // lowered by ~4mm (32 dots) per printer calibration request
 
   // Inv number: below name
   const invH = 18;
