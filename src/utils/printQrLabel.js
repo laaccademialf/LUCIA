@@ -222,12 +222,12 @@ const trySilentPrint = async (payload, printerConfig) => {
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       console.warn("Silent print HTTP error:", res.status, body);
-      return false;
+      throw new Error(body.error || `HTTP ${res.status}`);
     }
     return true;
   } catch (err) {
     console.warn("Silent print failed:", err);
-    return false;
+    throw err;
   }
 };
 
@@ -320,11 +320,14 @@ export const printAssetQrLabel = async ({ invNumber, name, qrValue, restaurant }
   const cfg = getPrinterConfig(restaurant);
   const zpl = buildZplPayload({ invNumber: nInv, name: nName, qrValue: nQr, printerConfig: cfg });
 
+  const reasons = [];
+
   // 1) Server route: browser → server API → raw TCP to printer
   try {
     const ok = await trySilentPrint(zpl, cfg);
     if (ok) return;
   } catch (err) {
+    reasons.push(`Сервер: ${err.message || err}`);
     console.warn("Server print failed:", err);
   }
 
@@ -333,10 +336,18 @@ export const printAssetQrLabel = async ({ invNumber, name, qrValue, restaurant }
     const ok = await tryLocalProxyPrint(zpl, cfg);
     if (ok) return;
   } catch (err) {
+    reasons.push(`Proxy: ${err.message || err}`);
     console.warn("Print proxy failed:", err);
   }
 
-  // 3) Fallback: browser print dialog
+  // 3) Якщо IP принтера задано, але обидва шляхи впали — показуємо причину
+  if (cfg.ip) {
+    throw new Error(
+      `Не вдалося відправити на принтер ${cfg.ip}:${cfg.port}. ${reasons.join(" | ") || "Невідома причина"}`
+    );
+  }
+
+  // 4) Fallback: браузерний діалог (коли IP принтера не налаштовано)
   await browserPrintLabel({ invNumber: nInv, name: nName, qrValue: nQr });
 };
 
