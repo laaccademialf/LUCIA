@@ -64,29 +64,32 @@ const getPrinterConfig = (overrides) => {
 const normalizeApiBase = (value) => String(value || "").replace(/\/+$/, "").replace(/\/api$/i, "");
 
 const getApiBaseUrl = () => {
-  try {
-    const envUrl =
-      typeof import.meta !== "undefined"
-        ? import.meta.env?.VITE_DATA_API_BASE_URL
-        : "";
-    if (envUrl) return normalizeApiBase(envUrl);
+  const envUrl =
+    typeof import.meta !== "undefined"
+      ? import.meta.env?.VITE_DATA_API_BASE_URL
+      : "";
+  if (envUrl) return normalizeApiBase(envUrl);
 
-    const raw = localStorage.getItem("lucia_runtime_custom_config");
-    if (raw) {
-      try {
-        const cfg = JSON.parse(raw);
-        if (cfg.apiBaseUrl) return normalizeApiBase(cfg.apiBaseUrl);
-      } catch {
-        // Ignore malformed runtime config and continue with safe fallbacks.
+  try {
+    if (typeof localStorage !== "undefined") {
+      const raw = localStorage.getItem("lucia_runtime_custom_config");
+      if (raw) {
+        try {
+          const cfg = JSON.parse(raw);
+          if (cfg.apiBaseUrl) return normalizeApiBase(cfg.apiBaseUrl);
+        } catch {
+          // Ignore malformed runtime config and continue with safe fallbacks.
+        }
       }
     }
-
-    if (typeof window !== "undefined" && window.location?.origin) {
-      return normalizeApiBase(window.location.origin);
-    }
   } catch {
-    /* ignore */
+    // Ignore localStorage access errors (e.g. blocked storage/privacy mode).
   }
+
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return normalizeApiBase(window.location.origin);
+  }
+
   return "";
 };
 
