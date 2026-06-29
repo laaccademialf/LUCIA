@@ -32,10 +32,10 @@ const getPrinterConfig = (overrides) => {
       ip: String(overrides?.printerIp || overrides?.printer_ip || localStorage.getItem("lucia_printer_ip") || "").trim(),
       port: parseInt(overrides?.printerPort || overrides?.printer_port || localStorage.getItem("lucia_printer_port") || "9100", 10) || 9100,
       offsetX: parseInt(overrides?.printerOffsetX || overrides?.printer_offset_x || localStorage.getItem("lucia_printer_offset_x") || "0", 10) || 0,
-      proxyUrl: String(overrides?.printerProxyUrl || overrides?.printer_proxy_url || localStorage.getItem("lucia_print_proxy_url") || "http://localhost:6101").trim(),
+      proxyUrl: String(overrides?.printerProxyUrl || overrides?.printer_proxy_url || localStorage.getItem("lucia_print_proxy_url") || "").trim(),
     };
   } catch {
-    return { ip: "", port: 9100, offsetX: 0, proxyUrl: "http://localhost:6101" };
+    return { ip: "", port: 9100, offsetX: 0, proxyUrl: "" };
   }
 };
 
