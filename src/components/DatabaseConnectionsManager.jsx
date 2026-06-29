@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   isCollectionsApiEnabled,
+  createCollectionItemApi,
   getCollectionItemApi,
   updateCollectionItemApi,
 } from "../api/collectionsApi";
@@ -829,13 +830,20 @@ export default function DatabaseConnectionsManager() {
               // Save to DB for all admins
               if (isCollectionsApiEnabled()) {
                 try {
-                  await updateCollectionItemApi("settings", "adminPrinter", {
+                  const payload = {
                     id: "adminPrinter",
                     printerIp: printerIp.trim(),
                     printerPort: String(printerPort || "9100").trim(),
                     printerOffsetX: String(printerOffsetX || "0").trim(),
                     printerProxyUrl: printerProxyUrl.trim(),
-                  });
+                  };
+
+                  const existing = await getCollectionItemApi("settings", "adminPrinter").catch(() => null);
+                  if (existing) {
+                    await updateCollectionItemApi("settings", "adminPrinter", payload);
+                  } else {
+                    await createCollectionItemApi("settings", payload);
+                  }
                 } catch (err) {
                   console.warn("Failed to save printer settings to DB:", err);
                 }
