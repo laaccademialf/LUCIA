@@ -76,6 +76,10 @@ const getApiBaseUrl = () => {
       const cfg = JSON.parse(raw);
       if (cfg.apiBaseUrl) return normalizeApiBase(cfg.apiBaseUrl);
     }
+
+    if (typeof window !== "undefined" && window.location?.origin) {
+      return normalizeApiBase(window.location.origin);
+    }
   } catch {
     /* ignore */
   }
