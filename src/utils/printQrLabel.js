@@ -96,17 +96,17 @@ const getPrintAuthHeaders = () => {
       headers.Authorization = `Bearer ${sessionToken}`;
     }
 
-    const envToken = String(
-      import.meta?.env?.VITE_DATA_API_TOKEN || import.meta?.env?.VITE_RUNTIME_SETTINGS_API_TOKEN || ""
-    ).trim();
+    const envToken = String(import.meta?.env?.VITE_DATA_API_TOKEN || import.meta?.env?.VITE_RUNTIME_SETTINGS_API_TOKEN || "").trim();
+
+    const rawRuntimeConfig = localStorage.getItem("lucia_runtime_custom_config");
     if (envToken) {
       headers["x-api-token"] = envToken;
       if (!headers.Authorization) {
         headers.Authorization = `Bearer ${envToken}`;
       }
+      return headers;
     }
 
-    const rawRuntimeConfig = localStorage.getItem("lucia_runtime_custom_config");
     if (!rawRuntimeConfig) return headers;
 
     const runtimeConfig = JSON.parse(rawRuntimeConfig);
