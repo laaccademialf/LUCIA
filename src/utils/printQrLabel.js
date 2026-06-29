@@ -24,40 +24,18 @@ const isMobileDevice = () => {
   return /iphone|ipad|ipod|android|mobile|phone/i.test(String(navigator.userAgent || ""));
 };
 
-const shouldUsePrintProxy = (proxyUrl) => {
-  const value = String(proxyUrl || "").trim();
-  if (!value) return false;
-
-  try {
-    const currentHost = String(window?.location?.hostname || "").trim().toLowerCase();
-    const parsed = new URL(value.includes("://") ? value : `http://${value}`);
-    const proxyHost = String(parsed.hostname || "").trim().toLowerCase();
-
-    const isLoopbackHost = ["localhost", "127.0.0.1", "::1"].includes(proxyHost);
-    const isLocalAppHost = ["localhost", "127.0.0.1", "::1"].includes(currentHost);
-
-    if (isLoopbackHost && !isLocalAppHost) return false;
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 /* ---------- printer config ---------- */
 
 const getPrinterConfig = (overrides) => {
   try {
-    const rawProxyUrl = String(overrides?.printerProxyUrl || overrides?.printer_proxy_url || localStorage.getItem("lucia_print_proxy_url") || "").trim();
-    const proxyUrl = shouldUsePrintProxy(rawProxyUrl) ? rawProxyUrl : "";
-
     return {
       ip: String(overrides?.printerIp || overrides?.printer_ip || localStorage.getItem("lucia_printer_ip") || "").trim(),
       port: parseInt(overrides?.printerPort || overrides?.printer_port || localStorage.getItem("lucia_printer_port") || "9100", 10) || 9100,
       offsetX: parseInt(overrides?.printerOffsetX || overrides?.printer_offset_x || localStorage.getItem("lucia_printer_offset_x") || "0", 10) || 0,
-      proxyUrl,
+      proxyUrl: String(overrides?.printerProxyUrl || overrides?.printer_proxy_url || localStorage.getItem("lucia_print_proxy_url") || "http://localhost:6101").trim(),
     };
   } catch {
-    return { ip: "", port: 9100, offsetX: 0, proxyUrl: "" };
+    return { ip: "", port: 9100, offsetX: 0, proxyUrl: "http://localhost:6101" };
   }
 };
 
@@ -351,25 +329,23 @@ export const printAssetQrLabel = async ({ invNumber, name, qrValue, restaurant }
 
   const reasons = [];
 
-  // 1) Server route: browser → server API → raw TCP to printer
-  try {
-    const ok = await trySilentPrint(zpl, cfg);
-    if (ok) return;
-  } catch (err) {
-    reasons.push(`Сервер: ${err.message || err}`);
-    console.warn("Server print failed:", err);
-    if (Number(err?.status) === 401 || Number(err?.status) === 403 || /unauthorized/i.test(String(err?.message || ""))) {
-      throw err;
-    }
-  }
-
-  // 2) Print proxy: browser → LAN proxy → raw TCP to printer
+  // 1) Print proxy: browser → LAN proxy → raw TCP to printer
   try {
     const ok = await tryLocalProxyPrint(zpl, cfg);
     if (ok) return;
   } catch (err) {
     reasons.push(`Proxy: ${err.message || err}`);
-    console.warn("Print proxy failed:", err);
+  }
+
+  // 2) Server route: browser → server API → raw TCP to printer
+  try {
+    const ok = await trySilentPrint(zpl, cfg);
+    if (ok) return;
+  } catch (err) {
+    reasons.push(`Сервер: ${err.message || err}`);
+    if (Number(err?.status) === 401 || Number(err?.status) === 403 || /unauthorized/i.test(String(err?.message || ""))) {
+      throw err;
+    }
   }
 
   // 3) Якщо IP принтера задано, але обидва шляхи впали — показуємо причину
@@ -413,9 +389,9 @@ export const printBatchQrLabels = async (assets, { onProgress, restaurant } = {}
       const zpl = buildZplPayload({ invNumber, name, qrValue, printerConfig: cfg });
 
       let printed = false;
-      try { printed = await trySilentPrint(zpl, cfg); } catch { /* ignore */ }
+      try { printed = await tryLocalProxyPrint(zpl, cfg); } catch { /* ignore */ }
       if (!printed) {
-        try { printed = await tryLocalProxyPrint(zpl, cfg); } catch { /* ignore */ }
+        try { printed = await trySilentPrint(zpl, cfg); } catch { /* ignore */ }
       }
       if (!printed) {
         results.failed++;
