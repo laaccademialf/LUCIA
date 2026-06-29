@@ -214,6 +214,7 @@ const trySilentPrint = async (payload, printerConfig) => {
     const res = await fetch(`${apiBase}/api/print-label`, {
       method: "POST",
       headers: getPrintAuthHeaders(),
+      credentials: "include",
       body: JSON.stringify({
         data: uint8ToBase64(payload),
         printerIp: ip,
@@ -331,6 +332,9 @@ export const printAssetQrLabel = async ({ invNumber, name, qrValue, restaurant }
   } catch (err) {
     reasons.push(`Сервер: ${err.message || err}`);
     console.warn("Server print failed:", err);
+    if (Number(err?.status) === 401 || Number(err?.status) === 403 || /unauthorized/i.test(String(err?.message || ""))) {
+      throw err;
+    }
   }
 
   // 2) Print proxy: browser → LAN proxy → raw TCP to printer
