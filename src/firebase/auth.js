@@ -235,10 +235,10 @@ const resolveFirebaseUserProfile = async (firebaseUser) => {
 };
 
 const readRuntimeCustomConfig = () => {
-  if (typeof window === "undefined" || typeof localStorage === "undefined") return null;
-  const raw = localStorage.getItem("lucia_runtime_custom_config");
-  if (!raw) return null;
   try {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") return null;
+    const raw = localStorage.getItem("lucia_runtime_custom_config");
+    if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return null;
     return parsed;
@@ -250,7 +250,11 @@ const readRuntimeCustomConfig = () => {
 const getAuthApiBase = () => {
   const runtime = readRuntimeCustomConfig();
   const runtimeBase = normalizeApiBase(runtime?.apiBaseUrl || "");
-  return runtimeBase || ENV_AUTH_API_BASE;
+  const originBase =
+    typeof window !== "undefined" && window.location?.origin
+      ? normalizeApiBase(window.location.origin)
+      : "";
+  return runtimeBase || ENV_AUTH_API_BASE || originBase;
 };
 
 const getAuthApiToken = () => {
