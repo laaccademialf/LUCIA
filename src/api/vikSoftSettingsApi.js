@@ -1,7 +1,8 @@
 // Клієнт для /api/settings/viksoft (керування з UI).
 // Перевикористовує ту саму baseUrl + auth, що й energoCenterApi.
 
-const ENV_BASE = String(import.meta.env.VITE_DATA_API_BASE_URL || "").trim().replace(/\/+$/, "");
+const normalizeApiBase = (value) => String(value || "").trim().replace(/\/+$/, "").replace(/\/api$/i, "");
+const ENV_BASE = normalizeApiBase(import.meta.env.VITE_DATA_API_BASE_URL || "");
 const ENV_TOKEN = String(import.meta.env.VITE_DATA_API_TOKEN || "").trim();
 
 const readRuntime = () => {
@@ -13,14 +14,14 @@ const readRuntime = () => {
 
 const getApiBase = () => {
   const runtime = readRuntime();
-  const runtimeBase = String(runtime?.apiBaseUrl || "").trim().replace(/\/+$/, "");
+  const runtimeBase = normalizeApiBase(runtime?.apiBaseUrl || "");
   return runtimeBase || ENV_BASE;
 };
 
 export const getVikSoftApiClientContext = () => {
   const runtime = readRuntime();
-  const runtimeBase = String(runtime?.apiBaseUrl || "").trim().replace(/\/+$/, "");
-  const envBase = String(ENV_BASE || "").trim().replace(/\/+$/, "");
+  const runtimeBase = normalizeApiBase(runtime?.apiBaseUrl || "");
+  const envBase = normalizeApiBase(ENV_BASE || "");
   const resolvedBase = runtimeBase || envBase;
   return {
     resolvedBase,

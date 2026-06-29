@@ -1,7 +1,8 @@
 // Клієнт для GET /api/energocenter/consumption.
 // Використовує власну змінну VITE_ENERGOCENTER_API_BASE_URL з фолбеком на VITE_DATA_API_BASE_URL.
-const ENV_ENERGOCENTER_BASE = String(import.meta.env.VITE_ENERGOCENTER_API_BASE_URL || "").trim().replace(/\/+$/, "");
-const ENV_API_BASE = String(import.meta.env.VITE_DATA_API_BASE_URL || "").trim().replace(/\/+$/, "");
+const normalizeApiBase = (value) => String(value || "").trim().replace(/\/+$/, "").replace(/\/api$/i, "");
+const ENV_ENERGOCENTER_BASE = normalizeApiBase(import.meta.env.VITE_ENERGOCENTER_API_BASE_URL || "");
+const ENV_API_BASE = normalizeApiBase(import.meta.env.VITE_DATA_API_BASE_URL || "");
 const ENV_API_TOKEN = String(import.meta.env.VITE_DATA_API_TOKEN || "").trim();
 
 const readRuntime = () => {
@@ -14,7 +15,7 @@ const readRuntime = () => {
 const getApiBase = () => {
   if (ENV_ENERGOCENTER_BASE) return ENV_ENERGOCENTER_BASE;
   const runtime = readRuntime();
-  const runtimeBase = String(runtime?.apiBaseUrl || "").trim().replace(/\/+$/, "");
+  const runtimeBase = normalizeApiBase(runtime?.apiBaseUrl || "");
   return runtimeBase || ENV_API_BASE;
 };
 

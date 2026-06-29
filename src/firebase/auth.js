@@ -17,11 +17,10 @@ import {
   listCollectionItemsApi,
 } from "./collectionsAdapter";
 
-const ENV_AUTH_API_BASE = String(
+const normalizeApiBase = (value) => String(value || "").trim().replace(/\/+$/, "").replace(/\/api$/i, "");
+const ENV_AUTH_API_BASE = normalizeApiBase(
   import.meta.env.VITE_AUTH_API_BASE_URL || import.meta.env.VITE_DATA_API_BASE_URL || ""
-)
-  .trim()
-  .replace(/\/+$/, "");
+);
 const ENV_AUTH_API_TOKEN = String(
   import.meta.env.VITE_AUTH_API_TOKEN || import.meta.env.VITE_DATA_API_TOKEN || ""
 ).trim();
@@ -250,7 +249,7 @@ const readRuntimeCustomConfig = () => {
 
 const getAuthApiBase = () => {
   const runtime = readRuntimeCustomConfig();
-  const runtimeBase = String(runtime?.apiBaseUrl || "").trim().replace(/\/+$/, "");
+  const runtimeBase = normalizeApiBase(runtime?.apiBaseUrl || "");
   return runtimeBase || ENV_AUTH_API_BASE;
 };
 

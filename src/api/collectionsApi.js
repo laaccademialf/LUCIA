@@ -1,4 +1,5 @@
-const ENV_API_BASE = String(import.meta.env.VITE_DATA_API_BASE_URL || "").trim().replace(/\/+$/, "");
+const normalizeApiBase = (value) => String(value || "").trim().replace(/\/+$/, "").replace(/\/api$/i, "");
+const ENV_API_BASE = normalizeApiBase(import.meta.env.VITE_DATA_API_BASE_URL || "");
 const ENV_API_TOKEN = String(import.meta.env.VITE_DATA_API_TOKEN || "").trim();
 const ENV_COLLECTIONS_CACHE_TTL_MS = Number(import.meta.env.VITE_COLLECTIONS_CACHE_TTL_MS || 15000);
 const COLLECTIONS_CACHE_TTL_MS = Number.isFinite(ENV_COLLECTIONS_CACHE_TTL_MS) ? Math.max(0, ENV_COLLECTIONS_CACHE_TTL_MS) : 15000;
@@ -40,7 +41,7 @@ const readRuntimeCustomConfig = () => {
 
 const getApiBase = () => {
   const runtime = readRuntimeCustomConfig();
-  const runtimeBase = String(runtime?.apiBaseUrl || "").trim().replace(/\/+$/, "");
+  const runtimeBase = normalizeApiBase(runtime?.apiBaseUrl || "");
   return runtimeBase || ENV_API_BASE;
 };
 

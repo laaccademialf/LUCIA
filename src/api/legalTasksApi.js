@@ -4,7 +4,8 @@
 // Навмисно НЕ використовує кеш collectionsApi.js, бо канбан/TODO потребують
 // майже-реального оновлення між користувачами (короткий polling).
 
-const ENV_API_BASE = String(import.meta.env.VITE_DATA_API_BASE_URL || "").trim().replace(/\/+$/, "");
+const normalizeApiBase = (value) => String(value || "").trim().replace(/\/+$/, "").replace(/\/api$/i, "");
+const ENV_API_BASE = normalizeApiBase(import.meta.env.VITE_DATA_API_BASE_URL || "");
 const ENV_API_TOKEN = String(import.meta.env.VITE_DATA_API_TOKEN || "").trim();
 
 const LEGAL_TASKS_COLLECTION = "legalTasks";
@@ -27,7 +28,7 @@ const readRuntimeCustomConfig = () => {
 
 const getApiBase = () => {
   const runtime = readRuntimeCustomConfig();
-  const runtimeBase = String(runtime?.apiBaseUrl || "").trim().replace(/\/+$/, "");
+  const runtimeBase = normalizeApiBase(runtime?.apiBaseUrl || "");
   return runtimeBase || ENV_API_BASE;
 };
 
