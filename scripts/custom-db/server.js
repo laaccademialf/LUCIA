@@ -49,6 +49,7 @@ const ENGINE = _explicitEngine || (_hasMySqlCreds ? "mysql" : "file");
 const REQUIRED_ENGINE = String(process.env.MIGRATION_DB_REQUIRE_ENGINE || "").trim().toLowerCase();
 const DATA_DIR = process.env.CUSTOM_MIGRATION_DATA_DIR || "./tmp/custom-db";
 const SETTINGS_FILE = process.env.RUNTIME_SETTINGS_FILE || "./tmp/custom-db/runtime-settings.json";
+const RUNTIME_SETTINGS_ENV_FILE = process.env.RUNTIME_SETTINGS_ENV_FILE || ".env";
 const POSTGRES_URL = String(process.env.POSTGRES_URL || "").trim();
 const ASSET_IMAGE_DIR = String(process.env.ASSET_IMAGE_DIR || "/var/www/luci.lafamiglia.ua/app/img").trim();
 const ASSET_IMAGE_PUBLIC_BASE = String(process.env.ASSET_IMAGE_PUBLIC_BASE || "/app/img").trim().replace(/\/+$/, "");
@@ -155,6 +156,103 @@ const readSettingsFile = async () => {
 const writeSettingsFile = async (settings) => {
   await ensureParentDir(SETTINGS_FILE);
   await fs.writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf-8");
+};
+
+const formatEnvValue = (value) => {
+  const next = String(value ?? "");
+  if (!next) return "";
+  return /[\s#'"`]/.test(next) ? JSON.stringify(next) : next;
+};
+
+const updateEnvFile = async (envFilePath, updates) => {
+  const resolvedPath = path.isAbsolute(envFilePath)
+    ? envFilePath
+    : path.resolve(process.cwd(), envFilePath);
+
+  await ensureParentDir(resolvedPath);
+
+  let raw = "";
+  try {
+    raw = await fs.readFile(resolvedPath, "utf-8");
+  } catch {
+    raw = "";
+  }
+
+  const lines = raw.split(/\r?\n/);
+  const seen = new Set();
+  const out = [];
+
+  for (const line of lines) {
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=.*$/);
+    if (!match) {
+      out.push(line);
+      continue;
+    }
+
+    const key = match[1];
+    if (!Object.prototype.hasOwnProperty.call(updates, key)) {
+      out.push(line);
+      continue;
+    }
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    const value = updates[key];
+    if (value === null || value === undefined || String(value).trim() === "") {
+      continue;
+    }
+
+    out.push(`${key}=${formatEnvValue(value)}`);
+  }
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (seen.has(key)) continue;
+    if (value === null || value === undefined || String(value).trim() === "") continue;
+    out.push(`${key}=${formatEnvValue(value)}`);
+  }
+
+  const normalized = out.join("\n").replace(/\n+$/, "");
+  await fs.writeFile(resolvedPath, normalized ? `${normalized}\n` : "", "utf-8");
+};
+
+const normalizeCustomRuntimeConfigForEnv = (config) => {
+  const dbEngineRaw = String(config?.dbEngine || "mysql").trim().toLowerCase();
+  const dbEngine = dbEngineRaw === "mariadb" ? "mysql" : dbEngineRaw;
+
+  return {
+    apiBaseUrl: String(config?.apiBaseUrl || "").trim().replace(/\/+$/, ""),
+    token: String(config?.token || "").trim(),
+    dbEngine: dbEngine || "mysql",
+    dbHost: String(config?.dbHost || "").trim(),
+    dbPort: Number(config?.dbPort || 3306),
+    dbUser: String(config?.dbUser || "").trim(),
+    dbPassword: typeof config?.dbPassword === "string" ? config.dbPassword : "",
+    dbName: String(config?.dbName || "").trim(),
+    postgresUrl: String(config?.postgresUrl || "").trim(),
+  };
+};
+
+const persistCustomRuntimeConfigToEnv = async (runtimeConfig) => {
+  const normalized = normalizeCustomRuntimeConfigForEnv(runtimeConfig || {});
+
+  const updates = {
+    VITE_DATA_API_BASE_URL: normalized.apiBaseUrl || null,
+    VITE_AUTH_API_BASE_URL: normalized.apiBaseUrl || null,
+    VITE_RUNTIME_SETTINGS_API_BASE_URL: normalized.apiBaseUrl || null,
+    VITE_DATA_API_TOKEN: normalized.token || null,
+    MIGRATION_DB_ENGINE: normalized.dbEngine === "postgres" ? "postgres" : "mysql",
+    MYSQL_HOST: normalized.dbEngine === "postgres" ? null : normalized.dbHost || null,
+    MYSQL_PORT: normalized.dbEngine === "postgres" ? null : String(normalized.dbPort || 3306),
+    MYSQL_USER: normalized.dbEngine === "postgres" ? null : normalized.dbUser || null,
+    MYSQL_PASSWORD: normalized.dbEngine === "postgres" ? null : normalized.dbPassword || null,
+    MYSQL_DATABASE: normalized.dbEngine === "postgres" ? null : normalized.dbName || null,
+    POSTGRES_URL: normalized.dbEngine === "postgres" ? normalized.postgresUrl || null : null,
+  };
+
+  await updateEnvFile(RUNTIME_SETTINGS_ENV_FILE, updates);
 };
 
 // CORS origin policy:
@@ -4531,6 +4629,7 @@ const handlePutRuntimeSettings = async (req, res) => {
 
   const primaryConnectionId = String(payload?.primaryConnectionId || "");
   const runtimeConfig = payload?.runtimeConfig || null;
+  const persistToEnv = Boolean(payload?.persistToEnv);
 
   if (
     runtimeConfig &&
@@ -4546,7 +4645,15 @@ const handlePutRuntimeSettings = async (req, res) => {
     updatedAt: new Date().toISOString(),
   });
 
-  return sendJson(res, 200, { ok: true });
+  if (persistToEnv && runtimeConfig && isValidCustomRuntimeConfig(runtimeConfig)) {
+    try {
+      await persistCustomRuntimeConfigToEnv(runtimeConfig);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Failed to persist runtime config to env: ${error.message}` });
+    }
+  }
+
+  return sendJson(res, 200, { ok: true, persistedToEnv: persistToEnv && Boolean(runtimeConfig) });
 };
 
 const handleDeleteRuntimeSettings = async (req, res) => {

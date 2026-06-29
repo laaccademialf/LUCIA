@@ -123,7 +123,7 @@ const settingsEndpoint = () => {
   return `${SETTINGS_API_BASE_URL}/settings/firebase-runtime`;
 };
 
-const persistRuntimeConfigToServer = async ({ primaryConnectionId, runtimeConfig }) => {
+const persistRuntimeConfigToServer = async ({ primaryConnectionId, runtimeConfig, persistToEnv = false }) => {
   const endpoint = settingsEndpoint();
   if (!endpoint) return;
 
@@ -134,6 +134,7 @@ const persistRuntimeConfigToServer = async ({ primaryConnectionId, runtimeConfig
       body: JSON.stringify({
         primaryConnectionId: primaryConnectionId || "",
         runtimeConfig: runtimeConfig || null,
+        persistToEnv: Boolean(persistToEnv),
       }),
     });
   } catch {
@@ -323,6 +324,7 @@ export const setPrimaryConnectionById = async (id) => {
   await persistRuntimeConfigToServer({
     primaryConnectionId: id,
     runtimeConfig: connection.config,
+    persistToEnv: connection.type === "custom",
   });
 };
 
