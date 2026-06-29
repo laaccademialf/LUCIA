@@ -1,3 +1,5 @@
+import { getCollectionsApiBase } from "../api/collectionsApi";
+
 /* ------------------------------------------------------------------ *
  *  printQrLabel – thermal-transfer network printer (ZPL, 20×30 mm)   *
  *                                                                     *
@@ -64,6 +66,13 @@ const getPrinterConfig = (overrides) => {
 const normalizeApiBase = (value) => String(value || "").replace(/\/+$/, "").replace(/\/api$/i, "");
 
 const getApiBaseUrl = () => {
+  try {
+    const collectionsBase = String(getCollectionsApiBase() || "").trim();
+    if (collectionsBase) return normalizeApiBase(collectionsBase);
+  } catch {
+    // Ignore and fallback to direct env/runtime/origin resolution below.
+  }
+
   const envUrl =
     typeof import.meta !== "undefined"
       ? import.meta.env?.VITE_DATA_API_BASE_URL
