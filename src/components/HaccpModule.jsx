@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
+import pdfMake from "pdfmake/build/pdfmake";
+import pdfFonts from "pdfmake/build/vfs_fonts";
 import {
   AlertTriangle,
   ArrowDown,
@@ -48,6 +50,8 @@ import {
   sumWeights,
   toPositiveNumber,
 } from "../data/haccpConstants";
+
+pdfMake.vfs = pdfFonts?.pdfMake?.vfs || pdfFonts;
 
 const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass =
@@ -404,6 +408,8 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   const [planDialogComment, setPlanDialogComment] = useState("");
   const [planDialogStatus, setPlanDialogStatus] = useState("in_progress");
   const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [selectedAuditId, setSelectedAuditId] = useState("");
   const [usersForResponsible, setUsersForResponsible] = useState([]);
   const [loadingResponsibleUsers, setLoadingResponsibleUsers] = useState(false);
   const actionPlansEtagRef = useRef("");
@@ -727,6 +733,32 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   );
 
   const trendSeries = useMemo(() => [...metrics].sort((a, b) => a.sortKey - b.sortKey), [metrics]);
+
+  const auditOptions = useMemo(
+    () =>
+      [...metrics]
+        .sort((a, b) => Number(b.sortKey || 0) - Number(a.sortKey || 0))
+        .map((audit) => ({
+          id: String(audit?.id || ""),
+          label: `${formatDisplayDate(audit?.date)} · ${String(audit?.restaurantName || "Локація")} · ${String(audit?.templateName || "Без шаблону")}`,
+        }))
+        .filter((item) => item.id),
+    [metrics]
+  );
+
+  useEffect(() => {
+    if (!auditOptions.length) {
+      if (selectedAuditId) setSelectedAuditId("");
+      return;
+    }
+    const exists = auditOptions.some((item) => String(item.id) === String(selectedAuditId || ""));
+    if (!exists) setSelectedAuditId(String(auditOptions[0].id));
+  }, [auditOptions, selectedAuditId]);
+
+  const selectedAudit = useMemo(
+    () => metricsById.get(String(selectedAuditId || "")) || null,
+    [metricsById, selectedAuditId]
+  );
 
   const avgScore = metrics.length
     ? roundPercent(metrics.reduce((acc, item) => acc + (Number(item.score) || 0), 0) / metrics.length)
@@ -1234,6 +1266,174 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
     }
   };
 
+  const handleExportPdf = async () => {
+    if (!selectedAudit) {
+      alert("Оберіть перевірку для вивантаження PDF.");
+      return;
+    }
+
+    try {
+      setIsExportingPdf(true);
+
+      const templateForAudit = selectedAudit?.templateSnapshot && typeof selectedAudit.templateSnapshot === "object"
+        ? selectedAudit.templateSnapshot
+        : templatesById.get(String(selectedAudit?.templateId || "")) || null;
+
+      const sectionResults = computeHaccpScores(templateForAudit, selectedAudit?.responses || {}).sectionResults;
+
+      const galleryById = new Map(
+        (Array.isArray(selectedAudit?.gallery) ? selectedAudit.gallery : [])
+          .map((photo) => [String(photo?.id || ""), photo])
+      );
+
+      const sectionBlocks = [];
+      (templateForAudit?.sections || [])
+        .slice()
+        .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+        .forEach((section, sectionIndex) => {
+          const sectionId = String(section?.id || "");
+          const percent = roundPercent(Number(sectionResults?.[sectionId]?.percent || 0));
+
+          sectionBlocks.push({
+            margin: [0, 8, 0, 4],
+            columns: [
+              { text: `${sectionIndex + 1}. ${String(section?.title || "Розділ без назви")}`, bold: true, fontSize: 12, color: "#0f172a", width: "*" },
+              { text: `${percent}%`, alignment: "right", bold: true, color: "#0369a1", width: 56 },
+            ],
+          });
+
+          const itemRows = [];
+          (section?.items || [])
+            .slice()
+            .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+            .forEach((item, itemIndex) => {
+              const itemId = String(item?.id || "");
+              const response = selectedAudit?.responses?.[itemId] || {};
+              const rating = response?.value !== null && response?.value !== undefined
+                ? RATING_BY_VALUE?.[response?.value]
+                : null;
+
+              const photoCount = [
+                ...(Array.isArray(response?.photoIds) ? response.photoIds : [])
+                  .map((photoId) => galleryById.get(String(photoId || "")))
+                  .filter((photo) => Boolean(getPhotoSrc(photo))),
+                ...(Array.isArray(response?.photos) ? response.photos : []).filter((photo) => Boolean(getPhotoSrc(photo))),
+              ].length;
+
+              itemRows.push([
+                { text: `${sectionIndex + 1}.${itemIndex + 1}`, fontSize: 9, color: "#334155" },
+                { text: String(item?.title || "Пункт без назви"), fontSize: 9, color: "#0f172a" },
+                { text: String(rating?.label || "Не оцінено"), fontSize: 9, color: "#0f172a" },
+                { text: String(response?.comment || "").trim() || "—", fontSize: 9, color: "#334155" },
+                { text: String(photoCount), fontSize: 9, alignment: "center", color: "#334155" },
+              ]);
+            });
+
+          sectionBlocks.push({
+            table: {
+              headerRows: 1,
+              widths: [28, "*", 92, "*", 44],
+              body: [
+                [
+                  { text: "№", bold: true, fontSize: 9, fillColor: "#e2e8f0", color: "#0f172a" },
+                  { text: "Пункт перевірки", bold: true, fontSize: 9, fillColor: "#e2e8f0", color: "#0f172a" },
+                  { text: "Оцінка", bold: true, fontSize: 9, fillColor: "#e2e8f0", color: "#0f172a" },
+                  { text: "Коментар", bold: true, fontSize: 9, fillColor: "#e2e8f0", color: "#0f172a" },
+                  { text: "Фото", bold: true, fontSize: 9, alignment: "center", fillColor: "#e2e8f0", color: "#0f172a" },
+                ],
+                ...(itemRows.length ? itemRows : [[
+                  { text: "—", fontSize: 9, color: "#334155" },
+                  { text: "У розділі відсутні пункти", fontSize: 9, color: "#334155" },
+                  { text: "—", fontSize: 9, color: "#334155" },
+                  { text: "—", fontSize: 9, color: "#334155" },
+                  { text: "0", fontSize: 9, alignment: "center", color: "#334155" },
+                ]]),
+              ],
+            },
+            layout: {
+              fillColor: (rowIndex) => (rowIndex === 0 ? "#e2e8f0" : rowIndex % 2 === 0 ? "#f8fafc" : null),
+              hLineColor: () => "#cbd5e1",
+              vLineColor: () => "#cbd5e1",
+              hLineWidth: () => 0.7,
+              vLineWidth: () => 0.7,
+            },
+            margin: [0, 0, 0, 6],
+          });
+        });
+
+      const documentDefinition = {
+        pageSize: "A4",
+        pageMargins: [26, 28, 26, 30],
+        footer: (currentPage, pageCount) => ({
+          margin: [26, 8, 26, 0],
+          columns: [
+            { text: `Звіт сформовано: ${new Date().toLocaleString("uk-UA")}`, fontSize: 8, color: "#64748b" },
+            { text: `Сторінка ${currentPage} з ${pageCount}`, fontSize: 8, alignment: "right", color: "#64748b" },
+          ],
+        }),
+        content: [
+          {
+            columns: [
+              {
+                width: "*",
+                stack: [
+                  { text: "ЗВІТ HACCP", fontSize: 20, bold: true, color: "#0f172a" },
+                  { text: "Обрана перевірка", fontSize: 10, color: "#475569", margin: [0, 2, 0, 0] },
+                ],
+              },
+              {
+                width: 180,
+                table: {
+                  widths: [70, "*"],
+                  body: [
+                    [{ text: "Дата", bold: true, fontSize: 9 }, { text: formatDisplayDate(selectedAudit?.date), fontSize: 9 }],
+                    [{ text: "Локація", bold: true, fontSize: 9 }, { text: String(selectedAudit?.restaurantName || "—"), fontSize: 9 }],
+                    [{ text: "Шаблон", bold: true, fontSize: 9 }, { text: String(selectedAudit?.templateName || selectedTemplateLabel || "—"), fontSize: 9 }],
+                  ],
+                },
+                layout: "lightHorizontalLines",
+              },
+            ],
+            margin: [0, 0, 0, 10],
+          },
+          {
+            table: {
+              widths: ["*", "*", "*"] ,
+              body: [[
+                { stack: [{ text: "Загальний бал", fontSize: 9, color: "#475569" }, { text: `${roundPercent(selectedAudit?.score || 0)}%`, bold: true, fontSize: 16, color: "#0f172a" }], fillColor: "#f8fafc", margin: [6, 5, 6, 5] },
+                { stack: [{ text: "Порушення", fontSize: 9, color: "#475569" }, { text: String(selectedAudit?.critical || 0), bold: true, fontSize: 16, color: "#b91c1c" }], fillColor: "#f8fafc", margin: [6, 5, 6, 5] },
+                { stack: [{ text: "Технолог", fontSize: 9, color: "#475569" }, { text: String(selectedAudit?.completedByName || selectedAudit?.updatedByName || selectedAudit?.createdByName || "—"), bold: true, fontSize: 12, color: "#0f172a" }], fillColor: "#f8fafc", margin: [6, 5, 6, 5] },
+              ]],
+            },
+            layout: {
+              hLineColor: () => "#cbd5e1",
+              vLineColor: () => "#cbd5e1",
+              hLineWidth: () => 0.7,
+              vLineWidth: () => 0.7,
+            },
+            margin: [0, 0, 0, 8],
+          },
+          ...sectionBlocks,
+        ],
+        defaultStyle: {
+          font: "Roboto",
+        },
+      };
+
+      const safeDate = String(selectedAudit?.date || "").slice(0, 10) || todayDate();
+      const safeLocation = String(selectedAudit?.restaurantName || "локація")
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^\w\u0400-\u04FF\-]/g, "");
+      pdfMake.createPdf(documentDefinition).download(`HACCP_перевірка_${safeDate}_${safeLocation || "звіт"}.pdf`);
+    } catch (error) {
+      console.error("Не вдалося експортувати PDF звіт:", error);
+      alert("Не вдалося експортувати звіт у PDF.");
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className={cardClass}>
@@ -1282,15 +1482,39 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                 />
               </div>
             </div>
+            <div className="flex items-center gap-2 min-w-[360px]">
+              <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Перевірка</label>
+              <select
+                className="min-w-[300px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+                value={selectedAuditId}
+                onChange={(e) => setSelectedAuditId(String(e.target.value || ""))}
+                disabled={!auditOptions.length}
+              >
+                {!auditOptions.length ? <option value="">Немає перевірок</option> : null}
+                {auditOptions.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <button
-            type="button"
-            disabled={isExportingExcel}
-            onClick={() => { void handleExportExcel(); }}
-            className="inline-flex h-10 min-w-[240px] flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            <Download size={16} /> {isExportingExcel ? "Вивантаження..." : "Вивантажити звіт"}
-          </button>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={isExportingExcel}
+              onClick={() => { void handleExportExcel(); }}
+              className="inline-flex h-10 min-w-[190px] items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <Download size={16} /> {isExportingExcel ? "Експорт..." : "Завантажити в Excel"}
+            </button>
+            <button
+              type="button"
+              disabled={isExportingPdf || !selectedAudit}
+              onClick={() => { void handleExportPdf(); }}
+              className="inline-flex h-10 min-w-[190px] items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-sky-600 bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <Download size={16} /> {isExportingPdf ? "Експорт..." : "Завантажити в PDF"}
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
