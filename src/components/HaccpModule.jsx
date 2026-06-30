@@ -51,7 +51,34 @@ import {
   toPositiveNumber,
 } from "../data/haccpConstants";
 
-pdfMake.vfs = pdfFonts?.pdfMake?.vfs || pdfFonts;
+const pdfMakeApi =
+  pdfMake && typeof pdfMake?.createPdf === "function"
+    ? pdfMake
+    : (pdfMake?.default && typeof pdfMake.default.createPdf === "function" ? pdfMake.default : null);
+
+const pdfFontMap =
+  (pdfFonts && typeof pdfFonts === "object" && pdfFonts.default ? pdfFonts.default : null) ||
+  pdfFonts?.pdfMake?.vfs ||
+  pdfFonts;
+
+if (pdfMakeApi) {
+  if (typeof pdfMakeApi.addVirtualFileSystem === "function") {
+    pdfMakeApi.addVirtualFileSystem(pdfFontMap);
+  } else {
+    pdfMakeApi.vfs = pdfFontMap;
+  }
+
+  if (typeof pdfMakeApi.addFonts === "function") {
+    pdfMakeApi.addFonts({
+      Roboto: {
+        normal: "Roboto-Regular.ttf",
+        bold: "Roboto-Medium.ttf",
+        italics: "Roboto-Italic.ttf",
+        bolditalics: "Roboto-MediumItalic.ttf",
+      },
+    });
+  }
+}
 
 const cardClass = "card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl";
 const inputClass =
@@ -1425,7 +1452,10 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
         .trim()
         .replace(/\s+/g, "_")
         .replace(/[^\w\u0400-\u04FF\-]/g, "");
-      pdfMake.createPdf(documentDefinition).download(`HACCP_перевірка_${safeDate}_${safeLocation || "звіт"}.pdf`);
+      if (!pdfMakeApi || typeof pdfMakeApi.createPdf !== "function") {
+        throw new Error("PDF engine is not initialized");
+      }
+      pdfMakeApi.createPdf(documentDefinition).download(`HACCP_перевірка_${safeDate}_${safeLocation || "звіт"}.pdf`);
     } catch (error) {
       console.error("Не вдалося експортувати PDF звіт:", error);
       alert("Не вдалося експортувати звіт у PDF.");
