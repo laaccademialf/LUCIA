@@ -76,6 +76,10 @@ const readBackendPackageVersion = () => {
 const BACKEND_VERSION = String(
   process.env.BACKEND_VERSION || process.env.VITE_APP_VERSION || readBackendPackageVersion() || "1.0.3+local"
 ).trim();
+// Унікальний id процесу для діагностики кількох одночасних інстансів за
+// одним проксі (симптом: дані «мигають», бо запити чергуються між бекендами).
+const SERVER_INSTANCE_ID = crypto.randomBytes(6).toString("hex");
+const SERVER_STARTED_AT = new Date().toISOString();
 
 const MYSQL_CONFIG = {
   host: String(process.env.MYSQL_HOST || "").trim(),
@@ -1268,21 +1272,30 @@ const tableExistsMySql = async (conn, tableName) => {
   return rows.length > 0;
 };
 
+// Кеш вибору фізичної таблиці: вибір МАЄ бути стабільним між запитами,
+// інакше читання/запис чергуються між case-варіантами таблиць і дані «мигають».
+const TABLE_NAME_RESOLUTION_CACHE = new Map(); // lower(tableName) -> resolved name
+
 const resolveExistingTableNameMySql = async (conn, tableName) => {
+  const cacheKey = String(tableName || "").toLowerCase();
+  const cached = TABLE_NAME_RESOLUTION_CACHE.get(cacheKey);
+  if (cached !== undefined) return cached;
+
   const [rows] = await conn.execute(
-    `SELECT
-       table_name,
-       COALESCE(table_rows, 0) AS table_rows
+    `SELECT table_name
      FROM information_schema.tables
      WHERE table_schema = DATABASE() AND LOWER(table_name) = LOWER(?)
      ORDER BY
-       (COALESCE(table_rows, 0) > 0) DESC,
        (table_name = ?) DESC,
-       COALESCE(table_rows, 0) DESC,
        table_name ASC`,
     [tableName, tableName]
   );
-  return String(rows?.[0]?.table_name || "").trim();
+  const resolved = String(rows?.[0]?.table_name || "").trim();
+  // Кешуємо лише позитивний результат: відсутня таблиця може бути створена пізніше.
+  if (resolved) {
+    TABLE_NAME_RESOLUTION_CACHE.set(cacheKey, resolved);
+  }
+  return resolved;
 };
 
 const resolveCollectionTableMySql = async (conn, collectionName, { preferFlat = true } = {}) => {
@@ -5027,6 +5040,8 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       service: "custom-db-migration-server",
       version: BACKEND_VERSION,
+      instanceId: SERVER_INSTANCE_ID,
+      startedAt: SERVER_STARTED_AT,
       engine: ENGINE,
       requiredEngine: REQUIRED_ENGINE || null,
       mysqlConfigured: Boolean(MYSQL_CONFIG.host && MYSQL_CONFIG.user && MYSQL_CONFIG.database),
