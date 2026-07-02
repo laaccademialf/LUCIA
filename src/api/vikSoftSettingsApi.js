@@ -15,7 +15,11 @@ const readRuntime = () => {
 const getApiBase = () => {
   const runtime = readRuntime();
   const runtimeBase = normalizeApiBase(runtime?.apiBaseUrl || "");
-  return runtimeBase || ENV_BASE;
+  const originBase =
+    typeof window !== "undefined" && window.location?.origin
+      ? normalizeApiBase(window.location.origin)
+      : "";
+  return runtimeBase || ENV_BASE || originBase;
 };
 
 export const getVikSoftApiClientContext = () => {

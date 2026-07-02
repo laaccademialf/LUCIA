@@ -16,7 +16,11 @@ const getApiBase = () => {
   if (ENV_ENERGOCENTER_BASE) return ENV_ENERGOCENTER_BASE;
   const runtime = readRuntime();
   const runtimeBase = normalizeApiBase(runtime?.apiBaseUrl || "");
-  return runtimeBase || ENV_API_BASE;
+  const originBase =
+    typeof window !== "undefined" && window.location?.origin
+      ? normalizeApiBase(window.location.origin)
+      : "";
+  return runtimeBase || ENV_API_BASE || originBase;
 };
 
 const getApiToken = () => {

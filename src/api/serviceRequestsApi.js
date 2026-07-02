@@ -18,7 +18,11 @@ const readRuntimeCustomConfig = () => {
 const getApiBase = () => {
   const runtime = readRuntimeCustomConfig();
   const runtimeBase = normalizeApiBase(runtime?.apiBaseUrl || "");
-  return runtimeBase || ENV_API_BASE;
+  const originBase =
+    typeof window !== "undefined" && window.location?.origin
+      ? normalizeApiBase(window.location.origin)
+      : "";
+  return runtimeBase || ENV_API_BASE || originBase;
 };
 
 const getApiToken = () => {

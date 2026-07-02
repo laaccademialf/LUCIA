@@ -18,7 +18,11 @@ const getApiBase = () => {
   if (ENV_METRO_BASE) return ENV_METRO_BASE;
   const runtime = readRuntime();
   const runtimeBase = normalizeApiBase(runtime?.apiBaseUrl || "");
-  return runtimeBase || ENV_API_BASE;
+  const originBase =
+    typeof window !== "undefined" && window.location?.origin
+      ? normalizeApiBase(window.location.origin)
+      : "";
+  return runtimeBase || ENV_API_BASE || originBase;
 };
 
 const getApiToken = () => {

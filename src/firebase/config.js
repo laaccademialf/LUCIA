@@ -3,16 +3,31 @@ import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getStorage } from "firebase/storage";
 
-// Конфігурація Firebase
-// Для використання: створіть файл .env в корені проєкту на основі .env.example
+// Конфігурація Firebase (ОПЦІЙНА).
+// Платформа працює з власною базою (MariaDB/Postgres) через custom-db API.
+// Firebase ініціалізується ЛИШЕ якщо задано реальну конфігурацію:
+//  - через env (VITE_FIREBASE_*), АБО
+//  - через runtime-налаштування (localStorage lucia_runtime_firebase_config).
+// Якщо конфігурації немає — жодних запитів до firestore.googleapis.com не буде.
 const firebaseConfigFromEnv = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "YOUR_API_KEY",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "YOUR_PROJECT_ID",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "YOUR_MESSAGING_SENDER_ID",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "YOUR_APP_ID"
+  apiKey: String(import.meta.env.VITE_FIREBASE_API_KEY || "").trim(),
+  authDomain: String(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "").trim(),
+  projectId: String(import.meta.env.VITE_FIREBASE_PROJECT_ID || "").trim(),
+  storageBucket: String(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "").trim(),
+  messagingSenderId: String(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "").trim(),
+  appId: String(import.meta.env.VITE_FIREBASE_APP_ID || "").trim(),
 };
+
+const REQUIRED_KEYS = ["apiKey", "authDomain", "projectId", "appId"];
+
+const isPlaceholderValue = (value) => {
+  const text = String(value || "").trim();
+  if (!text) return true;
+  return /^your_/i.test(text);
+};
+
+const isRealConfig = (config) =>
+  Boolean(config) && REQUIRED_KEYS.every((key) => !isPlaceholderValue(config?.[key]));
 
 const readRuntimeConfig = () => {
   if (typeof window === "undefined" || typeof localStorage === "undefined") {
@@ -24,31 +39,55 @@ const readRuntimeConfig = () => {
 
   try {
     const parsed = JSON.parse(raw);
-    const required = ["apiKey", "authDomain", "projectId", "appId"];
-    if (!required.every((key) => Boolean(String(parsed?.[key] || "").trim()))) {
-      return null;
-    }
+    if (!isRealConfig(parsed)) return null;
     return parsed;
   } catch {
     return null;
   }
 };
 
-const firebaseConfig = readRuntimeConfig() || firebaseConfigFromEnv;
+const runtimeConfig = readRuntimeConfig();
+const firebaseConfig = runtimeConfig || (isRealConfig(firebaseConfigFromEnv) ? firebaseConfigFromEnv : null);
 
-// Ініціалізація Firebase
-const app = initializeApp(firebaseConfig);
+export const isFirebaseConfigured = Boolean(firebaseConfig);
 
-// Ініціалізація Firestore
-export const db = getFirestore(app);
+// Заглушка: будь-яка спроба використати Firebase без конфігурації дає
+// зрозумілу помилку замість тихих запитів на firestore.googleapis.com.
+const createDisabledStub = (label) =>
+  new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        if (prop === Symbol.toPrimitive || prop === "toString") {
+          return () => `[Firebase ${label} disabled]`;
+        }
+        throw new Error(
+          `Firebase (${label}) вимкнено: платформа працює з власною базою через custom-db API. ` +
+            "Якщо Firebase дійсно потрібен, задайте VITE_FIREBASE_* у env або runtime-конфігурацію."
+        );
+      },
+    }
+  );
 
-// Ініціалізація Authentication
-export const auth = getAuth(app);
+let app = null;
+let db;
+let auth;
+let storage;
 
-// Ініціалізація Storage
-export const storage = getStorage(app);
+if (isFirebaseConfigured) {
+  app = initializeApp(firebaseConfig);
+  db = getFirestore(app);
+  auth = getAuth(app);
+  storage = getStorage(app);
+} else {
+  db = createDisabledStub("firestore");
+  auth = createDisabledStub("auth");
+  storage = createDisabledStub("storage");
+}
 
-export const activeFirebaseConfig = firebaseConfig;
-export const isRuntimeFirebaseConfig = Boolean(readRuntimeConfig());
+export { db, auth, storage };
+
+export const activeFirebaseConfig = firebaseConfig || {};
+export const isRuntimeFirebaseConfig = Boolean(runtimeConfig);
 
 export default app;

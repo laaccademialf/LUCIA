@@ -10,6 +10,13 @@ export default defineConfig({
     strictPort: true,
     allowedHosts: 'all',
     cors: true,
+    // Same-origin режим: фронт завжди ходить на власний origin,
+    // а в dev ці шляхи проксуються на custom-db сервер (MIGRATION_PORT).
+    proxy: (() => {
+      const backend = `http://127.0.0.1:${process.env.MIGRATION_PORT || 8787}`
+      const paths = ['/api', '/auth', '/settings', '/health', '/db', '/migration']
+      return Object.fromEntries(paths.map((p) => [p, { target: backend, changeOrigin: true }]))
+    })(),
   },
   build: {
     rollupOptions: {

@@ -1,8 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { Check, X, Plus, Download, Upload, Clock3, FileText, Edit3, Trash2, Search, Save, Building2, RefreshCcw, Landmark, Pause, Play, Send, Paperclip, Camera } from "lucide-react";
 import * as XLSX from "xlsx";
-import { ref as storageRef, uploadBytesResumable, getDownloadURL } from "firebase/storage";
-import { storage } from "../firebase/config";
 import { getUsers } from "../firebase/users";
 import {
   isPaymentRequestsApiEnabled,
