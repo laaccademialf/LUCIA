@@ -1,7 +1,7 @@
 import { forwardRef, useState, useEffect } from "react";
 import { X } from "lucide-react";
 
-const MultiSelect = forwardRef(({ label, options = [], value, onChange, disabled, ...props }, ref) => {
+const MultiSelect = forwardRef(({ label, options = [], value, onChange, disabled, placeholder, emptyOptionsText, ...props }, ref) => {
   const [selectedItems, setSelectedItems] = useState([]);
   const [isOpen, setIsOpen] = useState(false);
 
@@ -65,7 +65,7 @@ const MultiSelect = forwardRef(({ label, options = [], value, onChange, disabled
         >
           {selectedItems.length === 0 ? (
             <span className="text-slate-400 text-sm">
-              {disabled ? 'Спочатку оберіть центр відповідальності' : 'Оберіть особу/осіб'}
+              {placeholder || (disabled ? 'Спочатку оберіть центр відповідальності' : 'Оберіть особу/осіб')}
             </span>
           ) : (
             selectedItems.map((item, index) => (
@@ -113,7 +113,7 @@ const MultiSelect = forwardRef(({ label, options = [], value, onChange, disabled
 
         {isOpen && !disabled && options.length === 0 && (
           <div className="absolute z-10 w-full mt-1 bg-white border border-slate-300 rounded-lg shadow-lg p-3 text-center text-slate-500 text-sm">
-            Немає доступних варіантів
+            {emptyOptionsText || "Немає доступних варіантів"}
           </div>
         )}
       </div>

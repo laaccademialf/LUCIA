@@ -508,6 +508,40 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
     return nextQty - baseQty;
   }, [hasSavedPrimaryInventoryQuantity, nextInventoryQuantityValue, savedPrimaryInventoryQuantityRaw]);
 
+  const effectiveQuantityForLocation = useMemo(() => {
+    if (hasSavedPrimaryInventoryQuantity) {
+      const nextRaw = String(nextInventoryQuantityValue ?? "").trim();
+      if (nextRaw) {
+        const next = Number(nextRaw);
+        if (Number.isFinite(next)) return next;
+      }
+      const current = Number(savedPrimaryInventoryQuantityRaw);
+      return Number.isFinite(current) ? current : 0;
+    }
+
+    const primaryRaw = String(inventoryQuantityValue ?? "").trim();
+    if (!primaryRaw) return 0;
+    const primary = Number(primaryRaw);
+    return Number.isFinite(primary) ? primary : 0;
+  }, [hasSavedPrimaryInventoryQuantity, nextInventoryQuantityValue, savedPrimaryInventoryQuantityRaw, inventoryQuantityValue]);
+
+  const isMultiZoneAllowed = effectiveQuantityForLocation >= 2;
+
+  useEffect(() => {
+    if (isMultiZoneAllowed) return;
+    const rawZone = String(selectedZone || "").trim();
+    if (!rawZone.includes(",")) return;
+
+    const firstZone = rawZone
+      .split(",")
+      .map((item) => item.trim())
+      .find(Boolean);
+
+    if (firstZone && firstZone !== rawZone) {
+      setValue("zone", firstZone);
+    }
+  }, [isMultiZoneAllowed, selectedZone, setValue]);
+
   const effectiveQuantityForValue = useMemo(() => {
     if (hasSavedPrimaryInventoryQuantity) {
       const nextRaw = String(nextInventoryQuantityValue ?? "").trim();
@@ -1292,13 +1326,36 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
               {...register("locationName", { required: true })}
               options={ensureCurrentOption(restaurants.map((r) => r.name), selectedLocationName)}
             />
-            <Select
-              label="Зона розміщення"
-              {...register("zone")}
-              options={ensureCurrentOption(
-                placementZones.length > 0 ? placementZones : ["Зал", "Кухня", "Бар", "Склад", "Адміністрація"],
-                selectedZone
-              )}
+            <Controller
+              name="zone"
+              control={control}
+              render={({ field }) => {
+                const zoneOptions = ensureCurrentOption(
+                  placementZones.length > 0 ? placementZones : ["Зал", "Кухня", "Бар", "Склад", "Адміністрація"],
+                  field.value
+                );
+
+                if (isMultiZoneAllowed) {
+                  return (
+                    <MultiSelect
+                      label="Зона розміщення"
+                      {...field}
+                      options={zoneOptions}
+                      placeholder="Оберіть одну або декілька зон"
+                    />
+                  );
+                }
+
+                return (
+                  <Select
+                    label="Зона розміщення"
+                    value={String(field.value || "")}
+                    onChange={(e) => field.onChange(e.target.value)}
+                    onBlur={field.onBlur}
+                    options={zoneOptions}
+                  />
+                );
+              }}
             />
             <Select
               label="Центр відповідальності"
