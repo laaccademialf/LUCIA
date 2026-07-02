@@ -3217,7 +3217,7 @@ function App() {
                   <p className="text-2xl font-bold text-amber-900 mt-0.5">{fmtKwh(ov.totalGen)}</p>
                 </div>
                 <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 shadow-sm">
-                  <p className="text-xs font-semibold text-sky-700">Годин роботи генератора</p>
+                  <p className="text-xs font-semibold text-sky-700">Годин роботи генератора (орієнтовно)</p>
                   <p className="text-2xl font-bold text-sky-900 mt-0.5">{fmtHours(ov.totalGenHours)}</p>
                 </div>
               </div>
