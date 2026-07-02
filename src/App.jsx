@@ -1506,12 +1506,16 @@ function App() {
     const yIso = pickedIso || yesterdayIso;
     const isGen = (label) => /генератор/i.test(String(label || ""));
     const isAplus = (label) => /a\+/i.test(String(label || ""));
+    // Генераторний лічильник реєструє виробіток у ЗВОРОТНОМУ напрямку (A-),
+    // залежно від схеми підключення. Тому для генератора враховуємо A+ ТА A-.
+    const isAminus = (label) => /a-/i.test(String(label || ""));
     const targetRestaurantId = String(dashboardRestaurantFilter || "").trim();
 
     const sumFor = (restaurantId) => {
       let mains = 0;
       let gen = 0;
-      let genHalfHours = 0;
+      let genHalfHoursPlus = 0;
+      let genHalfHoursMinus = 0;
       let hasData = false;
       for (const rec of electricityReadings) {
         if (String(rec?.restaurantId || "") !== String(restaurantId)) continue;
@@ -1519,21 +1523,28 @@ function App() {
         const meters = Array.isArray(rec?.meters) ? rec.meters : [];
         for (const m of meters) {
           const label = String(m?.meterNumber || m?.meterId || "");
-          if (!isAplus(label)) continue;
           const v = Number(m?.consumption ?? m?.currValue);
           if (!Number.isFinite(v)) continue;
-          hasData = true;
           if (isGen(label)) {
+            // Виробіток генератора: A+ або A- (яка з активних енергій ненульова).
+            if (!isAplus(label) && !isAminus(label)) continue;
+            hasData = true;
             gen += v;
-            if (isAplus(label)) {
-              const hh = Number(m?.activeHalfHours);
-              if (Number.isFinite(hh) && hh > 0) genHalfHours += hh;
+            const hh = Number(m?.activeHalfHours);
+            if (Number.isFinite(hh) && hh > 0) {
+              if (isAplus(label)) genHalfHoursPlus += hh;
+              else genHalfHoursMinus += hh;
             }
           } else {
+            if (!isAplus(label)) continue;
+            hasData = true;
             mains += v;
           }
         }
       }
+      // Години: беремо більший з напрямків (щоб не подвоювати, якщо лічильник
+      // раптом фіксує обидва напрямки в одних і тих самих слотах).
+      const genHalfHours = Math.max(genHalfHoursPlus, genHalfHoursMinus);
       return { mains, gen, genHours: genHalfHours / 2, hasData };
     };
 
