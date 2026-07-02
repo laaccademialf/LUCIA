@@ -281,6 +281,14 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
         const id = await addLegalTaskApi(payloadWithUploadedFiles);
         const created = { ...payloadWithUploadedFiles, id };
 
+        // Оптимістично показуємо задачу одразу після отримання id від сервера
+        if (isMountedRef.current) {
+          setTasks((prev) => {
+            const alreadyExists = prev.some((t) => String(t.id) === String(id));
+            return alreadyExists ? prev : [...prev, created];
+          });
+        }
+
         const targets = resolveNotificationTargets("legal", "");
         await Promise.all(
           targets.map((target) =>
@@ -309,13 +317,17 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
   const updateTask = useCallback(
     async (id, data) => {
       if (!isLegalApiEnabled()) return { success: false };
+      const mergedData = { ...data, updatedAt: new Date().toISOString() };
+      // Оптимістично оновлюємо стан одразу, щоб не було кліпання
+      setTasks((prev) => prev.map((t) => String(t.id) === String(id) ? { ...t, ...mergedData } : t));
       try {
-        await updateLegalTaskApi(id, { ...data, updatedAt: new Date().toISOString() });
+        await updateLegalTaskApi(id, mergedData);
         await reload();
         return { success: true };
       } catch (err) {
         console.error("Помилка оновлення юридичної задачі:", err);
         setError(err);
+        await reload();
         return { success: false, error: err };
       }
     },
@@ -325,6 +337,8 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
   const removeTask = useCallback(
     async (id) => {
       if (!isLegalApiEnabled()) return { success: false };
+      // Оптимістично видаляємо одразу
+      setTasks((prev) => prev.filter((t) => String(t.id) !== String(id)));
       try {
         await deleteLegalTaskApi(id);
         await reload();
@@ -332,6 +346,7 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
       } catch (err) {
         console.error("Помилка видалення юридичної задачі:", err);
         setError(err);
+        await reload();
         return { success: false, error: err };
       }
     },
@@ -403,6 +418,9 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
         threadMessages: [...(Array.isArray(task.threadMessages) ? task.threadMessages : []), entry],
       };
 
+      // Оптимістично оновлюємо задачу в локальному стані
+      setTasks((prev) => prev.map((t) => String(t.id) === String(task.id) ? patch : t));
+
       try {
         await updateLegalTaskApi(task.id, patch);
 
@@ -431,6 +449,7 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
       } catch (err) {
         console.error("Помилка додавання коментаря до юридичної задачі:", err);
         setError(err);
+        await reload();
         return { success: false, error: err };
       }
     },
@@ -459,6 +478,9 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
         ],
       };
 
+      // Оптимістично оновлюємо дедлайн одразу
+      setTasks((prev) => prev.map((t) => String(t.id) === String(task.id) ? patch : t));
+
       try {
         await updateLegalTaskApi(task.id, patch);
 
@@ -480,6 +502,7 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
       } catch (err) {
         console.error("Помилка оновлення дедлайну юридичної задачі:", err);
         setError(err);
+        await reload();
         return { success: false, error: err };
       }
     },
@@ -516,6 +539,9 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
         patch.archived = false;
       }
 
+      // Оптимістично оновлюємо статус одразу, щоб не було кліпання на канбані
+      setTasks((prev) => prev.map((t) => String(t.id) === String(task.id) ? patch : t));
+
       try {
         await updateLegalTaskApi(task.id, patch);
 
@@ -539,6 +565,7 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
       } catch (err) {
         console.error("Помилка зміни статусу юридичної задачі:", err);
         setError(err);
+        await reload();
         return { success: false, error: err };
       }
     },
