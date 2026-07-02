@@ -3132,7 +3132,16 @@ function App() {
 
         if (isDashboardNav || (!String(activeNav || "").trim() && isDashboardTopTab)) {
           const fmtKwh = (n) => `${Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 2 })} кВт·год`;
-          const fmtHours = (n) => `${Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 2 })} год`;
+          const fmtHours = (n) => {
+            const value = Number(n || 0);
+            if (!Number.isFinite(value) || value <= 0) return "0 год";
+            const totalMinutes = Math.round(value * 60);
+            const hours = Math.floor(totalMinutes / 60);
+            const minutes = totalMinutes % 60;
+            if (hours === 0) return `${minutes} хв`;
+            if (minutes === 0) return `${hours} год`;
+            return `${hours} год ${minutes} хв`;
+          };
           const ov = electricityOverview;
           const dashboardRestaurantOptions = Array.isArray(restaurants) ? restaurants : [];
           const showDashboardRestaurantSelector = user?.role === "admin" || dashboardRestaurantOptions.length > 1;
