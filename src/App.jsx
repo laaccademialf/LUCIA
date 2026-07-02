@@ -443,6 +443,15 @@ const getUnreadNotificationsCount = (items) => {
   }, 0);
 };
 
+const buildStableNotificationKey = (prefix, parts = []) => {
+  const normalizedParts = Array.isArray(parts) ? parts : [parts];
+  const body = normalizedParts
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join("|");
+  return `${String(prefix || "n").trim() || "n"}_${body || "unknown"}`;
+};
+
 const playCenterAlertTone = () => {
   try {
     const audioEnabledRaw = localStorage.getItem("lucia_notification_audio_enabled");
@@ -898,7 +907,14 @@ function App() {
           .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
           .slice(0, 50)
           .map((item) => {
-            const key = `legal_${String(item.id || item.createdAt || Math.random().toString(36).slice(2))}`;
+            const key = buildStableNotificationKey("legal", [
+              item.id,
+              item.createdAt,
+              item.targetUserId,
+              item.targetRole,
+              item.title,
+              item.body,
+            ]);
             const source = String(item?.source || "legal").trim() || "legal";
             const isHaccp = source === "haccp";
             const isService = source === "service";
@@ -1011,9 +1027,17 @@ function App() {
           .map((item) => {
             const source = String(item?.source || "payment").trim() || "payment";
             const fallbackTitle = source === "legal" ? "Юридична задача" : "Платіжне сповіщення";
+            const stableKey = String(item.key || item.id || buildStableNotificationKey(source, [
+              item.createdAt,
+              item.targetUserId,
+              item.targetRole,
+              item.title,
+              item.body,
+              item.actionTab,
+            ]));
             return {
-              key: String(item.key || `${source}_${Math.random().toString(36).slice(2)}`),
-              id: String(item.id || item.key || `${source}_${Math.random().toString(36).slice(2)}`),
+              key: stableKey,
+              id: String(item.id || stableKey),
               type: source,
               title: String(item.title || fallbackTitle),
               time: item.createdAt ? new Date(item.createdAt).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit" }) : "щойно",
@@ -1033,8 +1057,8 @@ function App() {
     missedItems.sort((a, b) => a.time.localeCompare(b.time));
     const checklistNotifications = missedItems.slice(0, 50).map((item) => ({
       ...item,
-      key: item.key || `c_${Math.random().toString(36).slice(2)}`,
-      id: item.key || `c_${Math.random().toString(36).slice(2)}`,
+      key: item.key || buildStableNotificationKey("c", [item.title, item.body, item.createdAt]),
+      id: item.key || buildStableNotificationKey("c", [item.title, item.body, item.createdAt]),
       type: "checklist",
       read: false,
       actionUrl: "checklists",

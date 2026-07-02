@@ -30,7 +30,15 @@ const actorId = (user) => String(user?.uid || user?.id || user?.userId || user?.
 const pushLocalCenterNotification = ({ title, body, targetUserId, targetRole, actorUserId, actionTab }) => {
   if (typeof window === "undefined" || typeof localStorage === "undefined") return;
   try {
-    const key = `lnotify_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const key = [
+      "lnotify",
+      String(targetUserId || "").trim(),
+      String(targetRole || "").trim(),
+      String(actionTab || LEGAL_REQUEST_TAB).trim(),
+      String(title || "").trim(),
+      String(body || "").trim(),
+      String(actorUserId || "").trim(),
+    ].filter(Boolean).join("_");
     const payload = {
       key,
       title,
