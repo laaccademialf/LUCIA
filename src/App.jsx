@@ -598,6 +598,8 @@ function App() {
                       const [businessUnits, setBusinessUnits] = useState([]);
                       // Стан для фільтрації ресторану у графіку
                       const [restaurantFilter, setRestaurantFilter] = useState("");
+                      // Фільтр закладу для дашборду утиліт ("" = всі доступні заклади).
+                      const [dashboardRestaurantFilter, setDashboardRestaurantFilter] = useState("");
                       // Стан для вибраного ресторану (редагування)
                       const [selectedRestaurant, setSelectedRestaurant] = useState(null);
                       // Стан для форми ресторану
@@ -1497,10 +1499,12 @@ function App() {
     const yIso = y.toISOString().slice(0, 10);
     const isGen = (label) => /генератор/i.test(String(label || ""));
     const isAplus = (label) => /a\+/i.test(String(label || ""));
+    const targetRestaurantId = String(dashboardRestaurantFilter || "").trim();
 
     const sumFor = (restaurantId) => {
       let mains = 0;
       let gen = 0;
+      let genHalfHours = 0;
       let hasData = false;
       for (const rec of electricityReadings) {
         if (String(rec?.restaurantId || "") !== String(restaurantId)) continue;
@@ -1512,20 +1516,32 @@ function App() {
           const v = Number(m?.consumption ?? m?.currValue);
           if (!Number.isFinite(v)) continue;
           hasData = true;
-          if (isGen(label)) gen += v;
-          else mains += v;
+          if (isGen(label)) {
+            gen += v;
+            if (isAplus(label)) {
+              const hh = Number(m?.activeHalfHours);
+              if (Number.isFinite(hh) && hh > 0) genHalfHours += hh;
+            }
+          } else {
+            mains += v;
+          }
         }
       }
-      return { mains, gen, hasData };
+      return { mains, gen, genHours: genHalfHours / 2, hasData };
     };
 
-    const perRestaurant = restaurants.map((r) => {
+    const filteredRestaurants = targetRestaurantId
+      ? restaurants.filter((r) => String(r?.id || "") === targetRestaurantId)
+      : restaurants;
+
+    const perRestaurant = filteredRestaurants.map((r) => {
       const s = sumFor(r.id);
       return {
         id: r.id,
         name: r.name || "—",
         mains: s.mains,
         gen: s.gen,
+        genHours: s.genHours,
         total: s.mains + s.gen,
         hasData: s.hasData,
       };
@@ -1533,15 +1549,23 @@ function App() {
 
     const totalMains = perRestaurant.reduce((a, b) => a + b.mains, 0);
     const totalGen = perRestaurant.reduce((a, b) => a + b.gen, 0);
+    const totalGenHours = perRestaurant.reduce((a, b) => a + (Number(b.genHours) || 0), 0);
     return {
       yIso,
       perRestaurant,
       totalMains,
       totalGen,
+      totalGenHours,
       total: totalMains + totalGen,
       multiRestaurant: perRestaurant.length > 1,
     };
-  }, [electricityReadings, restaurants]);
+  }, [electricityReadings, restaurants, dashboardRestaurantFilter]);
+
+  useEffect(() => {
+    if (!dashboardRestaurantFilter) return;
+    const exists = restaurants.some((r) => String(r?.id || "") === String(dashboardRestaurantFilter));
+    if (!exists) setDashboardRestaurantFilter("");
+  }, [restaurants, dashboardRestaurantFilter]);
 
   const menuStructureForPermissions = useMemo(() => {
     // Базова структура навігації
@@ -3089,7 +3113,10 @@ function App() {
 
         if (isDashboardNav || (!String(activeNav || "").trim() && isDashboardTopTab)) {
           const fmtKwh = (n) => `${Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 2 })} кВт·год`;
+          const fmtHours = (n) => `${Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 2 })} год`;
           const ov = electricityOverview;
+          const dashboardRestaurantOptions = Array.isArray(restaurants) ? restaurants : [];
+          const showDashboardRestaurantSelector = user?.role === "admin" || dashboardRestaurantOptions.length > 1;
           const fmtDateUk = (iso) => {
             const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
             return m ? `${m[3]}.${m[2]}.${m[1]}` : String(iso || "");
@@ -3112,8 +3139,30 @@ function App() {
                 </div>
               </div>
 
-              {/* Загальний підсумок: лише «Спожито» та «З генератора» */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
+              <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-sm font-semibold text-slate-700">Заклад:</label>
+                  {showDashboardRestaurantSelector ? (
+                    <select
+                      value={dashboardRestaurantFilter}
+                      onChange={(e) => setDashboardRestaurantFilter(e.target.value)}
+                      className="min-w-[16rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      <option value="">Всі доступні</option>
+                      {dashboardRestaurantOptions.map((r) => (
+                        <option key={r.id} value={r.id}>{r.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
+                      {dashboardRestaurantOptions[0]?.name || "—"}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Загальний підсумок: «Спожито», «З генератора», «Годин роботи генератора» */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 max-w-4xl">
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 shadow-sm">
                   <p className="text-xs font-semibold text-emerald-700">Спожито за вчора</p>
                   <p className="text-2xl font-bold text-emerald-900 mt-0.5">{fmtKwh(ov.total)}</p>
@@ -3121,6 +3170,10 @@ function App() {
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 shadow-sm">
                   <p className="text-xs font-semibold text-amber-700">З генератора за вчора</p>
                   <p className="text-2xl font-bold text-amber-900 mt-0.5">{fmtKwh(ov.totalGen)}</p>
+                </div>
+                <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 shadow-sm">
+                  <p className="text-xs font-semibold text-sky-700">Годин роботи генератора</p>
+                  <p className="text-2xl font-bold text-sky-900 mt-0.5">{fmtHours(ov.totalGenHours)}</p>
                 </div>
               </div>
             </div>

@@ -1590,6 +1590,7 @@ const toAutoMeters = (rows = [], { isGenerator = false } = {}) => {
       prevValue: "",
       currValue: row.consumption,
       consumption: row.consumption,
+      activeHalfHours: Number.isFinite(Number(row?.activeHalfHours)) ? Number(row.activeHalfHours) : 0,
       source: isGenerator ? "energocenter-generator" : "energocenter",
     }));
 };

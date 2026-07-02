@@ -243,6 +243,7 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
           prevValue: "",
           currValue: row.consumption,
           consumption: row.consumption,
+          activeHalfHours: Number.isFinite(Number(row?.activeHalfHours)) ? Number(row.activeHalfHours) : 0,
           source: row?.isGenerator ? "energocenter-generator" : "energocenter",
         }));
     }

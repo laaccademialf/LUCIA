@@ -745,7 +745,28 @@ const recordDateIso = (rec) => {
   return "";
 };
 
-// Агрегує рядки за добу: повертає масив { point, direction, consumption }.
+// Витягти ключ півгодинного слоту (YYYY-MM-DDTHH:mm) із dt/date поля.
+// Потрібно для оцінки годин роботи генератора: рахуємо активні півгодини, де
+// споживання > 0, а потім ділимо на 2.
+const recordHalfHourSlot = (rec) => {
+  const raw = String(pluck(rec, DATE_FIELDS) || "").trim();
+  if (!raw) return "";
+  const dateIso = recordDateIso(rec);
+  if (!dateIso) return "";
+
+  // 2026-07-01T10:30:00 або 2026-07-01 10:30
+  let m = /(\d{4}-\d{2}-\d{2})[T\s](\d{2}):(\d{2})/.exec(raw);
+  if (m) return `${m[1]}T${m[2]}:${m[3]}`;
+
+  // 01.07.2026 10:30
+  m = /(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/.exec(raw);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}`;
+
+  return "";
+};
+
+// Агрегує рядки за добу: повертає масив
+// { point, direction, consumption, activeHalfHours }.
 // Один EIC = одна "точка обліку" (передаємо її назву через pointName).
 // targetDateIso (опц.) — лишити лише записи цієї доби (коли запит робиться
 // діапазоном [D, D+1], бо межовий випадок dtstart=dtend повертає пусто).
@@ -753,6 +774,7 @@ const aggregateForDay = (records, pointName, targetDateIso = "") => {
   // Згрупуємо суми по dr.
   const sumByDr = { 1: 0, 2: 0, 3: 0, 4: 0 };
   const hasByDr = { 1: false, 2: false, 3: false, 4: false };
+  const activeSlotsByDr = { 1: new Set(), 2: new Set(), 3: new Set(), 4: new Set() };
   for (const rec of records) {
     if (targetDateIso) {
       const recIso = recordDateIso(rec);
@@ -767,6 +789,10 @@ const aggregateForDay = (records, pointName, targetDateIso = "") => {
     if (val === null) continue;
     sumByDr[dr] += val;
     hasByDr[dr] = true;
+    if (val > 0) {
+      const slot = recordHalfHourSlot(rec);
+      if (slot) activeSlotsByDr[dr].add(slot);
+    }
   }
   const rows = [];
   for (const dr of [1, 2, 3, 4]) {
@@ -774,6 +800,7 @@ const aggregateForDay = (records, pointName, targetDateIso = "") => {
       point: pointName || "",
       direction: DIRECTION_BY_DR[dr],
       consumption: hasByDr[dr] ? Number(sumByDr[dr].toFixed(4)) : 0,
+      activeHalfHours: activeSlotsByDr[dr].size,
     });
   }
   return rows;
