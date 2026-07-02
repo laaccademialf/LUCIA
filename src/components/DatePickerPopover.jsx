@@ -46,7 +46,7 @@ const buildMonthGrid = (year, month) => {
 
 const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 
-const DatePickerPopover = ({ value, onChange, max, min, label = "Дата:" }) => {
+const DatePickerPopover = ({ value, onChange, max, min, label = "Дата:", className = "", triggerClassName = "" }) => {
   const [open, setOpen] = useState(false);
   const selected = useMemo(() => isoToDate(value), [value]);
   const [viewYear, setViewYear] = useState(selected.getFullYear());
@@ -109,19 +109,36 @@ const DatePickerPopover = ({ value, onChange, max, min, label = "Дата:" }) =
     setOpen(false);
   };
 
+  const hasLabel = Boolean(String(label || "").trim());
+  const triggerBaseClass = "inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white text-sm font-semibold text-slate-800 hover:border-indigo-400 transition";
+
   return (
-    <div ref={rootRef} className="relative inline-block">
-      <label className="inline-flex items-center gap-2 text-sm text-slate-600">
-        {label}
+    <div ref={rootRef} className={["relative", className].filter(Boolean).join(" ")}>
+      {hasLabel ? (
+        <label className="inline-flex items-center gap-2 text-sm text-slate-600">
+          {label}
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className={[triggerBaseClass, "px-2 py-1", triggerClassName].filter(Boolean).join(" ")}
+          >
+            <CalendarIcon size={16} className="text-indigo-500" />
+            <span>{formatDateUk(value)}</span>
+          </button>
+        </label>
+      ) : (
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm font-semibold text-slate-800 hover:border-indigo-400 transition"
+          aria-label="Обрати дату"
+          className={[triggerBaseClass, "w-full justify-between px-2 py-1", triggerClassName].filter(Boolean).join(" ")}
         >
-          <CalendarIcon size={16} className="text-indigo-500" />
-          <span>{formatDateUk(value)}</span>
+          <span className="inline-flex items-center gap-2">
+            <CalendarIcon size={16} className="text-indigo-500" />
+            <span>{formatDateUk(value)}</span>
+          </span>
         </button>
-      </label>
+      )}
       {open && (
         <div className="absolute z-50 mt-2 w-72 rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
           <div className="flex items-center justify-between mb-2">

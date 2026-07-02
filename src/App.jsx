@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from "react";
 import DeployInfo from "./components/DeployInfo";
-import { ClockBadgeTime, ClockBadgeDateTime } from "./components/ClockBadge";
+import { ClockBadgeTime } from "./components/ClockBadge";
 import {
   Archive,
   BarChart3,
@@ -20,6 +20,8 @@ import {
   Settings,
   Shield,
   Truck,
+  TrendingDown,
+  TrendingUp,
   Upload,
   UserIcon,
   Users,
@@ -3168,89 +3170,197 @@ function App() {
           const allTotalMains = (ov.perRestaurantAll || []).reduce((sum, row) => sum + Number(row?.mains || 0), 0);
           const allTotalGen = (ov.perRestaurantAll || []).reduce((sum, row) => sum + Number(row?.gen || 0), 0);
           const allTotalGenHours = (ov.perRestaurantAll || []).reduce((sum, row) => sum + Number(row?.genHours || 0), 0);
+          const toIso = (dateObj) => {
+            const y = dateObj.getFullYear();
+            const m = String(dateObj.getMonth() + 1).padStart(2, "0");
+            const d = String(dateObj.getDate()).padStart(2, "0");
+            return `${y}-${m}-${d}`;
+          };
+          const shiftIso = (iso, days) => {
+            const d = new Date(`${String(iso)}T00:00:00`);
+            d.setDate(d.getDate() + days);
+            return toIso(d);
+          };
+          const pctDiff = (current, baseline) => {
+            const c = Number(current || 0);
+            const b = Number(baseline || 0);
+            if (!Number.isFinite(c) || !Number.isFinite(b) || b <= 0) return null;
+            return ((c - b) / b) * 100;
+          };
+          const collectMainsByRestaurantAndDate = () => {
+            const byRestaurant = new Map();
+            for (const rec of electricityReadings || []) {
+              const rid = String(rec?.restaurantId || "");
+              const iso = String(rec?.date || "").slice(0, 10);
+              if (!rid || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue;
+              const meters = Array.isArray(rec?.meters) ? rec.meters : [];
+              let mains = 0;
+              for (const m of meters) {
+                const label = String(m?.meterNumber || m?.meterId || "");
+                if (/генератор/i.test(label)) continue;
+                if (!/a\+/i.test(label)) continue;
+                const v = Number(m?.consumption ?? m?.currValue);
+                if (Number.isFinite(v)) mains += v;
+              }
+              let dateMap = byRestaurant.get(rid);
+              if (!dateMap) {
+                dateMap = new Map();
+                byRestaurant.set(rid, dateMap);
+              }
+              dateMap.set(iso, (dateMap.get(iso) || 0) + mains);
+            }
+            return byRestaurant;
+          };
+          const mainsByRestaurantDate = collectMainsByRestaurantAndDate();
+          const targetIso = ov.yIso;
+          const yesterdayIso = shiftIso(targetIso, -1);
+          const sameWeekdayLastIso = shiftIso(targetIso, -7);
+          const sameWeekday4Isos = [7, 14, 21, 28].map((d) => shiftIso(targetIso, -d));
+          const getRestaurantMainsForDate = (restaurantId, iso) => {
+            const dateMap = mainsByRestaurantDate.get(String(restaurantId || ""));
+            return Number(dateMap?.get(iso) || 0);
+          };
+          const getAllMainsForDate = (iso) => {
+            let total = 0;
+            for (const r of dashboardRestaurantOptions) {
+              total += getRestaurantMainsForDate(r.id, iso);
+            }
+            return total;
+          };
+          const avgSameWeekday4 = (getter) => {
+            const values = sameWeekday4Isos.map((iso) => Number(getter(iso) || 0)).filter((v) => Number.isFinite(v) && v > 0);
+            if (!values.length) return 0;
+            return values.reduce((a, b) => a + b, 0) / values.length;
+          };
+          const trendLabel = (pct) => {
+            if (!Number.isFinite(pct)) return "н/д";
+            const abs = Math.abs(pct);
+            return `${pct > 0 ? "+" : "-"}${abs.toFixed(1)}%`;
+          };
+          const TrendBadge = ({ pct, label }) => {
+            const isUp = Number.isFinite(pct) && pct > 0;
+            const isDown = Number.isFinite(pct) && pct < 0;
+            const toneClass = isUp
+              ? "text-rose-700 bg-rose-50 border-rose-200"
+              : isDown
+                ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                : "text-slate-500 bg-slate-50 border-slate-200";
+
+            return (
+              <span
+                className={`inline-flex items-center justify-center gap-0.5 rounded-md border px-1 py-0.5 text-[9px] leading-none font-semibold whitespace-nowrap ${toneClass}`}
+                title={label}
+                aria-label={`${label}: ${trendLabel(pct)}`}
+              >
+                {isUp ? <TrendingUp size={10} /> : isDown ? <TrendingDown size={10} /> : <span className="inline-block h-[10px] w-[10px]" />}
+                <span>{trendLabel(pct)}</span>
+              </span>
+            );
+          };
+          const getTrendPackForRestaurant = (row) => {
+            const current = Number(row?.mains || 0);
+            const rid = row?.id;
+            const baselineYesterday = getRestaurantMainsForDate(rid, yesterdayIso);
+            const baselineSameDay = getRestaurantMainsForDate(rid, sameWeekdayLastIso);
+            const baseline4Avg = avgSameWeekday4((iso) => getRestaurantMainsForDate(rid, iso));
+            return {
+              vsYesterday: pctDiff(current, baselineYesterday),
+              vsSameWeekday: pctDiff(current, baselineSameDay),
+              vs4Avg: pctDiff(current, baseline4Avg),
+            };
+          };
+          const totalTrendPack = (() => {
+            const current = allTotalMains;
+            const baselineYesterday = getAllMainsForDate(yesterdayIso);
+            const baselineSameDay = getAllMainsForDate(sameWeekdayLastIso);
+            const baseline4Avg = avgSameWeekday4((iso) => getAllMainsForDate(iso));
+            return {
+              vsYesterday: pctDiff(current, baselineYesterday),
+              vsSameWeekday: pctDiff(current, baselineSameDay),
+              vs4Avg: pctDiff(current, baseline4Avg),
+            };
+          })();
 
           return (
             <>
               <div className="space-y-4">
-                <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <label className="text-sm font-semibold text-slate-700">Заклад:</label>
-                        {showDashboardRestaurantSelector ? (
-                          <select
-                            value={dashboardRestaurantFilter}
-                            onChange={(e) => setDashboardRestaurantFilter(e.target.value)}
-                            className="min-w-[15rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                          >
-                            <option value="">Всі доступні</option>
-                            {dashboardRestaurantOptions.map((r) => (
-                              <option key={r.id} value={r.id}>{r.name}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
-                            {dashboardRestaurantOptions[0]?.name || "—"}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <DatePickerPopover
-                          label="Дата:"
-                          value={dashboardDateFilter || ov.yIso}
-                          max={new Date().toISOString().slice(0, 10)}
-                          onChange={(nextIso) => {
-                            const fallback = (() => {
-                              const d = new Date();
-                              d.setDate(d.getDate() - 1);
-                              return d.toISOString().slice(0, 10);
-                            })();
-                            setDashboardDateFilter(String(nextIso || "") === fallback ? "" : String(nextIso || ""));
-                          }}
-                        />
-                      </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm sm:p-3">
+                  <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
+                    <div className="min-w-0">
+                      {showDashboardRestaurantSelector ? (
+                        <select
+                          value={dashboardRestaurantFilter}
+                          onChange={(e) => setDashboardRestaurantFilter(e.target.value)}
+                          className="h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none sm:min-w-[15rem]"
+                          aria-label="Обрати заклад"
+                        >
+                          <option value="">Всі доступні</option>
+                          {dashboardRestaurantOptions.map((r) => (
+                            <option key={r.id} value={r.id}>{r.name}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="block rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
+                          {dashboardRestaurantOptions[0]?.name || "—"}
+                        </span>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2 self-start sm:self-auto">
+                    <div className="min-w-0">
+                      <DatePickerPopover
+                        label=""
+                        className="w-full"
+                        triggerClassName="h-10 px-3 py-2"
+                        value={dashboardDateFilter || ov.yIso}
+                        max={new Date().toISOString().slice(0, 10)}
+                        onChange={(nextIso) => {
+                          const fallback = (() => {
+                            const d = new Date();
+                            d.setDate(d.getDate() - 1);
+                            return d.toISOString().slice(0, 10);
+                          })();
+                          setDashboardDateFilter(String(nextIso || "") === fallback ? "" : String(nextIso || ""));
+                        }}
+                      />
+                    </div>
+                    <div className="w-auto justify-self-end">
                       <button
                         type="button"
                         onClick={() => setShowDashboardSummaryModal(true)}
-                        className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100"
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+                        aria-label="Зведені дані"
+                        title="Зведені дані"
                       >
-                        Загальна інформація
+                        <BarChart3 size={18} />
                       </button>
-                      <ClockBadgeDateTime
-                        prefix="Оновлено:"
-                        className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
-                      />
                     </div>
                   </div>
                 </div>
 
                 {/* Загальний підсумок: «Спожито», «З генератора», «Годин роботи генератора» */}
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 shadow-sm">
-                    <p className="text-xs font-semibold text-emerald-700">Спожито {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
-                    <p className="text-2xl font-bold text-emerald-900 mt-0.5">{fmtKwh(ov.total)}</p>
+                <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-2 shadow-sm sm:p-3">
+                    <p className="text-[10px] leading-tight font-semibold text-emerald-700 sm:text-xs">Спожито {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
+                    <p className="mt-0.5 text-base leading-none font-bold text-emerald-900 sm:text-2xl">{fmtKwh(ov.total)}</p>
                   </div>
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 shadow-sm">
-                    <p className="text-xs font-semibold text-amber-700">З генератора {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
-                    <p className="text-2xl font-bold text-amber-900 mt-0.5">{fmtKwh(ov.totalGen)}</p>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 shadow-sm sm:p-3">
+                    <p className="text-[10px] leading-tight font-semibold text-amber-700 sm:text-xs">З генератора {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
+                    <p className="mt-0.5 text-base leading-none font-bold text-amber-900 sm:text-2xl">{fmtKwh(ov.totalGen)}</p>
                   </div>
-                  <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 shadow-sm">
-                    <p className="text-xs font-semibold text-sky-700">Годин роботи генератора (орієнтовно)</p>
-                    <p className="text-2xl font-bold text-sky-900 mt-0.5">{fmtHours(ov.totalGenHours)}</p>
+                  <div className="rounded-lg border border-sky-200 bg-sky-50 p-2 shadow-sm sm:p-3">
+                    <p className="text-[10px] leading-tight font-semibold text-sky-700 sm:text-xs">Годин роботи генератора (орієнтовно)</p>
+                    <p className="mt-0.5 text-base leading-none font-bold text-sky-900 sm:text-2xl">{fmtHours(ov.totalGenHours)}</p>
                   </div>
                 </div>
               </div>
               {showDashboardSummaryModal && (
-                <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/60 p-2 sm:items-center sm:p-4">
+                <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-2 sm:p-4">
                   <button
                     type="button"
                     className="absolute inset-0"
                     aria-label="Закрити"
                     onClick={() => setShowDashboardSummaryModal(false)}
                   />
-                  <div className="relative z-10 flex h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:h-auto sm:max-h-[88vh]">
+                  <div className="relative z-10 mx-auto my-3 w-full max-w-5xl rounded-2xl border border-slate-200 bg-white shadow-2xl sm:my-6">
                     <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
                       <div>
                         <h3 className="text-lg font-bold text-slate-900">Загальна інформація по закладах</h3>
@@ -3264,34 +3374,95 @@ function App() {
                         Закрити
                       </button>
                     </div>
-                    <div className="overflow-auto px-3 py-3 sm:px-4">
-                      <div className="min-w-[720px]">
+                    <div className="px-3 py-3 sm:px-4">
+                      <div className="hidden sm:block">
                         <table className="w-full border-collapse text-sm">
                           <thead>
                             <tr className="bg-slate-100 text-slate-700">
                               <th className="border border-slate-200 px-3 py-2 text-left font-semibold">Ресторан</th>
-                              <th className="border border-slate-200 px-3 py-2 text-right font-semibold">Спожито з мережі</th>
+                              <th className="border border-slate-200 px-3 py-2 text-right font-semibold">Спожито з мережі / тренд</th>
                               <th className="border border-slate-200 px-3 py-2 text-right font-semibold">Спожито з генератора</th>
                               <th className="border border-slate-200 px-3 py-2 text-right font-semibold">Години роботи генератора</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {(ov.perRestaurantAll || []).map((row) => (
+                            {(ov.perRestaurantAll || []).map((row) => {
+                              const trend = getTrendPackForRestaurant(row);
+                              return (
                               <tr key={row.id} className="odd:bg-white even:bg-slate-50">
                                 <td className="border border-slate-200 px-3 py-2 text-slate-900">{row.name}</td>
-                                <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtKwh(row.mains)}</td>
+                                <td className="border border-slate-200 px-3 py-2 text-right">
+                                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+                                    <span className="text-right tabular-nums">{fmtKwh(row.mains)}</span>
+                                    <div className="flex flex-nowrap items-center justify-end gap-1 border-l border-slate-200 pl-2">
+                                      <TrendBadge pct={trend.vsYesterday} label="До вчора" />
+                                      <TrendBadge pct={trend.vsSameWeekday} label="До цього ж дня тижня" />
+                                      <TrendBadge pct={trend.vs4Avg} label="До середнього 4 останніх таких днів" />
+                                    </div>
+                                  </div>
+                                </td>
                                 <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtKwh(row.gen)}</td>
                                 <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtHours(row.genHours)}</td>
                               </tr>
-                            ))}
+                              );
+                            })}
                             <tr className="bg-indigo-50 font-semibold text-indigo-900">
                               <td className="border border-slate-200 px-3 py-2">Разом</td>
-                              <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtKwh(allTotalMains)}</td>
+                              <td className="border border-slate-200 px-3 py-2 text-right">
+                                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+                                  <span className="text-right tabular-nums">{fmtKwh(allTotalMains)}</span>
+                                  <div className="flex flex-nowrap items-center justify-end gap-1 border-l border-indigo-200 pl-2">
+                                    <TrendBadge pct={totalTrendPack.vsYesterday} label="До вчора" />
+                                    <TrendBadge pct={totalTrendPack.vsSameWeekday} label="До цього ж дня тижня" />
+                                    <TrendBadge pct={totalTrendPack.vs4Avg} label="До середнього 4 останніх таких днів" />
+                                  </div>
+                                </div>
+                              </td>
                               <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtKwh(allTotalGen)}</td>
                               <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtHours(allTotalGenHours)}</td>
                             </tr>
                           </tbody>
                         </table>
+                      </div>
+
+                      <div className="space-y-2 sm:hidden">
+                        {(ov.perRestaurantAll || []).map((row) => {
+                          const trend = getTrendPackForRestaurant(row);
+                          return (
+                          <div key={`m-${row.id}`} className="rounded-xl border border-slate-200 bg-white p-3">
+                            <p className="text-sm font-bold text-slate-900">{row.name}</p>
+                            <div className="mt-2 grid grid-cols-1 gap-1 text-xs">
+                              <p className="flex items-center justify-between gap-3">
+                                <span className="text-slate-600">Спожито з мережі</span>
+                                <span className="font-semibold text-slate-900">{fmtKwh(row.mains)}</span>
+                              </p>
+                              <p className="flex items-center justify-between gap-3"><span className="text-slate-600">Спожито з генератора</span><span className="font-semibold text-slate-900">{fmtKwh(row.gen)}</span></p>
+                              <p className="flex items-center justify-between gap-3"><span className="text-slate-600">Години роботи генератора</span><span className="font-semibold text-slate-900">{fmtHours(row.genHours)}</span></p>
+                              <div className="mt-1 flex flex-wrap justify-end gap-1 border-t border-slate-100 pt-1">
+                                <TrendBadge pct={trend.vsYesterday} label="До вчора" />
+                                <TrendBadge pct={trend.vsSameWeekday} label="До цього ж дня тижня" />
+                                <TrendBadge pct={trend.vs4Avg} label="До середнього 4 останніх таких днів" />
+                              </div>
+                            </div>
+                          </div>
+                          );
+                        })}
+                        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3">
+                          <p className="text-sm font-bold text-indigo-900">Разом</p>
+                          <div className="mt-2 grid grid-cols-1 gap-1 text-xs">
+                            <p className="flex items-center justify-between gap-3">
+                              <span className="text-indigo-700">Спожито з мережі</span>
+                              <span className="font-semibold text-indigo-900">{fmtKwh(allTotalMains)}</span>
+                            </p>
+                            <p className="flex items-center justify-between gap-3"><span className="text-indigo-700">Спожито з генератора</span><span className="font-semibold text-indigo-900">{fmtKwh(allTotalGen)}</span></p>
+                            <p className="flex items-center justify-between gap-3"><span className="text-indigo-700">Години роботи генератора</span><span className="font-semibold text-indigo-900">{fmtHours(allTotalGenHours)}</span></p>
+                            <div className="mt-1 flex flex-wrap justify-end gap-1 border-t border-indigo-100 pt-1">
+                              <TrendBadge pct={totalTrendPack.vsYesterday} label="До вчора" />
+                              <TrendBadge pct={totalTrendPack.vsSameWeekday} label="До цього ж дня тижня" />
+                              <TrendBadge pct={totalTrendPack.vs4Avg} label="До середнього 4 останніх таких днів" />
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
