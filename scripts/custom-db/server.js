@@ -1065,6 +1065,12 @@ const createSession = async (userId, dbConfig) => {
 const deleteSession = async (token, dbConfig) => {
   if (!token) return;
   await deleteCollectionItemData("authSessions", token, dbConfig);
+  // Інвалідуємо кеш глобального gate (визначений нижче, доступний у рантаймі).
+  try {
+    SESSION_GATE_CACHE.delete(token);
+  } catch {
+    /* cache ще не ініціалізовано — ігноруємо */
+  }
 };
 
 const resolveAuthContext = async (req, dbConfig) => {
@@ -4683,11 +4689,42 @@ const handleDeleteRuntimeSettings = async (req, res) => {
 //   - /health  : uptime monitoring / load balancers
 // OPTIONS preflight is always allowed (handled before this gate) so browsers
 // can complete CORS negotiation.
-const PUBLIC_PATHS = new Set(["/health"]);
+const PUBLIC_PATHS = new Set(["/health", "/auth/login", "/auth/register"]);
 // Роути, де дозволяємо аутентифікацію сесією користувача (x-session-token)
 // без обов'язкового глобального API-токена. Додаткова перевірка виконується
 // в самому handler'і через resolveAuthContext/profile.
 const SESSION_AUTH_PATHS = new Set(["/api/print-label"]);
+
+// Session-based авторизація для глобального gate: якщо запит несе валідний
+// сесійний токен (x-session-token або Bearer), пропускаємо його без API-токена.
+// Це потрібно для same-origin деплою, де фронтенд зібрано без VITE_DATA_API_TOKEN.
+// Результат кешується, щоб не бити в БД на кожен запит.
+const SESSION_GATE_CACHE = new Map(); // token -> expiresAt (ms)
+const SESSION_GATE_CACHE_TTL_MS = 60_000;
+const SESSION_GATE_CACHE_MAX = 5000;
+
+const isSessionAuthorized = async (req) => {
+  const token = sessionTokenFromRequest(req);
+  if (!token) return false;
+
+  const cachedExpiry = SESSION_GATE_CACHE.get(token);
+  if (cachedExpiry && cachedExpiry > Date.now()) return true;
+
+  try {
+    const session = await getSessionByToken(token, getAssetsRuntimeConfig());
+    if (!session) {
+      SESSION_GATE_CACHE.delete(token);
+      return false;
+    }
+    if (SESSION_GATE_CACHE.size >= SESSION_GATE_CACHE_MAX) {
+      SESSION_GATE_CACHE.clear();
+    }
+    SESSION_GATE_CACHE.set(token, Date.now() + SESSION_GATE_CACHE_TTL_MS);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const server = http.createServer(async (req, res) => {
   const method = req.method || "GET";
@@ -4709,7 +4746,8 @@ const server = http.createServer(async (req, res) => {
     !PUBLIC_PATHS.has(pathname) &&
     !SESSION_AUTH_PATHS.has(pathname) &&
     !isAuthorized(req) &&
-    !hasQueryTokenAccess
+    !hasQueryTokenAccess &&
+    !(await isSessionAuthorized(req))
   ) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
   }

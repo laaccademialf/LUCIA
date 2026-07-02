@@ -37,6 +37,11 @@ const headers = () => {
   if (token) {
     next.Authorization = `Bearer ${token}`;
   }
+  const sessionToken =
+    typeof window !== "undefined" && typeof localStorage !== "undefined"
+      ? String(localStorage.getItem("lucia_auth_session_token") || "").trim()
+      : "";
+  if (sessionToken) next["x-session-token"] = sessionToken;
   return next;
 };
 
