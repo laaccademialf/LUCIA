@@ -4967,8 +4967,7 @@ const SESSION_GATE_CACHE = new Map(); // token -> expiresAt (ms)
 const SESSION_GATE_CACHE_TTL_MS = 60_000;
 const SESSION_GATE_CACHE_MAX = 5000;
 
-const isSessionAuthorized = async (req) => {
-  const token = sessionTokenFromRequest(req);
+const isSessionTokenValid = async (token) => {
   if (!token) return false;
 
   const cachedExpiry = SESSION_GATE_CACHE.get(token);
@@ -4988,6 +4987,10 @@ const isSessionAuthorized = async (req) => {
   } catch {
     return false;
   }
+};
+
+const isSessionAuthorized = async (req) => {
+  return isSessionTokenValid(sessionTokenFromRequest(req));
 };
 
 const server = http.createServer(async (req, res) => {
@@ -5017,12 +5020,19 @@ const server = http.createServer(async (req, res) => {
   // Enforce the global token gate for every non-public route.
   const queryToken = String(requestUrl.searchParams.get("token") || "").trim();
   const hasQueryTokenAccess = Boolean(TOKEN) && queryToken === TOKEN;
+  // EventSource (SSE) не вміє слати заголовки — для /api/assets/events приймаємо
+  // сесійний токен через ?session= (короткоживучий, відкликається при logout).
+  const querySessionToken =
+    pathname === "/api/assets/events"
+      ? String(requestUrl.searchParams.get("session") || "").trim()
+      : "";
   if (
     !PUBLIC_PATHS.has(pathname) &&
     !SESSION_AUTH_PATHS.has(pathname) &&
     !isAuthorized(req) &&
     !hasQueryTokenAccess &&
-    !(await isSessionAuthorized(req))
+    !(await isSessionAuthorized(req)) &&
+    !(querySessionToken && (await isSessionTokenValid(querySessionToken)))
   ) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
   }
@@ -5507,8 +5517,20 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === "/api/assets/events" && method === "GET") {
+    // EventSource не підтримує заголовки — приймаємо авторизацію через query:
+    //   ?session=<сесійний токен> (пріоритет, короткоживучий)
+    //   ?token=<API токен>   (legacy fallback)
     const tokenFromQuery = String(requestUrl.searchParams.get("token") || "").trim();
-    const authorized = isAuthorized(req) || (Boolean(TOKEN) && tokenFromQuery === TOKEN);
+    const sessionFromQuery = String(requestUrl.searchParams.get("session") || "").trim();
+    let authorized = isAuthorized(req) || (Boolean(TOKEN) && tokenFromQuery === TOKEN);
+    if (!authorized && sessionFromQuery) {
+      try {
+        const session = await getSessionByToken(sessionFromQuery, getAssetsRuntimeConfig());
+        authorized = Boolean(session);
+      } catch {
+        authorized = false;
+      }
+    }
     if (!authorized) {
       return sendJson(res, 401, { ok: false, error: "Unauthorized" });
     }

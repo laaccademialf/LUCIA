@@ -198,10 +198,22 @@ export const subscribeToAssetsEventsApi = ({ onChange, onError } = {}) => {
     return () => {};
   }
 
-  const token = getApiToken();
+  // EventSource не вміє слати заголовки, тому авторизація йде через query.
+  // Безпека: віддаємо ПЕРЕВАГУ короткоживучому сесійному токену (відкликається
+  // при logout), а глобальний API-токен у URL — лише як legacy fallback,
+  // щоб не світити довгоживучий секрет в історії браузера та логах проксі.
+  const sessionToken =
+    typeof window !== "undefined" && typeof localStorage !== "undefined"
+      ? String(localStorage.getItem("lucia_auth_session_token") || "").trim()
+      : "";
   const params = new URLSearchParams();
-  if (token) {
-    params.set("token", token);
+  if (sessionToken) {
+    params.set("session", sessionToken);
+  } else {
+    const token = getApiToken();
+    if (token) {
+      params.set("token", token);
+    }
   }
 
   const sseUrl = `${endpoint("/api/assets/events")}${params.toString() ? `?${params.toString()}` : ""}`;
