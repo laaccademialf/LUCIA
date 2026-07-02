@@ -37,6 +37,7 @@ import { UsersTable } from "./components/UsersTable";
 import UtilityMetersManager from "./components/UtilityMetersManager";
 import UtilitiesManagementModule from "./components/UtilitiesManagementModule";
 import ElectricityTab from "./components/ElectricityTab";
+import DatePickerPopover from "./components/DatePickerPopover";
 import { MaterialResponsibilityManager } from "./components/MaterialResponsibilityManager";
 import AssetTransferWriteoffManager from "./components/AssetTransferWriteoffManager";
 import { useAuth } from "./hooks/useAuth";
@@ -3168,23 +3169,19 @@ function App() {
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <label className="text-sm font-semibold text-slate-700">Дата:</label>
-                    <input
-                      type="date"
-                      value={dashboardDateFilter}
+                    <DatePickerPopover
+                      label="Дата:"
+                      value={dashboardDateFilter || ov.yIso}
                       max={new Date().toISOString().slice(0, 10)}
-                      onChange={(e) => setDashboardDateFilter(e.target.value)}
-                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                      title="Дата звіту (порожньо — вчора)"
+                      onChange={(nextIso) => {
+                        const fallback = (() => {
+                          const d = new Date();
+                          d.setDate(d.getDate() - 1);
+                          return d.toISOString().slice(0, 10);
+                        })();
+                        setDashboardDateFilter(String(nextIso || "") === fallback ? "" : String(nextIso || ""));
+                      }}
                     />
-                    {dashboardDateFilter && (
-                      <button
-                        type="button"
-                        onClick={() => setDashboardDateFilter("")}
-                        className="rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                        title="Скинути до «вчора»"
-                      >Вчора</button>
-                    )}
                   </div>
                 </div>
               </div>
