@@ -893,8 +893,14 @@ function App() {
       try {
         const items = await getLegalNotificationsApi();
         if (cancelled) return;
+        // Не показуємо сповіщення старші 7 днів — інакше після логіну на новому
+        // пристрої/браузері вся історія виглядає як «нові» непрочитані.
+        const notificationMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
+        const nowTs = Date.now();
         const mapped = (Array.isArray(items) ? items : [])
           .filter((item) => {
+            const createdTs = Date.parse(String(item?.createdAt || ""));
+            if (Number.isFinite(createdTs) && nowTs - createdTs > notificationMaxAgeMs) return false;
             const source = String(item?.source || "").trim();
             if (source && source !== "legal" && source !== "haccp" && source !== "service") return false;
             const targetUserId = normalizeLegalIdentity(item?.targetUserId);

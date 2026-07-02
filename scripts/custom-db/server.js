@@ -5691,6 +5691,37 @@ server.listen(PORT, HOST, () => {
   console.log(`Health endpoint: http://${HOST}:${PORT}/health`);
   console.log(`Migration endpoint: http://${HOST}:${PORT}/migration/import`);
 
+  // TTL-очистка старих сповіщень (legalNotifications): старші 14 днів видаляються,
+  // інакше центр сповіщень накопичує їх нескінченно і на кожному новому пристрої
+  // користувач бачить «купу старих» непрочитаних.
+  const cleanupOldNotifications = async () => {
+    try {
+      const dbConfig = getAssetsRuntimeConfig();
+      const items = await getCollectionItemsData("legalNotifications", dbConfig);
+      const cutoffTs = Date.now() - 14 * 24 * 60 * 60 * 1000;
+      let removed = 0;
+      for (const item of Array.isArray(items) ? items : []) {
+        const createdTs = Date.parse(String(item?.createdAt || item?.created_at || ""));
+        if (!item?.id) continue;
+        if (Number.isFinite(createdTs) && createdTs < cutoffTs) {
+          await deleteCollectionItemData("legalNotifications", item.id, dbConfig).catch(() => {});
+          removed += 1;
+        }
+      }
+      if (removed > 0) {
+        console.log(`[notifications] TTL cleanup: removed ${removed} old legalNotifications`);
+      }
+    } catch (error) {
+      console.warn(`[notifications] TTL cleanup failed: ${error?.message || error}`);
+    }
+  };
+  setImmediate(() => {
+    void cleanupOldNotifications();
+  });
+  setInterval(() => {
+    void cleanupOldNotifications();
+  }, 24 * 60 * 60 * 1000);
+
   // Warm the /api/assets cache in the background so the very first user
   // request hits a hot cache (no DB read, no JSON.stringify, no gzip).
   setImmediate(() => {
