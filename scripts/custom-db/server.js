@@ -967,7 +967,7 @@ const ensureBootstrapAdminUser = async (dbConfig) => {
   bootstrapAdminPromise = (async () => {
     const [users, authUsers] = await Promise.all([
       getCollectionItemsData("users", dbConfig),
-      getCollectionItemsData("authUsers", dbConfig),
+      getAuthUsersData(dbConfig),
     ]);
 
     if (users.length > 0 || authUsers.length > 0) {
@@ -977,8 +977,7 @@ const ensureBootstrapAdminUser = async (dbConfig) => {
     const createdAt = nowIso();
     const password = hashPassword(BOOTSTRAP_ADMIN_PASSWORD);
 
-    await createCollectionItemData(
-      "authUsers",
+    await createAuthUserRecord(
       {
         id: BOOTSTRAP_ADMIN_ID,
         email: BOOTSTRAP_ADMIN_EMAIL,
@@ -1057,9 +1056,109 @@ const resolveAuthProfileWithFallback = async (req, dbConfig, fallbackUserId = ""
   return await getUserProfileById(normalizedFallbackUserId, dbConfig);
 };
 
+const AUTH_USERS_COLLECTION_CANDIDATES = ["authUsers", "authusers"];
+
+const dedupeAuthUsers = (items) => {
+  const byId = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== "object") continue;
+    const id = String(item.id || "").trim();
+    if (!id) continue;
+    if (!byId.has(id)) {
+      byId.set(id, item);
+      continue;
+    }
+
+    // Prefer fresher record when duplicate IDs exist across legacy collections.
+    const current = byId.get(id);
+    const currentTs = Date.parse(String(current?.updatedAt || current?.createdAt || "")) || 0;
+    const nextTs = Date.parse(String(item?.updatedAt || item?.createdAt || "")) || 0;
+    if (nextTs >= currentTs) {
+      byId.set(id, item);
+    }
+  }
+  return Array.from(byId.values());
+};
+
+const getAuthUsersData = async (dbConfig) => {
+  const buckets = await Promise.all(
+    AUTH_USERS_COLLECTION_CANDIDATES.map(async (collectionName) => {
+      try {
+        return await getCollectionItemsData(collectionName, dbConfig);
+      } catch {
+        return [];
+      }
+    })
+  );
+  return dedupeAuthUsers(buckets.flat());
+};
+
+const resolveAuthUserCollectionById = async (id, dbConfig) => {
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) return "authUsers";
+
+  for (const collectionName of AUTH_USERS_COLLECTION_CANDIDATES) {
+    try {
+      const item = await getCollectionItemData(collectionName, normalizedId, dbConfig);
+      if (item) return collectionName;
+    } catch {
+      // continue lookup
+    }
+  }
+  return "authUsers";
+};
+
+const getAuthUserById = async (id, dbConfig) => {
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) return null;
+
+  for (const collectionName of AUTH_USERS_COLLECTION_CANDIDATES) {
+    try {
+      const item = await getCollectionItemData(collectionName, normalizedId, dbConfig);
+      if (item) return item;
+    } catch {
+      // continue fallback lookup
+    }
+  }
+  return null;
+};
+
+const createAuthUserRecord = async (payload, dbConfig) => {
+  await createCollectionItemData("authUsers", payload, dbConfig);
+  const created = await getAuthUserById(payload?.id, dbConfig);
+  if (created) return created;
+
+  // Fallback for legacy lower-case auth collection names.
+  await createCollectionItemData("authusers", payload, dbConfig);
+  const fallbackCreated = await getAuthUserById(payload?.id, dbConfig);
+  if (fallbackCreated) return fallbackCreated;
+
+  throw new Error("Auth user was not persisted");
+};
+
+const updateAuthUserRecord = async (id, payload, dbConfig) => {
+  const targetCollection = await resolveAuthUserCollectionById(id, dbConfig);
+  return updateCollectionItemData(targetCollection, String(id), payload, dbConfig);
+};
+
+const deleteAuthUserById = async (id, dbConfig) => {
+  const normalizedId = String(id || "").trim();
+  if (!normalizedId) return;
+
+  await Promise.all(
+    AUTH_USERS_COLLECTION_CANDIDATES.map(async (collectionName) => {
+      try {
+        await deleteCollectionItemData(collectionName, normalizedId, dbConfig);
+      } catch {
+        // ignore missing records and continue cleanup in other collections
+      }
+    })
+  );
+};
+
 const getAuthUsersByEmail = async (email, dbConfig) => {
   const normalizedEmail = normalizeEmail(email);
-  const authUsers = await getCollectionItemsData("authUsers", dbConfig);
+  const authUsers = await getAuthUsersData(dbConfig);
   return authUsers.filter((item) => normalizeEmail(item?.email) === normalizedEmail);
 };
 
@@ -3176,8 +3275,7 @@ const handleAuthRegister = async (req, res) => {
   const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const { salt, hash } = hashPassword(password);
 
-  await createCollectionItemData(
-    "authUsers",
+  await createAuthUserRecord(
     {
       id: userId,
       email,
@@ -3347,7 +3445,7 @@ const handleAuthUpdateProfile = async (req, res) => {
     return sendJson(res, 400, { ok: false, error: "Email is required" });
   }
 
-  const authUser = await getCollectionItemData("authUsers", profile.id, dbConfig);
+  const authUser = await getAuthUserById(profile.id, dbConfig);
   if (!authUser) {
     return sendJson(res, 404, { ok: false, error: "Auth user not found" });
   }
@@ -3368,8 +3466,7 @@ const handleAuthUpdateProfile = async (req, res) => {
     }
   }
 
-  await updateCollectionItemData(
-    "authUsers",
+  await updateAuthUserRecord(
     String(profile.id),
     {
       email: nextEmail,
@@ -3416,7 +3513,7 @@ const handleAuthChangePassword = async (req, res) => {
     return sendJson(res, 400, { ok: false, error: "currentPassword and newPassword(min 6) are required" });
   }
 
-  const authUser = await getCollectionItemData("authUsers", profile.id, dbConfig);
+  const authUser = await getAuthUserById(profile.id, dbConfig);
   if (!authUser) {
     return sendJson(res, 404, { ok: false, error: "Auth user not found" });
   }
@@ -3428,8 +3525,7 @@ const handleAuthChangePassword = async (req, res) => {
   }
 
   const nextPassword = hashPassword(newPassword);
-  await updateCollectionItemData(
-    "authUsers",
+  await updateAuthUserRecord(
     String(profile.id),
     {
       ...buildPasswordStoragePayload(nextPassword),
@@ -3482,7 +3578,7 @@ const handleAuthAdminCreateUser = async (req, res) => {
     return sendJson(res, 400, { ok: false, error: "Current password is required" });
   }
 
-  const currentAuthUser = await getCollectionItemData("authUsers", String(profile.id), dbConfig);
+  const currentAuthUser = await getAuthUserById(String(profile.id), dbConfig);
   if (!currentAuthUser) {
     return sendJson(res, 404, { ok: false, error: "Auth user not found" });
   }
@@ -3514,8 +3610,7 @@ const handleAuthAdminCreateUser = async (req, res) => {
   const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const { salt, hash } = hashPassword(password);
 
-  await createCollectionItemData(
-    "authUsers",
+  await createAuthUserRecord(
     {
       id: userId,
       email,
@@ -3580,7 +3675,7 @@ const handleAuthAdminResetUserPassword = async (req, res) => {
     return sendJson(res, 403, { ok: false, error: "Only admin can reset user passwords" });
   }
 
-  const currentAuthUser = await getCollectionItemData("authUsers", String(profile.id), dbConfig);
+  const currentAuthUser = await getAuthUserById(String(profile.id), dbConfig);
   if (!currentAuthUser) {
     return sendJson(res, 404, { ok: false, error: "Auth user not found" });
   }
@@ -3591,14 +3686,13 @@ const handleAuthAdminResetUserPassword = async (req, res) => {
     return sendJson(res, 401, { ok: false, error: "Current password is invalid" });
   }
 
-  const targetAuthUser = await getCollectionItemData("authUsers", targetUserId, dbConfig);
+  const targetAuthUser = await getAuthUserById(targetUserId, dbConfig);
   if (!targetAuthUser) {
     return sendJson(res, 404, { ok: false, error: "Target auth user not found" });
   }
 
   const nextPassword = hashPassword(defaultPassword);
-  await updateCollectionItemData(
-    "authUsers",
+  await updateAuthUserRecord(
     targetUserId,
     {
       ...buildPasswordStoragePayload(nextPassword),
@@ -4609,17 +4703,17 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
       const userEmail = normalizeEmail(user?.email);
 
       // 1) Видаляємо auth-користувача за тим самим id (основний сценарій)
-      await deleteCollectionItemData("authUsers", itemId, dbConfig).catch(() => {});
+      await deleteAuthUserById(itemId, dbConfig);
 
       // 2) Додатковий fallback: видаляємо authUsers з таким email (на випадок legacy id)
       if (userEmail) {
-        const authUsers = await getCollectionItemsData("authUsers", dbConfig);
+        const authUsers = await getAuthUsersData(dbConfig);
         const matchedAuthUsers = authUsers.filter(
           (authUser) => normalizeEmail(authUser?.email) === userEmail
         );
         for (const authUser of matchedAuthUsers) {
           if (!authUser?.id) continue;
-          await deleteCollectionItemData("authUsers", authUser.id, dbConfig).catch(() => {});
+          await deleteAuthUserById(authUser.id, dbConfig);
         }
       }
 
