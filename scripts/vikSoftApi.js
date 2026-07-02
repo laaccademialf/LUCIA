@@ -90,10 +90,12 @@ const MAKET_CANDIDATES = (() => {
   return [...new Set(merged)];
 })();
 
-// Запам'ятовуємо макет, який реально повернув дані (як tokenTransport). У сталому
-// режимі це робить 1 запит на EIC замість перебору 2 макетів — критично для
-// ресторанів з кількома лічильниками на флапаючому сервері.
-let learnedMaket = null;
+// Запам'ятовуємо макет, який реально повернув дані, ОКРЕМО для КОЖНОГО EIC.
+// Глобальний learnedMaket був помилкою: різні макети мають РІЗНУ СЕМАНТИКУ значень
+// (APIGetGr30 → real_val З множником трансформації; APIGetD_GR → val БЕЗ множника),
+// і один «вивчений» від чужого лічильника D_GR занижав значення в К-т разів
+// (напр. 10 кВт замість 600 при К-т=60).
+const learnedMaketByEic = new Map();
 
 // Нормалізує базу API: приймає як чисту базу, так і випадково вставлений повний URL
 // (напр. ".../api/v1/login?user=...&pass=...") — лишає тільки origin (scheme+host+port).
@@ -1071,10 +1073,11 @@ export const fetchEnergoCenterConsumption = async ({
       let records = [];
       let usedMaket = null;
       let lastErr = null;
-      // Спершу пробуємо вже вивчений макет (1 запит на EIC). Якщо його ще не
-      // знаємо — перебираємо кандидатів (APIGetGr30 -> APIGetD_GR).
-      const maketOrder = learnedMaket
-        ? [learnedMaket, ...MAKET_CANDIDATES.filter((m) => m !== learnedMaket)]
+      // Спершу пробуємо вивчений для ЦЬОГО EIC макет (1 запит). Якщо його ще
+      // не знаємо — перебираємо кандидатів (APIGetGr30 -> APIGetD_GR).
+      const learned = learnedMaketByEic.get(eic) || null;
+      const maketOrder = learned
+        ? [learned, ...MAKET_CANDIDATES.filter((m) => m !== learned)]
         : MAKET_CANDIDATES;
       for (const maket of maketOrder) {
         try {
@@ -1088,14 +1091,19 @@ export const fetchEnergoCenterConsumption = async ({
           if (recs.length) {
             records = recs;
             usedMaket = maket;
-            learnedMaket = maket; // запам'ятовуємо робочий макет
+            learnedMaketByEic.set(eic, maket); // запам'ятовуємо робочий макет для цього EIC
             break;
           }
           // Валідна відповідь, але порожня. Якщо це вже вивчений макет — у цього EIC
           // просто немає даних за добу; інші макети не пробуємо (зайві запити).
-          if (learnedMaket && maket === learnedMaket) break;
+          if (learned && maket === learned) break;
         } catch (e) {
           lastErr = e;
+          // ПОМИЛКА (мережа/5xx/таймаут) — НЕ переходимо на інший макет:
+          // у макетів різна семантика значень (D_GR без множника), і мовчазний
+          // фолбек на глюку сервера давав занижені в К-т разів значення
+          // (10 кВт замість 600). Краще чесна помилка й повтор пізніше.
+          break;
         }
       }
       if (!records.length) {
@@ -1107,7 +1115,12 @@ export const fetchEnergoCenterConsumption = async ({
       }
       const pointName = getPointName(eic);
       const rows = aggregateForDay(records, pointName, reportDateIso);
-      return { rows, usedMaket };
+      // Резервний макет APIGetD_GR повертає val без множника — попереджаємо,
+      // щоб занижені значення було видно одразу в UI.
+      const warning = usedMaket && usedMaket !== MAKET_CANDIDATES[0]
+        ? `EIC ${eic}: дані з резервного макета ${usedMaket} — значення можуть бути без множника трансформації`
+        : null;
+      return { rows, usedMaket, ...(warning ? { warning } : {}) };
     });
 
     for (const res of perEic) {
@@ -1116,6 +1129,7 @@ export const fetchEnergoCenterConsumption = async ({
         errors.push(res.error);
         continue;
       }
+      if (res.warning) errors.push(res.warning);
       if (res.usedMaket) maketsUsed.add(res.usedMaket);
       if (Array.isArray(res.rows)) allRows.push(...res.rows);
     }
