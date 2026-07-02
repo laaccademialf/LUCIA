@@ -50,6 +50,11 @@ EXCLUDES=(
   --exclude='./android/app/build'
   --exclude='./android/build'
   --exclude='./.env.local'
+  # Інфраструктурні файли/папки сервера (налаштовує ІТ, НЕ перезаписуємо при оновленні):
+  --exclude='./img'
+  --exclude='./frontend'
+  --exclude='./docker-compose.yml'
+  --exclude='./templates'
 )
 [[ $WITH_DIST -eq 0 ]] && EXCLUDES+=(--exclude='./dist')
 [[ $WITH_ENV -eq 0 ]] && EXCLUDES+=(--exclude='./.env' --exclude='./.env.*')
