@@ -197,6 +197,39 @@ const normalizeOrder = (value = {}) => {
   };
 };
 
+const normalizeContactHistory = (value) => {
+  const rawHistory = (() => {
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  })();
+
+  return rawHistory
+    .map((entry) => ({
+      at: String(entry?.at || entry?.date || "").trim(),
+      by: String(entry?.by || entry?.user || entry?.author || "").trim(),
+      action: String(entry?.action || "update").trim() || "update",
+      changes: Array.isArray(entry?.changes)
+        ? entry.changes
+          .map((change) => ({
+            field: String(change?.field || "").trim(),
+            label: String(change?.label || change?.field || "").trim(),
+            from: String(change?.from ?? ""),
+            to: String(change?.to ?? ""),
+          }))
+          .filter((change) => change.field)
+        : [],
+    }))
+    .filter((entry) => entry.at);
+};
+
 const normalizeContact = (value = {}) => ({
   id: String(value?.id || ""),
   name: String(value?.name || "").trim(),
@@ -206,11 +239,47 @@ const normalizeContact = (value = {}) => ({
   phone: String(value?.phone || "").trim(),
   email: String(value?.email || "").trim(),
   assignedManager: String(value?.assignedManager || value?.managerName || "").trim(),
+  serviceManager: String(value?.serviceManager || value?.serviceManagerName || value?.service_manager || "").trim(),
   leadSource: String(value?.leadSource || "").trim(),
   notes: String(value?.notes || "").trim(),
+  history: normalizeContactHistory(value?.history),
   createdAt: String(value?.createdAt || ""),
   updatedAt: String(value?.updatedAt || ""),
 });
+
+const CONTACT_TRACKED_FIELDS = [
+  { field: "name", label: "Ім'я / назва" },
+  { field: "company", label: "Компанія" },
+  { field: "industry", label: "Промисловість" },
+  { field: "address", label: "Адреса" },
+  { field: "phone", label: "Телефон" },
+  { field: "email", label: "Email" },
+  { field: "assignedManager", label: "Менеджер" },
+  { field: "serviceManager", label: "Сервіс менеджер" },
+  { field: "leadSource", label: "Джерело ліда" },
+  { field: "notes", label: "Нотатки" },
+];
+
+const buildContactHistoryEntry = (previous, nextDraft, author) => {
+  const prevContact = normalizeContact(previous || {});
+  const changes = CONTACT_TRACKED_FIELDS
+    .map(({ field, label }) => {
+      const from = String(prevContact?.[field] ?? "").trim();
+      const to = String(nextDraft?.[field] ?? "").trim();
+      if (from === to) return null;
+      return { field, label, from, to };
+    })
+    .filter(Boolean);
+
+  if (changes.length === 0) return null;
+
+  return {
+    at: new Date().toISOString(),
+    by: String(author || "").trim() || "Система",
+    action: previous && previous.id ? "update" : "create",
+    changes,
+  };
+};
 
 const normalizeField = (value = {}) => ({
   id: String(value?.id || ""),
@@ -468,6 +537,29 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
               .filter(Boolean),
       }));
       setOrders((prev) => [saved, ...prev.filter((item) => String(item.id) !== String(saved.id))].sort(sortByUpdatedAt));
+
+      // Підтягуємо сервіс менеджера з угоди у пов'язаний контакт
+      const serviceManagerName = String(saved.serviceManagerName || "").trim();
+      const linkedContact = saved.contactId
+        ? contacts.find((item) => String(item.id) === String(saved.contactId))
+        : null;
+      if (linkedContact && serviceManagerName && String(linkedContact.serviceManager || "").trim() !== serviceManagerName) {
+        const contactDraft = normalizeContact({ ...linkedContact, serviceManager: serviceManagerName });
+        const historyEntry = buildContactHistoryEntry(linkedContact, contactDraft, currentUserName);
+        const nextHistory = historyEntry
+          ? [...(contactDraft.history || []), historyEntry]
+          : (contactDraft.history || []);
+        try {
+          const savedContact = normalizeContact(await saveRecord(COLLECTIONS.contacts, {
+            ...contactDraft,
+            history: nextHistory,
+          }));
+          setContacts((prev) => [savedContact, ...prev.filter((item) => String(item.id) !== String(savedContact.id))].sort((left, right) => left.name.localeCompare(right.name, "uk")));
+        } catch (contactSyncError) {
+          console.error("Не вдалося синхронізувати сервіс менеджера з контактом:", contactSyncError);
+        }
+      }
+
       return { success: true };
     } catch (saveError) {
       console.error("Помилка збереження CRM-замовлення:", saveError);
@@ -476,7 +568,7 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [contacts, currentUserName]);
 
   const handleDeleteOrder = useCallback(async (id) => {
     setSaving(true);
@@ -494,7 +586,22 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
   const handleSaveContact = useCallback(async (draft) => {
     setSaving(true);
     try {
-      const saved = normalizeContact(await saveRecord(COLLECTIONS.contacts, draft));
+      const previous = draft?.id
+        ? contacts.find((item) => String(item.id) === String(draft.id))
+        : null;
+      const normalizedDraft = normalizeContact({
+        ...(previous || {}),
+        ...draft,
+        history: previous?.history || normalizeContactHistory(draft?.history),
+      });
+      const historyEntry = buildContactHistoryEntry(previous, normalizedDraft, currentUserName);
+      const nextHistory = historyEntry
+        ? [...(normalizedDraft.history || []), historyEntry]
+        : (normalizedDraft.history || []);
+      const saved = normalizeContact(await saveRecord(COLLECTIONS.contacts, {
+        ...normalizedDraft,
+        history: nextHistory,
+      }));
       setContacts((prev) => [saved, ...prev.filter((item) => String(item.id) !== String(saved.id))].sort((left, right) => left.name.localeCompare(right.name, "uk")));
       return { success: true, contact: saved };
     } catch (saveError) {
@@ -504,7 +611,7 @@ export default function CateringOperationsModule({ user, activeNav, topTab }) {
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [contacts, currentUserName]);
 
   const handleDeleteContact = useCallback(async (id) => {
     setSaving(true);

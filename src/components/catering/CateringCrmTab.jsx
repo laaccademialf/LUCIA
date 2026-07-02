@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ClipboardList, ContactRound, Download, FileDown, FileText, MapPin, Pencil, Plus, Trash2, Upload, Users } from "lucide-react";
+import { ClipboardList, Columns3, ContactRound, Download, FileDown, FileText, History, MapPin, Pencil, Plus, Trash2, Upload, Users } from "lucide-react";
 import {
   downloadCateringContactsTemplate,
   exportCateringContactsToExcel,
@@ -35,6 +35,20 @@ const formatDateUk = (value) => {
   const parsed = new Date(raw);
   if (!Number.isNaN(parsed.getTime())) return parsed.toLocaleDateString("uk-UA");
   return raw;
+};
+
+const formatHistoryDateTime = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "—";
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return parsed.toLocaleString("uk-UA", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 };
 
 const toDateInputValue = (value) => {
@@ -260,6 +274,7 @@ const emptyContact = {
   phone: "",
   email: "",
   assignedManager: "",
+  serviceManager: "",
   leadSource: "",
   notes: "",
 };
@@ -419,6 +434,33 @@ const DEFAULT_ORDER_TABLE_COLUMN_IDS = [
 
 const ORDER_TABLE_COLUMNS_STORAGE_KEY = "lucia_catering_crm_order_table_columns";
 
+const CONTACT_TABLE_COLUMNS = [
+  { id: "name", label: "Контакт" },
+  { id: "company", label: "Компанія" },
+  { id: "industry", label: "Промисловість" },
+  { id: "address", label: "Адреса" },
+  { id: "leadSource", label: "Джерело ліда" },
+  { id: "assignedManager", label: "Менеджер" },
+  { id: "serviceManager", label: "Сервіс менеджер" },
+  { id: "phone", label: "Телефон" },
+  { id: "email", label: "Email" },
+  { id: "dealsCount", label: "Нагоди" },
+  { id: "wonAmount", label: "Сума угод" },
+];
+
+const DEFAULT_CONTACT_TABLE_COLUMN_IDS = [
+  "name",
+  "company",
+  "industry",
+  "address",
+  "leadSource",
+  "assignedManager",
+  "phone",
+  "email",
+];
+
+const CONTACT_TABLE_COLUMNS_STORAGE_KEY = "lucia_catering_crm_contact_table_columns";
+
 const baseInput = "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100";
 const compactActionBtn = "inline-flex h-7 items-center justify-center rounded-md border px-2 text-[11px] font-semibold transition";
 
@@ -482,6 +524,9 @@ export default function CateringCrmTab({
   const [vatRulesDraft, setVatRulesDraft] = useState([]);
   const [showColumnsMenu, setShowColumnsMenu] = useState(false);
   const [draggedColumnId, setDraggedColumnId] = useState("");
+  const [showContactColumnsMenu, setShowContactColumnsMenu] = useState(false);
+  const [draggedContactColumnId, setDraggedContactColumnId] = useState("");
+  const [selectedContactId, setSelectedContactId] = useState("");
   const [orderDateFrom, setOrderDateFrom] = useState("");
   const [orderDateTo, setOrderDateTo] = useState("");
   const [orderTableColumns, setOrderTableColumns] = useState(() => {
@@ -517,8 +562,42 @@ export default function CateringCrmTab({
       return fallback;
     }
   });
+  const [contactTableColumns, setContactTableColumns] = useState(() => {
+    const fallback = CONTACT_TABLE_COLUMNS.map((column) => ({
+      id: column.id,
+      visible: DEFAULT_CONTACT_TABLE_COLUMN_IDS.includes(column.id),
+    }));
+
+    if (typeof window === "undefined") return fallback;
+    try {
+      const raw = window.localStorage.getItem(CONTACT_TABLE_COLUMNS_STORAGE_KEY);
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return fallback;
+
+      const parsedMap = new Map(
+        parsed
+          .filter((item) => item && typeof item === "object")
+          .map((item) => [String(item.id || ""), Boolean(item.visible)]),
+      );
+
+      const orderedKnown = parsed
+        .map((item) => String(item?.id || ""))
+        .filter((id) => CONTACT_TABLE_COLUMNS.some((column) => column.id === id));
+      const missingKnown = CONTACT_TABLE_COLUMNS.map((column) => column.id).filter((id) => !orderedKnown.includes(id));
+      const finalOrder = [...orderedKnown, ...missingKnown];
+
+      return finalOrder.map((id) => ({
+        id,
+        visible: parsedMap.has(id) ? Boolean(parsedMap.get(id)) : DEFAULT_CONTACT_TABLE_COLUMN_IDS.includes(id),
+      }));
+    } catch {
+      return fallback;
+    }
+  });
   const contactImportRef = useRef(null);
   const columnsMenuRef = useRef(null);
+  const contactColumnsMenuRef = useRef(null);
 
   useEffect(() => {
     setOrderForm(createDefaultOrder(currentUserName));
@@ -533,10 +612,18 @@ export default function CateringCrmTab({
   }, [orderTableColumns]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(CONTACT_TABLE_COLUMNS_STORAGE_KEY, JSON.stringify(contactTableColumns));
+  }, [contactTableColumns]);
+
+  useEffect(() => {
     const handleClickOutside = (event) => {
-      if (!columnsMenuRef.current) return;
-      if (columnsMenuRef.current.contains(event.target)) return;
-      setShowColumnsMenu(false);
+      if (columnsMenuRef.current && !columnsMenuRef.current.contains(event.target)) {
+        setShowColumnsMenu(false);
+      }
+      if (contactColumnsMenuRef.current && !contactColumnsMenuRef.current.contains(event.target)) {
+        setShowContactColumnsMenu(false);
+      }
     };
 
     document.addEventListener("mousedown", handleClickOutside);
@@ -621,6 +708,125 @@ export default function CateringCrmTab({
     });
     return map;
   }, [contacts]);
+
+  const resolveOrderContact = useMemo(() => (item) => (
+    contactsById.get(String(item?.contactId || "").trim())
+    || contactLookup.get(normalizeKey(`${String(item?.companyName || "").trim()} ${String(item?.customerName || "").trim()}`))
+    || contactLookup.get(normalizeKey(String(item?.customerName || "").trim()))
+    || contactLookup.get(normalizeKey(String(item?.companyName || "").trim()))
+    || null
+  ), [contactsById, contactLookup]);
+
+  const ordersStatsByContact = useMemo(() => {
+    const map = new Map();
+    orders.forEach((order) => {
+      const contact = resolveOrderContact(order);
+      const contactId = String(contact?.id || "").trim();
+      if (!contactId) return;
+      const entry = map.get(contactId) || {
+        orders: [],
+        dealsCount: 0,
+        wonCount: 0,
+        wonAmount: 0,
+        pipelineAmount: 0,
+        lostCount: 0,
+      };
+      entry.orders.push(order);
+      entry.dealsCount += 1;
+      const amount = Number(order.amount || 0);
+      if (order.status === "confirmed") {
+        entry.wonCount += 1;
+        entry.wonAmount += amount;
+      } else if (order.status === "cancelled") {
+        entry.lostCount += 1;
+      } else {
+        entry.pipelineAmount += amount;
+      }
+      map.set(contactId, entry);
+    });
+    map.forEach((entry) => {
+      entry.orders.sort((left, right) => String(right.eventDate || right.creationDate || right.updatedAt || "").localeCompare(String(left.eventDate || left.creationDate || left.updatedAt || "")));
+    });
+    return map;
+  }, [orders, resolveOrderContact]);
+
+  const emptyContactStats = useMemo(() => ({ orders: [], dealsCount: 0, wonCount: 0, wonAmount: 0, pipelineAmount: 0, lostCount: 0 }), []);
+
+  const selectedContact = useMemo(
+    () => contacts.find((item) => String(item.id) === String(selectedContactId)) || null,
+    [contacts, selectedContactId],
+  );
+
+  const selectedContactStats = useMemo(
+    () => (selectedContact ? (ordersStatsByContact.get(String(selectedContact.id)) || emptyContactStats) : emptyContactStats),
+    [selectedContact, ordersStatsByContact, emptyContactStats],
+  );
+
+  const selectedContactHistory = useMemo(() => {
+    if (!selectedContact || !Array.isArray(selectedContact.history)) return [];
+    return [...selectedContact.history].sort((left, right) => String(right.at || "").localeCompare(String(left.at || "")));
+  }, [selectedContact]);
+
+  const toggleContactColumn = (columnId) => {
+    setContactTableColumns((prev) => prev.map((column) => (column.id === columnId ? { ...column, visible: !column.visible } : column)));
+  };
+
+  const moveContactColumn = (fromId, toId) => {
+    if (!fromId || !toId || fromId === toId) return;
+    setContactTableColumns((prev) => {
+      const next = [...prev];
+      const fromIndex = next.findIndex((column) => column.id === fromId);
+      const toIndex = next.findIndex((column) => column.id === toId);
+      if (fromIndex === -1 || toIndex === -1) return prev;
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const visibleContactTableColumns = useMemo(
+    () => contactTableColumns.filter((column) => column.visible),
+    [contactTableColumns],
+  );
+
+  const getContactTableCellValue = (item, columnId) => {
+    const stats = ordersStatsByContact.get(String(item.id)) || emptyContactStats;
+    switch (columnId) {
+      case "name":
+        return (
+          <button
+            type="button"
+            className="text-left font-semibold text-indigo-700 hover:underline"
+            onClick={() => setSelectedContactId(item.id)}
+            title="Відкрити контакт"
+          >
+            {item.name || "—"}
+          </button>
+        );
+      case "company":
+        return item.company || "—";
+      case "industry":
+        return item.industry || "—";
+      case "address":
+        return item.address || "—";
+      case "leadSource":
+        return item.leadSource || "—";
+      case "assignedManager":
+        return item.assignedManager || "—";
+      case "serviceManager":
+        return item.serviceManager || "—";
+      case "phone":
+        return item.phone || "—";
+      case "email":
+        return item.email || "—";
+      case "dealsCount":
+        return stats.dealsCount > 0 ? stats.dealsCount : "—";
+      case "wonAmount":
+        return stats.wonAmount > 0 ? formatMoney(stats.wonAmount) : "—";
+      default:
+        return item[columnId] ?? "—";
+    }
+  };
 
   const productsByCategory = useMemo(() => {
     const grouped = new Map();
@@ -1819,6 +2025,7 @@ export default function CateringCrmTab({
                             industry: orderForm.newContactIndustry.trim(),
                             address: orderForm.newContactAddress.trim(),
                             assignedManager: orderForm.managerName.trim(),
+                            serviceManager: orderForm.serviceManagerName.trim(),
                             leadSource: orderForm.leadSource,
                           };
                           const contactResult = await onSaveContact(contactDraft);
@@ -2534,6 +2741,48 @@ export default function CateringCrmTab({
               <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={() => contactImportRef.current?.click()}>
                 <Upload size={14} /> Імпорт
               </button>
+              <div className="relative" ref={contactColumnsMenuRef}>
+                <button
+                  type="button"
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  onClick={() => setShowContactColumnsMenu((prev) => !prev)}
+                >
+                  <Columns3 size={14} /> Поля
+                </button>
+                {showContactColumnsMenu && (
+                  <div className="absolute right-0 z-30 mt-2 w-72 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <p className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Показ / порядок колонок</p>
+                    <div className="max-h-72 space-y-1 overflow-auto">
+                      {contactTableColumns.map((column) => {
+                        const label = CONTACT_TABLE_COLUMNS.find((item) => item.id === column.id)?.label || column.id;
+                        return (
+                          <div
+                            key={column.id}
+                            draggable
+                            className="flex cursor-grab items-center gap-2 rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-50 active:cursor-grabbing"
+                            onDragStart={() => setDraggedContactColumnId(column.id)}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={() => {
+                              moveContactColumn(draggedContactColumnId, column.id);
+                              setDraggedContactColumnId("");
+                            }}
+                            onDragEnd={() => setDraggedContactColumnId("")}
+                          >
+                            <span className="text-slate-400">::</span>
+                            <input
+                              type="checkbox"
+                              className="h-3.5 w-3.5"
+                              checked={column.visible}
+                              onChange={() => toggleContactColumn(column.id)}
+                            />
+                            <span className="truncate">{label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-indigo-600 text-white shadow hover:bg-indigo-500"
@@ -2585,28 +2834,22 @@ export default function CateringCrmTab({
           <table className="min-w-full text-sm">
             <thead className="text-left text-slate-500">
               <tr>
-                <th className="px-3 py-2">Контакт</th>
-                <th className="px-3 py-2">Компанія</th>
-                <th className="px-3 py-2">Промисловість</th>
-                <th className="px-3 py-2">Адреса</th>
-                <th className="px-3 py-2">Джерело ліда</th>
-                <th className="px-3 py-2">Менеджер</th>
-                <th className="px-3 py-2">Телефон</th>
-                <th className="px-3 py-2">Email</th>
+                {visibleContactTableColumns.map((column) => (
+                  <th key={column.id} className="px-3 py-2">
+                    {CONTACT_TABLE_COLUMNS.find((item) => item.id === column.id)?.label || column.id}
+                  </th>
+                ))}
                 <th className="px-3 py-2">Дії</th>
               </tr>
             </thead>
             <tbody>
               {filteredContacts.map((item) => (
                 <tr key={item.id} className="border-t border-slate-200 align-top">
-                  <td className="px-3 py-3 font-medium text-slate-900">{item.name}</td>
-                  <td className="px-3 py-3 text-slate-700">{item.company || "—"}</td>
-                  <td className="px-3 py-3 text-slate-700">{item.industry || "—"}</td>
-                  <td className="px-3 py-3 text-slate-700">{item.address || "—"}</td>
-                  <td className="px-3 py-3 text-slate-700">{item.leadSource || "—"}</td>
-                  <td className="px-3 py-3 text-slate-700">{item.assignedManager || "—"}</td>
-                  <td className="px-3 py-3 text-slate-700">{item.phone || "—"}</td>
-                  <td className="px-3 py-3 text-slate-700">{item.email || "—"}</td>
+                  {visibleContactTableColumns.map((column) => (
+                    <td key={column.id} className="px-3 py-3 text-slate-700">
+                      {getContactTableCellValue(item, column.id)}
+                    </td>
+                  ))}
                   <td className="px-3 py-3">
                     <div className="flex items-center gap-2">
                       <button
@@ -2635,7 +2878,7 @@ export default function CateringCrmTab({
               ))}
               {filteredContacts.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-3 py-8 text-center text-slate-500">Контактів за фільтром не знайдено.</td>
+                  <td colSpan={visibleContactTableColumns.length + 1} className="px-3 py-8 text-center text-slate-500">Контактів за фільтром не знайдено.</td>
                 </tr>
               )}
             </tbody>
@@ -2662,6 +2905,7 @@ export default function CateringCrmTab({
                 <input className={baseInput} value={contactForm.email} onChange={(event) => setContactForm((prev) => ({ ...prev, email: event.target.value }))} placeholder="Email" />
               </div>
               <input className={baseInput} list="catering-contact-managers" value={contactForm.assignedManager} onChange={(event) => setContactForm((prev) => ({ ...prev, assignedManager: event.target.value }))} placeholder="Закріплений менеджер" />
+              <input className={baseInput} list="catering-contact-managers" value={contactForm.serviceManager || ""} onChange={(event) => setContactForm((prev) => ({ ...prev, serviceManager: event.target.value }))} placeholder="Сервіс менеджер" />
               <input className={baseInput} list="catering-lead-source-list" value={contactForm.leadSource} onChange={(event) => setContactForm((prev) => ({ ...prev, leadSource: event.target.value }))} placeholder="Джерело ліда" />
               <textarea className={`${baseInput} min-h-[96px]`} value={contactForm.notes} onChange={(event) => setContactForm((prev) => ({ ...prev, notes: event.target.value }))} placeholder="Коментар, джерело контакту, особливості клієнта" />
             </div>
@@ -2700,6 +2944,154 @@ export default function CateringCrmTab({
             <datalist id="catering-industry-list">
               {industryOptions.map((value) => <option key={value} value={value} />)}
             </datalist>
+          </div>
+        </div>
+      )}
+
+      {selectedContact && (
+        <div className="fixed inset-0 z-50 flex bg-black/40">
+          <div className="flex h-full w-full flex-col overflow-hidden bg-white">
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 bg-slate-50 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600 text-lg font-bold text-white">
+                  {(selectedContact.name || "?").trim().slice(0, 1).toUpperCase()}
+                </span>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900">{selectedContact.name || "Контакт"}</h3>
+                  <p className="text-xs text-slate-500">{[selectedContact.company, selectedContact.industry].filter(Boolean).join(" • ") || "Без компанії"}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white"
+                  onClick={() => {
+                    setContactForm(selectedContact);
+                    setSelectedContactId("");
+                    setShowContactModal(true);
+                  }}
+                >
+                  <Pencil size={13} className="mr-1 inline" /> Редагувати
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white"
+                  onClick={() => setSelectedContactId("")}
+                >
+                  Закрити
+                </button>
+              </div>
+            </div>
+
+            <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-center shadow-sm">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Нагоди</p>
+                    <p className="mt-1 text-xl font-bold text-slate-900">{selectedContactStats.dealsCount}</p>
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-center shadow-sm">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-600">Підтверджено</p>
+                    <p className="mt-1 text-xl font-bold text-emerald-700">{selectedContactStats.wonCount}</p>
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-center shadow-sm">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-600">Принесено грошей</p>
+                    <p className="mt-1 text-base font-bold text-emerald-700">{formatMoney(selectedContactStats.wonAmount)}</p>
+                  </div>
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-center shadow-sm">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-600">В роботі</p>
+                    <p className="mt-1 text-base font-bold text-amber-700">{formatMoney(selectedContactStats.pipelineAmount)}</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {[
+                    ["Компанія", selectedContact.company],
+                    ["Промисловість", selectedContact.industry],
+                    ["Адреса", selectedContact.address],
+                    ["Телефон", selectedContact.phone],
+                    ["Email", selectedContact.email],
+                    ["Джерело ліда", selectedContact.leadSource],
+                    ["Менеджер", selectedContact.assignedManager],
+                    ["Сервіс менеджер", selectedContact.serviceManager],
+                  ].map(([label, value]) => (
+                    <div key={label} className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
+                      <span className="w-32 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+                      <span className="text-sm text-slate-800">{value || "—"}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {selectedContact.notes && (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2 text-sm text-slate-700">
+                    <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Нотатки</span>
+                    {selectedContact.notes}
+                  </div>
+                )}
+
+                <div>
+                  <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-900">
+                    <ClipboardList size={15} className="text-indigo-600" /> Нагоди контакту
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">{selectedContactStats.orders.length}</span>
+                  </h4>
+                  {selectedContactStats.orders.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-slate-300 px-3 py-4 text-center text-xs text-slate-500">У контакту ще немає угод.</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {selectedContactStats.orders.map((order) => {
+                        const status = ORDER_STATUSES.find((item) => item.id === order.status);
+                        return (
+                          <div key={order.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-slate-900">{order.title || "Без назви"}</p>
+                              <p className="text-xs text-slate-500">{formatDateUk(order.eventDate)}{order.managerName ? ` • ${order.managerName}` : ""}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`rounded-md border px-2 py-0.5 text-[11px] font-semibold ${status?.tone || "border-slate-200 bg-slate-50 text-slate-600"}`}>{status?.label || order.status}</span>
+                              <span className="text-sm font-semibold text-slate-900">{formatMoney(order.amount)}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <aside className="flex min-h-0 shrink-0 flex-col border-t border-slate-200 bg-slate-50 lg:w-[400px] lg:border-l lg:border-t-0">
+                <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-5 py-3">
+                  <History size={16} className="text-violet-600" />
+                  <h4 className="text-sm font-semibold text-slate-900">Історія змін</h4>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-slate-600">{selectedContactHistory.length}</span>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+                  {selectedContactHistory.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-6 text-center text-xs text-slate-500">Змін ще не зафіксовано.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {selectedContactHistory.map((entry, index) => (
+                        <div key={`${entry.at}_${index}`} className="relative rounded-lg border border-slate-200 bg-white px-3 py-2.5 shadow-sm">
+                          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <span className="font-semibold text-slate-700">{entry.action === "create" ? "Створено" : "Оновлено"} • {entry.by || "Система"}</span>
+                            <span className="text-slate-400">{formatHistoryDateTime(entry.at)}</span>
+                          </div>
+                          <ul className="space-y-0.5">
+                            {entry.changes.map((change, changeIndex) => (
+                              <li key={`${change.field}_${changeIndex}`} className="text-xs text-slate-600">
+                                <span className="font-medium text-slate-700">{change.label}:</span>{" "}
+                                {change.from ? <span className="text-rose-500 line-through">{change.from}</span> : <span className="text-slate-400">—</span>}{" "}
+                                <span className="text-slate-400">→</span>{" "}
+                                <span className="text-emerald-600">{change.to || "—"}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </aside>
+            </div>
           </div>
         </div>
       )}

@@ -767,6 +767,25 @@ const recordHalfHourSlot = (rec) => {
   return "";
 };
 
+// Оцінка тривалості роботи за енергією півгодинних слотів.
+// Беремо середнє з найбільших 3 активних слотів як орієнтир «повного» півгодинного
+// інтервалу й масштабуємо ним усі позитивні значення. Це не точний мотогодинник,
+// але суттєво краще за простий підрахунок слотів.
+const estimateRuntimeMinutes = (values = []) => {
+  const positives = (Array.isArray(values) ? values : [])
+    .map((v) => Number(v))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  if (!positives.length) return 0;
+
+  const sorted = [...positives].sort((a, b) => a - b);
+  const refCount = Math.min(3, sorted.length);
+  const reference = sorted.slice(-refCount).reduce((sum, v) => sum + v, 0) / refCount;
+  if (!(reference > 0)) return 0;
+
+  const minutes = positives.reduce((sum, v) => sum + Math.min(30, (30 * v) / reference), 0);
+  return Math.round(minutes);
+};
+
 // Агрегує рядки за добу: повертає масив
 // { point, direction, consumption, activeHalfHours }.
 // Один EIC = одна "точка обліку" (передаємо її назву через pointName).
@@ -777,6 +796,7 @@ const aggregateForDay = (records, pointName, targetDateIso = "") => {
   const sumByDr = { 1: 0, 2: 0, 3: 0, 4: 0 };
   const hasByDr = { 1: false, 2: false, 3: false, 4: false };
   const activeSlotsByDr = { 1: new Set(), 2: new Set(), 3: new Set(), 4: new Set() };
+  const activeEnergyByDr = { 1: [], 2: [], 3: [], 4: [] };
   for (const rec of records) {
     if (targetDateIso) {
       const recIso = recordDateIso(rec);
@@ -794,15 +814,18 @@ const aggregateForDay = (records, pointName, targetDateIso = "") => {
     if (val > 0) {
       const slot = recordHalfHourSlot(rec);
       if (slot) activeSlotsByDr[dr].add(slot);
+      activeEnergyByDr[dr].push(val);
     }
   }
   const rows = [];
   for (const dr of [1, 2, 3, 4]) {
+    const activeRuntimeMinutes = estimateRuntimeMinutes(activeEnergyByDr[dr]);
     rows.push({
       point: pointName || "",
       direction: DIRECTION_BY_DR[dr],
       consumption: hasByDr[dr] ? Number(sumByDr[dr].toFixed(4)) : 0,
       activeHalfHours: activeSlotsByDr[dr].size,
+      activeRuntimeMinutes,
     });
   }
   return rows;

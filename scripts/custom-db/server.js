@@ -1591,6 +1591,8 @@ const toAutoMeters = (rows = [], { isGenerator = false } = {}) => {
       currValue: row.consumption,
       consumption: row.consumption,
       activeHalfHours: Number.isFinite(Number(row?.activeHalfHours)) ? Number(row.activeHalfHours) : 0,
+      activeRuntimeMinutes: Number.isFinite(Number(row?.activeRuntimeMinutes)) ? Number(row.activeRuntimeMinutes) : 0,
+      sourcePoint: String(row?.point || "").trim(),
       source: isGenerator ? "energocenter-generator" : "energocenter",
     }));
 };

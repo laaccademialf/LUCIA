@@ -1509,13 +1509,20 @@ function App() {
     // Генераторний лічильник реєструє виробіток у ЗВОРОТНОМУ напрямку (A-),
     // залежно від схеми підключення. Тому для генератора враховуємо A+ ТА A-.
     const isAminus = (label) => /a-/i.test(String(label || ""));
+    const generatorGroupKey = (meter) => {
+      const explicit = String(meter?.sourcePoint || "").trim();
+      if (explicit) return explicit;
+      const label = String(meter?.meterNumber || meter?.meterId || "").trim();
+      const match = /^Генератор:\s*(.+?)\s+[AR][+-]$/.exec(label);
+      if (match) return match[1].trim();
+      return label.replace(/^Генератор:\s*/i, "").replace(/\s+[AR][+-]$/i, "").trim() || label;
+    };
     const targetRestaurantId = String(dashboardRestaurantFilter || "").trim();
 
     const sumFor = (restaurantId) => {
       let mains = 0;
       let gen = 0;
-      let genHalfHoursPlus = 0;
-      let genHalfHoursMinus = 0;
+      let genRuntimeMinutesByPoint = new Map();
       let hasData = false;
       for (const rec of electricityReadings) {
         if (String(rec?.restaurantId || "") !== String(restaurantId)) continue;
@@ -1530,10 +1537,17 @@ function App() {
             if (!isAplus(label) && !isAminus(label)) continue;
             hasData = true;
             gen += v;
-            const hh = Number(m?.activeHalfHours);
-            if (Number.isFinite(hh) && hh > 0) {
-              if (isAplus(label)) genHalfHoursPlus += hh;
-              else genHalfHoursMinus += hh;
+            const runtimeMinutes = Number(
+              m?.activeRuntimeMinutes ?? (
+                Number.isFinite(Number(m?.activeHalfHours)) ? Number(m.activeHalfHours) * 30 : 0
+              )
+            );
+            if (Number.isFinite(runtimeMinutes) && runtimeMinutes > 0) {
+              const groupKey = generatorGroupKey(m);
+              if (groupKey) {
+                const current = genRuntimeMinutesByPoint.get(groupKey) || 0;
+                genRuntimeMinutesByPoint.set(groupKey, Math.max(current, runtimeMinutes));
+              }
             }
           } else {
             if (!isAplus(label)) continue;
@@ -1542,10 +1556,8 @@ function App() {
           }
         }
       }
-      // Години: беремо більший з напрямків (щоб не подвоювати, якщо лічильник
-      // раптом фіксує обидва напрямки в одних і тих самих слотах).
-      const genHalfHours = Math.max(genHalfHoursPlus, genHalfHoursMinus);
-      return { mains, gen, genHours: genHalfHours / 2, hasData };
+      const genRuntimeMinutes = [...genRuntimeMinutesByPoint.values()].reduce((a, b) => a + b, 0);
+      return { mains, gen, genHours: genRuntimeMinutes / 60, hasData };
     };
 
     const filteredRestaurants = targetRestaurantId
