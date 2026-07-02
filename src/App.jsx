@@ -1060,7 +1060,25 @@ function App() {
         .map((item) => String(item?.key || item?.id || ""))
         .filter(Boolean)
     );
-    const hasNewNotifications = Array.from(currentNotificationKeys).some((key) => !seenNotificationKeysRef.current.has(key));
+
+    // Звук — лише для СПРАВДІ нових сповіщень:
+    //  - ключ ще не бачений за цю сесію (накопичувальний set, щоб тимчасове
+    //    випадання з топ-50 не давало повторний сигнал при поверненні)
+    //  - не приховане/не прочитане користувачем
+    //  - створене нещодавно (старі записи з БД не будять звуком; без createdAt —
+    //    напр. чеклисти — дозволяємо, бо їх ключі стабільні в межах дня)
+    const { readSet: soundReadSet, dismissedSet: soundDismissedSet } = getNotificationReadAndDismissedSets();
+    const nowTs = Date.now();
+    const NOTIFICATION_SOUND_FRESHNESS_MS = 3 * 60 * 1000;
+    const hasNewNotifications = nextNotifications.some((item) => {
+      const key = String(item?.key || item?.id || "");
+      if (!key) return false;
+      if (seenNotificationKeysRef.current.has(key)) return false;
+      if (soundDismissedSet.has(key) || soundReadSet.has(key)) return false;
+      const createdTs = Date.parse(String(item?.createdAt || ""));
+      if (Number.isFinite(createdTs) && nowTs - createdTs > NOTIFICATION_SOUND_FRESHNESS_MS) return false;
+      return true;
+    });
 
     if (!notificationSoundInitializedRef.current) {
       notificationSoundInitializedRef.current = true;
@@ -1068,7 +1086,13 @@ function App() {
       playCenterAlertTone();
     }
 
-    seenNotificationKeysRef.current = currentNotificationKeys;
+    // Накопичуємо ключі (не замінюємо), з м'яким лімітом розміру.
+    for (const key of currentNotificationKeys) {
+      seenNotificationKeysRef.current.add(key);
+    }
+    if (seenNotificationKeysRef.current.size > 2000) {
+      seenNotificationKeysRef.current = new Set(currentNotificationKeys);
+    }
 
     seenMissedChecklistKeysRef.current = new Set(checklistNotifications.map((item) => item.key));
   }, [

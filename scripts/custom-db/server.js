@@ -4780,6 +4780,23 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
       }
     }
 
+    // Каскад: при видаленні юридичної задачі чистимо її сповіщення,
+    // інакше «осиротілі» записи вічно повертаються в центр сповіщень.
+    if (collectionName === "legalTasks") {
+      try {
+        const notifications = await getCollectionItemsData("legalNotifications", dbConfig);
+        const orphaned = (Array.isArray(notifications) ? notifications : []).filter(
+          (item) => String(item?.taskId || "") === String(itemId)
+        );
+        for (const item of orphaned) {
+          if (!item?.id) continue;
+          await deleteCollectionItemData("legalNotifications", item.id, dbConfig).catch(() => {});
+        }
+      } catch {
+        // не блокуємо видалення задачі через помилки чистки сповіщень
+      }
+    }
+
     await deleteCollectionItemData(collectionName, itemId, dbConfig);
     return sendJson(res, 200, { ok: true });
   }
