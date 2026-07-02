@@ -1,0 +1,19 @@
+{
+  "name": "LUCIA",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:24",
+  "postCreateCommand": "npm ci",
+  "forwardPorts": [5173, 8787],
+  "portsAttributes": {
+    "5173": { "label": "Vite (frontend)" },
+    "8787": { "label": "Custom DB API (backend)" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "bradlc.vscode-tailwindcss",
+        "GitHub.copilot-chat"
+      ]
+    }
+  }
+}

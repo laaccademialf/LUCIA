@@ -3,6 +3,10 @@
   "private": true,
   "version": "1.0.3",
   "type": "module",
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
   "scripts": {
     "predev": "node scripts/git-meta.cjs",
     "dev": "vite",
@@ -13,6 +17,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "deploy:archive": "bash scripts/make-deploy-archive.sh",
     "premigration:server": "node scripts/git-meta.cjs",
     "migration:server": "node scripts/custom-db/server.js",
     "postinstall": "node scripts/git-meta.cjs"
@@ -24,6 +29,7 @@
     "@headlessui/react": "^2.2.9",
     "@tanstack/react-table": "^8.21.3",
     "@zxing/browser": "^0.1.5",
+    "@zxing/library": "^0.21.3",
     "clsx": "^2.1.1",
     "firebase": "^12.7.0",
     "jszip": "^3.10.1",
@@ -36,6 +42,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-hook-form": "^7.70.0",
+    "react-is": "^19.2.3",
     "react-qr-code": "^2.0.18",
     "recharts": "^3.6.0",
     "xlsx": "^0.18.5"
