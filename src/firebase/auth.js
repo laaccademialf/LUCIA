@@ -335,7 +335,19 @@ const authApiHeaders = (withJson = true) => {
 };
 
 const authApiRequest = async (path, options = {}) => {
-  const response = await fetch(`${getAuthApiBase()}${path}`, options);
+  const requestAuth = async (requestPath) => fetch(`${getAuthApiBase()}${requestPath}`, options);
+
+  let response = await requestAuth(path);
+  if (!response.ok && response.status === 404) {
+    const normalizedPath = String(path || "").trim();
+    const fallbackPath = normalizedPath.startsWith("/auth/")
+      ? `/api${normalizedPath}`
+      : (normalizedPath.startsWith("/api/auth/") ? normalizedPath.slice(4) : "");
+    if (fallbackPath) {
+      response = await requestAuth(fallbackPath);
+    }
+  }
+
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     let normalizedMessage = body || `Auth API error ${response.status}`;

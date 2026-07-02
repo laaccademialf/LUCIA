@@ -1268,27 +1268,41 @@ const tableExistsMySql = async (conn, tableName) => {
   return rows.length > 0;
 };
 
+const resolveExistingTableNameMySql = async (conn, tableName) => {
+  const [rows] = await conn.execute(
+    `SELECT
+       table_name,
+       COALESCE(table_rows, 0) AS table_rows
+     FROM information_schema.tables
+     WHERE table_schema = DATABASE() AND LOWER(table_name) = LOWER(?)
+     ORDER BY
+       (COALESCE(table_rows, 0) > 0) DESC,
+       (table_name = ?) DESC,
+       COALESCE(table_rows, 0) DESC,
+       table_name ASC`,
+    [tableName, tableName]
+  );
+  return String(rows?.[0]?.table_name || "").trim();
+};
+
 const resolveCollectionTableMySql = async (conn, collectionName, { preferFlat = true } = {}) => {
   const baseTable = tableNameForCollection(collectionName);
   const flatTable = `${baseTable}_flat`;
 
-  if (preferFlat && (await tableExistsMySql(conn, flatTable))) {
-    // Existing _flat tables from older migration versions may miss payload/updated_at.
-    // Ensure required columns exist so camelCase fields can be reconstructed reliably.
-    await ensureCollectionFlatTableMySql(conn, collectionName);
-    return flatTable;
+  const existingFlatTable = preferFlat
+    ? await resolveExistingTableNameMySql(conn, flatTable)
+    : "";
+  if (preferFlat && existingFlatTable) {
+    return existingFlatTable;
   }
 
+  const existingBaseTable = await resolveExistingTableNameMySql(conn, baseTable);
+
   if (preferFlat) {
-    if (await tableExistsMySql(conn, baseTable)) {
-      // One-time upgrade path: if only legacy JSON table exists,
-      // normalize that collection into _flat and then always use _flat.
-      try {
-        await normalizeOneCollectionToFlatMySql(conn, collectionName);
-      } catch {
-        await ensureCollectionFlatTableMySql(conn, collectionName);
-      }
-      return flatTable;
+    if (existingBaseTable) {
+      // Keep using existing legacy base table when it exists under different case.
+      // This prevents splitting data across lucia_legalTasks* vs lucia_legaltasks*.
+      return existingBaseTable;
     }
 
     await ensureCollectionFlatTableMySql(conn, collectionName);
@@ -3393,7 +3407,32 @@ const handleAuthLogin = async (req, res) => {
   const authUser = selected?.candidate || null;
   const profile = selected?.profile || null;
   if (!profile) {
-    return sendJson(res, 404, { ok: false, error: "User profile not found" });
+    const recoveredProfile = {
+      id: String(authUser?.id || "").trim(),
+      email: normalizeEmail(authUser?.email || email),
+      displayName: readFirstString(authUser?.displayName, authUser?.display_name, email),
+      role: "user",
+      restaurant: "",
+      restaurants: [],
+      position: "",
+      workRole: "",
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    if (!recoveredProfile.id) {
+      return sendJson(res, 404, { ok: false, error: "User profile not found" });
+    }
+
+    await createCollectionItemData("users", recoveredProfile, dbConfig);
+
+    const token = await createSession(recoveredProfile.id, dbConfig);
+    return sendJson(res, 200, {
+      ok: true,
+      token,
+      user: mapUserProfile(recoveredProfile),
+      recoveredProfile: true,
+    });
   }
 
   const token = await createSession(authUser.id, dbConfig);
@@ -4813,7 +4852,95 @@ const handleDeleteRuntimeSettings = async (req, res) => {
 //   - /health  : uptime monitoring / load balancers
 // OPTIONS preflight is always allowed (handled before this gate) so browsers
 // can complete CORS negotiation.
-const PUBLIC_PATHS = new Set(["/health", "/auth/login", "/auth/register"]);
+const PUBLIC_PATHS = new Set([
+  "/health",
+  "/auth/login",
+  "/auth/register",
+  "/api/auth/login",
+  "/api/auth/register",
+]);
+// Публічні статичні медіа (фото активів, HACCP, юридичні вкладення):
+// браузер вантажить їх через <img src> / <a href> БЕЗ заголовків токена,
+// тому ці префікси не мають вимагати авторизацію. Роздаються лише GET/HEAD
+// з жорстким захистом від path traversal (див. serveStaticMediaFile).
+const PUBLIC_MEDIA_PREFIXES = [
+  // Більш специфічні префікси першими (legal/haccp можуть мати власні dir через env).
+  { publicBase: LEGAL_ATTACHMENT_PUBLIC_BASE, dir: LEGAL_ATTACHMENT_DIR },
+  { publicBase: HACCP_IMAGE_PUBLIC_BASE, dir: HACCP_IMAGE_DIR },
+  { publicBase: ASSET_IMAGE_PUBLIC_BASE, dir: ASSET_IMAGE_DIR },
+].filter((item) => item.publicBase && item.dir);
+
+const isPublicMediaPath = (pathname) =>
+  PUBLIC_MEDIA_PREFIXES.some((item) => pathname.startsWith(`${item.publicBase}/`));
+
+const STATIC_MEDIA_CONTENT_TYPES = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".pdf": "application/pdf",
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".txt": "text/plain; charset=utf-8",
+  ".csv": "text/csv; charset=utf-8",
+  ".zip": "application/zip",
+};
+
+const serveStaticMediaFile = async (req, res, pathname) => {
+  const matched = PUBLIC_MEDIA_PREFIXES.find((item) => pathname.startsWith(`${item.publicBase}/`));
+  if (!matched) return false;
+
+  const relativeRaw = pathname.slice(matched.publicBase.length + 1);
+  let relative;
+  try {
+    relative = decodeURIComponent(relativeRaw);
+  } catch {
+    sendJson(res, 400, { ok: false, error: "Bad file path" });
+    return true;
+  }
+
+  // Захист від path traversal: нормалізуємо і перевіряємо, що файл лишається в dir.
+  const baseDir = path.resolve(matched.dir);
+  const absolutePath = path.resolve(baseDir, relative);
+  if (absolutePath !== baseDir && !absolutePath.startsWith(baseDir + path.sep)) {
+    sendJson(res, 403, { ok: false, error: "Forbidden" });
+    return true;
+  }
+
+  let fileBuffer;
+  try {
+    const stat = await fs.stat(absolutePath);
+    if (!stat.isFile()) {
+      sendJson(res, 404, { ok: false, error: "Not found" });
+      return true;
+    }
+    fileBuffer = await fs.readFile(absolutePath);
+  } catch {
+    sendJson(res, 404, { ok: false, error: "Not found" });
+    return true;
+  }
+
+  const ext = path.extname(absolutePath).toLowerCase();
+  const contentType = STATIC_MEDIA_CONTENT_TYPES[ext] || "application/octet-stream";
+
+  setCorsHeaders(res);
+  res.writeHead(200, {
+    "Content-Type": contentType,
+    "Content-Length": fileBuffer.length,
+    "Cache-Control": "public, max-age=86400",
+    "X-Content-Type-Options": "nosniff",
+  });
+  if ((req.method || "GET") === "HEAD") {
+    res.end();
+  } else {
+    res.end(fileBuffer);
+  }
+  return true;
+};
 // Роути, де дозволяємо аутентифікацію сесією користувача (x-session-token)
 // без обов'язкового глобального API-токена. Додаткова перевірка виконується
 // в самому handler'і через resolveAuthContext/profile.
@@ -4861,6 +4988,17 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204);
     res.end();
     return;
+  }
+
+  // Публічні статичні медіа (фото активів /app/img/*): віддаємо без токена,
+  // бо браузер не додає auth-заголовки до <img src>. Тільки GET/HEAD.
+  if ((method === "GET" || method === "HEAD") && isPublicMediaPath(pathname)) {
+    try {
+      const served = await serveStaticMediaFile(req, res, pathname);
+      if (served) return;
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: `Static file error: ${error.message}` });
+    }
   }
 
   // Enforce the global token gate for every non-public route.
@@ -4921,7 +5059,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (method === "POST" && pathname === "/auth/register") {
+  if (method === "POST" && (pathname === "/auth/register" || pathname === "/api/auth/register")) {
     try {
       return await handleAuthRegister(req, res);
     } catch (error) {
@@ -4929,7 +5067,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (method === "POST" && pathname === "/auth/login") {
+  if (method === "POST" && (pathname === "/auth/login" || pathname === "/api/auth/login")) {
     try {
       return await handleAuthLogin(req, res);
     } catch (error) {
@@ -4937,7 +5075,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (method === "GET" && pathname === "/auth/me") {
+  if (method === "GET" && (pathname === "/auth/me" || pathname === "/api/auth/me")) {
     try {
       return await handleAuthMe(req, res);
     } catch (error) {
@@ -4945,7 +5083,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (method === "POST" && pathname === "/auth/logout") {
+  if (method === "POST" && (pathname === "/auth/logout" || pathname === "/api/auth/logout")) {
     try {
       return await handleAuthLogout(req, res);
     } catch (error) {
@@ -4953,7 +5091,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (method === "POST" && pathname === "/auth/admin-create-user") {
+  if (method === "POST" && (pathname === "/auth/admin-create-user" || pathname === "/api/auth/admin-create-user")) {
     try {
       return await handleAuthAdminCreateUser(req, res);
     } catch (error) {
@@ -4961,7 +5099,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (method === "POST" && pathname === "/auth/admin-reset-user-password") {
+  if (method === "POST" && (pathname === "/auth/admin-reset-user-password" || pathname === "/api/auth/admin-reset-user-password")) {
     try {
       return await handleAuthAdminResetUserPassword(req, res);
     } catch (error) {
@@ -4969,7 +5107,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (method === "POST" && pathname === "/auth/update-profile") {
+  if (method === "POST" && (pathname === "/auth/update-profile" || pathname === "/api/auth/update-profile")) {
     try {
       return await handleAuthUpdateProfile(req, res);
     } catch (error) {
@@ -4977,7 +5115,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  if (method === "POST" && pathname === "/auth/change-password") {
+  if (method === "POST" && (pathname === "/auth/change-password" || pathname === "/api/auth/change-password")) {
     try {
       return await handleAuthChangePassword(req, res);
     } catch (error) {
