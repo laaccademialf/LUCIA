@@ -600,6 +600,8 @@ function App() {
                       const [restaurantFilter, setRestaurantFilter] = useState("");
                       // Фільтр закладу для дашборду утиліт ("" = всі доступні заклади).
                       const [dashboardRestaurantFilter, setDashboardRestaurantFilter] = useState("");
+                      // Фільтр дати для дашборду утиліт ("" = вчора).
+                      const [dashboardDateFilter, setDashboardDateFilter] = useState("");
                       // Стан для вибраного ресторану (редагування)
                       const [selectedRestaurant, setSelectedRestaurant] = useState(null);
                       // Стан для форми ресторану
@@ -1492,11 +1494,15 @@ function App() {
     return [];
   }, [activeNav, menuStructure, user, userPermissions]);
 
-  // Огляд спожитої електроенергії за вчора (A+) по доступних користувачу закладах.
+  // Огляд спожитої електроенергії за обрану дату (типово вчора, A+) по доступних закладах.
   const electricityOverview = useMemo(() => {
     const y = new Date();
     y.setDate(y.getDate() - 1);
-    const yIso = y.toISOString().slice(0, 10);
+    const yesterdayIso = y.toISOString().slice(0, 10);
+    const pickedIso = /^\d{4}-\d{2}-\d{2}$/.test(String(dashboardDateFilter || "").trim())
+      ? String(dashboardDateFilter).trim()
+      : "";
+    const yIso = pickedIso || yesterdayIso;
     const isGen = (label) => /генератор/i.test(String(label || ""));
     const isAplus = (label) => /a\+/i.test(String(label || ""));
     const targetRestaurantId = String(dashboardRestaurantFilter || "").trim();
@@ -1552,6 +1558,7 @@ function App() {
     const totalGenHours = perRestaurant.reduce((a, b) => a + (Number(b.genHours) || 0), 0);
     return {
       yIso,
+      isYesterday: yIso === yesterdayIso,
       perRestaurant,
       totalMains,
       totalGen,
@@ -1559,7 +1566,7 @@ function App() {
       total: totalMains + totalGen,
       multiRestaurant: perRestaurant.length > 1,
     };
-  }, [electricityReadings, restaurants, dashboardRestaurantFilter]);
+  }, [electricityReadings, restaurants, dashboardRestaurantFilter, dashboardDateFilter]);
 
   useEffect(() => {
     if (!dashboardRestaurantFilter) return;
@@ -3129,7 +3136,7 @@ function App() {
                   <div>
                     <h2 className="text-xl sm:text-2xl font-bold">Огляд системи</h2>
                     <p className="text-indigo-100 text-sm mt-1">
-                      Спожита електроенергія за вчора ({fmtDateUk(ov.yIso)})
+                      Спожита електроенергія за {ov.isYesterday ? "вчора" : "обрану дату"} ({fmtDateUk(ov.yIso)})
                     </p>
                   </div>
                   <ClockBadgeDateTime
@@ -3140,35 +3147,56 @@ function App() {
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="text-sm font-semibold text-slate-700">Заклад:</label>
-                  {showDashboardRestaurantSelector ? (
-                    <select
-                      value={dashboardRestaurantFilter}
-                      onChange={(e) => setDashboardRestaurantFilter(e.target.value)}
-                      className="min-w-[16rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                    >
-                      <option value="">Всі доступні</option>
-                      {dashboardRestaurantOptions.map((r) => (
-                        <option key={r.id} value={r.id}>{r.name}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
-                      {dashboardRestaurantOptions[0]?.name || "—"}
-                    </span>
-                  )}
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-sm font-semibold text-slate-700">Заклад:</label>
+                    {showDashboardRestaurantSelector ? (
+                      <select
+                        value={dashboardRestaurantFilter}
+                        onChange={(e) => setDashboardRestaurantFilter(e.target.value)}
+                        className="min-w-[16rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      >
+                        <option value="">Всі доступні</option>
+                        {dashboardRestaurantOptions.map((r) => (
+                          <option key={r.id} value={r.id}>{r.name}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
+                        {dashboardRestaurantOptions[0]?.name || "—"}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="text-sm font-semibold text-slate-700">Дата:</label>
+                    <input
+                      type="date"
+                      value={dashboardDateFilter}
+                      max={new Date().toISOString().slice(0, 10)}
+                      onChange={(e) => setDashboardDateFilter(e.target.value)}
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      title="Дата звіту (порожньо — вчора)"
+                    />
+                    {dashboardDateFilter && (
+                      <button
+                        type="button"
+                        onClick={() => setDashboardDateFilter("")}
+                        className="rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                        title="Скинути до «вчора»"
+                      >Вчора</button>
+                    )}
+                  </div>
                 </div>
               </div>
 
               {/* Загальний підсумок: «Спожито», «З генератора», «Годин роботи генератора» */}
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 max-w-4xl">
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 shadow-sm">
-                  <p className="text-xs font-semibold text-emerald-700">Спожито за вчора</p>
+                  <p className="text-xs font-semibold text-emerald-700">Спожито {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
                   <p className="text-2xl font-bold text-emerald-900 mt-0.5">{fmtKwh(ov.total)}</p>
                 </div>
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 shadow-sm">
-                  <p className="text-xs font-semibold text-amber-700">З генератора за вчора</p>
+                  <p className="text-xs font-semibold text-amber-700">З генератора {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
                   <p className="text-2xl font-bold text-amber-900 mt-0.5">{fmtKwh(ov.totalGen)}</p>
                 </div>
                 <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 shadow-sm">
