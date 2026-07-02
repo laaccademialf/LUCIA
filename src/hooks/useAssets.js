@@ -270,7 +270,15 @@ export const useAssets = (enableRealtime = true) => {
 
       if (enableRealtime) {
         const canUseSse = typeof window !== "undefined" && typeof EventSource !== "undefined";
-        if (canUseSse) {
+        const startSse = () => {
+          if (!canUseSse) {
+            startPollingFallback();
+            return;
+          }
+          if (unsubscribeAssetsEvents) {
+            unsubscribeAssetsEvents();
+            unsubscribeAssetsEvents = null;
+          }
           unsubscribeAssetsEvents = subscribeToAssetsEventsApi({
             onChange: () => {
               void fetchViaApi();
@@ -280,9 +288,8 @@ export const useAssets = (enableRealtime = true) => {
               startPollingFallback();
             },
           });
-        } else {
-          startPollingFallback();
-        }
+        };
+        startSse();
 
         // Re-fetch immediately when the user logs in (token becomes available).
         // Without this, the list stays empty until the next poll cycle (~5s+)
@@ -297,6 +304,9 @@ export const useAssets = (enableRealtime = true) => {
               // not swallow the first post-login response.
               lastAssetsSignatureRef.current = "";
               void fetchViaApi({ lite: true });
+              // Перестворюємо SSE-підписку: попередня була відкрита З СТАРИМ/порожнім
+              // сесійним токеном і отримувала 401 до перезавантаження сторінки.
+              startSse();
             }
           });
         } catch { /* noop */ }

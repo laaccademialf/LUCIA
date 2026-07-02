@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getMenuStructure, saveMenuStructure } from "../firebase/menuStructure";
+import { subscribeToAuthChanges } from "../firebase/auth";
 import {
   createCollectionItemApi,
   getCollectionItemApi,
@@ -15,6 +16,7 @@ export function useMenuStructure() {
 
   useEffect(() => {
     let unsub = false;
+    let lastAuthUserId = null;
     async function fetchMenu() {
       setLoading(true);
       try {
@@ -33,7 +35,25 @@ export function useMenuStructure() {
       }
     }
     fetchMenu();
-    return () => { unsub = true; };
+
+    // Перший фетч міг відбутися ДО логіну (без сесії → 401 від gate) → порожнє меню
+    // «Немає доступних розділів» до F5. Перезавантажуємо меню після входу користувача.
+    let unsubscribeAuth = () => {};
+    try {
+      unsubscribeAuth = subscribeToAuthChanges((authUser) => {
+        const nextId = authUser?.uid || authUser?.id || null;
+        const prevId = lastAuthUserId;
+        lastAuthUserId = nextId;
+        if (nextId && nextId !== prevId) {
+          fetchMenu();
+        }
+      });
+    } catch { /* noop */ }
+
+    return () => {
+      unsub = true;
+      unsubscribeAuth();
+    };
   }, []);
 
   // Збереження структури меню
