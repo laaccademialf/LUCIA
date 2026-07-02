@@ -603,6 +603,8 @@ function App() {
                       const [dashboardRestaurantFilter, setDashboardRestaurantFilter] = useState("");
                       // Фільтр дати для дашборду утиліт ("" = вчора).
                       const [dashboardDateFilter, setDashboardDateFilter] = useState("");
+                      // Модальне вікно «Загальна інформація» по всіх закладах.
+                      const [showDashboardSummaryModal, setShowDashboardSummaryModal] = useState(false);
                       // Стан для вибраного ресторану (редагування)
                       const [selectedRestaurant, setSelectedRestaurant] = useState(null);
                       // Стан для форми ресторану
@@ -1560,11 +1562,7 @@ function App() {
       return { mains, gen, genHours: genRuntimeMinutes / 60, hasData };
     };
 
-    const filteredRestaurants = targetRestaurantId
-      ? restaurants.filter((r) => String(r?.id || "") === targetRestaurantId)
-      : restaurants;
-
-    const perRestaurant = filteredRestaurants.map((r) => {
+    const perRestaurantAll = restaurants.map((r) => {
       const s = sumFor(r.id);
       return {
         id: r.id,
@@ -1577,12 +1575,17 @@ function App() {
       };
     });
 
+    const perRestaurant = targetRestaurantId
+      ? perRestaurantAll.filter((r) => String(r?.id || "") === targetRestaurantId)
+      : perRestaurantAll;
+
     const totalMains = perRestaurant.reduce((a, b) => a + b.mains, 0);
     const totalGen = perRestaurant.reduce((a, b) => a + b.gen, 0);
     const totalGenHours = perRestaurant.reduce((a, b) => a + (Number(b.genHours) || 0), 0);
     return {
       yIso,
       isYesterday: yIso === yesterdayIso,
+      perRestaurantAll,
       perRestaurant,
       totalMains,
       totalGen,
@@ -3162,78 +3165,139 @@ function App() {
             return m ? `${m[3]}.${m[2]}.${m[1]}` : String(iso || "");
           };
 
+          const allTotalMains = (ov.perRestaurantAll || []).reduce((sum, row) => sum + Number(row?.mains || 0), 0);
+          const allTotalGen = (ov.perRestaurantAll || []).reduce((sum, row) => sum + Number(row?.gen || 0), 0);
+          const allTotalGenHours = (ov.perRestaurantAll || []).reduce((sum, row) => sum + Number(row?.genHours || 0), 0);
+
           return (
-            <div className="space-y-5">
-              <div className="rounded-2xl border border-indigo-300/40 bg-gradient-to-r from-indigo-700 via-indigo-600 to-blue-600 p-5 text-white shadow-xl">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h2 className="text-xl sm:text-2xl font-bold">Огляд системи</h2>
-                    <p className="text-indigo-100 text-sm mt-1">
-                      Спожита електроенергія за {ov.isYesterday ? "вчора" : "обрану дату"} ({fmtDateUk(ov.yIso)})
-                    </p>
-                  </div>
-                  <ClockBadgeDateTime
-                    prefix="Оновлено:"
-                    className="rounded-xl bg-white/15 px-3 py-2 text-sm font-semibold"
-                  />
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-                <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <label className="text-sm font-semibold text-slate-700">Заклад:</label>
-                    {showDashboardRestaurantSelector ? (
-                      <select
-                        value={dashboardRestaurantFilter}
-                        onChange={(e) => setDashboardRestaurantFilter(e.target.value)}
-                        className="min-w-[16rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            <>
+              <div className="space-y-4">
+                <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="text-sm font-semibold text-slate-700">Заклад:</label>
+                        {showDashboardRestaurantSelector ? (
+                          <select
+                            value={dashboardRestaurantFilter}
+                            onChange={(e) => setDashboardRestaurantFilter(e.target.value)}
+                            className="min-w-[15rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                          >
+                            <option value="">Всі доступні</option>
+                            {dashboardRestaurantOptions.map((r) => (
+                              <option key={r.id} value={r.id}>{r.name}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
+                            {dashboardRestaurantOptions[0]?.name || "—"}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <DatePickerPopover
+                          label="Дата:"
+                          value={dashboardDateFilter || ov.yIso}
+                          max={new Date().toISOString().slice(0, 10)}
+                          onChange={(nextIso) => {
+                            const fallback = (() => {
+                              const d = new Date();
+                              d.setDate(d.getDate() - 1);
+                              return d.toISOString().slice(0, 10);
+                            })();
+                            setDashboardDateFilter(String(nextIso || "") === fallback ? "" : String(nextIso || ""));
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 self-start sm:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => setShowDashboardSummaryModal(true)}
+                        className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100"
                       >
-                        <option value="">Всі доступні</option>
-                        {dashboardRestaurantOptions.map((r) => (
-                          <option key={r.id} value={r.id}>{r.name}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
-                        {dashboardRestaurantOptions[0]?.name || "—"}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <DatePickerPopover
-                      label="Дата:"
-                      value={dashboardDateFilter || ov.yIso}
-                      max={new Date().toISOString().slice(0, 10)}
-                      onChange={(nextIso) => {
-                        const fallback = (() => {
-                          const d = new Date();
-                          d.setDate(d.getDate() - 1);
-                          return d.toISOString().slice(0, 10);
-                        })();
-                        setDashboardDateFilter(String(nextIso || "") === fallback ? "" : String(nextIso || ""));
-                      }}
-                    />
+                        Загальна інформація
+                      </button>
+                      <ClockBadgeDateTime
+                        prefix="Оновлено:"
+                        className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Загальний підсумок: «Спожито», «З генератора», «Годин роботи генератора» */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 max-w-4xl">
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 shadow-sm">
-                  <p className="text-xs font-semibold text-emerald-700">Спожито {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
-                  <p className="text-2xl font-bold text-emerald-900 mt-0.5">{fmtKwh(ov.total)}</p>
-                </div>
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 shadow-sm">
-                  <p className="text-xs font-semibold text-amber-700">З генератора {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
-                  <p className="text-2xl font-bold text-amber-900 mt-0.5">{fmtKwh(ov.totalGen)}</p>
-                </div>
-                <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 shadow-sm">
-                  <p className="text-xs font-semibold text-sky-700">Годин роботи генератора (орієнтовно)</p>
-                  <p className="text-2xl font-bold text-sky-900 mt-0.5">{fmtHours(ov.totalGenHours)}</p>
+                {/* Загальний підсумок: «Спожито», «З генератора», «Годин роботи генератора» */}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 shadow-sm">
+                    <p className="text-xs font-semibold text-emerald-700">Спожито {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
+                    <p className="text-2xl font-bold text-emerald-900 mt-0.5">{fmtKwh(ov.total)}</p>
+                  </div>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 shadow-sm">
+                    <p className="text-xs font-semibold text-amber-700">З генератора {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
+                    <p className="text-2xl font-bold text-amber-900 mt-0.5">{fmtKwh(ov.totalGen)}</p>
+                  </div>
+                  <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 shadow-sm">
+                    <p className="text-xs font-semibold text-sky-700">Годин роботи генератора (орієнтовно)</p>
+                    <p className="text-2xl font-bold text-sky-900 mt-0.5">{fmtHours(ov.totalGenHours)}</p>
+                  </div>
                 </div>
               </div>
-            </div>
+              {showDashboardSummaryModal && (
+                <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/60 p-2 sm:items-center sm:p-4">
+                  <button
+                    type="button"
+                    className="absolute inset-0"
+                    aria-label="Закрити"
+                    onClick={() => setShowDashboardSummaryModal(false)}
+                  />
+                  <div className="relative z-10 flex h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:h-auto sm:max-h-[88vh]">
+                    <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                      <div>
+                        <h3 className="text-lg font-bold text-slate-900">Загальна інформація по закладах</h3>
+                        <p className="text-sm text-slate-600">Дата: {fmtDateUk(ov.yIso)}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowDashboardSummaryModal(false)}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        Закрити
+                      </button>
+                    </div>
+                    <div className="overflow-auto px-3 py-3 sm:px-4">
+                      <div className="min-w-[720px]">
+                        <table className="w-full border-collapse text-sm">
+                          <thead>
+                            <tr className="bg-slate-100 text-slate-700">
+                              <th className="border border-slate-200 px-3 py-2 text-left font-semibold">Ресторан</th>
+                              <th className="border border-slate-200 px-3 py-2 text-right font-semibold">Спожито з мережі</th>
+                              <th className="border border-slate-200 px-3 py-2 text-right font-semibold">Спожито з генератора</th>
+                              <th className="border border-slate-200 px-3 py-2 text-right font-semibold">Години роботи генератора</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(ov.perRestaurantAll || []).map((row) => (
+                              <tr key={row.id} className="odd:bg-white even:bg-slate-50">
+                                <td className="border border-slate-200 px-3 py-2 text-slate-900">{row.name}</td>
+                                <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtKwh(row.mains)}</td>
+                                <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtKwh(row.gen)}</td>
+                                <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtHours(row.genHours)}</td>
+                              </tr>
+                            ))}
+                            <tr className="bg-indigo-50 font-semibold text-indigo-900">
+                              <td className="border border-slate-200 px-3 py-2">Разом</td>
+                              <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtKwh(allTotalMains)}</td>
+                              <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtKwh(allTotalGen)}</td>
+                              <td className="border border-slate-200 px-3 py-2 text-right tabular-nums">{fmtHours(allTotalGenHours)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           );
         }
 
