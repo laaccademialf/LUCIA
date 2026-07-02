@@ -29,8 +29,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Підправ під свій сервер:
-WorkingDirectory=/var/www/luci.lafamiglia.ua/app
+# Підправ під свій сервер (корінь застосунку, звідки запускається server.js):
+WorkingDirectory=/var/www/example.com/app
 User=www-data
 Group=www-data
 # Усі секрети та конфіг БД — лише тут (поза git):

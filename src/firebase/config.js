@@ -69,16 +69,50 @@ const createDisabledStub = (label) =>
     }
   );
 
+// ЛІНИВА ініціалізація: Firebase SDK не стартує при завантаженні сторінки
+// (жодних heartbeat-записів в IndexedDB, жодного трафіку), а лише при першому
+// реальному зверненні до db/auth/storage — тобто тільки якщо десь виконується
+// не-API гілка коду, чого в same-origin режимі не буває.
 let app = null;
+let services = null;
+
+const ensureFirebase = () => {
+  if (services) return services;
+  app = initializeApp(firebaseConfig);
+  services = {
+    db: getFirestore(app),
+    auth: getAuth(app),
+    storage: getStorage(app),
+  };
+  return services;
+};
+
+const createLazyService = (key, label) =>
+  new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        const service = ensureFirebase()[key];
+        const value = service[prop];
+        return typeof value === "function" ? value.bind(service) : value;
+      },
+      has(_target, prop) {
+        return prop in ensureFirebase()[key];
+      },
+      getPrototypeOf() {
+        return Object.getPrototypeOf(ensureFirebase()[key]);
+      },
+    }
+  );
+
 let db;
 let auth;
 let storage;
 
 if (isFirebaseConfigured) {
-  app = initializeApp(firebaseConfig);
-  db = getFirestore(app);
-  auth = getAuth(app);
-  storage = getStorage(app);
+  db = createLazyService("db", "firestore");
+  auth = createLazyService("auth", "auth");
+  storage = createLazyService("storage", "storage");
 } else {
   db = createDisabledStub("firestore");
   auth = createDisabledStub("auth");

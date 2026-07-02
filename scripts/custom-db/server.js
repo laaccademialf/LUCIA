@@ -51,7 +51,14 @@ const DATA_DIR = process.env.CUSTOM_MIGRATION_DATA_DIR || "./tmp/custom-db";
 const SETTINGS_FILE = process.env.RUNTIME_SETTINGS_FILE || "./tmp/custom-db/runtime-settings.json";
 const RUNTIME_SETTINGS_ENV_FILE = process.env.RUNTIME_SETTINGS_ENV_FILE || ".env";
 const POSTGRES_URL = String(process.env.POSTGRES_URL || "").trim();
-const ASSET_IMAGE_DIR = String(process.env.ASSET_IMAGE_DIR || "/var/www/luci.lafamiglia.ua/app/img").trim();
+// Корінь застосунку на сервері (домен більше не хардкодиться):
+//   - LUCIA_APP_ROOT=/var/www/<your-domain>/app  → img зберігаються в <root>/img
+//   - або задайте ASSET_IMAGE_DIR напряму.
+// Старий дефолт залишено як фолбек для сумісності з чинним продом.
+const APP_ROOT = String(process.env.LUCIA_APP_ROOT || "").trim().replace(/\/+$/, "");
+const ASSET_IMAGE_DIR = String(
+  process.env.ASSET_IMAGE_DIR || (APP_ROOT ? `${APP_ROOT}/img` : "/var/www/luci.lafamiglia.ua/app/img")
+).trim();
 const ASSET_IMAGE_PUBLIC_BASE = String(process.env.ASSET_IMAGE_PUBLIC_BASE || "/app/img").trim().replace(/\/+$/, "");
 const HACCP_IMAGE_DIR = String(process.env.HACCP_IMAGE_DIR || `${ASSET_IMAGE_DIR}/haccp`).trim();
 const HACCP_IMAGE_PUBLIC_BASE = String(process.env.HACCP_IMAGE_PUBLIC_BASE || `${ASSET_IMAGE_PUBLIC_BASE}/haccp`).trim().replace(/\/+$/, "");
@@ -256,18 +263,20 @@ const persistCustomRuntimeConfigToEnv = async (runtimeConfig) => {
 };
 
 // CORS origin policy:
-//  - Default is the production frontend (https://luci.lafamiglia.ua). Capacitor
-//    Android/iOS apps don't send a real Origin and aren't blocked by CORS, so
-//    the mobile app keeps working.
-//  - To override, set RUNTIME_SETTINGS_CORS_ORIGIN in env. Supports either a
-//    single value, a comma-separated list (e.g. prod + staging + localhost),
-//    or "*" to fully disable the allowlist (NOT recommended in production).
+//  - Override via RUNTIME_SETTINGS_CORS_ORIGIN: single value, comma-separated
+//    list, or "*" to fully disable the allowlist (NOT recommended in production).
+//  - Same-origin деплой (фронт і API на одному домені за реверс-проксі)
+//    працює БЕЗ налаштування: origin, чий host збігається з Host /
+//    X-Forwarded-Host запиту, дозволяється автоматично — домен можна
+//    міняти без правок конфіга.
+//  - Capacitor Android/iOS apps don't send a real Origin and aren't blocked.
 //  - When a list is configured, the server echoes the matching request Origin
 //    back, which is what browsers require for cross-origin requests.
-const CORS_ORIGIN_RAW = String(
-  process.env.RUNTIME_SETTINGS_CORS_ORIGIN || "https://luci.lafamiglia.ua"
-).trim();
-const CORS_ALLOWED_ORIGINS = CORS_ORIGIN_RAW === "*"
+const CORS_ORIGIN_RAW = String(process.env.RUNTIME_SETTINGS_CORS_ORIGIN || "").trim();
+// "*" — повністю відкритий CORS (не рекомендовано); порожньо — авторежим:
+// дозволяємо лише same-host origin (той самий домен) та dev-origins.
+const CORS_WIDE_OPEN = CORS_ORIGIN_RAW === "*";
+const CORS_ALLOWED_ORIGINS = CORS_WIDE_OPEN || !CORS_ORIGIN_RAW
   ? null
   : CORS_ORIGIN_RAW.split(",").map((value) => value.trim()).filter(Boolean);
 const ASSETS_API_SLOW_MS = Math.max(
@@ -316,10 +325,31 @@ const isDevOrigin = (origin) => {
   }
 };
 
+// Same-origin деплой: якщо host з Origin збігається з Host (або
+// X-Forwarded-Host від реверс-проксі), це той самий домен — дозволяємо
+// незалежно від allowlist. Робить міграцію домену безконфігною.
+const isSameHostOrigin = (req, origin) => {
+  try {
+    const originHost = new URL(origin).host.toLowerCase();
+    if (!originHost) return false;
+    const forwardedHost = String(req?.headers?.["x-forwarded-host"] || "")
+      .split(",")[0]
+      .trim()
+      .toLowerCase();
+    const requestHost = String(req?.headers?.host || "").trim().toLowerCase();
+    return originHost === forwardedHost || originHost === requestHost;
+  } catch {
+    return false;
+  }
+};
+
 const resolveAllowedOrigin = (req) => {
-  if (!CORS_ALLOWED_ORIGINS) return "*";
+  if (CORS_WIDE_OPEN) return "*";
   const requestOrigin = String(req?.headers?.origin || "").trim();
-  if (requestOrigin && CORS_ALLOWED_ORIGINS.includes(requestOrigin)) {
+  if (requestOrigin && CORS_ALLOWED_ORIGINS?.includes(requestOrigin)) {
+    return requestOrigin;
+  }
+  if (requestOrigin && isSameHostOrigin(req, requestOrigin)) {
     return requestOrigin;
   }
   // Dev-friendly: автоматично дозволяємо локальну розробку та GitHub Codespaces,
@@ -331,13 +361,13 @@ const resolveAllowedOrigin = (req) => {
   }
   // Fallback to first whitelisted origin (browser will still block mismatched
   // origins; this keeps non-browser clients like curl/native apps working).
-  return CORS_ALLOWED_ORIGINS[0] || "*";
+  return CORS_ALLOWED_ORIGINS?.[0] || "null";
 };
 
 const setCorsHeaders = (res) => {
   const req = res?.req;
   res.setHeader("Access-Control-Allow-Origin", resolveAllowedOrigin(req));
-  if (CORS_ALLOWED_ORIGINS) {
+  if (!CORS_WIDE_OPEN) {
     res.setHeader("Vary", "Origin");
   }
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
@@ -5473,10 +5503,14 @@ server.listen(PORT, HOST, () => {
     console.log("[security] API token: configured.");
   }
   if (CORS_ALLOWED_ORIGINS) {
-    console.log(`[security] CORS allowed origins: ${CORS_ALLOWED_ORIGINS.join(", ")}`);
-  } else {
+    console.log(`[security] CORS allowed origins: ${CORS_ALLOWED_ORIGINS.join(", ")} (+ same-host, + dev origins)`);
+  } else if (CORS_WIDE_OPEN) {
     console.warn(
       "[security] CORS is wide open (Access-Control-Allow-Origin: *). For production set RUNTIME_SETTINGS_CORS_ORIGIN to your frontend URL (comma-separated for multiple)."
+    );
+  } else {
+    console.log(
+      "[security] CORS auto mode: same-host origin and dev origins are allowed. Set RUNTIME_SETTINGS_CORS_ORIGIN to add extra origins."
     );
   }
   console.log(
