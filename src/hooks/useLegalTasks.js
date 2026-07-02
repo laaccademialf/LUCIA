@@ -56,8 +56,6 @@ const pushLocalCenterNotification = ({ title, body, targetUserId, targetRole, ac
 const pushLegalNotification = async ({ task, title, body, targetUserId, targetRole, actionTab, actorUserId }) => {
   if (!isLegalApiEnabled()) return;
   try {
-    pushLocalCenterNotification({ title, body, targetUserId, targetRole, actorUserId, actionTab });
-
     await addLegalNotificationApi({
       taskId: String(task?.id || ""),
       taskTitle: String(task?.title || ""),
@@ -74,6 +72,11 @@ const pushLegalNotification = async ({ task, title, body, targetUserId, targetRo
       window.dispatchEvent(new CustomEvent("lucia:notifications-updated"));
     }
   } catch (error) {
+    // Fallback only when API write failed to avoid duplicate center notifications.
+    pushLocalCenterNotification({ title, body, targetUserId, targetRole, actorUserId, actionTab });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("lucia:notifications-updated"));
+    }
     console.warn("Не вдалося створити юридичне сповіщення:", error);
   }
 };
@@ -85,6 +88,7 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const isMountedRef = useRef(true);
+  const reloadRequestIdRef = useRef(0);
 
   const reloadSettings = useCallback(async () => {
     if (!isLegalApiEnabled()) {
@@ -116,19 +120,21 @@ export const useLegalTasks = (user, { pollIntervalMs = DEFAULT_POLL_INTERVAL_MS 
       setLoading(false);
       return [];
     }
+    const requestId = reloadRequestIdRef.current + 1;
+    reloadRequestIdRef.current = requestId;
     try {
       const data = await getLegalTasksApi();
-      if (isMountedRef.current) {
+      if (isMountedRef.current && requestId === reloadRequestIdRef.current) {
         setTasks(Array.isArray(data) ? data : []);
         setError(null);
       }
       return data;
     } catch (err) {
       console.error("Помилка завантаження юридичних задач:", err);
-      if (isMountedRef.current) setError(err);
+      if (isMountedRef.current && requestId === reloadRequestIdRef.current) setError(err);
       return [];
     } finally {
-      if (isMountedRef.current) setLoading(false);
+      if (isMountedRef.current && requestId === reloadRequestIdRef.current) setLoading(false);
     }
   }, []);
 
