@@ -63,13 +63,24 @@ const KNOWN_BY_KEY = new Map(KNOWN_COLLECTIONS.map((name) => [name.toLowerCase()
 const quoteIdent = (name) => `\`${String(name).replace(/`/g, "``")}\``;
 
 const rowTimestamp = (doc) => {
-  const candidates = [doc?.updatedAt, doc?.updated_at, doc?.createdAt, doc?.created_at];
-  let best = 0;
-  for (const value of candidates) {
-    const ts = Date.parse(String(value || ""));
-    if (Number.isFinite(ts) && ts > best) best = ts;
-  }
-  return best;
+  const parseBest = (values = []) => {
+    let best = 0;
+    for (const value of values) {
+      const ts = Date.parse(String(value || ""));
+      if (Number.isFinite(ts) && ts > best) best = ts;
+    }
+    return best;
+  };
+
+  // Пріоритет за бізнес-полями з payload. SQL updated_at/created_at часто
+  // відображають час імпорту/міграції, а не реальну «свіжість» документа.
+  // Якщо payload already містить updatedAt/createdAt — саме вони мають
+  // визначати, який дублікат виграє. На них і впав CI: legacy-рядок мав
+  // новіший SQL updated_at, але старіший payload.updatedAt.
+  const payloadBest = parseBest([doc?.updatedAt, doc?.createdAt]);
+  if (payloadBest > 0) return payloadBest;
+
+  return parseBest([doc?.updated_at, doc?.created_at]);
 };
 
 const parsePayload = (value) => {
