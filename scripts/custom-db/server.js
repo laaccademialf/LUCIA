@@ -1060,7 +1060,42 @@ const resolveAuthProfileWithFallback = async (req, dbConfig, fallbackUserId = ""
   return await getUserProfileById(normalizedFallbackUserId, dbConfig);
 };
 
-const AUTH_USERS_COLLECTION_CANDIDATES = ["authUsers", "authusers"];
+// Колекції, в яких шукаємо облікові записи auth-користувачів.
+// Конфігурується через env AUTH_USERS_COLLECTIONS (кома-розділений список).
+// Значення нормалізуються: приймаємо як імена колекцій ("authUsers"), так і
+// повні імена таблиць ("lucia_authUsers_flat") — префікс lucia_ та суфікс _flat
+// знімаються автоматично, бо resolveCollectionTableMySql сам мапить колекцію на
+// фізичну таблицю (base або _flat, незалежно від регістру). Це робить будь-які
+// операційні правки (env чи навіть sed по таблиці) безпечними.
+const normalizeAuthCollectionCandidate = (value) => {
+  let next = String(value || "").trim();
+  if (!next) return "";
+  next = next.replace(/^lucia_/i, "");
+  next = next.replace(/_flat$/i, "");
+  return next;
+};
+
+const dedupeCandidatesCaseInsensitive = (values) => {
+  const seen = new Set();
+  const out = [];
+  for (const value of values) {
+    const key = value.toLowerCase();
+    if (!value || seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+};
+
+const AUTH_USERS_COLLECTION_CANDIDATES = dedupeCandidatesCaseInsensitive(
+  [
+    ...String(process.env.AUTH_USERS_COLLECTIONS || "")
+      .split(",")
+      .map(normalizeAuthCollectionCandidate),
+    "authUsers",
+    "authusers",
+  ].filter(Boolean)
+);
 
 const dedupeAuthUsers = (items) => {
   const byId = new Map();
@@ -1085,15 +1120,30 @@ const dedupeAuthUsers = (items) => {
 };
 
 const getAuthUsersData = async (dbConfig) => {
+  const errors = [];
   const buckets = await Promise.all(
     AUTH_USERS_COLLECTION_CANDIDATES.map(async (collectionName) => {
       try {
         return await getCollectionItemsData(collectionName, dbConfig);
-      } catch {
+      } catch (error) {
+        errors.push(error);
         return [];
       }
     })
   );
+
+  // Якщо ЖОДНА колекція не прочиталась — це збій БД, а не «немає користувачів».
+  // Ковтати таку помилку не можна: логін відповів би «Invalid credentials»
+  // при правильному паролі, і проблема виглядала б як містика.
+  if (errors.length === AUTH_USERS_COLLECTION_CANDIDATES.length && errors.length > 0) {
+    const dbError = new Error(
+      `Auth storage unavailable: ${errors[0]?.message || "unknown DB error"}`
+    );
+    dbError.cause = errors[0];
+    dbError.isAuthStorageFailure = true;
+    throw dbError;
+  }
+
   return dedupeAuthUsers(buckets.flat());
 };
 
@@ -4272,14 +4322,26 @@ const handleServiceRequestsApi = async (req, res, requestId) => {
 //   - authSessions: contains live session tokens (account takeover target)
 // Internal code paths (auth handlers, bootstrap, migrations) read these via
 // getCollectionItemsData() directly and are unaffected.
-const SENSITIVE_COLLECTIONS = new Set(["authUsers", "authSessions"]);
+// ВАЖЛИВО: перевірка МУСИТЬ бути регістронезалежною і знімати lucia_/_flat,
+// бо SQL-резолвер таблиць регістронезалежний: "authusers" або
+// "lucia_authUsers_flat" інакше обійшли б заборону і віддали хеші паролів.
+const SENSITIVE_COLLECTIONS = new Set(["authusers", "authsessions"]);
+
+const isSensitiveCollection = (collectionName) => {
+  const normalized = String(collectionName || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^lucia_/, "")
+    .replace(/_flat$/, "");
+  return SENSITIVE_COLLECTIONS.has(normalized);
+};
 
 const handleCollectionsApi = async (req, res, collectionName, itemId) => {
   if (!isAuthorized(req)) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
   }
 
-  if (SENSITIVE_COLLECTIONS.has(String(collectionName || ""))) {
+  if (isSensitiveCollection(collectionName)) {
     return sendJson(res, 403, {
       ok: false,
       error: "Forbidden: this collection is not accessible via the public API",
@@ -5074,6 +5136,32 @@ const server = http.createServer(async (req, res) => {
       mysqlConfigured: Boolean(MYSQL_CONFIG.host && MYSQL_CONFIG.user && MYSQL_CONFIG.database),
       tokenProtected: Boolean(TOKEN),
       now: new Date().toISOString(),
+      // /health?deep=1 — глибока перевірка: чи реально читається сховище
+      // auth-користувачів (та сама логіка, що й логін). Для моніторингу:
+      // якщо authStorage.ok=false — логін ГАРАНТОВАНО не працює.
+      ...(requestUrl.searchParams.get("deep")
+        ? {
+            authStorage: await (async () => {
+              const includeDetails = isAuthorized(req);
+              try {
+                const users = await getAuthUsersData(getAssetsRuntimeConfig());
+                return {
+                  ok: true,
+                  ...(includeDetails
+                    ? { usersCount: users.length, candidates: AUTH_USERS_COLLECTION_CANDIDATES }
+                    : {}),
+                };
+              } catch (error) {
+                return {
+                  ok: false,
+                  ...(includeDetails
+                    ? { error: String(error?.message || error), candidates: AUTH_USERS_COLLECTION_CANDIDATES }
+                    : {}),
+                };
+              }
+            })(),
+          }
+        : {}),
     });
   }
 
