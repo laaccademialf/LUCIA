@@ -74,10 +74,7 @@ const bootstrap = async () => {
   const { default: App } = await import("./App.jsx");
 
   if (import.meta.env.DEV) {
-    await Promise.all([
-      import("./utils/createAdmin"),
-      import("./utils/migration"),
-    ]);
+    await import("./utils/migration");
   }
 
   createRoot(document.getElementById("root")).render(

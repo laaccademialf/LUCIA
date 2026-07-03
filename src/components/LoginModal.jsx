@@ -26,20 +26,14 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
       onClose();
     } catch (error) {
       console.error("Помилка входу:", error);
-      if (error.code === "auth/operation-not-allowed") {
-        setError("⚠️ Authentication не активовано у Firebase Console. Будь ласка, активуйте Email/Password провайдер.");
-      } else if (error.code === "auth/api-401") {
+      if (error.code === "auth/api-401" || error.code === "auth/invalid-credential" || error.code === "auth/wrong-password") {
         setError("Невірний email або пароль");
-      } else if (error.code === "auth/api-404") {
+      } else if (error.code === "auth/api-404" || error.code === "auth/user-not-found") {
         setError("Користувача не знайдено");
-      } else if (error.code === "auth/invalid-credential") {
-        setError("Невірний email або пароль");
-      } else if (error.code === "auth/user-not-found") {
-        setError("Користувача не знайдено");
-      } else if (error.code === "auth/wrong-password") {
-        setError("Невірний пароль");
-      } else if (error.code && error.code.includes("api-key")) {
-        setError("⚠️ Невалідний API ключ!\n\nПерезапустіть dev сервер:\n• Ctrl+C в терміналі\n• npm run dev");
+      } else if (error.code === "auth/api-429" || Number(error.status) === 429) {
+        setError("Забагато невдалих спроб входу. Спробуйте через кілька хвилин.");
+      } else if (error.code === "auth/api-500" || Number(error.status) >= 500) {
+        setError("Сервер тимчасово недоступний. Спробуйте пізніше або зверніться до адміністратора.");
       } else {
         setError(`Помилка входу: ${error.message || "Спробуйте ще раз"}`);
       }

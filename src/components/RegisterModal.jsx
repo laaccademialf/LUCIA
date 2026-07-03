@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X } from "lucide-react";
-import { isAuthApiEnabled, registerUser } from "../firebase/auth";
+import { registerUser } from "../firebase/auth";
 
 export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
   const [email, setEmail] = useState("");
@@ -14,54 +14,28 @@ export const RegisterModal = ({ onClose, onSwitchToLogin }) => {
     setError("");
     setLoading(true);
 
-    // Перевірка Firebase змінних потрібна лише коли не використовується Auth API backend
-    const apiMode = isAuthApiEnabled();
-    const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
-    if (import.meta.env.DEV) {
-      console.log("Auth mode:", apiMode ? "Auth API" : "Firebase");
-      console.log("Environment:", import.meta.env.MODE);
-    }
-
-    if (!apiMode && (!apiKey || apiKey === "YOUR_API_KEY")) {
-      setError("⚠️ Firebase змінні НЕ завантажені!\n\n" + 
-        (import.meta.env.PROD 
-          ? "🌐 Ви на Production (Vercel):\n\n1. Vercel Dashboard → Settings → Environment Variables\n2. Додайте всі VITE_FIREBASE_* змінні\n3. Deployments → Redeploy\n\n4. Firebase Console → Authentication → Settings → Authorized domains\n5. Додайте домен: " + window.location.hostname
-          : "💻 Ви локально:\n\n1. Перезапустіть: Ctrl+C → npm run dev\n2. або ./restart-dev.sh"
-        ));
-      setLoading(false);
-      return;
-    }
-
     try {
       await registerUser(email, password, displayName);
       onClose();
     } catch (error) {
       console.error("Помилка реєстрації:", error);
-      console.error("Код помилки:", error.code);
-      console.error("Повідомлення:", error.message);
-      
-      if (error.code === "auth/operation-not-allowed") {
-        setError("⚠️ Email/Password authentication не активовано у Firebase Console.\n\nЩоб активувати:\n1. Відкрийте Firebase Console\n2. Authentication → Sign-in method\n3. Увімкніть Email/Password");
-      } else if (error.code === "auth/api-409" || String(error.message || "").toLowerCase().includes("already")) {
+
+      if (
+        error.code === "auth/api-409" ||
+        error.code === "auth/email-already-in-use" ||
+        String(error.message || "").toLowerCase().includes("already")
+      ) {
         setError("Цей email вже використовується");
       } else if (error.code === "auth/api-401") {
         setError("Невірні дані для реєстрації");
-      } else if (error.code === "auth/email-already-in-use") {
-        setError("Цей email вже використовується");
-      } else if (error.code === "auth/weak-password") {
+      } else if (error.code === "auth/weak-password" || String(error.message || "").includes("min 6")) {
         setError("Пароль занадто слабкий. Мінімум 6 символів");
       } else if (error.code === "auth/invalid-email") {
         setError("Невірний формат email");
-      } else if (error.code && error.code.includes("api-key")) {
-        setError("⚠️ Невалідний API ключ Firebase!\n\n" +
-          (import.meta.env.PROD
-            ? "На Vercel:\n1. Settings → Environment Variables\n2. Додайте VITE_FIREBASE_API_KEY\n3. Redeploy\n\n4. Firebase → Authorized domains\n5. Додайте: " + window.location.hostname
-            : "Локально:\n1. Ctrl+C → npm run dev\n2. або ./restart-dev.sh"
-          ));
-      } else if (error.code === "auth/unauthorized-domain" || error.message?.includes("domain")) {
-        setError("⚠️ Домен не авторизовано в Firebase!\n\n1. Firebase Console:\nhttps://console.firebase.google.com/project/luci-f1285/authentication/settings\n\n2. Authorized domains → Add domain\n3. Додайте: " + window.location.hostname);
+      } else if (Number(error.status) >= 500) {
+        setError("Сервер тимчасово недоступний. Спробуйте пізніше.");
       } else {
-        setError(`Помилка реєстрації: ${error.message || "Спробуйте ще раз"}\n\nКод помилки: ${error.code || "невідомо"}`);
+        setError(`Помилка реєстрації: ${error.message || "Спробуйте ще раз"}`);
       }
     } finally {
       setLoading(false);
