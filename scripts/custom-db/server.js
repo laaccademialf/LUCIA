@@ -7,6 +7,23 @@ import net from "node:net";
 import zlib from "node:zlib";
 import { DEFAULT_MENU_STRUCTURE } from "../../src/data/defaultMenuStructure.js";
 import { KNOWN_COLLECTIONS } from "./collections.js";
+import {
+  quoteIdentMySql,
+  sanitizeColumnName,
+  MAX_MYSQL_IDENTIFIER_LENGTH,
+  ALWAYS_JSON_FIELDS,
+  flattenScalarFields,
+  detectValueType,
+  mergeTypes,
+  sqlTypeFor,
+  toMySqlDateTime,
+  toMySqlDate,
+  toMySqlNumber,
+  toMySqlBoolean,
+  normalizeValueForMySqlColumnType,
+  parsePayloadField,
+  sortByPayloadTimestampsDesc,
+} from "./lib/sql-utils.js";
 
 const loadEnvFile = (filePath) => {
   try {
@@ -1179,17 +1196,27 @@ const getAuthUserById = async (id, dbConfig) => {
 };
 
 const createAuthUserRecord = async (payload, dbConfig) => {
-  await createCollectionItemData("authUsers", payload, dbConfig);
+  // strictInsert: конфлікт id або email (UNIQUE uniq_auth_email) має впасти
+  // з помилкою, а НЕ тихо перезаписати чужий обліковий запис через upsert.
+  try {
+    await createCollectionItemData("authUsers", payload, dbConfig, { strictInsert: true });
+  } catch (error) {
+    if (isDuplicateEntryError(error)) {
+      const dupError = new Error("Email already in use");
+      dupError.code = "auth/email-already-in-use";
+      throw dupError;
+    }
+    throw error;
+  }
   const created = await getAuthUserById(payload?.id, dbConfig);
   if (created) return created;
 
-  // Fallback for legacy lower-case auth collection names.
-  await createCollectionItemData("authusers", payload, dbConfig);
-  const fallbackCreated = await getAuthUserById(payload?.id, dbConfig);
-  if (fallbackCreated) return fallbackCreated;
-
   throw new Error("Auth user was not persisted");
 };
+
+const isDuplicateEntryError = (error) =>
+  String(error?.code || "") === "ER_DUP_ENTRY" ||
+  /duplicate/i.test(String(error?.message || ""));
 
 const updateAuthUserRecord = async (id, payload, dbConfig) => {
   const targetCollection = await resolveAuthUserCollectionById(id, dbConfig);
@@ -1352,31 +1379,6 @@ const assertCollectionCreatable = (collectionName) => {
 
 const tableNameForCollection = (collectionName) =>
   `lucia_${String(collectionName || "").replace(/-/g, "_")}`;
-
-const sortByPayloadTimestampsDesc = (items) => {
-  const toTimestamp = (value) => {
-    const parsed = Date.parse(String(value || ""));
-    return Number.isNaN(parsed) ? 0 : parsed;
-  };
-
-  return [...items].sort((a, b) => {
-    const bTime = Math.max(
-      toTimestamp(b?.updatedAt),
-      toTimestamp(b?.createdAt),
-      toTimestamp(b?.updated_at),
-      toTimestamp(b?.created_at)
-    );
-    const aTime = Math.max(
-      toTimestamp(a?.updatedAt),
-      toTimestamp(a?.createdAt),
-      toTimestamp(a?.updated_at),
-      toTimestamp(a?.created_at)
-    );
-
-    if (bTime !== aTime) return bTime - aTime;
-    return String(b?.id || "").localeCompare(String(a?.id || ""));
-  });
-};
 
 const ensureGenericTableMySql = async (conn, collectionName) => {
   const tableName = tableNameForCollection(collectionName);
@@ -1633,7 +1635,108 @@ const getCollectionItemData = async (collectionName, id, dbConfig) => {
   throw new Error(`Unsupported engine for collection ${collection}: ${dbConfig.dbEngine}`);
 };
 
-const createCollectionItemData = async (collectionName, payload, dbConfig) => {
+// Єдина точка запису документа в MySQL-таблицю колекції.
+// strictInsert=true → чистий INSERT без ON DUPLICATE KEY UPDATE: конфлікт
+// PRIMARY KEY (id) чи UNIQUE (email) дає помилку ER_DUP_ENTRY замість тихого
+// перезапису ЧУЖОГО рядка. Обов'язково для створення auth-користувачів.
+const writeCollectionItemMySql = async (conn, collection, nextId, normalized, { strictInsert = false } = {}) => {
+  const tableName = await resolveCollectionTableMySql(conn, collection);
+  const isFlatTable = String(tableName || "").endsWith("_flat");
+  const existingColumns = await getMySqlColumns(conn, tableName);
+  const hasPayloadColumn = existingColumns.has("payload");
+  const shouldPersistPayload = hasPayloadColumn;
+
+  // Compatibility mode: some flat tables were created without payload column.
+  // For permissions collections in _flat mode, keep nested permissions/restaurants
+  // as JSON strings in scalar columns to avoid relying on payload column.
+  const flatSource = (() => {
+    if (!isFlatTable || (collection !== "rolePermissions" && collection !== "fieldPermissions")) {
+      return normalized;
+    }
+
+    const next = { ...normalized };
+    if (next.permissions && typeof next.permissions === "object") {
+      next.permissions = JSON.stringify(next.permissions);
+    }
+    if (Array.isArray(next.restaurants)) {
+      next.restaurants = JSON.stringify(next.restaurants);
+    }
+    return next;
+  })();
+
+  const flat = flattenScalarFields(flatSource);
+  // Видаляємо ключі, що перевищують ліміт MySQL на довжину ідентифікатора
+  for (const col of Object.keys(flat)) {
+    if (col.length > MAX_MYSQL_IDENTIFIER_LENGTH) {
+      delete flat[col];
+    }
+  }
+  const typeMap = Object.entries(flat).reduce((acc, [col, value]) => {
+    acc[col] = mergeTypes(acc[col], detectValueType(value));
+    return acc;
+  }, {});
+
+  await ensureFlatColumnsMySql(conn, tableName, typeMap);
+  if (collection === "assets") {
+    // During repeated inventory edits, change history/photos can exceed TEXT size.
+    await ensureMySqlLongTextColumns(conn, tableName, ["inventory_change_history", "photos"]);
+  }
+  if (collection === "productInventories") {
+    // Merged inventory payloads can exceed TEXT limit (64KB), especially merged_source_documents.
+    await ensureMySqlLongTextColumns(conn, tableName, [
+      "items",
+      "user_contributions",
+      "contributors",
+      "merged_from_ids",
+      "merged_source_documents",
+    ]);
+  }
+  const columnsAfterEnsure = await getMySqlColumns(conn, tableName);
+  const columnTypes = await getMySqlColumnTypes(conn, tableName);
+  const scalarColumns = Object.keys(flat).filter((col) => columnsAfterEnsure.has(col));
+
+  const insertColumns = ["id", ...(shouldPersistPayload ? ["payload"] : []), ...scalarColumns];
+  const insertValues = [
+    nextId,
+    ...(shouldPersistPayload ? [JSON.stringify(normalized)] : []),
+    ...scalarColumns.map((col) => {
+      const value = flat[col];
+      return normalizeValueForMySqlColumnType(value, columnTypes[col], typeMap[col]);
+    }),
+  ];
+
+  const placeholders = insertColumns.map(() => "?").join(", ");
+
+  if (strictInsert) {
+    await conn.execute(
+      `INSERT INTO ${quoteIdentMySql(tableName)} (${insertColumns.map((col) => quoteIdentMySql(col)).join(", ")}) VALUES (${placeholders})`,
+      insertValues
+    );
+    return nextId;
+  }
+
+  const updates = [
+    ...(shouldPersistPayload ? ["payload = VALUES(payload)"] : []),
+    ...scalarColumns.map((col) => `${quoteIdentMySql(col)} = VALUES(${quoteIdentMySql(col)})`),
+    ...(columnsAfterEnsure.has("updated_at") ? ["updated_at = CURRENT_TIMESTAMP"] : []),
+  ].join(", ");
+
+  if (!updates) {
+    await conn.execute(
+      `INSERT IGNORE INTO ${quoteIdentMySql(tableName)} (${insertColumns.map((col) => quoteIdentMySql(col)).join(", ")}) VALUES (${placeholders})`,
+      insertValues
+    );
+    return nextId;
+  }
+
+  await conn.execute(
+    `INSERT INTO ${quoteIdentMySql(tableName)} (${insertColumns.map((col) => quoteIdentMySql(col)).join(", ")}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updates}`,
+    insertValues
+  );
+  return nextId;
+};
+
+const createCollectionItemData = async (collectionName, payload, dbConfig, options = {}) => {
   const collection = normalizeCollectionName(collectionName);
   const nextId = String(payload?.id || "").trim() || randomId();
   const normalized = {
@@ -1645,6 +1748,9 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
 
   if (dbConfig.dbEngine === "file") {
     const items = await readCollectionFile(collection);
+    if (options.strictInsert && items.some((item) => String(item?.id || "") === nextId)) {
+      throw new Error(`Duplicate id in ${collection}: ${nextId}`);
+    }
     const filtered = items.filter((item) => String(item?.id || "") !== nextId);
     filtered.push({ id: nextId, data: normalized });
     await writeCollectionFile(collection, filtered);
@@ -1652,93 +1758,9 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    return withMySqlPooledConnection(dbConfig.mysqlConfig, async (conn) => {
-      const tableName = await resolveCollectionTableMySql(conn, collection);
-      const isFlatTable = String(tableName || "").endsWith("_flat");
-      const existingColumns = await getMySqlColumns(conn, tableName);
-      const hasPayloadColumn = existingColumns.has("payload");
-      const shouldPersistPayload = hasPayloadColumn;
-
-      // Compatibility mode: some flat tables were created without payload column.
-      // For permissions collections in _flat mode, keep nested permissions/restaurants
-      // as JSON strings in scalar columns to avoid relying on payload column.
-      const flatSource = (() => {
-        if (!isFlatTable || (collection !== "rolePermissions" && collection !== "fieldPermissions")) {
-          return normalized;
-        }
-
-        const next = { ...normalized };
-        if (next.permissions && typeof next.permissions === "object") {
-          next.permissions = JSON.stringify(next.permissions);
-        }
-        if (Array.isArray(next.restaurants)) {
-          next.restaurants = JSON.stringify(next.restaurants);
-        }
-        return next;
-      })();
-
-      const flat = flattenScalarFields(flatSource);
-      // Видаляємо ключі, що перевищують ліміт MySQL на довжину ідентифікатора
-      for (const col of Object.keys(flat)) {
-        if (col.length > MAX_MYSQL_IDENTIFIER_LENGTH) {
-          delete flat[col];
-        }
-      }
-      const typeMap = Object.entries(flat).reduce((acc, [col, value]) => {
-        acc[col] = mergeTypes(acc[col], detectValueType(value));
-        return acc;
-      }, {});
-
-      await ensureFlatColumnsMySql(conn, tableName, typeMap);
-      if (collection === "assets") {
-        // During repeated inventory edits, change history/photos can exceed TEXT size.
-        await ensureMySqlLongTextColumns(conn, tableName, ["inventory_change_history", "photos"]);
-      }
-      if (collection === "productInventories") {
-        // Merged inventory payloads can exceed TEXT limit (64KB), especially merged_source_documents.
-        await ensureMySqlLongTextColumns(conn, tableName, [
-          "items",
-          "user_contributions",
-          "contributors",
-          "merged_from_ids",
-          "merged_source_documents",
-        ]);
-      }
-      const columnsAfterEnsure = await getMySqlColumns(conn, tableName);
-      const columnTypes = await getMySqlColumnTypes(conn, tableName);
-      const scalarColumns = Object.keys(flat).filter((col) => columnsAfterEnsure.has(col));
-
-      const insertColumns = ["id", ...(shouldPersistPayload ? ["payload"] : []), ...scalarColumns];
-      const insertValues = [
-        nextId,
-        ...(shouldPersistPayload ? [JSON.stringify(normalized)] : []),
-        ...scalarColumns.map((col) => {
-          const value = flat[col];
-          return normalizeValueForMySqlColumnType(value, columnTypes[col], typeMap[col]);
-        }),
-      ];
-
-      const placeholders = insertColumns.map(() => "?").join(", ");
-      const updates = [
-        ...(shouldPersistPayload ? ["payload = VALUES(payload)"] : []),
-        ...scalarColumns.map((col) => `${quoteIdentMySql(col)} = VALUES(${quoteIdentMySql(col)})`),
-        ...(columnsAfterEnsure.has("updated_at") ? ["updated_at = CURRENT_TIMESTAMP"] : []),
-      ].join(", ");
-
-      if (!updates) {
-        await conn.execute(
-          `INSERT IGNORE INTO ${quoteIdentMySql(tableName)} (${insertColumns.map((col) => quoteIdentMySql(col)).join(", ")}) VALUES (${placeholders})`,
-          insertValues
-        );
-        return nextId;
-      }
-
-      await conn.execute(
-        `INSERT INTO ${quoteIdentMySql(tableName)} (${insertColumns.map((col) => quoteIdentMySql(col)).join(", ")}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updates}`,
-        insertValues
-      );
-      return nextId;
-    });
+    return withMySqlPooledConnection(dbConfig.mysqlConfig, async (conn) =>
+      writeCollectionItemMySql(conn, collection, nextId, normalized, options)
+    );
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -1760,34 +1782,84 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
   throw new Error(`Unsupported engine for collection ${collection}: ${dbConfig.dbEngine}`);
 };
 
+// Серіалізація read-modify-write по ключу collection:id.
+// Сервер однопроцесний, тож in-process м'ютекс повністю усуває lost updates
+// (два паралельні PUT читали той самий стан і другий затирав зміни першого).
+// SQL-транзакція тут НЕ підходить: запис може виконувати ALTER TABLE
+// (ensureFlatColumnsMySql), а DDL усередині транзакції з row-lock дає
+// metadata-lock deadlock у MariaDB.
+const updateLocks = new Map(); // key -> tail promise
+const withUpdateLock = (key, fn) => {
+  const tail = updateLocks.get(key) || Promise.resolve();
+  const run = tail.then(fn, fn);
+  const guarded = run.catch(() => {});
+  updateLocks.set(key, guarded);
+  guarded.finally(() => {
+    if (updateLocks.get(key) === guarded) updateLocks.delete(key);
+  });
+  return run;
+};
+
 const updateCollectionItemData = async (collectionName, id, payload, dbConfig) => {
   const collection = normalizeCollectionName(collectionName);
   const itemId = String(id || "").trim();
   if (!itemId) throw new Error("Item id is required");
 
-  const existing = await getCollectionItemData(collection, itemId, dbConfig);
-  if (!existing) throw new Error("Item not found");
-
-  // Видаляємо зі старого документа фрагменти раніше розгорнутих динамічних полів
-  const cleanExisting = { ...existing };
-  for (const existingKey of Object.keys(cleanExisting)) {
-    if (existingKey === "id") continue;
-    for (const blockedPrefix of ALWAYS_JSON_FIELDS) {
-      if (existingKey !== blockedPrefix && existingKey.startsWith(blockedPrefix + "_")) {
-        delete cleanExisting[existingKey];
-        break;
+  const mergeExistingWithPayload = (existing) => {
+    // Видаляємо зі старого документа фрагменти раніше розгорнутих динамічних полів
+    const cleanExisting = { ...existing };
+    for (const existingKey of Object.keys(cleanExisting)) {
+      if (existingKey === "id") continue;
+      for (const blockedPrefix of ALWAYS_JSON_FIELDS) {
+        if (existingKey !== blockedPrefix && existingKey.startsWith(blockedPrefix + "_")) {
+          delete cleanExisting[existingKey];
+          break;
+        }
       }
     }
+
+    const merged = {
+      ...cleanExisting,
+      ...(payload && typeof payload === "object" ? payload : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    delete merged.id;
+    return merged;
+  };
+
+  // MySQL: атомарний read-modify-write під м'ютексом (одне з'єднання з пулу).
+  if (dbConfig.dbEngine === "mysql") {
+    return withUpdateLock(`${collection}:${itemId}`, () =>
+      withMySqlPooledConnection(dbConfig.mysqlConfig, async (conn) => {
+        const tableName = await resolveCollectionTableMySql(conn, collection, { createIfMissing: false });
+        if (!tableName) throw new Error("Item not found");
+
+        const [rows] = await conn.execute(
+          `SELECT * FROM \`${tableName}\` WHERE id = ? LIMIT 1`,
+          [itemId]
+        );
+        if (!rows.length) throw new Error("Item not found");
+        const existing = mapMySqlRowToDocument(rows[0]);
+
+        const merged = mergeExistingWithPayload(existing);
+        await writeCollectionItemMySql(conn, collection, itemId, {
+          ...merged,
+          createdAt: merged.createdAt || new Date().toISOString(),
+        });
+
+        return itemId;
+      })
+    );
   }
 
-  const merged = {
-    ...cleanExisting,
-    ...(payload && typeof payload === "object" ? payload : {}),
-    updatedAt: new Date().toISOString(),
-  };
-  delete merged.id;
+  // file / postgres: старий шлях (read → merge → upsert) під тим самим м'ютексом.
+  return withUpdateLock(`${collection}:${itemId}`, async () => {
+    const existing = await getCollectionItemData(collection, itemId, dbConfig);
+    if (!existing) throw new Error("Item not found");
 
-  return createCollectionItemData(collection, { ...merged, id: itemId }, dbConfig);
+    const merged = mergeExistingWithPayload(existing);
+    return createCollectionItemData(collection, { ...merged, id: itemId }, dbConfig);
+  });
 };
 
 const deleteCollectionItemData = async (collectionName, id, dbConfig) => {
@@ -1842,16 +1914,6 @@ const ensureAssetsTablePostgres = async (client) => {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
-};
-
-const parsePayloadField = (value) => {
-  if (value && typeof value === "object") return value;
-  if (typeof value !== "string") return {};
-  try {
-    return JSON.parse(value);
-  } catch {
-    return {};
-  }
 };
 
 const getAssetsRuntimeConfig = () => {
@@ -2953,208 +3015,6 @@ const handleDbTest = async (req, res) => {
   }
 };
 
-const quoteIdentMySql = (name) => {
-  if (!/^[a-zA-Z0-9_]+$/.test(String(name || ""))) {
-    throw new Error(`Unsafe SQL identifier: ${name}`);
-  }
-  return `\`${name}\``;
-};
-
-const sanitizeColumnName = (raw) => {
-  const normalized = String(raw || "")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .replace(/[^a-zA-Z0-9_]/g, "_")
-    .toLowerCase()
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  if (!normalized) return "field_value";
-  if (/^[0-9]/.test(normalized)) return `f_${normalized}`;
-  if (normalized === "id" || normalized === "payload" || normalized === "updated_at") {
-    return `f_${normalized}`;
-  }
-  return normalized;
-};
-
-const MAX_MYSQL_IDENTIFIER_LENGTH = 64;
-
-// Поля, які завжди зберігаються як JSON (не розгортаються рекурсивно)
-const ALWAYS_JSON_FIELDS = new Set([
-  "assignmentTypes", "assignment_types",
-  "pricingByRestaurantId", "pricing_by_restaurant_id",
-  "pricingByRestaurantGroup", "pricing_by_restaurant_group",
-]);
-
-const flattenScalarFields = (input, prefix = "", out = {}) => {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return out;
-
-  for (const [key, value] of Object.entries(input)) {
-    const nextKey = prefix ? `${prefix}_${key}` : key;
-    if (value === null || value === undefined) {
-      out[sanitizeColumnName(nextKey)] = null;
-      continue;
-    }
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      out[sanitizeColumnName(nextKey)] = value;
-      continue;
-    }
-    if (value instanceof Date) {
-      out[sanitizeColumnName(nextKey)] = value.toISOString();
-      continue;
-    }
-    if (Array.isArray(value)) {
-      out[sanitizeColumnName(nextKey)] = JSON.stringify(value);
-      continue;
-    }
-    if (typeof value === "object") {
-      const colName = sanitizeColumnName(nextKey);
-      // Зберегти як JSON якщо: поле у списку динамічних, або ім'я занадто довге
-      if (ALWAYS_JSON_FIELDS.has(key) || prefix && ALWAYS_JSON_FIELDS.has(prefix) || colName.length >= MAX_MYSQL_IDENTIFIER_LENGTH - 20) {
-        out[colName] = JSON.stringify(value);
-      } else {
-        flattenScalarFields(value, nextKey, out);
-      }
-    }
-  }
-  return out;
-};
-
-const detectValueType = (value) => {
-  if (value === null || value === undefined) return "null";
-  if (typeof value === "boolean") return "boolean";
-  if (typeof value === "number") return Number.isInteger(value) ? "integer" : "number";
-  if (typeof value === "string") {
-    const isoDateLike = /^\d{4}-\d{2}-\d{2}(?:[ T].*)?$/.test(value);
-    if (isoDateLike) return "date";
-    return "string";
-  }
-  return "string";
-};
-
-const mergeTypes = (current, next) => {
-  if (!current || current === "null") return next;
-  if (!next || next === "null") return current;
-  if (current === next) return current;
-  if ((current === "integer" && next === "number") || (current === "number" && next === "integer")) {
-    return "number";
-  }
-  if ((current === "date" && next === "string") || (current === "string" && next === "date")) {
-    return "string";
-  }
-  return "string";
-};
-
-const sqlTypeFor = (type) => {
-  if (type === "boolean") return "TINYINT(1) NULL";
-  if (type === "integer") return "BIGINT NULL";
-  if (type === "number") return "DOUBLE NULL";
-  if (type === "date") return "DATETIME NULL";
-  return "TEXT NULL";
-};
-
-const toMySqlDateTime = (value) => {
-  if (value === null || value === undefined) return null;
-
-  if (value instanceof Date) {
-    if (Number.isNaN(value.getTime())) return null;
-    const yyyy = value.getFullYear();
-    const mm = String(value.getMonth() + 1).padStart(2, "0");
-    const dd = String(value.getDate()).padStart(2, "0");
-    const hh = String(value.getHours()).padStart(2, "0");
-    const mi = String(value.getMinutes()).padStart(2, "0");
-    const ss = String(value.getSeconds()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
-  }
-
-  const text = String(value).trim();
-  if (!text) return null;
-
-  // Already in MySQL DATETIME format.
-  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text)) {
-    return text;
-  }
-
-  const parsed = new Date(text);
-  if (Number.isNaN(parsed.getTime())) return null;
-  const yyyy = parsed.getFullYear();
-  const mm = String(parsed.getMonth() + 1).padStart(2, "0");
-  const dd = String(parsed.getDate()).padStart(2, "0");
-  const hh = String(parsed.getHours()).padStart(2, "0");
-  const mi = String(parsed.getMinutes()).padStart(2, "0");
-  const ss = String(parsed.getSeconds()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
-};
-
-const toMySqlDate = (value) => {
-  if (value === null || value === undefined) return null;
-
-  const text = String(value).trim();
-  if (!text) return null;
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    return text;
-  }
-
-  const parsed = new Date(text);
-  if (Number.isNaN(parsed.getTime())) return null;
-  const yyyy = parsed.getFullYear();
-  const mm = String(parsed.getMonth() + 1).padStart(2, "0");
-  const dd = String(parsed.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-};
-
-const MYSQL_INTEGER_TYPES = new Set(["tinyint", "smallint", "mediumint", "int", "integer", "bigint", "bit", "year"]);
-const MYSQL_DECIMAL_TYPES = new Set(["decimal", "numeric", "float", "double", "real", "dec"]);
-const MYSQL_DATE_TYPES = new Set(["date"]);
-const MYSQL_DATETIME_TYPES = new Set(["datetime", "timestamp"]);
-
-const toMySqlNumber = (value, { integer = false } = {}) => {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "boolean") return value ? 1 : 0;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) return null;
-    return integer ? Math.trunc(value) : value;
-  }
-
-  const text = String(value).trim();
-  if (!text) return null;
-  const normalized = text.replace(/\s+/g, "").replace(/,/g, ".");
-  const parsed = Number(normalized);
-  if (!Number.isFinite(parsed)) return null;
-  return integer ? Math.trunc(parsed) : parsed;
-};
-
-const toMySqlBoolean = (value) => {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "boolean") return value ? 1 : 0;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) return null;
-    return value ? 1 : 0;
-  }
-
-  const text = String(value).trim().toLowerCase();
-  if (!text) return null;
-  if (["1", "true", "yes", "y", "on", "так"].includes(text)) return 1;
-  if (["0", "false", "no", "n", "off", "ні"].includes(text)) return 0;
-  const numeric = Number(text);
-  if (Number.isFinite(numeric)) return numeric ? 1 : 0;
-  return null;
-};
-
-const normalizeValueForMySqlColumnType = (value, declaredType, inferredType = "") => {
-  const type = String(declaredType || "").toLowerCase();
-
-  if (MYSQL_DATE_TYPES.has(type)) return toMySqlDate(value);
-  if (MYSQL_DATETIME_TYPES.has(type)) return toMySqlDateTime(value);
-  if (MYSQL_INTEGER_TYPES.has(type)) return toMySqlNumber(value, { integer: true });
-  if (MYSQL_DECIMAL_TYPES.has(type)) return toMySqlNumber(value, { integer: false });
-  if (type === "boolean") return toMySqlBoolean(value);
-
-  if (inferredType === "date") return toMySqlDateTime(value);
-  if (typeof value === "boolean") return value ? 1 : 0;
-  if (value === undefined) return null;
-  return value ?? null;
-};
-
 const getMySqlColumns = async (conn, tableName) => {
   const [rows] = await conn.execute(
     `SELECT COLUMN_NAME AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`,
@@ -3446,16 +3306,23 @@ const handleAuthRegister = async (req, res) => {
   const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const { salt, hash } = hashPassword(password);
 
-  await createAuthUserRecord(
-    {
-      id: userId,
-      email,
-      ...buildPasswordStoragePayload({ salt, hash }),
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    },
-    dbConfig
-  );
+  try {
+    await createAuthUserRecord(
+      {
+        id: userId,
+        email,
+        ...buildPasswordStoragePayload({ salt, hash }),
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      },
+      dbConfig
+    );
+  } catch (error) {
+    if (String(error?.code || "") === "auth/email-already-in-use") {
+      return sendJson(res, 409, { ok: false, error: "Email already in use" });
+    }
+    throw error;
+  }
 
   const profilePayload = {
     id: userId,
@@ -3870,16 +3737,23 @@ const handleAuthAdminCreateUser = async (req, res) => {
   const userId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const { salt, hash } = hashPassword(password);
 
-  await createAuthUserRecord(
-    {
-      id: userId,
-      email,
-      ...buildPasswordStoragePayload({ salt, hash }),
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    },
-    dbConfig
-  );
+  try {
+    await createAuthUserRecord(
+      {
+        id: userId,
+        email,
+        ...buildPasswordStoragePayload({ salt, hash }),
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      },
+      dbConfig
+    );
+  } catch (error) {
+    if (String(error?.code || "") === "auth/email-already-in-use") {
+      return sendJson(res, 409, { ok: false, error: "Email already in use" });
+    }
+    throw error;
+  }
 
   const primaryRestaurant = restaurant || restaurantsList[0] || "";
   const profilePayload = {

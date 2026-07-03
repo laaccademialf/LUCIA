@@ -158,6 +158,26 @@ assert "файл бекапа існує" "1" "$BK_COUNT"
 BK_CONTENT=$(docker exec "$DB_CONTAINER" sh -c 'cat /tmp/lucia-backups/lucia_*.sql.gz | gunzip | grep -c lucia_authUsers_flat' || true)
 [[ "$BK_CONTENT" -gt 0 ]] && { echo "  ✓ бекап містить дані authUsers"; PASS=$((PASS+1)); } || { echo "  ✗ бекап порожній"; FAIL=$((FAIL+1)); }
 
+echo "=== 12. Атомарність update (транзакція + row lock) ==="
+curl -s -X POST "http://127.0.0.1:$API_PORT/api/collections/restaurants" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"id":"race1","name":"Base"}' > /dev/null
+# Два конкурентні PUT з різними полями — обидва мають вижити
+curl -s -X PUT "http://127.0.0.1:$API_PORT/api/collections/restaurants/race1" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"fieldA":"A"}' > /dev/null &
+PID_A=$!
+curl -s -X PUT "http://127.0.0.1:$API_PORT/api/collections/restaurants/race1" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"fieldB":"B"}' > /dev/null &
+PID_B=$!
+wait "$PID_A" "$PID_B"
+RACE=$(curl -s "http://127.0.0.1:$API_PORT/api/collections/restaurants/race1" -H "Authorization: Bearer $TOKEN")
+assert "конкурентний update: поле A збережено" '"fieldA":"A"' "$RACE"
+assert "конкурентний update: поле B збережено" '"fieldB":"B"' "$RACE"
+
+echo "=== 13. Строгий insert auth (гонка дубліката email) ==="
+REG1=$(curl -s -X POST "http://127.0.0.1:$API_PORT/auth/register" -H "Content-Type: application/json" -d '{"email":"strict@int.ua","password":"Strict123!","displayName":"S1"}')
+assert "перша реєстрація ok" '"ok":true' "$REG1"
+REG2=$(curl -s -X POST "http://127.0.0.1:$API_PORT/auth/register" -H "Content-Type: application/json" -d '{"email":"strict@int.ua","password":"Other123!","displayName":"S2"}')
+assert "повторна реєстрація → відхилено" "Email already in use" "$REG2"
+STRICT_LOGIN=$(curl -s -X POST "http://127.0.0.1:$API_PORT/auth/login" -H "Content-Type: application/json" -d '{"email":"strict@int.ua","password":"Strict123!"}')
+assert "оригінальний пароль не перезаписано" '"ok":true' "$STRICT_LOGIN"
+
 echo ""
 echo "==================================="
 echo "Пройдено: $PASS, Провалено: $FAIL"
