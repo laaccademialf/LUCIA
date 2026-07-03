@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-and-build:
+    name: Юніт-тести + збірка фронтенду
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Встановлення залежностей (npm ci — як на сервері)
+        run: npm ci
+      - name: Юніт-тести
+        run: npm test
+      - name: Продакшн-збірка
+        run: npm run build
+
+  integration:
+    name: Інтеграційні тести бекенда (MariaDB)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Встановлення залежностей
+        run: npm ci
+      - name: Інтеграційні тести (docker mariadb 10.11, повний прод-сценарій)
+        run: npm run test:integration
