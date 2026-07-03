@@ -1228,7 +1228,50 @@ const getUserProfileById = async (id, dbConfig) => {
 
 const getSessionByToken = async (token, dbConfig) => {
   if (!token) return null;
-  return getCollectionItemData("authSessions", token, dbConfig);
+  const session = await getCollectionItemData("authSessions", token, dbConfig);
+  if (!session) return null;
+
+  // TTL: прострочені сесії вважаються недійсними і видаляються ліниво.
+  if (isSessionExpired(session)) {
+    await deleteSession(token, dbConfig).catch(() => {});
+    return null;
+  }
+  return session;
+};
+
+// --- TTL сесій -------------------------------------------------------------
+// LUCIA_SESSION_TTL_HOURS (default 720 = 30 діб). 0 — вимкнути TTL.
+const SESSION_TTL_HOURS = (() => {
+  const parsed = Number.parseFloat(String(process.env.LUCIA_SESSION_TTL_HOURS ?? "720"));
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 720;
+})();
+const SESSION_TTL_MS = SESSION_TTL_HOURS * 60 * 60 * 1000;
+
+const isSessionExpired = (session) => {
+  if (!SESSION_TTL_MS) return false;
+  const ts = Date.parse(String(session?.createdAt || session?.created_at || ""));
+  if (!Number.isFinite(ts)) return false; // без дати — не чіпаємо (legacy)
+  return Date.now() - ts > SESSION_TTL_MS;
+};
+
+// Періодична чистка прострочених сесій (кожні 6 годин + при старті).
+const cleanupExpiredSessions = async () => {
+  if (!SESSION_TTL_MS) return;
+  try {
+    const dbConfig = getAssetsRuntimeConfig();
+    const sessions = await getCollectionItemsData("authSessions", dbConfig);
+    let removed = 0;
+    for (const session of Array.isArray(sessions) ? sessions : []) {
+      if (!session?.id || !isSessionExpired(session)) continue;
+      await deleteCollectionItemData("authSessions", session.id, dbConfig).catch(() => {});
+      removed += 1;
+    }
+    if (removed > 0) {
+      console.log(`[sessions] Cleanup: removed ${removed} expired sessions (TTL ${SESSION_TTL_HOURS}h)`);
+    }
+  } catch (error) {
+    console.warn(`[sessions] Cleanup failed: ${error.message}`);
+  }
 };
 
 const createSession = async (userId, dbConfig) => {
@@ -1521,18 +1564,14 @@ const getCollectionItemsData = async (collectionName, dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
+    return withMySqlPooledConnection(dbConfig.mysqlConfig, async (conn) => {
       const tableName = await resolveCollectionTableMySql(conn, collection, { createIfMissing: false });
       if (!tableName) return [];
       const [rows] = await conn.execute(`SELECT * FROM \`${tableName}\``);
       return sortByPayloadTimestampsDesc(
         rows.map((row) => mapMySqlRowToDocument(row))
       );
-    } finally {
-      await conn.end();
-    }
+    });
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -1567,17 +1606,13 @@ const getCollectionItemData = async (collectionName, id, dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
+    return withMySqlPooledConnection(dbConfig.mysqlConfig, async (conn) => {
       const tableName = await resolveCollectionTableMySql(conn, collection, { createIfMissing: false });
       if (!tableName) return null;
       const [rows] = await conn.execute(`SELECT * FROM \`${tableName}\` WHERE id = ? LIMIT 1`, [itemId]);
       if (!rows.length) return null;
       return mapMySqlRowToDocument(rows[0]);
-    } finally {
-      await conn.end();
-    }
+    });
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -1617,9 +1652,7 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
+    return withMySqlPooledConnection(dbConfig.mysqlConfig, async (conn) => {
       const tableName = await resolveCollectionTableMySql(conn, collection);
       const isFlatTable = String(tableName || "").endsWith("_flat");
       const existingColumns = await getMySqlColumns(conn, tableName);
@@ -1705,9 +1738,7 @@ const createCollectionItemData = async (collectionName, payload, dbConfig) => {
         insertValues
       );
       return nextId;
-    } finally {
-      await conn.end();
-    }
+    });
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -1774,16 +1805,12 @@ const deleteCollectionItemData = async (collectionName, id, dbConfig) => {
   }
 
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
+    return withMySqlPooledConnection(dbConfig.mysqlConfig, async (conn) => {
       const tableName = await resolveCollectionTableMySql(conn, collection, { createIfMissing: false });
       if (!tableName) return;
       await conn.execute(`DELETE FROM \`${tableName}\` WHERE id = ?`, [itemId]);
       return;
-    } finally {
-      await conn.end();
-    }
+    });
   }
 
   if (dbConfig.dbEngine === "postgres") {
@@ -3452,6 +3479,60 @@ const handleAuthRegister = async (req, res) => {
   });
 };
 
+// --- Rate limiting логіна ---------------------------------------------------
+// Захист від брутфорсу паролів. Ковзне вікно, окремі ліміти на IP та email.
+// LUCIA_LOGIN_RATE_LIMIT (default 10 невдалих спроб) за
+// LUCIA_LOGIN_RATE_WINDOW_MINUTES (default 15 хв) → 429 Too Many Requests.
+// Успішний логін скидає лічильники. 0 — вимкнути.
+const LOGIN_RATE_LIMIT = (() => {
+  const parsed = Number.parseInt(String(process.env.LUCIA_LOGIN_RATE_LIMIT ?? "10"), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 10;
+})();
+const LOGIN_RATE_WINDOW_MS = (() => {
+  const parsed = Number.parseFloat(String(process.env.LUCIA_LOGIN_RATE_WINDOW_MINUTES ?? "15"));
+  return (Number.isFinite(parsed) && parsed > 0 ? parsed : 15) * 60 * 1000;
+})();
+const loginAttempts = new Map(); // key -> [timestamps]
+
+const clientIpFromRequest = (req) => {
+  const forwarded = String(req?.headers?.["x-forwarded-for"] || "")
+    .split(",")[0]
+    .trim();
+  return forwarded || String(req?.socket?.remoteAddress || "unknown");
+};
+
+const pruneLoginAttempts = (key) => {
+  const now = Date.now();
+  const list = (loginAttempts.get(key) || []).filter((ts) => now - ts < LOGIN_RATE_WINDOW_MS);
+  if (list.length > 0) loginAttempts.set(key, list);
+  else loginAttempts.delete(key);
+  return list;
+};
+
+const isLoginRateLimited = (req, email) => {
+  if (!LOGIN_RATE_LIMIT) return false;
+  const byIp = pruneLoginAttempts(`ip:${clientIpFromRequest(req)}`);
+  const byEmail = email ? pruneLoginAttempts(`email:${email}`) : [];
+  // Ліміт на email трохи жорсткіший за IP (той самий акаунт з різних IP).
+  return byIp.length >= LOGIN_RATE_LIMIT * 2 || byEmail.length >= LOGIN_RATE_LIMIT;
+};
+
+const recordFailedLogin = (req, email) => {
+  if (!LOGIN_RATE_LIMIT) return;
+  const now = Date.now();
+  const ipKey = `ip:${clientIpFromRequest(req)}`;
+  const emailKey = email ? `email:${email}` : "";
+  loginAttempts.set(ipKey, [...pruneLoginAttempts(ipKey), now]);
+  if (emailKey) loginAttempts.set(emailKey, [...pruneLoginAttempts(emailKey), now]);
+  // Обмеження росту мапи
+  if (loginAttempts.size > 10000) loginAttempts.clear();
+};
+
+const resetLoginAttempts = (req, email) => {
+  loginAttempts.delete(`ip:${clientIpFromRequest(req)}`);
+  if (email) loginAttempts.delete(`email:${email}`);
+};
+
 const handleAuthLogin = async (req, res) => {
   let payload;
   try {
@@ -3466,10 +3547,18 @@ const handleAuthLogin = async (req, res) => {
     return sendJson(res, 400, { ok: false, error: "email and password are required" });
   }
 
+  if (isLoginRateLimited(req, email)) {
+    return sendJson(res, 429, {
+      ok: false,
+      error: "Забагато невдалих спроб входу. Спробуйте пізніше.",
+    });
+  }
+
   const dbConfig = getAssetsRuntimeConfig();
   await ensureBootstrapAdminUser(dbConfig);
   const authUsers = await getAuthUsersByEmail(email, dbConfig);
   if (!Array.isArray(authUsers) || authUsers.length === 0) {
+    recordFailedLogin(req, email);
     return sendJson(res, 401, { ok: false, error: "Invalid credentials" });
   }
 
@@ -3479,6 +3568,7 @@ const handleAuthLogin = async (req, res) => {
   });
 
   if (passwordMatchedCandidates.length === 0) {
+    recordFailedLogin(req, email);
     return sendJson(res, 401, { ok: false, error: "Invalid credentials" });
   }
 
@@ -3566,6 +3656,7 @@ const handleAuthLogin = async (req, res) => {
   }
 
   const token = await createSession(authUser.id, dbConfig);
+  resetLoginAttempts(req, email);
   return sendJson(res, 200, {
     ok: true,
     token,
@@ -3899,9 +3990,7 @@ const handleAssetsBatchImport = async (req, res) => {
 
   // --- MySQL: optimized single-connection batch ---
   if (dbConfig.dbEngine === "mysql") {
-    const mysql = await import("mysql2/promise");
-    const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
-    try {
+    await withMySqlPooledConnection(dbConfig.mysqlConfig, async (conn) => {
       const tableName = await resolveCollectionTableMySql(conn, "assets");
       const isFlatTable = String(tableName || "").endsWith("_flat");
 
@@ -4025,9 +4114,7 @@ const handleAssetsBatchImport = async (req, res) => {
           }
         }
       }
-    } finally {
-      await conn.end();
-    }
+    });
 
     broadcastAssetsSse("assets-change", { type: "batch-import", at: nowIso(), created: results.created, updated: results.updated });
     invalidateAssetsCache();
@@ -5876,6 +5963,14 @@ server.listen(PORT, HOST, () => {
   setInterval(() => {
     void cleanupOldNotifications();
   }, 24 * 60 * 60 * 1000);
+
+  // Періодична чистка прострочених auth-сесій (TTL LUCIA_SESSION_TTL_HOURS).
+  setImmediate(() => {
+    void cleanupExpiredSessions();
+  });
+  setInterval(() => {
+    void cleanupExpiredSessions();
+  }, 6 * 60 * 60 * 1000);
 
   // Warm the /api/assets cache in the background so the very first user
   // request hits a hot cache (no DB read, no JSON.stringify, no gzip).

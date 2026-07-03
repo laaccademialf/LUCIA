@@ -134,6 +134,30 @@ for name in authUsers authusers AUTHUSERS authSessions authsessions lucia_authUs
   assert "заборонено: $name" "Forbidden" "$RESP"
 done
 
+echo "=== 9. Унікальний індекс email (після консолідації) ==="
+IDX=$(sql "SELECT COUNT(*) AS n FROM information_schema.statistics WHERE table_schema='lucia_int' AND LOWER(table_name)='lucia_authusers_flat' AND index_name='uniq_auth_email'" | tail -1)
+assert "UNIQUE індекс uniq_auth_email існує" "1" "$IDX"
+DUP_INSERT=$(docker exec "$DB_CONTAINER" mariadb -uroot -proot lucia_int -e "INSERT INTO lucia_authUsers_flat (id, email) VALUES ('dupe_test','fresh@int.ua')" 2>&1 || true)
+assert "дублікат email відхилено БД" "Duplicate" "$DUP_INSERT"
+
+echo "=== 10. Rate limiting логіна ==="
+RL_LAST=""
+for i in $(seq 1 12); do
+  RL_LAST=$(curl -s -X POST "http://127.0.0.1:$API_PORT/auth/login" -H "Content-Type: application/json" -d '{"email":"bruteforce@int.ua","password":"WRONG'$i'"}')
+done
+assert "після 10+ невдалих спроб → 429" "Забагато невдалих спроб" "$RL_LAST"
+RL_OK=$(curl -s -X POST "http://127.0.0.1:$API_PORT/auth/login" -H "Content-Type: application/json" -d '{"email":"fresh@int.ua","password":"Int123!"}')
+assert "легітимний користувач не заблокований (інший email, той самий IP)" '"ok":true' "$RL_OK"
+
+echo "=== 11. Бекап (через контейнер, як у проді) ==="
+docker cp scripts/custom-db/backup-db.sh "$DB_CONTAINER:/tmp/backup-db.sh"
+BK_OUT=$(docker exec -e MYSQL_HOST=127.0.0.1 -e MYSQL_PORT=3306 -e MYSQL_USER=root -e MYSQL_PASSWORD=root -e MYSQL_DATABASE=lucia_int -e BACKUP_DIR=/tmp/lucia-backups "$DB_CONTAINER" bash /tmp/backup-db.sh 2>&1) || true
+assert "бекап створено" "✓ Готово" "$BK_OUT"
+BK_COUNT=$(docker exec "$DB_CONTAINER" sh -c 'ls /tmp/lucia-backups/lucia_*.sql.gz 2>/dev/null | wc -l')
+assert "файл бекапа існує" "1" "$BK_COUNT"
+BK_CONTENT=$(docker exec "$DB_CONTAINER" sh -c 'cat /tmp/lucia-backups/lucia_*.sql.gz | gunzip | grep -c lucia_authUsers_flat' || true)
+[[ "$BK_CONTENT" -gt 0 ]] && { echo "  ✓ бекап містить дані authUsers"; PASS=$((PASS+1)); } || { echo "  ✗ бекап порожній"; FAIL=$((FAIL+1)); }
+
 echo ""
 echo "==================================="
 echo "Пройдено: $PASS, Провалено: $FAIL"

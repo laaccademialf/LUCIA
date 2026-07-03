@@ -222,6 +222,107 @@ const main = async () => {
       console.log(`\n✓ Готово. Старі таблиці збережено як zz_backup_*_${stamp}.`);
       console.log("Після перевірки роботи їх можна видалити. Перезапустіть бекенд, щоб скинути кеш résolution таблиць.");
     }
+
+    // ------------------------------------------------------------------
+    // Крок 2: цілісність authUsers — дедуплікація email + UNIQUE індекс.
+    // Дублікати email — джерело недетермінованого логіна («який запис
+    // виграє сьогодні»). Лишаємо найсвіжіший запис, решту — в бекап-таблицю.
+    // ------------------------------------------------------------------
+    console.log(`\n=== Цілісність authUsers (email) ===`);
+    const [authTables] = await conn.execute(
+      `SELECT table_name AS t FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND LOWER(table_name) = 'lucia_authusers_flat'`
+    );
+    const authTable = String(authTables?.[0]?.t || "");
+    if (!authTable) {
+      console.log("Таблиця lucia_authUsers_flat не знайдена — пропускаю.");
+    } else {
+      // email-колонка (може бути відсутня після консолідації payload-only)
+      const [cols] = await conn.execute(
+        `SELECT COLUMN_NAME AS c FROM information_schema.columns
+         WHERE table_schema = DATABASE() AND table_name = ?`,
+        [authTable]
+      );
+      const colNames = new Set(cols.map((r) => String(r.c)));
+      if (!colNames.has("email")) {
+        console.log(`[authUsers] Додаю колонку email у ${authTable}`);
+        if (APPLY) {
+          await conn.execute(`ALTER TABLE ${quoteIdent(authTable)} ADD COLUMN email VARCHAR(255) NULL`);
+        }
+      }
+      if (APPLY) {
+        await conn.execute(
+          `UPDATE ${quoteIdent(authTable)}
+           SET email = LOWER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(payload, '$.email'))))
+           WHERE (email IS NULL OR email = '') AND payload IS NOT NULL`
+        );
+        await conn.execute(
+          `UPDATE ${quoteIdent(authTable)} SET email = LOWER(TRIM(email)) WHERE email IS NOT NULL`
+        );
+      }
+
+      // Дублікати email
+      const [dupes] = await conn.execute(
+        `SELECT LOWER(TRIM(email)) AS e, COUNT(*) AS n FROM ${quoteIdent(authTable)}
+         WHERE email IS NOT NULL AND email != ''
+         GROUP BY LOWER(TRIM(email)) HAVING COUNT(*) > 1`
+      );
+      if (dupes.length === 0) {
+        console.log("[authUsers] Дублікатів email немає. ✓");
+      } else {
+        console.log(`[authUsers] Знайдено ${dupes.length} email з дублікатами:`);
+        for (const dupe of dupes) {
+          const [rows] = await conn.execute(
+            `SELECT * FROM ${quoteIdent(authTable)} WHERE LOWER(TRIM(email)) = ?`,
+            [dupe.e]
+          );
+          const docs = rows.map(rowToDocument).sort((a, b) => rowTimestamp(b) - rowTimestamp(a));
+          const keep = docs[0];
+          const drop = docs.slice(1);
+          console.log(`  ${dupe.e}: лишаю ${keep.id}, прибираю ${drop.map((d) => d.id).join(", ")}`);
+          if (APPLY) {
+            const dupeBackup = `zz_backup_authusers_dupes_${stamp}`;
+            await conn.execute(`
+              CREATE TABLE IF NOT EXISTS ${quoteIdent(dupeBackup)} (
+                id VARCHAR(255) PRIMARY KEY,
+                payload JSON NULL,
+                removed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              )
+            `);
+            for (const doc of drop) {
+              const { id, ...payload } = doc;
+              await conn.execute(
+                `INSERT IGNORE INTO ${quoteIdent(dupeBackup)} (id, payload) VALUES (?, ?)`,
+                [id, JSON.stringify(payload)]
+              );
+              await conn.execute(`DELETE FROM ${quoteIdent(authTable)} WHERE id = ?`, [id]);
+            }
+          }
+        }
+      }
+
+      // UNIQUE індекс
+      const [indexes] = await conn.execute(
+        `SELECT INDEX_NAME AS i FROM information_schema.statistics
+         WHERE table_schema = DATABASE() AND table_name = ? AND index_name = 'uniq_auth_email'`,
+        [authTable]
+      );
+      if (indexes.length > 0) {
+        console.log("[authUsers] UNIQUE індекс на email вже існує. ✓");
+      } else {
+        console.log(`[authUsers] Створюю UNIQUE індекс uniq_auth_email на ${authTable}(email)`);
+        if (APPLY) {
+          try {
+            await conn.execute(
+              `CREATE UNIQUE INDEX uniq_auth_email ON ${quoteIdent(authTable)} (email)`
+            );
+            console.log("[authUsers] ✓ Індекс створено — дублікати email тепер неможливі на рівні БД.");
+          } catch (error) {
+            console.error(`[authUsers] ✗ Не вдалося створити індекс: ${error.message}`);
+          }
+        }
+      }
+    }
   } finally {
     await conn.end();
   }
