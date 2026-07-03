@@ -6,6 +6,7 @@ import path from "node:path";
 import net from "node:net";
 import zlib from "node:zlib";
 import { DEFAULT_MENU_STRUCTURE } from "../../src/data/defaultMenuStructure.js";
+import { KNOWN_COLLECTIONS } from "./collections.js";
 
 const loadEnvFile = (filePath) => {
   try {
@@ -1273,6 +1274,39 @@ const normalizeCollectionName = (name) => {
   return cleaned;
 };
 
+// ============================================================================
+// РЕЄСТР КОЛЕКЦІЙ («закони бази» — фіксовані)
+// Повний перелік — у ./collections.js (спільний із скриптом консолідації).
+// Таблиці створюються ЛИШЕ для відомих колекцій і ЛИШЕ при записі. Читання
+// неіснуючої колекції повертає порожній результат і НІКОЛИ не створює таблицю.
+// Розширення без деплою: env LUCIA_EXTRA_COLLECTIONS=назва1,назва2
+// Аварійний вимикач (стара поведінка): LUCIA_ALLOW_UNKNOWN_COLLECTIONS=true
+// ============================================================================
+const EXTRA_COLLECTIONS = String(process.env.LUCIA_EXTRA_COLLECTIONS || "")
+  .split(",")
+  .map((v) => v.trim())
+  .filter((v) => /^[a-zA-Z0-9_-]+$/.test(v));
+
+const KNOWN_COLLECTIONS_BY_LOWER = new Map(
+  [...KNOWN_COLLECTIONS, ...EXTRA_COLLECTIONS].map((name) => [name.toLowerCase(), name])
+);
+
+// Повертає канонічне ім'я колекції (з правильним регістром) або null.
+const resolveKnownCollection = (name) =>
+  KNOWN_COLLECTIONS_BY_LOWER.get(String(name || "").trim().toLowerCase()) || null;
+
+const ALLOW_UNKNOWN_COLLECTIONS =
+  String(process.env.LUCIA_ALLOW_UNKNOWN_COLLECTIONS || "").trim().toLowerCase() === "true";
+
+const assertCollectionCreatable = (collectionName) => {
+  if (resolveKnownCollection(collectionName) || ALLOW_UNKNOWN_COLLECTIONS) return;
+  throw new Error(
+    `Unknown collection "${collectionName}": table auto-creation refused. ` +
+      `Add it to KNOWN_COLLECTIONS in server.js, or set LUCIA_EXTRA_COLLECTIONS=${collectionName}, ` +
+      `or (not recommended) LUCIA_ALLOW_UNKNOWN_COLLECTIONS=true.`
+  );
+};
+
 const tableNameForCollection = (collectionName) =>
   `lucia_${String(collectionName || "").replace(/-/g, "_")}`;
 
@@ -1348,7 +1382,11 @@ const resolveExistingTableNameMySql = async (conn, tableName) => {
   return resolved;
 };
 
-const resolveCollectionTableMySql = async (conn, collectionName, { preferFlat = true } = {}) => {
+const resolveCollectionTableMySql = async (
+  conn,
+  collectionName,
+  { preferFlat = true, createIfMissing = true } = {}
+) => {
   const baseTable = tableNameForCollection(collectionName);
   const flatTable = `${baseTable}_flat`;
 
@@ -1368,6 +1406,13 @@ const resolveCollectionTableMySql = async (conn, collectionName, { preferFlat = 
       return existingBaseTable;
     }
 
+    // Читання неіснуючої колекції НЕ створює таблицю («закони бази» фіксовані):
+    // повертаємо "" — виклики трактують це як порожню колекцію.
+    if (!createIfMissing) {
+      return "";
+    }
+
+    assertCollectionCreatable(collectionName);
     await ensureCollectionFlatTableMySql(conn, collectionName);
     return flatTable;
   }
@@ -1376,13 +1421,29 @@ const resolveCollectionTableMySql = async (conn, collectionName, { preferFlat = 
     return baseTable;
   }
 
+  if (!createIfMissing) {
+    return "";
+  }
+
   // fallback: create base table for backward compatibility
+  assertCollectionCreatable(collectionName);
   await ensureGenericTableMySql(conn, collectionName);
   return baseTable;
 };
 
+const tableExistsPostgres = async (client, tableName) => {
+  const result = await client.query(
+    `SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1 LIMIT 1`,
+    [tableName]
+  );
+  return result.rows.length > 0;
+};
+
 const ensureGenericTablePostgres = async (client, collectionName) => {
   const tableName = tableNameForCollection(collectionName);
+  if (!(await tableExistsPostgres(client, tableName))) {
+    assertCollectionCreatable(collectionName);
+  }
   await client.query(`
     CREATE TABLE IF NOT EXISTS "${tableName}" (
       id TEXT PRIMARY KEY,
@@ -1463,7 +1524,8 @@ const getCollectionItemsData = async (collectionName, dbConfig) => {
     const mysql = await import("mysql2/promise");
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
-      const tableName = await resolveCollectionTableMySql(conn, collection);
+      const tableName = await resolveCollectionTableMySql(conn, collection, { createIfMissing: false });
+      if (!tableName) return [];
       const [rows] = await conn.execute(`SELECT * FROM \`${tableName}\``);
       return sortByPayloadTimestampsDesc(
         rows.map((row) => mapMySqlRowToDocument(row))
@@ -1478,7 +1540,8 @@ const getCollectionItemsData = async (collectionName, dbConfig) => {
     const client = new Client({ connectionString: dbConfig.postgresUrl });
     await client.connect();
     try {
-      const tableName = await ensureGenericTablePostgres(client, collection);
+      const tableName = tableNameForCollection(collection);
+      if (!(await tableExistsPostgres(client, tableName))) return [];
       const result = await client.query(`SELECT id, payload FROM "${tableName}"`);
       return sortByPayloadTimestampsDesc(
         result.rows.map((row) => ({ id: row.id, ...parsePayloadField(row.payload) }))
@@ -1507,7 +1570,8 @@ const getCollectionItemData = async (collectionName, id, dbConfig) => {
     const mysql = await import("mysql2/promise");
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
-      const tableName = await resolveCollectionTableMySql(conn, collection);
+      const tableName = await resolveCollectionTableMySql(conn, collection, { createIfMissing: false });
+      if (!tableName) return null;
       const [rows] = await conn.execute(`SELECT * FROM \`${tableName}\` WHERE id = ? LIMIT 1`, [itemId]);
       if (!rows.length) return null;
       return mapMySqlRowToDocument(rows[0]);
@@ -1521,7 +1585,8 @@ const getCollectionItemData = async (collectionName, id, dbConfig) => {
     const client = new Client({ connectionString: dbConfig.postgresUrl });
     await client.connect();
     try {
-      const tableName = await ensureGenericTablePostgres(client, collection);
+      const tableName = tableNameForCollection(collection);
+      if (!(await tableExistsPostgres(client, tableName))) return null;
       const result = await client.query(`SELECT id, payload FROM "${tableName}" WHERE id = $1 LIMIT 1`, [itemId]);
       if (!result.rows.length) return null;
       return { id: result.rows[0].id, ...parsePayloadField(result.rows[0].payload) };
@@ -1712,7 +1777,8 @@ const deleteCollectionItemData = async (collectionName, id, dbConfig) => {
     const mysql = await import("mysql2/promise");
     const conn = await mysql.default.createConnection(dbConfig.mysqlConfig);
     try {
-      const tableName = await resolveCollectionTableMySql(conn, collection);
+      const tableName = await resolveCollectionTableMySql(conn, collection, { createIfMissing: false });
+      if (!tableName) return;
       await conn.execute(`DELETE FROM \`${tableName}\` WHERE id = ?`, [itemId]);
       return;
     } finally {
@@ -1725,7 +1791,8 @@ const deleteCollectionItemData = async (collectionName, id, dbConfig) => {
     const client = new Client({ connectionString: dbConfig.postgresUrl });
     await client.connect();
     try {
-      const tableName = await ensureGenericTablePostgres(client, collection);
+      const tableName = tableNameForCollection(collection);
+      if (!(await tableExistsPostgres(client, tableName))) return;
       await client.query(`DELETE FROM "${tableName}" WHERE id = $1`, [itemId]);
       return;
     } finally {

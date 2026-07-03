@@ -17,6 +17,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "bash scripts/custom-db/integration-test.sh",
     "deploy:archive": "bash scripts/make-deploy-archive.sh",
     "premigration:server": "node scripts/git-meta.cjs",
     "migration:server": "node scripts/custom-db/server.js",
