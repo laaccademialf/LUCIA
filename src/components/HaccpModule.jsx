@@ -3086,28 +3086,67 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
 
   return (
     <div className="space-y-4">
-      <div className="card border border-slate-200 bg-white px-5 py-4 text-slate-900 shadow-xl">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div className="card border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-xl sticky top-0 z-20">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <ClipboardCheck size={18} className="text-emerald-600" />
-            <h2 className="text-lg font-semibold">Аудит</h2>
+            <h2 className="text-base font-semibold">Аудит</h2>
+            {isCompleted ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                <CheckCircle2 size={12} /> Завершено
+              </span>
+            ) : currentAuditId ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                Чернетка
+              </span>
+            ) : null}
           </div>
-          {isCompleted ? (
-            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-              <CheckCircle2 size={13} /> Завершено
-            </span>
-          ) : currentAuditId ? (
-            <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-              Чернетка
-            </span>
+
+          {effectiveRestaurantId && selectedTemplate ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {dirty ? <span className="text-xs font-medium text-amber-600">• незбережені зміни</span> : null}
+              {!isAuditInProgress && !isCompleted ? (
+                <span className="text-xs text-slate-500">• оцінка після старту</span>
+              ) : null}
+              {isAuditInProgress && !canCompleteAudit ? (
+                <span className="text-xs text-red-600">• залишилось заповнити: {completionIssues.length}</span>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => persist("draft")}
+                disabled={submitting || isCompleted}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                <Save size={14} /> Зберегти чернетку
+              </button>
+              {!hasAuditStarted ? (
+                <button
+                  type="button"
+                  onClick={handleStartAudit}
+                  disabled={submitting || isCompleted}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+                >
+                  <CheckCircle2 size={14} /> Розпочати аудит
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => persist("completed")}
+                  disabled={submitting || !canCompleteAudit}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+                >
+                  <CheckCircle2 size={14} /> Завершити аудит
+                </button>
+              )}
+            </div>
           ) : null}
         </div>
 
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-start">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-end">
           <div className="min-w-0 xl:basis-[520px] xl:flex-none">
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-[150px_220px_auto]">
             <div>
-              <label className="text-sm font-semibold text-slate-800">Заклад</label>
+              <label className="text-xs font-semibold text-slate-700">Заклад</label>
               <select
                 className={compactInputClass}
                 value={effectiveRestaurantId || ""}
@@ -3122,7 +3161,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
             </div>
 
             <div>
-              <label className="text-sm font-semibold text-slate-800">Шаблон аудиту</label>
+              <label className="text-xs font-semibold text-slate-700">Шаблон аудиту</label>
               <select
                 className={compactInputClass}
                 value={selectedTemplateId || ""}
@@ -3136,7 +3175,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
             </div>
 
             <div>
-              <label className="text-sm font-semibold text-slate-800">Дата</label>
+              <label className="text-xs font-semibold text-slate-700">Дата</label>
               <div className="mt-1">
                 <DatePickerPopover
                   value={selectedDate}
@@ -3153,30 +3192,30 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
           </div>
 
           {effectiveRestaurantId && selectedTemplate ? (
-            <div className="min-w-0 flex-1 xl:min-w-[460px] xl:self-start">
-              <div className="flex h-full flex-col rounded-xl border border-slate-200 bg-slate-50 px-5 py-3">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-800">Підсумкова оцінка</p>
-                    <div className="mt-0.5 flex items-center gap-2.5">
-                      <span className="text-4xl font-extrabold text-slate-900">{roundPercent(scores.totalPercent)}%</span>
-                      <ScoreBadge percent={scores.totalPercent} />
-                    </div>
+            <div className="min-w-0 flex-1 xl:min-w-[420px]">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-3xl font-extrabold leading-none text-slate-900">{roundPercent(scores.totalPercent)}%</span>
+                    <ScoreBadge percent={scores.totalPercent} />
                   </div>
-                  <div className="text-left text-sm text-slate-600 sm:text-right">
-                    <p>Оцінено пунктів: <span className="font-semibold text-slate-900">{scores.assessedItems} з {scores.totalItems}</span></p>
+                  <div className="text-right text-xs text-slate-600">
+                    <p>Оцінено: <span className="font-semibold text-slate-900">{scores.assessedItems} з {scores.totalItems}</span></p>
                     <div className="mt-0.5"><WeightSumBadge sum={sectionWeightSum} label="Ваги розділів" /></div>
                   </div>
                 </div>
-                <div className="mt-2.5 h-3 w-full overflow-hidden rounded-full bg-white">
+                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white">
                   <div className={`h-full rounded-full transition-all ${gradeBandFor(scores.totalPercent).barClass}`} style={{ width: `${Math.min(100, Math.max(0, roundPercent(scores.totalPercent)))}%` }} />
                 </div>
-                <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-slate-500">
+                <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
                   {RATING_SCALE.map((rating) => (
-                    <span key={rating.value} className="inline-flex items-center gap-1.5">
-                      <span className={`h-2.5 w-2.5 rounded-full ${rating.dotClass}`} /> {rating.label} — {Number.isFinite(rating.percent) ? `${rating.percent}%` : "не враховується"}
+                    <span key={rating.value} className="inline-flex items-center gap-1">
+                      <span className={`h-2 w-2 rounded-full ${rating.dotClass}`} /> {rating.label} — {Number.isFinite(rating.percent) ? `${rating.percent}%` : "n/a"}
                     </span>
                   ))}
+                  {hasAuditStarted ? (
+                    <span className="text-slate-400">· старт: {new Date(auditStartedAt).toLocaleString("uk-UA")}</span>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -3283,53 +3322,6 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                 </div>
               );
             })}
-          </div>
-
-          <div className={`${cardClass} sticky bottom-0 z-10`}>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-sm text-slate-600">
-                Результат: <span className="font-bold text-slate-900">{roundPercent(scores.totalPercent)}%</span> · оцінено {scores.assessedItems}/{scores.totalItems}
-                {dirty ? <span className="ml-2 text-amber-600">• є незбережені зміни</span> : null}
-                {!isAuditInProgress && !isCompleted ? (
-                  <span className="ml-2 text-slate-500">• блоки оцінки стануть доступні після старту аудиту</span>
-                ) : null}
-                {isAuditInProgress && !canCompleteAudit ? (
-                  <span className="ml-2 text-red-600">• для завершення залишилось заповнити: {completionIssues.length}</span>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => persist("draft")}
-                  disabled={submitting || isCompleted}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                >
-                  <Save size={15} /> Зберегти чернетку
-                </button>
-                {!hasAuditStarted ? (
-                  <button
-                    type="button"
-                    onClick={handleStartAudit}
-                    disabled={submitting || isCompleted}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
-                  >
-                    <CheckCircle2 size={15} /> Розпочати аудит
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => persist("completed")}
-                    disabled={submitting || !canCompleteAudit}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
-                  >
-                    <CheckCircle2 size={15} /> Завершити аудит
-                  </button>
-                )}
-              </div>
-            </div>
-            {hasAuditStarted ? (
-              <p className="mt-2 text-xs text-slate-500">Початок аудиту: {new Date(auditStartedAt).toLocaleString("uk-UA")}</p>
-            ) : null}
           </div>
         </>
       )}
