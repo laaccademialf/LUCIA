@@ -31,6 +31,7 @@ import DatePickerPopover from "./DatePickerPopover";
 import DateRangePickerPopover from "./DateRangePickerPopover";
 import {
   createCollectionItemApi,
+  getCollectionsApiBase,
   isCollectionsApiEnabled,
   listCollectionItemsApi,
   listCollectionItemsConditionalApi,
@@ -271,6 +272,79 @@ const collectIssueItemIds = (responses) => {
 };
 
 const getPhotoSrc = (photo) => String(photo?.url || photo?.dataUrl || "").trim();
+
+// Приводимо джерело зображення (URL або dataURL) до стисненого JPEG dataURL для вставки у PDF.
+// Спершу пробуємо fetch → object URL (щоб canvas не «затруївся»), із запасним варіантом через <img>.
+// У разі помилки (CORS тощо) повертаємо null, і фото просто не потрапляє у PDF.
+const fetchImageObjectUrl = async (src) => {
+  try {
+    const res = await fetch(src, { mode: "cors" });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  }
+};
+
+const loadPdfImage = async (src, maxWidth = 700) => {
+  const source = String(src || "").trim();
+  if (!source) return null;
+
+  const isData = source.startsWith("data:");
+  // Відносні шляхи (/app/img/...) резолвимо до абсолютних через API base,
+  // бо застосунок може працювати на іншому origin, ніж бекенд із медіа.
+  let resolved = source;
+  if (!isData && source.startsWith("/")) {
+    const base = String(getCollectionsApiBase() || "").replace(/\/+$/, "");
+    if (base) resolved = `${base}${source}`;
+  }
+
+  let objectUrl = null;
+  let loadSrc = resolved;
+  if (!isData) {
+    objectUrl = await fetchImageObjectUrl(resolved);
+    if (objectUrl) loadSrc = objectUrl;
+  }
+
+  try {
+    return await new Promise((resolve) => {
+      const img = new Image();
+      if (!objectUrl && !isData) img.crossOrigin = "anonymous";
+      img.onload = () => {
+        try {
+          const naturalW = img.naturalWidth || maxWidth;
+          const naturalH = img.naturalHeight || maxWidth;
+          const scale = Math.min(1, maxWidth / naturalW);
+          const w = Math.max(1, Math.round(naturalW * scale));
+          const h = Math.max(1, Math.round(naturalH * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) return resolve(null);
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve({ dataUrl: canvas.toDataURL("image/jpeg", 0.82), width: w, height: h });
+        } catch {
+          resolve(null);
+        }
+      };
+      img.onerror = () => resolve(null);
+      img.src = loadSrc;
+    });
+  } finally {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  }
+};
+
+// Кольори заливки клітинки «Оцінка» у PDF за значенням рейтингу.
+const PDF_RATING_FILL = {
+  2: { fill: "#16a34a", color: "#ffffff" }, // Добре — зелений
+  1: { fill: "#f59e0b", color: "#ffffff" }, // Задовільно — жовтий
+  0: { fill: "#dc2626", color: "#ffffff" }, // Погано — червоний
+  "-1": { fill: "#e2e8f0", color: "#334155" }, // N/A — сірий
+};
+
 const getCriticalPlanKey = (auditId, itemId) => `${String(auditId || "")}::${String(itemId || "")}`;
 const ACTION_PLANS_COLLECTION = "haccpActionPlans";
 
@@ -1313,6 +1387,45 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           .map((photo) => [String(photo?.id || ""), photo])
       );
 
+      // Збираємо унікальні фото пунктів (linked + legacy) без дублікатів.
+      const getItemPhotos = (response) => {
+        const linked = (Array.isArray(response?.photoIds) ? response.photoIds : [])
+          .map((photoId) => galleryById.get(String(photoId || "")))
+          .filter((photo) => Boolean(getPhotoSrc(photo)));
+        const legacy = (Array.isArray(response?.photos) ? response.photos : []).filter((photo) => Boolean(getPhotoSrc(photo)));
+        const merged = [...linked, ...legacy];
+        const seen = new Set();
+        return merged.filter((photo) => {
+          const key = String(photo?.id || getPhotoSrc(photo) || "");
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      };
+
+      // Попередньо завантажуємо всі фото в base64 (стиснуті), щоб pdfMake міг їх вставити.
+      const uniqueSrcs = [];
+      const seenSrc = new Set();
+      (templateForAudit?.sections || []).forEach((section) => {
+        (section?.items || []).forEach((item) => {
+          const response = selectedAudit?.responses?.[String(item?.id || "")] || {};
+          getItemPhotos(response).forEach((photo) => {
+            const src = getPhotoSrc(photo);
+            if (src && !seenSrc.has(src)) {
+              seenSrc.add(src);
+              uniqueSrcs.push(src);
+            }
+          });
+        });
+      });
+
+      const imageEntries = await Promise.all(
+        uniqueSrcs.map(async (src) => [src, await loadPdfImage(src, 700)])
+      );
+      const imageMap = new Map(imageEntries.filter(([, value]) => Boolean(value)));
+
+      const galleryEntries = [];
+
       const sectionBlocks = [];
       (templateForAudit?.sections || [])
         .slice()
@@ -1335,23 +1448,55 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
             .forEach((item, itemIndex) => {
               const itemId = String(item?.id || "");
+              const itemNumber = `${sectionIndex + 1}.${itemIndex + 1}`;
               const response = selectedAudit?.responses?.[itemId] || {};
               const rating = response?.value !== null && response?.value !== undefined
                 ? RATING_BY_VALUE?.[response?.value]
                 : null;
 
-              const photoCount = [
-                ...(Array.isArray(response?.photoIds) ? response.photoIds : [])
-                  .map((photoId) => galleryById.get(String(photoId || "")))
-                  .filter((photo) => Boolean(getPhotoSrc(photo))),
-                ...(Array.isArray(response?.photos) ? response.photos : []).filter((photo) => Boolean(getPhotoSrc(photo))),
-              ].length;
+              const itemPhotos = getItemPhotos(response);
+              const loadedPhotos = itemPhotos
+                .map((photo) => imageMap.get(getPhotoSrc(photo)))
+                .filter(Boolean);
+              const photoCount = itemPhotos.length;
+
+              // Заливка клітинки «Оцінка» кольором за рейтингом.
+              const fillDef = rating ? PDF_RATING_FILL[rating.value] : null;
+              const ratingCell = {
+                text: String(rating?.label || "Не оцінено"),
+                fontSize: 9,
+                bold: Boolean(fillDef),
+                alignment: "center",
+                color: fillDef ? fillDef.color : "#0f172a",
+                ...(fillDef ? { fillColor: fillDef.fill } : {}),
+              };
+
+              // Міні-фото під коментарем.
+              const inlineThumbs = loadedPhotos.slice(0, 4).map((im) => ({
+                width: "auto",
+                image: im.dataUrl,
+                fit: [40, 40],
+              }));
+              const commentText = String(response?.comment || "").trim() || "—";
+              const commentCell = inlineThumbs.length
+                ? {
+                    stack: [
+                      { text: commentText, fontSize: 9, color: "#334155" },
+                      { columns: inlineThumbs, columnGap: 4, margin: [0, 3, 0, 0] },
+                    ],
+                  }
+                : { text: commentText, fontSize: 9, color: "#334155" };
+
+              // Фото для фінальної галереї (усі підряд, по 4 на сторінку).
+              loadedPhotos.forEach((im) => {
+                galleryEntries.push({ label: itemNumber, dataUrl: im.dataUrl });
+              });
 
               itemRows.push([
-                { text: `${sectionIndex + 1}.${itemIndex + 1}`, fontSize: 9, color: "#334155" },
+                { text: itemNumber, fontSize: 9, color: "#334155" },
                 { text: String(item?.title || "Пункт без назви"), fontSize: 9, color: "#0f172a" },
-                { text: String(rating?.label || "Не оцінено"), fontSize: 9, color: "#0f172a" },
-                { text: String(response?.comment || "").trim() || "—", fontSize: 9, color: "#334155" },
+                ratingCell,
+                commentCell,
                 { text: String(photoCount), fontSize: 9, alignment: "center", color: "#334155" },
               ]);
             });
@@ -1387,6 +1532,39 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             margin: [0, 0, 0, 6],
           });
         });
+
+      // Фінальна галерея: усі додані фото по 4 на сторінку (2×2).
+      const galleryContent = [];
+      if (galleryEntries.length) {
+        galleryContent.push({
+          text: "Додані фотографії",
+          fontSize: 14,
+          bold: true,
+          color: "#0f172a",
+          margin: [0, 0, 0, 8],
+          pageBreak: "before",
+        });
+        for (let i = 0; i < galleryEntries.length; i += 4) {
+          const group = galleryEntries.slice(i, i + 4);
+          const rows = [];
+          for (let r = 0; r < group.length; r += 2) {
+            const pair = group.slice(r, r + 2).map((entry) => ({
+              stack: [
+                { image: entry.dataUrl, fit: [245, 175], alignment: "center" },
+                { text: entry.label, fontSize: 8, color: "#475569", alignment: "center", margin: [0, 3, 0, 0] },
+              ],
+              margin: [0, 0, 0, 10],
+            }));
+            while (pair.length < 2) pair.push({ text: "" });
+            rows.push(pair);
+          }
+          galleryContent.push({
+            table: { widths: ["*", "*"], body: rows },
+            layout: "noBorders",
+            ...(i > 0 ? { pageBreak: "before" } : {}),
+          });
+        }
+      }
 
       const documentDefinition = {
         pageSize: "A4",
@@ -1441,6 +1619,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             margin: [0, 0, 0, 8],
           },
           ...sectionBlocks,
+          ...galleryContent,
         ],
         defaultStyle: {
           font: "Roboto",
@@ -1466,99 +1645,98 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
 
   return (
     <div className="space-y-4">
-      <div className={cardClass}>
-        <div className="mb-3 flex flex-wrap items-center gap-3">
+      <div className="card p-3 bg-white border border-slate-200 text-slate-900 shadow-xl">
+        <div className="mb-2 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <ShieldCheck size={18} className="text-emerald-600" />
-            <h2 className="text-lg font-semibold whitespace-nowrap">Звіт з аудитів</h2>
+            <h2 className="text-base font-semibold whitespace-nowrap">Звіт з аудитів</h2>
           </div>
-          <div className="flex flex-wrap items-center gap-3 min-w-[220px]">
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Локація</label>
-              <select
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
-                value={selectedRestaurantId}
-                onChange={(e) => setSelectedRestaurantId(e.target.value)}
-              >
-                <option value="">Оберіть локацію</option>
-                <option value={ALL_LOCATIONS_VALUE}>Всі локації</option>
-                {availableRestaurants.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Шаблон</label>
-              <select
-                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
-                value={selectedTemplateId}
-                onChange={(e) => setSelectedTemplateId(e.target.value)}
-              >
-                <option value={ALL_TEMPLATES_VALUE}>Всі шаблони</option>
-                {availableTemplateOptions.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Період</label>
-              <div className="w-64">
-                <DateRangePickerPopover
-                  from={periodFrom}
-                  to={periodTo}
-                  onChange={({ from, to }) => { setPeriodFrom(from); setPeriodTo(to); }}
-                  min={availablePeriodBounds.min || undefined}
-                  max={availablePeriodBounds.max || undefined}
-                />
-              </div>
-            </div>
-            <div className="flex items-center gap-2 min-w-[360px]">
-              <label className="text-xs font-semibold text-slate-600 whitespace-nowrap">Перевірка</label>
-              <select
-                className="min-w-[300px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
-                value={selectedAuditId}
-                onChange={(e) => setSelectedAuditId(String(e.target.value || ""))}
-                disabled={!auditOptions.length}
-              >
-                {!auditOptions.length ? <option value="">Немає перевірок</option> : null}
-                {auditOptions.map((item) => (
-                  <option key={item.id} value={item.id}>{item.label}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
             <button
               type="button"
               disabled={isExportingExcel}
               onClick={() => { void handleExportExcel(); }}
-              className="inline-flex h-10 min-w-[190px] items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-emerald-600 bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70"
+              className="inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-70"
             >
-              <Download size={16} /> {isExportingExcel ? "Експорт..." : "Завантажити в Excel"}
+              <Download size={16} /> {isExportingExcel ? "Експорт..." : "Excel"}
             </button>
             <button
               type="button"
               disabled={isExportingPdf || !selectedAudit}
               onClick={() => { void handleExportPdf(); }}
-              className="inline-flex h-10 min-w-[190px] items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-sky-600 bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-70"
+              className="inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-sky-600 bg-sky-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-70"
             >
-              <Download size={16} /> {isExportingPdf ? "Експорт..." : "Завантажити в PDF"}
+              <Download size={16} /> {isExportingPdf ? "Експорт..." : "PDF"}
             </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-            <p className="text-xs text-slate-500">Дата перевірок</p>
-            <p className="font-semibold text-slate-900">{technicalInfo.dateLabel}</p>
+        <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold text-slate-600">Локація</span>
+            <select
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+              value={selectedRestaurantId}
+              onChange={(e) => setSelectedRestaurantId(e.target.value)}
+            >
+              <option value="">Оберіть локацію</option>
+              <option value={ALL_LOCATIONS_VALUE}>Всі локації</option>
+              {availableRestaurants.map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold text-slate-600">Шаблон</span>
+            <select
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+              value={selectedTemplateId}
+              onChange={(e) => setSelectedTemplateId(e.target.value)}
+            >
+              <option value={ALL_TEMPLATES_VALUE}>Всі шаблони</option>
+              {availableTemplateOptions.map((item) => (
+                <option key={item.id} value={item.id}>{item.name}</option>
+              ))}
+            </select>
+          </label>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-semibold text-slate-600">Період</span>
+            <DateRangePickerPopover
+              from={periodFrom}
+              to={periodTo}
+              onChange={({ from, to }) => { setPeriodFrom(from); setPeriodTo(to); }}
+              min={availablePeriodBounds.min || undefined}
+              max={availablePeriodBounds.max || undefined}
+            />
           </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-            <p className="text-xs text-slate-500">Технолог(и)</p>
-            <p className="font-semibold text-slate-900">{technicalInfo.technologistLabel}</p>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold text-slate-600">Перевірка</span>
+            <select
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
+              value={selectedAuditId}
+              onChange={(e) => setSelectedAuditId(String(e.target.value || ""))}
+              disabled={!auditOptions.length}
+            >
+              {!auditOptions.length ? <option value="">Немає перевірок</option> : null}
+              {auditOptions.map((item) => (
+                <option key={item.id} value={item.id}>{item.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <div className="flex items-baseline gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5">
+            <p className="shrink-0 text-xs text-slate-500">Дата перевірок</p>
+            <p className="truncate text-sm font-semibold text-slate-900">{technicalInfo.dateLabel}</p>
           </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-            <p className="text-xs text-slate-500">Локація</p>
-            <p className="font-semibold text-slate-900">{technicalInfo.locationLabel}</p>
+          <div className="flex items-baseline gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5">
+            <p className="shrink-0 text-xs text-slate-500">Технолог(и)</p>
+            <p className="truncate text-sm font-semibold text-slate-900">{technicalInfo.technologistLabel}</p>
+          </div>
+          <div className="flex items-baseline gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5">
+            <p className="shrink-0 text-xs text-slate-500">Локація</p>
+            <p className="truncate text-sm font-semibold text-slate-900">{technicalInfo.locationLabel}</p>
           </div>
         </div>
 
@@ -2794,24 +2972,25 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
   const restaurantAudits = useMemo(() => {
     const restaurantId = String(effectiveRestaurantId || "").trim();
     const templateId = String(selectedTemplateId || "").trim();
-    const selectedDateKey = String(selectedDate || "").slice(0, 10);
+    const allowedRestaurantIds = new Set(
+      (Array.isArray(availableRestaurants) ? availableRestaurants : []).map((item) => String(item?.id || "").trim())
+    );
 
-    if (!restaurantId) return [];
-
+    // Показуємо всю історію аудитів (усі статуси, без прив'язки до вибраної дати),
+    // обмежуючись лише доступними для користувача закладами.
     return (audits || [])
-      .filter((audit) => String(audit?.status || "") === "completed")
-      .filter((audit) => String(audit?.restaurantId || "").trim() === restaurantId)
+      .filter((audit) => {
+        const auditRestaurantId = String(audit?.restaurantId || "").trim();
+        if (restaurantId) return auditRestaurantId === restaurantId;
+        if (isAdmin) return true;
+        return allowedRestaurantIds.has(auditRestaurantId);
+      })
       .filter((audit) => {
         if (!templateId) return true;
         return String(audit?.templateId || "").trim() === templateId;
       })
-      .filter((audit) => {
-        if (!selectedDateKey) return true;
-        const auditDateKey = String(audit?.date || "").slice(0, 10);
-        return auditDateKey === selectedDateKey;
-      })
       .sort((a, b) => getAuditSortKey(b) - getAuditSortKey(a));
-  }, [audits, effectiveRestaurantId, selectedDate, selectedTemplateId]);
+  }, [audits, availableRestaurants, effectiveRestaurantId, isAdmin, selectedTemplateId]);
 
   const openHistoryAuditPreview = (audit) => {
     setHistoryAuditPreview(audit || null);
@@ -3196,10 +3375,11 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
         {showHistory ? (
           <div className="mt-3 overflow-x-auto">
             {restaurantAudits.length ? (
-              <table className="w-full min-w-[640px] text-sm">
+              <table className="w-full min-w-[720px] text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
                     <th className="py-2 pr-3">Дата</th>
+                    <th className="py-2 pr-3">Локація</th>
                     <th className="py-2 pr-3">Шаблон</th>
                     <th className="py-2 pr-3">Результат</th>
                     <th className="py-2 pr-3">Статус</th>
@@ -3210,6 +3390,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                   {restaurantAudits.map((audit) => (
                     <tr key={audit.id} className="border-b border-slate-100">
                       <td className="py-2 pr-3 font-medium text-slate-900">{formatDisplayDate(audit.date)}</td>
+                      <td className="py-2 pr-3 text-slate-600">{audit.restaurantName || "—"}</td>
                       <td className="py-2 pr-3 text-slate-600">{audit.templateName || "—"}</td>
                       <td className="py-2 pr-3"><ScoreBadge percent={audit.totalPercent || 0} /></td>
                       <td className="py-2 pr-3">
@@ -3236,7 +3417,7 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                 </tbody>
               </table>
             ) : (
-              <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">Для обраних фільтрів (локація, тип аудиту, дата) аудитів не знайдено.</p>
+              <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">Для обраних фільтрів (локація, тип аудиту) аудитів не знайдено.</p>
             )}
           </div>
         ) : null}
