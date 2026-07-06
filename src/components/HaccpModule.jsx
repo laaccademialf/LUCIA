@@ -43,7 +43,10 @@ import {
   RATING_SCALE,
   buildDefaultHaccpTemplate,
   computeHaccpScores,
+  flattenSectionItems,
+  getSectionGroups,
   gradeBandFor,
+  hasSubsections,
   isCommentRequired,
   isPhotoRequired,
   makeHaccpId,
@@ -772,7 +775,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           : templatesById.get(String(audit?.templateId || "")) || null;
         const itemTitleById = new Map();
         (template?.sections || []).forEach((section) => {
-          (section?.items || []).forEach((item) => {
+          flattenSectionItems(section).forEach((item) => {
             itemTitleById.set(String(item?.id || ""), String(item?.title || ""));
           });
         });
@@ -1315,10 +1318,9 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           .slice()
           .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
           .forEach((section) => {
-            (section?.items || [])
-              .slice()
-              .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
-              .forEach((sectionItem) => {
+            getSectionGroups(section).forEach((group) => {
+              const subsectionTitle = group.isSubsection ? String(group.title || "Підрозділ") : "";
+              group.items.forEach((sectionItem) => {
                 const itemId = String(sectionItem?.id || "");
                 const response = auditItem?.responses?.[itemId] || {};
                 const rating = RATING_BY_VALUE?.[response?.value] || null;
@@ -1335,12 +1337,14 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                   Локація: String(auditItem?.restaurantName || "Локація"),
                   Шаблон: String(auditItem?.templateName || "Без шаблону"),
                   Розділ: String(section?.title || "Без назви розділу"),
+                  Підрозділ: subsectionTitle,
                   Пункт: String(sectionItem?.title || "Пункт без назви"),
                   Оцінка: rating?.label || "Не оцінено",
                   Коментар: String(response?.comment || "").trim(),
                   Фото: photoLinks.join("\n"),
                 });
               });
+            });
           });
       });
 
@@ -1407,7 +1411,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
       const uniqueSrcs = [];
       const seenSrc = new Set();
       (templateForAudit?.sections || []).forEach((section) => {
-        (section?.items || []).forEach((item) => {
+        flattenSectionItems(section).forEach((item) => {
           const response = selectedAudit?.responses?.[String(item?.id || "")] || {};
           getItemPhotos(response).forEach((photo) => {
             const src = getPhotoSrc(photo);
@@ -1443,63 +1447,85 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           });
 
           const itemRows = [];
-          (section?.items || [])
-            .slice()
-            .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
-            .forEach((item, itemIndex) => {
-              const itemId = String(item?.id || "");
-              const itemNumber = `${sectionIndex + 1}.${itemIndex + 1}`;
-              const response = selectedAudit?.responses?.[itemId] || {};
-              const rating = response?.value !== null && response?.value !== undefined
-                ? RATING_BY_VALUE?.[response?.value]
-                : null;
+          const buildItemRow = (item, itemNumber) => {
+            const itemId = String(item?.id || "");
+            const response = selectedAudit?.responses?.[itemId] || {};
+            const rating = response?.value !== null && response?.value !== undefined
+              ? RATING_BY_VALUE?.[response?.value]
+              : null;
 
-              const itemPhotos = getItemPhotos(response);
-              const loadedPhotos = itemPhotos
-                .map((photo) => imageMap.get(getPhotoSrc(photo)))
-                .filter(Boolean);
-              const photoCount = itemPhotos.length;
+            const itemPhotos = getItemPhotos(response);
+            const loadedPhotos = itemPhotos
+              .map((photo) => imageMap.get(getPhotoSrc(photo)))
+              .filter(Boolean);
+            const photoCount = itemPhotos.length;
 
-              // Заливка клітинки «Оцінка» кольором за рейтингом.
-              const fillDef = rating ? PDF_RATING_FILL[rating.value] : null;
-              const ratingCell = {
-                text: String(rating?.label || "Не оцінено"),
-                fontSize: 9,
-                bold: Boolean(fillDef),
-                alignment: "center",
-                color: fillDef ? fillDef.color : "#0f172a",
-                ...(fillDef ? { fillColor: fillDef.fill } : {}),
-              };
+            // Заливка клітинки «Оцінка» кольором за рейтингом.
+            const fillDef = rating ? PDF_RATING_FILL[rating.value] : null;
+            const ratingCell = {
+              text: String(rating?.label || "Не оцінено"),
+              fontSize: 9,
+              bold: Boolean(fillDef),
+              alignment: "center",
+              color: fillDef ? fillDef.color : "#0f172a",
+              ...(fillDef ? { fillColor: fillDef.fill } : {}),
+            };
 
-              // Міні-фото під коментарем.
-              const inlineThumbs = loadedPhotos.slice(0, 4).map((im) => ({
-                width: "auto",
-                image: im.dataUrl,
-                fit: [40, 40],
-              }));
-              const commentText = String(response?.comment || "").trim() || "—";
-              const commentCell = inlineThumbs.length
-                ? {
-                    stack: [
-                      { text: commentText, fontSize: 9, color: "#334155" },
-                      { columns: inlineThumbs, columnGap: 4, margin: [0, 3, 0, 0] },
-                    ],
-                  }
-                : { text: commentText, fontSize: 9, color: "#334155" };
+            // Міні-фото під коментарем.
+            const inlineThumbs = loadedPhotos.slice(0, 4).map((im) => ({
+              width: "auto",
+              image: im.dataUrl,
+              fit: [40, 40],
+            }));
+            const commentText = String(response?.comment || "").trim() || "—";
+            const commentCell = inlineThumbs.length
+              ? {
+                  stack: [
+                    { text: commentText, fontSize: 9, color: "#334155" },
+                    { columns: inlineThumbs, columnGap: 4, margin: [0, 3, 0, 0] },
+                  ],
+                }
+              : { text: commentText, fontSize: 9, color: "#334155" };
 
-              // Фото для фінальної галереї (усі підряд, по 4 на сторінку).
-              loadedPhotos.forEach((im) => {
-                galleryEntries.push({ label: itemNumber, dataUrl: im.dataUrl });
-              });
-
-              itemRows.push([
-                { text: itemNumber, fontSize: 9, color: "#334155" },
-                { text: String(item?.title || "Пункт без назви"), fontSize: 9, color: "#0f172a" },
-                ratingCell,
-                commentCell,
-                { text: String(photoCount), fontSize: 9, alignment: "center", color: "#334155" },
-              ]);
+            // Фото для фінальної галереї (усі підряд, по 4 на сторінку).
+            loadedPhotos.forEach((im) => {
+              galleryEntries.push({ label: itemNumber, dataUrl: im.dataUrl });
             });
+
+            return [
+              { text: itemNumber, fontSize: 9, color: "#334155" },
+              { text: String(item?.title || "Пункт без назви"), fontSize: 9, color: "#0f172a" },
+              ratingCell,
+              commentCell,
+              { text: String(photoCount), fontSize: 9, alignment: "center", color: "#334155" },
+            ];
+          };
+
+          getSectionGroups(section).forEach((group, groupIndex) => {
+            if (group.isSubsection) {
+              const subPercent = roundPercent(Number(sectionResults?.[group.id]?.percent || 0));
+              // Заголовок підрозділу — рядок на всю ширину таблиці.
+              itemRows.push([
+                {
+                  text: `${sectionIndex + 1}.${groupIndex + 1} ${String(group.title || "Підрозділ")}  ·  ${subPercent}%`,
+                  colSpan: 5,
+                  bold: true,
+                  fontSize: 9,
+                  color: "#065f46",
+                  fillColor: "#dcfce7",
+                  margin: [0, 1, 0, 1],
+                },
+                {}, {}, {}, {},
+              ]);
+              group.items.forEach((item, itemIndex) => {
+                itemRows.push(buildItemRow(item, `${sectionIndex + 1}.${groupIndex + 1}.${itemIndex + 1}`));
+              });
+            } else {
+              group.items.forEach((item, itemIndex) => {
+                itemRows.push(buildItemRow(item, `${sectionIndex + 1}.${itemIndex + 1}`));
+              });
+            }
+          });
 
           sectionBlocks.push({
             table: {
@@ -1866,6 +1892,32 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                   const isDown = Number(scoreDelta) < 0;
                   const templateForItem = templatesById.get(String(item?.templateId || "")) || null;
                   const sectionResults = computeHaccpScores(templateForItem, item?.responses || {}).sectionResults;
+                  const buildItemRow = (sectionItem) => {
+                    const sectionItemId = String(sectionItem?.id || "");
+                    const responseValue = item?.responses?.[sectionItemId]?.value;
+                    const rating = RATING_BY_VALUE?.[responseValue];
+                    const response = item?.responses?.[sectionItemId] || {};
+                    const photos = (Array.isArray(response?.photoIds) ? response.photoIds : [])
+                      .map((photoId) => ({ photoId, photo: (item?.gallery || []).find((entry) => String(entry?.id || "") === String(photoId || "")) || null }))
+                      .map(({ photo }) => photo)
+                      .filter((photo) => getPhotoSrc(photo));
+                    const legacyPhotos = (Array.isArray(response?.photos) ? response.photos : []).filter((photo) => getPhotoSrc(photo));
+                    const dedup = new Set();
+                    const photoList = [...photos, ...legacyPhotos].filter((photo) => {
+                      const key = String(photo?.id || getPhotoSrc(photo) || "");
+                      if (!key || dedup.has(key)) return false;
+                      dedup.add(key);
+                      return true;
+                    });
+                    return {
+                      id: sectionItemId,
+                      title: String(sectionItem?.title || "Пункт без назви"),
+                      comment: String(response?.comment || "").trim(),
+                      ratingLabel: rating?.label || "Не оцінено",
+                      ratingPercent: Number.isFinite(rating?.percent) ? rating.percent : null,
+                      photos: photoList,
+                    };
+                  };
                   const sectionRows = (templateForItem?.sections || [])
                     .slice()
                     .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
@@ -1876,42 +1928,61 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                       const percent = Number.isFinite(persistedPercent)
                         ? roundPercent(persistedPercent)
                         : roundPercent(Number.isFinite(computedPercent) ? computedPercent : 0);
-                      const items = (section?.items || [])
-                        .slice()
-                        .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
-                        .map((sectionItem) => {
-                          const sectionItemId = String(sectionItem?.id || "");
-                          const responseValue = item?.responses?.[sectionItemId]?.value;
-                          const rating = RATING_BY_VALUE?.[responseValue];
-                          const response = item?.responses?.[sectionItemId] || {};
-                          const photos = (Array.isArray(response?.photoIds) ? response.photoIds : [])
-                            .map((photoId) => ({ photoId, photo: (item?.gallery || []).find((entry) => String(entry?.id || "") === String(photoId || "")) || null }))
-                            .map(({ photo }) => photo)
-                            .filter((photo) => getPhotoSrc(photo));
-                          const legacyPhotos = (Array.isArray(response?.photos) ? response.photos : []).filter((photo) => getPhotoSrc(photo));
-                          const dedup = new Set();
-                          const photoList = [...photos, ...legacyPhotos].filter((photo) => {
-                            const key = String(photo?.id || getPhotoSrc(photo) || "");
-                            if (!key || dedup.has(key)) return false;
-                            dedup.add(key);
-                            return true;
-                          });
-                          return {
-                            id: sectionItemId,
-                            title: String(sectionItem?.title || "Пункт без назви"),
-                            comment: String(response?.comment || "").trim(),
-                            ratingLabel: rating?.label || "Не оцінено",
-                            ratingPercent: Number.isFinite(rating?.percent) ? rating.percent : null,
-                            photos: photoList,
-                          };
-                        });
+                      const usesSub = hasSubsections(section);
+                      const groups = getSectionGroups(section).map((group) => ({
+                        id: group.id,
+                        title: group.title,
+                        isSubsection: group.isSubsection,
+                        percent: group.isSubsection ? roundPercent(Number(sectionResults?.[group.id]?.percent) || 0) : percent,
+                        items: group.items.map(buildItemRow),
+                      }));
                       return {
                         id: sectionId,
                         title: String(section?.title || "Без назви категорії"),
                         percent,
-                        items,
+                        usesSub,
+                        groups,
                       };
                     });
+
+                  const renderInfographicItem = (section, sectionItem) => (
+                    <div key={`${section.id}_${sectionItem.id}`} className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="text-slate-700">{sectionItem.title}</span>
+                        <span className="shrink-0 font-semibold text-slate-900">
+                          {sectionItem.ratingLabel}
+                          {sectionItem.ratingPercent !== null ? ` (${sectionItem.ratingPercent}%)` : ""}
+                        </span>
+                      </div>
+                      <div className="mt-2 space-y-2 border-t border-slate-100 pt-2">
+                        <div className="rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                          <span className="font-semibold text-slate-700">Коментар:</span>{" "}
+                          {sectionItem.comment || "Коментар відсутній"}
+                        </div>
+                        {sectionItem.photos.length ? (
+                          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
+                            {sectionItem.photos.map((photo, photoIndex) => (
+                              <button
+                                key={`${section.id}_${sectionItem.id}_${photo?.id || photoIndex}`}
+                                type="button"
+                                onClick={() => setGalleryLightboxPhoto(photo)}
+                                className="overflow-hidden rounded border border-slate-200 bg-slate-50"
+                                title={photo?.name || "Фото пункту"}
+                              >
+                                <img
+                                  src={getPhotoSrc(photo)}
+                                  alt={photo?.name || "Фото пункту"}
+                                  className="h-16 w-full object-cover"
+                                />
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-slate-400">Фото до цього пункту відсутні.</p>
+                        )}
+                      </div>
+                    </div>
+                  );
 
                   return (
                     <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
@@ -1962,45 +2033,28 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
                                   </div>
                                 </summary>
                                 <div className="mt-1.5 space-y-1">
-                                  {section.items.length ? (
-                                    section.items.map((sectionItem) => (
-                                      <div key={`${section.id}_${sectionItem.id}`} className="rounded border border-slate-200 bg-white px-2 py-1.5">
-                                        <div className="flex items-start justify-between gap-2">
-                                          <span className="text-slate-700">{sectionItem.title}</span>
-                                          <span className="shrink-0 font-semibold text-slate-900">
-                                            {sectionItem.ratingLabel}
-                                            {sectionItem.ratingPercent !== null ? ` (${sectionItem.ratingPercent}%)` : ""}
-                                          </span>
-                                        </div>
-                                        <div className="mt-2 space-y-2 border-t border-slate-100 pt-2">
-                                          <div className="rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
-                                            <span className="font-semibold text-slate-700">Коментар:</span>{" "}
-                                            {sectionItem.comment || "Коментар відсутній"}
-                                          </div>
-                                          {sectionItem.photos.length ? (
-                                            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
-                                              {sectionItem.photos.map((photo, photoIndex) => (
-                                                <button
-                                                  key={`${section.id}_${sectionItem.id}_${photo?.id || photoIndex}`}
-                                                  type="button"
-                                                  onClick={() => setGalleryLightboxPhoto(photo)}
-                                                  className="overflow-hidden rounded border border-slate-200 bg-slate-50"
-                                                  title={photo?.name || "Фото пункту"}
-                                                >
-                                                  <img
-                                                    src={getPhotoSrc(photo)}
-                                                    alt={photo?.name || "Фото пункту"}
-                                                    className="h-16 w-full object-cover"
-                                                  />
-                                                </button>
-                                              ))}
+                                  {section.groups.some((group) => group.items.length) ? (
+                                    section.usesSub ? (
+                                      section.groups.map((group) => (
+                                        <details key={`${item.id}_${group.id}`} className="rounded border border-emerald-200 bg-emerald-50/40 px-2 py-1">
+                                          <summary className="cursor-pointer list-none">
+                                            <div className="flex items-center justify-between gap-2">
+                                              <span className="truncate font-semibold text-emerald-800">{group.title || "Підрозділ"}</span>
+                                              <span className="font-semibold text-slate-900">{group.percent}%</span>
                                             </div>
-                                          ) : (
-                                            <p className="text-[11px] text-slate-400">Фото до цього пункту відсутні.</p>
-                                          )}
-                                        </div>
-                                      </div>
-                                    ))
+                                          </summary>
+                                          <div className="mt-1.5 space-y-1">
+                                            {group.items.length ? (
+                                              group.items.map((sectionItem) => renderInfographicItem(section, sectionItem))
+                                            ) : (
+                                              <p className="text-xs text-slate-500">У підрозділі немає пунктів.</p>
+                                            )}
+                                          </div>
+                                        </details>
+                                      ))
+                                    ) : (
+                                      section.groups[0].items.map((sectionItem) => renderInfographicItem(section, sectionItem))
+                                    )
                                   ) : (
                                     <p className="text-xs text-slate-500">У категорії немає пунктів.</p>
                                   )}
@@ -2847,18 +2901,23 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
   const collectIssues = () => {
     const issues = [];
     sortedSections.forEach((section, sectionIndex) => {
-      (section.items || []).forEach((item, itemIndex) => {
-        const prefix = `${sectionIndex + 1}.${itemIndex + 1} ${item.title}`;
-        const response = responses[item.id];
-        if (!response || response.value === null || response.value === undefined || !RATING_BY_VALUE[response.value]) {
-          issues.push(`${prefix} — не оцінено`);
-          return;
-        }
-        if (isCommentRequired(response.value) && !String(response.comment || "").trim()) {
-          issues.push(`${prefix} — потрібен коментар`);
-        }
-        const photoIds = Array.isArray(response?.photoIds) ? response.photoIds.filter((id) => galleryById.has(id)) : [];
-        if (isPhotoRequired(response.value) && !photoIds.length) issues.push(`${prefix} — додайте фото`);
+      getSectionGroups(section).forEach((group, groupIndex) => {
+        const usesSub = hasSubsections(section);
+        group.items.forEach((item, itemIndex) => {
+          const prefix = usesSub
+            ? `${sectionIndex + 1}.${groupIndex + 1}.${itemIndex + 1} ${item.title}`
+            : `${sectionIndex + 1}.${itemIndex + 1} ${item.title}`;
+          const response = responses[item.id];
+          if (!response || response.value === null || response.value === undefined || !RATING_BY_VALUE[response.value]) {
+            issues.push(`${prefix} — не оцінено`);
+            return;
+          }
+          if (isCommentRequired(response.value) && !String(response.comment || "").trim()) {
+            issues.push(`${prefix} — потрібен коментар`);
+          }
+          const photoIds = Array.isArray(response?.photoIds) ? response.photoIds.filter((id) => galleryById.has(id)) : [];
+          if (isPhotoRequired(response.value) && !photoIds.length) issues.push(`${prefix} — додайте фото`);
+        });
       });
     });
     return issues;
@@ -3148,9 +3207,29 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
 
           <div className="space-y-3">
             {sortedSections.map((section, sectionIndex) => {
-              const sectionResult = scores.sectionResults[section.id] || { percent: 0, assessed: 0, total: (section.items || []).length };
+              const sectionResult = scores.sectionResults[section.id] || { percent: 0, assessed: 0, total: flattenSectionItems(section).length };
               const collapsed = Boolean(collapsedSections[section.id]);
-              const items = [...(section.items || [])].sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));
+              const groups = getSectionGroups(section);
+              const usesSubsections = hasSubsections(section);
+              const renderItem = (item, label) => {
+                const response = responses[item.id] || {};
+                return (
+                  <AuditItemCard
+                    key={item.id}
+                    item={item}
+                    label={label}
+                    response={response}
+                    photos={getItemPhotos(response)}
+                    isReadOnlyAudit={isReadOnlyAudit}
+                    onRate={(value) => handleRating(item.id, value)}
+                    onComment={(text) => handleComment(item.id, text)}
+                    onCaptureFiles={(files) => captureForItem(item.id, files)}
+                    onOpenPicker={() => setPicker({ itemId: item.id, itemLabel: `${label} ${item.title}` })}
+                    onDetach={(photoId) => detachFromItem(item.id, photoId)}
+                    onPreview={(photo) => setLightbox(photo)}
+                  />
+                );
+              };
               return (
                 <div key={section.id} className={cardClass}>
                   <button
@@ -3174,122 +3253,31 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
 
                   {!collapsed ? (
                     <div className="mt-3 space-y-2.5">
-                      {items.map((item, itemIndex) => {
-                        const response = responses[item.id] || {};
-                        const currentValue = response.value;
-                        const needsComment = isCommentRequired(currentValue);
-                        const needsPhotos = isPhotoRequired(currentValue);
-                        const canAttachPhotos = currentValue !== null && currentValue !== undefined && (Number(currentValue) === 1 || Number(currentValue) === 0);
-                        const showEvidenceBlock = needsComment || canAttachPhotos;
-                        const commentMissing = needsComment && !String(response.comment || "").trim();
-                        const photos = getItemPhotos(response);
-                        const photosMissing = needsPhotos && photos.length === 0;
-                        return (
-                          <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                              <div className="min-w-0">
-                                <p className="text-sm font-semibold text-slate-900">
-                                  {sectionIndex + 1}.{itemIndex + 1} {item.title}
-                                  <span className="ml-1 font-normal text-slate-400">· вага {roundPercent(toPositiveNumber(item.weight, 1))}</span>
+                      {usesSubsections ? (
+                        groups.map((group, subIndex) => {
+                          const subResult = scores.sectionResults[group.id] || { percent: 0, assessed: 0, total: group.items.length };
+                          return (
+                            <div key={group.id} className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-2.5">
+                              <div className="mb-2 flex items-center justify-between gap-2">
+                                <p className="min-w-0 truncate text-sm font-semibold text-emerald-800">
+                                  {sectionIndex + 1}.{subIndex + 1} {group.title || "Підрозділ"}
+                                  <span className="ml-1 font-normal text-emerald-600/70">· вага {roundPercent(group.weight)}% · оцінено {subResult.assessed}/{subResult.total}</span>
                                 </p>
-                                {item.description ? <p className="mt-0.5 text-xs text-slate-500">{item.description}</p> : null}
+                                <ScoreBadge percent={subResult.percent} />
                               </div>
-                              <div className="flex shrink-0 flex-wrap gap-1.5">
-                                {RATING_SCALE.map((rating) => {
-                                  const active = currentValue === rating.value;
-                                  return (
-                                    <button
-                                      key={rating.value}
-                                      type="button"
-                                      onClick={() => handleRating(item.id, rating.value)}
-                                      disabled={isReadOnlyAudit}
-                                      className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${active ? rating.selectedClass : rating.idleClass}`}
-                                      title={rating.short}
-                                    >
-                                      {rating.label}
-                                    </button>
-                                  );
-                                })}
+                              <div className="space-y-2.5">
+                                {group.items.map((item, itemIndex) => renderItem(item, `${sectionIndex + 1}.${subIndex + 1}.${itemIndex + 1}`))}
+                                {!group.items.length ? <p className="rounded-lg border border-dashed border-slate-300 p-3 text-xs text-slate-500">У цьому підрозділі немає пунктів.</p> : null}
                               </div>
                             </div>
-
-                            {showEvidenceBlock ? (
-                              <div className="mt-2.5 space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5">
-                                {needsComment ? (
-                                  <div>
-                                    <label className="flex items-center gap-1 text-xs font-semibold text-amber-800">
-                                      <AlertTriangle size={12} /> Коментар обовʼязковий
-                                    </label>
-                                    <textarea
-                                      className={`${inputClass} min-h-[56px] ${commentMissing ? "border-red-400 focus:border-red-500 focus:ring-red-100" : ""}`}
-                                      value={String(response.comment || "")}
-                                      onChange={(e) => handleComment(item.id, e.target.value)}
-                                      disabled={isReadOnlyAudit}
-                                      placeholder="Опишіть результат перевірки по пункту"
-                                    />
-                                  </div>
-                                ) : null}
-
-                                {canAttachPhotos ? (
-                                  <div>
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <label className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 ${isReadOnlyAudit ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
-                                        <Camera size={13} /> Додати фото
-                                        <input
-                                          type="file"
-                                          accept="image/*"
-                                          multiple
-                                          disabled={isReadOnlyAudit}
-                                          className="hidden"
-                                          onChange={(e) => {
-                                            void captureForItem(item.id, e.target.files);
-                                            e.target.value = "";
-                                          }}
-                                        />
-                                      </label>
-                                      <button
-                                        type="button"
-                                        onClick={() => setPicker({ itemId: item.id, itemLabel: `${sectionIndex + 1}.${itemIndex + 1} ${item.title}` })}
-                                        disabled={isReadOnlyAudit}
-                                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                                      >
-                                        <Images size={13} /> З галереї
-                                      </button>
-                                      <span className={`text-[11px] ${photosMissing ? "text-red-500" : "text-slate-400"}`}>{photos.length}/{MAX_PHOTOS_PER_ITEM}</span>
-                                    </div>
-                                    {photos.length > 0 ? (
-                                      <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
-                                        {photos.map((photo, photoIndex) => (
-                                          <div key={`${item.id}_${photo.id || photoIndex}`} className="relative">
-                                            <button type="button" onClick={() => setLightbox(photo)} className="w-full">
-                                              <img src={getPhotoSrc(photo)} alt={photo.name || "фото"} className="h-20 w-full rounded-lg border border-slate-200 object-cover" />
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => detachFromItem(item.id, photo.id)}
-                                              disabled={isReadOnlyAudit}
-                                              className="absolute -right-1.5 -top-1.5 rounded-full bg-red-600 p-0.5 text-white shadow hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
-                                            >
-                                              <X size={12} />
-                                            </button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    ) : (
-                                      <p className={`mt-2 text-xs ${needsPhotos ? "text-red-500" : "text-slate-500"}`}>
-                                        {needsPhotos
-                                          ? "Для оцінки «Погано» додайте щонайменше одне фото."
-                                          : "Фото можна додати за бажанням для оцінки «Задовільно»."}
-                                      </p>
-                                    )}
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                      {!items.length ? <p className="rounded-lg border border-dashed border-slate-300 p-3 text-xs text-slate-500">У цьому розділі немає пунктів.</p> : null}
+                          );
+                        })
+                      ) : (
+                        <>
+                          {groups[0].items.map((item, itemIndex) => renderItem(item, `${sectionIndex + 1}.${itemIndex + 1}`))}
+                          {!groups[0].items.length ? <p className="rounded-lg border border-dashed border-slate-300 p-3 text-xs text-slate-500">У цьому розділі немає пунктів.</p> : null}
+                        </>
+                      )}
                     </div>
                   ) : null}
                 </div>
@@ -3449,56 +3437,68 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
             <div className="max-h-[68vh] space-y-2 overflow-y-auto pr-1">
               {historyPreviewSections.length ? (
                 historyPreviewSections.map((section, sectionIndex) => {
-                  const items = (Array.isArray(section?.items) ? [...section.items] : []).sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0));
+                  const groups = getSectionGroups(section);
+                  const usesSub = hasSubsections(section);
+                  const renderPreviewItem = (sectionItem, label) => {
+                    const itemId = String(sectionItem?.id || "");
+                    const response = historyAuditPreview?.responses?.[itemId] || {};
+                    const rating = RATING_BY_VALUE?.[response?.value] || null;
+                    const photoIds = Array.isArray(response?.photoIds) ? response.photoIds : [];
+                    const linkedPhotos = photoIds.map((id) => historyPreviewGalleryById.get(String(id || ""))).filter((photo) => getPhotoSrc(photo));
+                    const legacyPhotos = (Array.isArray(response?.photos) ? response.photos : []).filter((photo) => getPhotoSrc(photo));
+                    const mergedPhotos = [...linkedPhotos, ...legacyPhotos];
+                    const seen = new Set();
+                    const photos = mergedPhotos.filter((photo) => {
+                      const key = String(photo?.id || getPhotoSrc(photo) || "");
+                      if (!key || seen.has(key)) return false;
+                      seen.add(key);
+                      return true;
+                    });
+
+                    return (
+                      <div key={`${itemId || label}`} className="rounded-md border border-slate-200 bg-white p-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm text-slate-800">{label} {String(sectionItem?.title || "Пункт")}</p>
+                          <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-semibold ${rating ? rating.idleClass : "border-slate-300 bg-slate-100 text-slate-600"}`}>
+                            {rating ? rating.label : "Не оцінено"}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-600">
+                          <span className="font-semibold text-slate-700">Коментар:</span> {String(response?.comment || "").trim() || "Коментар відсутній"}
+                        </p>
+                        {photos.length ? (
+                          <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                            {photos.map((photo, photoIndex) => (
+                              <button
+                                key={`${itemId}_${photo?.id || photoIndex}`}
+                                type="button"
+                                onClick={() => setLightbox(photo)}
+                                className="overflow-hidden rounded border border-slate-200 bg-slate-50"
+                                title={photo?.name || "Фото пункту"}
+                              >
+                                <img src={getPhotoSrc(photo)} alt={photo?.name || "Фото пункту"} className="h-16 w-full object-cover" />
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  };
+
                   return (
                     <div key={String(section?.id || sectionIndex)} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                       <p className="font-semibold text-slate-900">{sectionIndex + 1}. {String(section?.title || "Розділ")}</p>
                       <div className="mt-2 space-y-2">
-                        {items.map((sectionItem, itemIndex) => {
-                          const itemId = String(sectionItem?.id || "");
-                          const response = historyAuditPreview?.responses?.[itemId] || {};
-                          const rating = RATING_BY_VALUE?.[response?.value] || null;
-                          const photoIds = Array.isArray(response?.photoIds) ? response.photoIds : [];
-                          const linkedPhotos = photoIds.map((id) => historyPreviewGalleryById.get(String(id || ""))).filter((photo) => getPhotoSrc(photo));
-                          const legacyPhotos = (Array.isArray(response?.photos) ? response.photos : []).filter((photo) => getPhotoSrc(photo));
-                          const mergedPhotos = [...linkedPhotos, ...legacyPhotos];
-                          const seen = new Set();
-                          const photos = mergedPhotos.filter((photo) => {
-                            const key = String(photo?.id || getPhotoSrc(photo) || "");
-                            if (!key || seen.has(key)) return false;
-                            seen.add(key);
-                            return true;
-                          });
-
-                          return (
-                            <div key={`${section?.id || sectionIndex}_${itemId || itemIndex}`} className="rounded-md border border-slate-200 bg-white p-2">
-                              <div className="flex items-start justify-between gap-2">
-                                <p className="text-sm text-slate-800">{sectionIndex + 1}.{itemIndex + 1} {String(sectionItem?.title || "Пункт")}</p>
-                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-semibold ${rating ? rating.idleClass : "border-slate-300 bg-slate-100 text-slate-600"}`}>
-                                  {rating ? rating.label : "Не оцінено"}
-                                </span>
-                              </div>
-                              <p className="mt-1 text-xs text-slate-600">
-                                <span className="font-semibold text-slate-700">Коментар:</span> {String(response?.comment || "").trim() || "Коментар відсутній"}
-                              </p>
-                              {photos.length ? (
-                                <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
-                                  {photos.map((photo, photoIndex) => (
-                                    <button
-                                      key={`${itemId}_${photo?.id || photoIndex}`}
-                                      type="button"
-                                      onClick={() => setLightbox(photo)}
-                                      className="overflow-hidden rounded border border-slate-200 bg-slate-50"
-                                      title={photo?.name || "Фото пункту"}
-                                    >
-                                      <img src={getPhotoSrc(photo)} alt={photo?.name || "Фото пункту"} className="h-16 w-full object-cover" />
-                                    </button>
-                                  ))}
+                        {usesSub
+                          ? groups.map((group, subIndex) => (
+                              <div key={group.id} className="rounded-md border border-emerald-200 bg-emerald-50/40 p-2">
+                                <p className="mb-1.5 text-sm font-semibold text-emerald-800">{sectionIndex + 1}.{subIndex + 1} {group.title || "Підрозділ"}</p>
+                                <div className="space-y-2">
+                                  {group.items.map((sectionItem, itemIndex) => renderPreviewItem(sectionItem, `${sectionIndex + 1}.${subIndex + 1}.${itemIndex + 1}`))}
                                 </div>
-                              ) : null}
-                            </div>
-                          );
-                        })}
+                              </div>
+                            ))
+                          : groups[0].items.map((sectionItem, itemIndex) => renderPreviewItem(sectionItem, `${sectionIndex + 1}.${itemIndex + 1}`))}
                       </div>
                     </div>
                   );
@@ -3515,12 +3515,220 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
 }
 
 /* ------------------------------------------------------------------ */
+/* Картка пункту аудиту (спільна для розділів і підрозділів)           */
+/* ------------------------------------------------------------------ */
+
+function AuditItemCard({ item, label, response, photos, isReadOnlyAudit, onRate, onComment, onCaptureFiles, onOpenPicker, onDetach, onPreview }) {
+  const currentValue = response?.value;
+  const needsComment = isCommentRequired(currentValue);
+  const needsPhotos = isPhotoRequired(currentValue);
+  const canAttachPhotos = currentValue !== null && currentValue !== undefined && (Number(currentValue) === 1 || Number(currentValue) === 0);
+  const showEvidenceBlock = needsComment || canAttachPhotos;
+  const commentMissing = needsComment && !String(response?.comment || "").trim();
+  const photosMissing = needsPhotos && photos.length === 0;
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-slate-900">
+            {label} {item.title}
+            <span className="ml-1 font-normal text-slate-400">· вага {roundPercent(toPositiveNumber(item.weight, 1))}</span>
+          </p>
+          {item.description ? <p className="mt-0.5 text-xs text-slate-500">{item.description}</p> : null}
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-1.5">
+          {RATING_SCALE.map((rating) => {
+            const active = currentValue === rating.value;
+            return (
+              <button
+                key={rating.value}
+                type="button"
+                onClick={() => onRate(rating.value)}
+                disabled={isReadOnlyAudit}
+                className={`rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${active ? rating.selectedClass : rating.idleClass}`}
+                title={rating.short}
+              >
+                {rating.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {showEvidenceBlock ? (
+        <div className="mt-2.5 space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5">
+          {needsComment ? (
+            <div>
+              <label className="flex items-center gap-1 text-xs font-semibold text-amber-800">
+                <AlertTriangle size={12} /> Коментар обовʼязковий
+              </label>
+              <textarea
+                className={`${inputClass} min-h-[56px] ${commentMissing ? "border-red-400 focus:border-red-500 focus:ring-red-100" : ""}`}
+                value={String(response?.comment || "")}
+                onChange={(e) => onComment(e.target.value)}
+                disabled={isReadOnlyAudit}
+                placeholder="Опишіть результат перевірки по пункту"
+              />
+            </div>
+          ) : null}
+
+          {canAttachPhotos ? (
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className={`inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 ${isReadOnlyAudit ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+                  <Camera size={13} /> Додати фото
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    disabled={isReadOnlyAudit}
+                    className="hidden"
+                    onChange={(e) => {
+                      void onCaptureFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={onOpenPicker}
+                  disabled={isReadOnlyAudit}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Images size={13} /> З галереї
+                </button>
+                <span className={`text-[11px] ${photosMissing ? "text-red-500" : "text-slate-400"}`}>{photos.length}/{MAX_PHOTOS_PER_ITEM}</span>
+              </div>
+              {photos.length > 0 ? (
+                <div className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-5">
+                  {photos.map((photo, photoIndex) => (
+                    <div key={`${item.id}_${photo.id || photoIndex}`} className="relative">
+                      <button type="button" onClick={() => onPreview(photo)} className="w-full">
+                        <img src={getPhotoSrc(photo)} alt={photo.name || "фото"} className="h-20 w-full rounded-lg border border-slate-200 object-cover" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDetach(photo.id)}
+                        disabled={isReadOnlyAudit}
+                        className="absolute -right-1.5 -top-1.5 rounded-full bg-red-600 p-0.5 text-white shadow hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className={`mt-2 text-xs ${needsPhotos ? "text-red-500" : "text-slate-500"}`}>
+                  {needsPhotos
+                    ? "Для оцінки «Погано» додайте щонайменше одне фото."
+                    : "Фото можна додати за бажанням для оцінки «Задовільно»."}
+                </p>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Редактор розділу шаблону                                            */
 /* ------------------------------------------------------------------ */
 
-function SectionEditor({ section, index, totalSections, isAdmin, onChange, onRemove, onMove, onAddItem, onUpdateItem, onRemoveItem, onDistributeItems }) {
-  const items = section.items || [];
-  const itemsWeightSum = sumWeights(items);
+function SectionEditor({ section, index, totalSections, isAdmin, onChange, onRemove, onMove }) {
+  const usesSubsections = hasSubsections(section);
+  const directItems = Array.isArray(section.items) ? section.items : [];
+  const subsections = Array.isArray(section.subsections) ? section.subsections : [];
+
+  const makeItem = (order) => ({ id: makeHaccpId(), title: "", description: "", weight: 1, sortOrder: order });
+
+  // --- Прямі пункти розділу (legacy режим) ---
+  const addDirectItem = () => onChange({ ...section, items: [...directItems, makeItem(directItems.length)] });
+  const updateDirectItem = (itemId, patch) =>
+    onChange({ ...section, items: directItems.map((item) => (item.id === itemId ? { ...item, ...patch } : item)) });
+  const removeDirectItem = (itemId) =>
+    onChange({ ...section, items: directItems.filter((item) => item.id !== itemId) });
+  const distributeDirectItems = () => {
+    const weights = distributeEqually(directItems.length);
+    onChange({ ...section, items: directItems.map((item, idx) => ({ ...item, weight: weights[idx] })) });
+  };
+
+  // --- Підрозділи ---
+  const addSubsection = () => {
+    let subs = [...subsections];
+    let items = directItems;
+    // Якщо у розділі вже є прямі пункти — загортаємо їх у "Підрозділ 1",
+    // щоб нічого не втратити при переході в режим підрозділів.
+    if (!subsections.length && directItems.length) {
+      subs.push({
+        id: makeHaccpId(),
+        title: "Підрозділ 1",
+        weight: 0,
+        sortOrder: 0,
+        items: directItems.map((item, i) => ({ ...item, sortOrder: i })),
+      });
+      items = [];
+    }
+    subs.push({ id: makeHaccpId(), title: "", weight: 0, sortOrder: subs.length, items: [] });
+    onChange({ ...section, items, subsections: subs });
+  };
+
+  const updateSubsection = (subId, patch) =>
+    onChange({ ...section, subsections: subsections.map((sub) => (sub.id === subId ? { ...sub, ...patch } : sub)) });
+
+  const removeSubsection = (subId) => {
+    const next = subsections.filter((sub) => sub.id !== subId).map((sub, idx) => ({ ...sub, sortOrder: idx }));
+    // Якщо підрозділів не лишилось — повертаємось у режим прямих пунктів.
+    onChange({ ...section, subsections: next.length ? next : undefined });
+  };
+
+  const moveSubsection = (subIndex, direction) => {
+    const next = [...subsections].sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0));
+    const target = subIndex + direction;
+    if (target < 0 || target >= next.length) return;
+    [next[subIndex], next[target]] = [next[target], next[subIndex]];
+    onChange({ ...section, subsections: next.map((sub, idx) => ({ ...sub, sortOrder: idx })) });
+  };
+
+  const distributeSubsectionWeights = () => {
+    const weights = distributeEqually(subsections.length);
+    onChange({ ...section, subsections: subsections.map((sub, idx) => ({ ...sub, weight: weights[idx] })) });
+  };
+
+  const addSubItem = (subId) =>
+    onChange({
+      ...section,
+      subsections: subsections.map((sub) =>
+        sub.id === subId ? { ...sub, items: [...(sub.items || []), makeItem((sub.items || []).length)] } : sub
+      ),
+    });
+  const updateSubItem = (subId, itemId, patch) =>
+    onChange({
+      ...section,
+      subsections: subsections.map((sub) =>
+        sub.id === subId ? { ...sub, items: (sub.items || []).map((item) => (item.id === itemId ? { ...item, ...patch } : item)) } : sub
+      ),
+    });
+  const removeSubItem = (subId, itemId) =>
+    onChange({
+      ...section,
+      subsections: subsections.map((sub) =>
+        sub.id === subId ? { ...sub, items: (sub.items || []).filter((item) => item.id !== itemId) } : sub
+      ),
+    });
+  const distributeSubItemWeights = (subId) =>
+    onChange({
+      ...section,
+      subsections: subsections.map((sub) => {
+        if (sub.id !== subId) return sub;
+        const weights = distributeEqually((sub.items || []).length);
+        return { ...sub, items: (sub.items || []).map((item, idx) => ({ ...item, weight: weights[idx] })) };
+      }),
+    });
+
+  const sortedSubsections = [...subsections].sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0));
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3">
@@ -3554,52 +3762,145 @@ function SectionEditor({ section, index, totalSections, isAdmin, onChange, onRem
             </div>
           </div>
 
-          <div className="mt-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <p className="text-xs font-semibold text-slate-700">Пункти ({items.length})</p>
-              <WeightSumBadge sum={itemsWeightSum} label="Ваги пунктів" />
-            </div>
-            <div className="flex items-center gap-1.5">
-              <button type="button" onClick={() => onDistributeItems(section.id)} disabled={!isAdmin || !items.length} className="rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-40">
-                Рівні ваги
-              </button>
-              <button type="button" onClick={() => onAddItem(section.id)} disabled={!isAdmin} className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40">
-                <Plus size={12} /> Пункт
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-2 space-y-2">
-            {items.map((item, itemIndex) => (
-              <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-2">
-                <div className="flex items-start gap-2">
-                  <span className="pt-2 text-xs font-semibold text-slate-400">{index + 1}.{itemIndex + 1}</span>
-                  <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 md:grid-cols-[1fr_90px]">
-                    <input className={inputClass} value={item.title} onChange={(e) => onUpdateItem(section.id, item.id, { title: e.target.value })} disabled={!isAdmin} placeholder="Критерій відповідності" />
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.1"
-                      className={inputClass}
-                      value={item.weight ?? 1}
-                      onChange={(e) => onUpdateItem(section.id, item.id, { weight: Number(e.target.value || 0) })}
-                      disabled={!isAdmin}
-                      title="Вага пункту в розділі"
-                    />
-                  </div>
-                  <button type="button" onClick={() => onRemoveItem(section.id, item.id)} disabled={!isAdmin} className="mt-1.5 rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-40">
-                    <Trash2 size={13} />
+          {usesSubsections ? (
+            <div className="mt-3">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-semibold text-emerald-700">Підрозділи ({sortedSubsections.length})</p>
+                <div className="flex items-center gap-1.5">
+                  <WeightSumBadge sum={sumWeights(subsections)} label="Ваги підрозділів" />
+                  <button type="button" onClick={distributeSubsectionWeights} disabled={!isAdmin || !subsections.length} className="rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-40">
+                    Рівні ваги
                   </button>
                 </div>
               </div>
-            ))}
-            {!items.length ? <p className="rounded-md border border-dashed border-slate-300 p-2 text-[11px] text-slate-400">Додайте пункти розділу.</p> : null}
-          </div>
+
+              <div className="space-y-2">
+                {sortedSubsections.map((sub, subIndex) => (
+                  <div key={sub.id} className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-2.5">
+                    <div className="flex items-start gap-2">
+                      <div className="flex flex-col gap-1 pt-1">
+                        <button type="button" onClick={() => moveSubsection(subIndex, -1)} disabled={!isAdmin || subIndex === 0} className="rounded p-0.5 text-slate-400 hover:bg-slate-100 disabled:opacity-30">
+                          <ArrowUp size={12} />
+                        </button>
+                        <button type="button" onClick={() => moveSubsection(subIndex, 1)} disabled={!isAdmin || subIndex === sortedSubsections.length - 1} className="rounded p-0.5 text-slate-400 hover:bg-slate-100 disabled:opacity-30">
+                          <ArrowDown size={12} />
+                        </button>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_120px]">
+                          <div>
+                            <label className="text-[11px] font-semibold text-slate-600">Підрозділ {index + 1}.{subIndex + 1} *</label>
+                            <input className={inputClass} value={sub.title || ""} onChange={(e) => updateSubsection(sub.id, { title: e.target.value })} disabled={!isAdmin} placeholder="Назва підрозділу" />
+                          </div>
+                          <div>
+                            <label className="text-[11px] font-semibold text-slate-600">Вага, %</label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.1"
+                              className={inputClass}
+                              value={sub.weight ?? 0}
+                              onChange={(e) => updateSubsection(sub.id, { weight: Number(e.target.value || 0) })}
+                              disabled={!isAdmin}
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-2">
+                          <ItemsBlock
+                            items={sub.items || []}
+                            numberPrefix={`${index + 1}.${subIndex + 1}`}
+                            isAdmin={isAdmin}
+                            onAdd={() => addSubItem(sub.id)}
+                            onUpdate={(itemId, patch) => updateSubItem(sub.id, itemId, patch)}
+                            onRemove={(itemId) => removeSubItem(sub.id, itemId)}
+                            onDistribute={() => distributeSubItemWeights(sub.id)}
+                          />
+                        </div>
+                      </div>
+                      <button type="button" onClick={() => removeSubsection(sub.id)} disabled={!isAdmin} className="rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-40">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <button type="button" onClick={addSubsection} disabled={!isAdmin} className="mt-2 inline-flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-40">
+                <Plus size={12} /> Підрозділ
+              </button>
+            </div>
+          ) : (
+            <div className="mt-3">
+              <ItemsBlock
+                items={directItems}
+                numberPrefix={`${index + 1}`}
+                isAdmin={isAdmin}
+                onAdd={addDirectItem}
+                onUpdate={updateDirectItem}
+                onRemove={removeDirectItem}
+                onDistribute={distributeDirectItems}
+              />
+              <button type="button" onClick={addSubsection} disabled={!isAdmin} className="mt-2 inline-flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-40">
+                <Plus size={12} /> Додати підрозділ
+              </button>
+            </div>
+          )}
         </div>
 
         <button type="button" onClick={() => onRemove(section.id)} disabled={!isAdmin} className="rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-40">
           <Trash2 size={15} />
         </button>
+      </div>
+    </div>
+  );
+}
+
+// Блок редагування пунктів (спільний для розділу та підрозділу).
+function ItemsBlock({ items, numberPrefix, isAdmin, onAdd, onUpdate, onRemove, onDistribute }) {
+  const list = Array.isArray(items) ? items : [];
+  const itemsWeightSum = sumWeights(list);
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-semibold text-slate-700">Пункти ({list.length})</p>
+          <WeightSumBadge sum={itemsWeightSum} label="Ваги пунктів" />
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button type="button" onClick={onDistribute} disabled={!isAdmin || !list.length} className="rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-40">
+            Рівні ваги
+          </button>
+          <button type="button" onClick={onAdd} disabled={!isAdmin} className="inline-flex items-center gap-1 rounded border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-40">
+            <Plus size={12} /> Пункт
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-2 space-y-2">
+        {list.map((item, itemIndex) => (
+          <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-2">
+            <div className="flex items-start gap-2">
+              <span className="pt-2 text-xs font-semibold text-slate-400">{numberPrefix}.{itemIndex + 1}</span>
+              <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 md:grid-cols-[1fr_90px]">
+                <input className={inputClass} value={item.title} onChange={(e) => onUpdate(item.id, { title: e.target.value })} disabled={!isAdmin} placeholder="Критерій відповідності" />
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  className={inputClass}
+                  value={item.weight ?? 1}
+                  onChange={(e) => onUpdate(item.id, { weight: Number(e.target.value || 0) })}
+                  disabled={!isAdmin}
+                  title="Вага пункту"
+                />
+              </div>
+              <button type="button" onClick={() => onRemove(item.id)} disabled={!isAdmin} className="mt-1.5 rounded p-1 text-red-600 hover:bg-red-50 disabled:opacity-40">
+                <Trash2 size={13} />
+              </button>
+            </div>
+          </div>
+        ))}
+        {!list.length ? <p className="rounded-md border border-dashed border-slate-300 p-2 text-[11px] text-slate-400">Додайте пункти.</p> : null}
       </div>
     </div>
   );
@@ -3640,19 +3941,36 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
   };
 
   const startEdit = (template) => {
-    const sections = (template.sections || []).map((section, sectionIndex) => ({
-      id: section.id || makeHaccpId(),
-      title: section.title || "",
-      weight: Number(section.weight ?? 0),
-      sortOrder: Number(section.sortOrder ?? sectionIndex),
-      items: (section.items || []).map((item, itemIndex) => ({
+    const mapItems = (items) =>
+      (Array.isArray(items) ? items : []).map((item, itemIndex) => ({
         id: item.id || makeHaccpId(),
         title: item.title || "",
         description: item.description || "",
         weight: Number(item.weight ?? 1),
         sortOrder: Number(item.sortOrder ?? itemIndex),
-      })),
-    }));
+      }));
+
+    const sections = (template.sections || []).map((section, sectionIndex) => {
+      const base = {
+        id: section.id || makeHaccpId(),
+        title: section.title || "",
+        weight: Number(section.weight ?? 0),
+        sortOrder: Number(section.sortOrder ?? sectionIndex),
+      };
+      if (Array.isArray(section.subsections) && section.subsections.length) {
+        return {
+          ...base,
+          subsections: section.subsections.map((sub, subIndex) => ({
+            id: sub.id || makeHaccpId(),
+            title: sub.title || "",
+            weight: Number(sub.weight ?? 0),
+            sortOrder: Number(sub.sortOrder ?? subIndex),
+            items: mapItems(sub.items),
+          })),
+        };
+      }
+      return { ...base, items: mapItems(section.items) };
+    });
     setEditingId(template.id);
     setForm({
       name: template.name || "",
@@ -3698,48 +4016,6 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
     });
   };
 
-  const addItem = (sectionId) => {
-    setForm((prev) => ({
-      ...prev,
-      sections: prev.sections.map((section) =>
-        section.id === sectionId
-          ? { ...section, items: [...section.items, { id: makeHaccpId(), title: "", description: "", weight: 1, sortOrder: section.items.length }] }
-          : section
-      ),
-    }));
-  };
-
-  const updateItem = (sectionId, itemId, patch) => {
-    setForm((prev) => ({
-      ...prev,
-      sections: prev.sections.map((section) =>
-        section.id === sectionId
-          ? { ...section, items: section.items.map((item) => (item.id === itemId ? { ...item, ...patch } : item)) }
-          : section
-      ),
-    }));
-  };
-
-  const removeItem = (sectionId, itemId) => {
-    setForm((prev) => ({
-      ...prev,
-      sections: prev.sections.map((section) =>
-        section.id === sectionId ? { ...section, items: section.items.filter((item) => item.id !== itemId) } : section
-      ),
-    }));
-  };
-
-  const distributeItemWeights = (sectionId) => {
-    setForm((prev) => ({
-      ...prev,
-      sections: prev.sections.map((section) => {
-        if (section.id !== sectionId) return section;
-        const weights = distributeEqually(section.items.length);
-        return { ...section, items: section.items.map((item, idx) => ({ ...item, weight: weights[idx] })) };
-      }),
-    }));
-  };
-
   const toggleRestaurant = (restaurantId) => {
     setForm((prev) => {
       const exists = prev.restaurantIds.map(String).includes(String(restaurantId));
@@ -3759,23 +4035,42 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
       return;
     }
 
+    const cleanItems = (items) =>
+      (Array.isArray(items) ? items : [])
+        .filter((item) => item.title?.trim())
+        .map((item, itemIndex) => ({
+          id: item.id || makeHaccpId(),
+          title: item.title.trim(),
+          description: item.description?.trim() || "",
+          weight: toPositiveNumber(item.weight, 1),
+          sortOrder: itemIndex,
+        }));
+
     const sections = form.sections
-      .map((section, sectionIndex) => ({
-        id: section.id || makeHaccpId(),
-        title: section.title.trim(),
-        weight: toPositiveNumber(section.weight, 0),
-        sortOrder: sectionIndex,
-        items: (section.items || [])
-          .filter((item) => item.title?.trim())
-          .map((item, itemIndex) => ({
-            id: item.id || makeHaccpId(),
-            title: item.title.trim(),
-            description: item.description?.trim() || "",
-            weight: toPositiveNumber(item.weight, 1),
-            sortOrder: itemIndex,
-          })),
-      }))
-      .filter((section) => section.title);
+      .map((section, sectionIndex) => {
+        const base = {
+          id: section.id || makeHaccpId(),
+          title: section.title.trim(),
+          weight: toPositiveNumber(section.weight, 0),
+          sortOrder: sectionIndex,
+        };
+        if (Array.isArray(section.subsections) && section.subsections.length) {
+          const subsections = section.subsections
+            .map((sub, subIndex) => ({
+              id: sub.id || makeHaccpId(),
+              title: (sub.title || "").trim(),
+              weight: toPositiveNumber(sub.weight, 0),
+              sortOrder: subIndex,
+              items: cleanItems(sub.items),
+            }))
+            .filter((sub) => sub.title || sub.items.length);
+          if (subsections.length) {
+            return { ...base, subsections };
+          }
+        }
+        return { ...base, items: cleanItems(section.items) };
+      })
+      .filter((section) => section.title && (section.subsections?.length || section.items?.length));
 
     if (!sections.length) {
       alert("Додайте хоча б один розділ з пунктами.");
@@ -3844,7 +4139,7 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
             {templates.map((template) => {
               const assigned = Array.isArray(template.restaurantIds) ? template.restaurantIds : [];
               const sectionsCount = (template.sections || []).length;
-              const itemsCount = (template.sections || []).reduce((acc, section) => acc + (section.items || []).length, 0);
+              const itemsCount = (template.sections || []).reduce((acc, section) => acc + flattenSectionItems(section).length, 0);
               return (
                 <div key={template.id} className={`rounded-lg border p-3 ${editingId === template.id ? "border-emerald-300 bg-emerald-50" : "border-slate-200"}`}>
                   <div className="flex items-start justify-between gap-2">
@@ -3946,10 +4241,6 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
                   onChange={updateSection}
                   onRemove={removeSection}
                   onMove={moveSection}
-                  onAddItem={addItem}
-                  onUpdateItem={updateItem}
-                  onRemoveItem={removeItem}
-                  onDistributeItems={distributeItemWeights}
                 />
               ))}
               {!form.sections.length ? <p className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">Додайте розділи аудиту.</p> : null}

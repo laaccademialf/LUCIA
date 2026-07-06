@@ -94,6 +94,83 @@ export const sumWeights = (arr) =>
 
 export const roundPercent = (value) => Math.round((Number(value) || 0) * 10) / 10;
 
+// ------------------------------------------------------------------
+// Підрозділи: розділ може мати або власні пункти (items), або підрозділи
+// (subsections), кожен з яких має свої пункти. Хелпери нижче нормалізують
+// доступ до цієї структури, щоб решта коду не дублювала логіку.
+// ------------------------------------------------------------------
+
+export const hasSubsections = (section) =>
+  Array.isArray(section?.subsections) && section.subsections.length > 0;
+
+// Повертає "групи" розділу у нормалізованому вигляді:
+// - якщо є підрозділи → масив підрозділів (isSubsection: true);
+// - інакше → одна віртуальна група з пунктами розділу (isSubsection: false).
+export const getSectionGroups = (section) => {
+  if (hasSubsections(section)) {
+    return [...section.subsections]
+      .sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+      .map((sub) => ({
+        id: String(sub?.id || ""),
+        title: String(sub?.title || ""),
+        weight: toPositiveNumber(sub?.weight, 0),
+        isSubsection: true,
+        items: Array.isArray(sub?.items)
+          ? [...sub.items].sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+          : [],
+      }));
+  }
+  return [
+    {
+      id: String(section?.id || ""),
+      title: "",
+      weight: 0,
+      isSubsection: false,
+      items: Array.isArray(section?.items)
+        ? [...section.items].sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+        : [],
+    },
+  ];
+};
+
+// Плоский відсортований список усіх пунктів розділу (враховує підрозділи).
+export const flattenSectionItems = (section) => {
+  if (hasSubsections(section)) {
+    return getSectionGroups(section).flatMap((group) => group.items);
+  }
+  return Array.isArray(section?.items)
+    ? [...section.items].sort((a, b) => Number(a?.sortOrder ?? 0) - Number(b?.sortOrder ?? 0))
+    : [];
+};
+
+// Розрахунок результату для групи пунктів (спільна логіка для розділу/підрозділу).
+const computeItemsResult = (items, responses = {}) => {
+  let planWeight = 0;
+  let factWeight = 0;
+  let assessed = 0;
+  let total = 0;
+
+  for (const item of Array.isArray(items) ? items : []) {
+    total += 1;
+    const itemWeight = toPositiveNumber(item?.weight, 1);
+    const response = responses?.[item.id];
+    const rating = response && response.value !== null && response.value !== undefined
+      ? RATING_BY_VALUE[response.value]
+      : null;
+
+    if (rating) {
+      assessed += 1;
+      if (!rating.excludeFromScore && Number.isFinite(rating.percent)) {
+        planWeight += itemWeight;
+        factWeight += (itemWeight * rating.percent) / 100;
+      }
+    }
+  }
+
+  const percent = planWeight > 0 ? (factWeight / planWeight) * 100 : 0;
+  return { percent, assessed, total, hasData: assessed > 0 };
+};
+
 // Розрахунок результату аудиту.
 // Логіка така ж, як в Excel: для кожного пункту "План" = його вага,
 // "Факт" = вага × відсоток оцінки. Розділ зважується власною вагою.
@@ -108,41 +185,63 @@ export const computeHaccpScores = (template, responses = {}) => {
   const aggregated = [];
 
   for (const section of sections) {
-    const items = Array.isArray(section?.items) ? section.items : [];
-    let planWeight = 0;
-    let factWeight = 0;
-    let assessed = 0;
+    const groups = getSectionGroups(section);
+    const usesSubsections = hasSubsections(section);
 
-    for (const item of items) {
-      totalItems += 1;
-      const itemWeight = toPositiveNumber(item?.weight, 1);
-      const response = responses?.[item.id];
-      const rating = response && response.value !== null && response.value !== undefined
-        ? RATING_BY_VALUE[response.value]
-        : null;
+    let sectionAssessed = 0;
+    let sectionTotal = 0;
+    const groupAgg = []; // { percent, hasData, weight }
 
-      if (rating) {
-        assessed += 1;
-        assessedItems += 1;
-        if (!rating.excludeFromScore && Number.isFinite(rating.percent)) {
-          planWeight += itemWeight;
-          factWeight += (itemWeight * rating.percent) / 100;
-        }
+    for (const group of groups) {
+      const res = computeItemsResult(group.items, responses);
+      totalItems += res.total;
+      assessedItems += res.assessed;
+      sectionAssessed += res.assessed;
+      sectionTotal += res.total;
+
+      if (usesSubsections) {
+        // Результат по кожному підрозділу доступний за його id.
+        sectionResults[group.id] = {
+          percent: res.percent,
+          assessed: res.assessed,
+          total: res.total,
+          hasData: res.hasData,
+          weight: toPositiveNumber(group.weight, 0),
+        };
       }
+      groupAgg.push({ percent: res.percent, hasData: res.hasData, weight: toPositiveNumber(group.weight, 0) });
     }
 
-    const percent = planWeight > 0 ? (factWeight / planWeight) * 100 : 0;
-    const sectionWeight = toPositiveNumber(section?.weight, 0);
+    // Відсоток розділу: якщо є підрозділи — зважене середнє їхніх відсотків
+    // (за вагою підрозділу; якщо ваги нульові — просте середнє). Інакше —
+    // відсоток єдиної групи (як у старій логіці по пунктах розділу).
+    let sectionPercent = 0;
+    let sectionHasData = false;
+    if (usesSubsections) {
+      const withData = groupAgg.filter((entry) => entry.hasData);
+      sectionHasData = withData.length > 0;
+      if (withData.length) {
+        const wSum = withData.reduce((acc, entry) => acc + entry.weight, 0);
+        sectionPercent = wSum > 0
+          ? withData.reduce((acc, entry) => acc + entry.percent * entry.weight, 0) / wSum
+          : withData.reduce((acc, entry) => acc + entry.percent, 0) / withData.length;
+      }
+    } else {
+      const single = groupAgg[0] || { percent: 0, hasData: false };
+      sectionPercent = single.percent;
+      sectionHasData = single.hasData;
+    }
 
+    const sectionWeight = toPositiveNumber(section?.weight, 0);
     sectionResults[section.id] = {
-      percent,
-      assessed,
-      total: items.length,
-      hasData: planWeight > 0,
+      percent: sectionPercent,
+      assessed: sectionAssessed,
+      total: sectionTotal,
+      hasData: sectionHasData,
       weight: sectionWeight,
     };
 
-    aggregated.push({ percent, hasData: assessed > 0, weight: sectionWeight });
+    aggregated.push({ percent: sectionPercent, hasData: sectionHasData, weight: sectionWeight });
   }
 
   const withData = aggregated.filter((entry) => entry.hasData);
