@@ -1385,6 +1385,14 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
         ? selectedAudit.templateSnapshot
         : templatesById.get(String(selectedAudit?.templateId || "")) || null;
 
+      // Заголовок звіту = назва шаблону аудиту (динамічно), а не хардкод.
+      const auditTitle = String(
+        selectedAudit?.templateName ||
+        templateForAudit?.name ||
+        selectedTemplateLabel ||
+        "Звіт аудиту"
+      ).trim() || "Звіт аудиту";
+
       const sectionResults = computeHaccpScores(templateForAudit, selectedAudit?.responses || {}).sectionResults;
 
       const galleryById = new Map(
@@ -1609,8 +1617,8 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
               {
                 width: "*",
                 stack: [
-                  { text: "ЗВІТ HACCP", fontSize: 20, bold: true, color: "#0f172a" },
-                  { text: "Обрана перевірка", fontSize: 10, color: "#475569", margin: [0, 2, 0, 0] },
+                  { text: auditTitle, fontSize: 20, bold: true, color: "#0f172a" },
+                  { text: "Звіт аудиту", fontSize: 10, color: "#475569", margin: [0, 2, 0, 0] },
                 ],
               },
               {
