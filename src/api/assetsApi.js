@@ -198,26 +198,36 @@ export const subscribeToAssetsEventsApi = ({ onChange, onError } = {}) => {
     return () => {};
   }
 
+  let source = null;
+  let closed = false;
+  let reconnectTimer = null;
+  let retryDelay = 2000; // старт 2с
+  const MAX_RETRY_DELAY = 30000;
+
   // EventSource не вміє слати заголовки, тому авторизація йде через query.
   // Безпека: віддаємо ПЕРЕВАГУ короткоживучому сесійному токену (відкликається
   // при logout), а глобальний API-токен у URL — лише як legacy fallback,
   // щоб не світити довгоживучий секрет в історії браузера та логах проксі.
-  const sessionToken =
-    typeof window !== "undefined" && typeof localStorage !== "undefined"
-      ? String(localStorage.getItem("lucia_auth_session_token") || "").trim()
-      : "";
-  const params = new URLSearchParams();
-  if (sessionToken) {
-    params.set("session", sessionToken);
-  } else {
-    const token = getApiToken();
-    if (token) {
-      params.set("token", token);
+  // ВАЖЛИВО: токен читаємо ЗАНОВО на кожному (пере)підключенні — після
+  // повторного логіну токен у localStorage ротується, а вже відкритий
+  // EventSource не може оновити свій URL, тому кожен переконект = новий EventSource
+  // зі свіжим токеном. Це прибирає 401, коли платформа відкрита довго.
+  const buildUrl = () => {
+    const sessionToken =
+      typeof localStorage !== "undefined"
+        ? String(localStorage.getItem("lucia_auth_session_token") || "").trim()
+        : "";
+    const params = new URLSearchParams();
+    if (sessionToken) {
+      params.set("session", sessionToken);
+    } else {
+      const token = getApiToken();
+      if (token) {
+        params.set("token", token);
+      }
     }
-  }
-
-  const sseUrl = `${endpoint("/api/assets/events")}${params.toString() ? `?${params.toString()}` : ""}`;
-  const source = new EventSource(sseUrl);
+    return `${endpoint("/api/assets/events")}${params.toString() ? `?${params.toString()}` : ""}`;
+  };
 
   const notifyChange = () => {
     if (typeof onChange === "function") {
@@ -225,15 +235,56 @@ export const subscribeToAssetsEventsApi = ({ onChange, onError } = {}) => {
     }
   };
 
-  source.addEventListener("assets-change", notifyChange);
-  source.onmessage = notifyChange;
-  source.onerror = (event) => {
-    if (typeof onError === "function") {
-      onError(event);
-    }
+  const scheduleReconnect = () => {
+    if (closed || reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY);
   };
 
+  const connect = () => {
+    if (closed) return;
+    try {
+      source = new EventSource(buildUrl());
+    } catch (error) {
+      scheduleReconnect();
+      return;
+    }
+
+    source.addEventListener("assets-change", notifyChange);
+    source.onmessage = notifyChange;
+    source.onopen = () => {
+      // Здорове з'єднання — скидаємо backoff.
+      retryDelay = 2000;
+    };
+    source.onerror = (event) => {
+      if (typeof onError === "function") {
+        onError(event);
+      }
+      // Штатний авто-реконект браузера повторно бив би у ТОЙ САМИЙ URL зі
+      // старим (можливо, простроченим) токеном → нескінченні 401. Тому беремо
+      // керування на себе: закриваємо і переконектуємось зі свіжим токеном.
+      if (source) {
+        source.close();
+        source = null;
+      }
+      scheduleReconnect();
+    };
+  };
+
+  connect();
+
   return () => {
-    source.close();
+    closed = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (source) {
+      source.close();
+      source = null;
+    }
   };
 };

@@ -10,6 +10,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronUp,
   ClipboardCheck,
   Copy,
@@ -3913,6 +3914,7 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyTemplateForm());
   const [saving, setSaving] = useState(false);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
 
   const restaurantNameById = useMemo(() => {
     const map = new Map();
@@ -3925,11 +3927,19 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
   const startCreate = () => {
     setEditingId(null);
     setForm(emptyTemplateForm());
+    setIsEditorOpen(true);
   };
 
   const startCreateFromDefault = () => {
     setEditingId(null);
     setForm(buildDefaultHaccpTemplate());
+    setIsEditorOpen(true);
+  };
+
+  const closeEditor = () => {
+    setEditingId(null);
+    setForm(emptyTemplateForm());
+    setIsEditorOpen(false);
   };
 
   const startEdit = (template) => {
@@ -3971,6 +3981,7 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
       restaurantIds: (template.restaurantIds || []).map(String),
       sections,
     });
+    setIsEditorOpen(true);
   };
 
   const addSection = () => {
@@ -4085,8 +4096,7 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
       alert("Не вдалося зберегти шаблон.");
       return;
     }
-    setEditingId(null);
-    setForm(emptyTemplateForm());
+    closeEditor();
   };
 
   const deleteTemplate = async (template) => {
@@ -4102,8 +4112,8 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
   );
 
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
-      <div className="xl:col-span-2">
+    <div>
+      {!isEditorOpen ? (
         <div className={cardClass}>
           <div className="mb-4 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
@@ -4168,14 +4178,19 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
             ) : null}
           </div>
         </div>
-      </div>
-
-      <div className="xl:col-span-3">
+      ) : (
         <div className={cardClass}>
           <div className="mb-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Layers size={17} className="text-emerald-600" />
-              <h3 className="font-semibold">{editingId ? "Редагування шаблону" : "Новий шаблон"}</h3>
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={closeEditor}
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                <ChevronLeft size={16} /> До списку
+              </button>
+              <Layers size={17} className="shrink-0 text-emerald-600" />
+              <h3 className="truncate font-semibold">{editingId ? "Редагування шаблону" : "Новий шаблон"}</h3>
             </div>
             <WeightSumBadge sum={sectionWeightSum} label="Сума ваг розділів" />
           </div>
@@ -4241,18 +4256,16 @@ function TemplatesTab({ user, restaurants, templates, createTemplate, updateTemp
 
           {hasTemplateEditAccess ? (
             <div className="mt-4 flex justify-end gap-2">
-              {editingId ? (
-                <button type="button" onClick={startCreate} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
-                  Скасувати
-                </button>
-              ) : null}
+              <button type="button" onClick={closeEditor} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
+                Скасувати
+              </button>
               <button type="button" onClick={saveTemplate} disabled={saving} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60">
                 <Save size={15} /> Зберегти шаблон
               </button>
             </div>
           ) : null}
         </div>
-      </div>
+      )}
     </div>
   );
 }
