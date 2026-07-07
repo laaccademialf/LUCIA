@@ -1467,7 +1467,6 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             const loadedPhotos = itemPhotos
               .map((photo) => imageMap.get(getPhotoSrc(photo)))
               .filter(Boolean);
-            const photoCount = itemPhotos.length;
 
             // Заливка клітинки «Оцінка» кольором за рейтингом.
             const fillDef = rating ? PDF_RATING_FILL[rating.value] : null;
@@ -1484,7 +1483,7 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
             const inlineThumbs = loadedPhotos.slice(0, 4).map((im) => ({
               width: "auto",
               image: im.dataUrl,
-              fit: [40, 40],
+              fit: [70, 70],
             }));
             const commentText = String(response?.comment || "").trim() || "—";
             const commentCell = inlineThumbs.length
@@ -1506,7 +1505,6 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
               { text: String(item?.title || "Пункт без назви"), fontSize: 9, color: "#0f172a" },
               ratingCell,
               commentCell,
-              { text: String(photoCount), fontSize: 9, alignment: "center", color: "#334155" },
             ];
           };
 
@@ -1517,14 +1515,14 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
               itemRows.push([
                 {
                   text: `${sectionIndex + 1}.${groupIndex + 1} ${String(group.title || "Підрозділ")}  ·  ${subPercent}%`,
-                  colSpan: 5,
+                  colSpan: 4,
                   bold: true,
                   fontSize: 9,
                   color: "#065f46",
                   fillColor: "#dcfce7",
                   margin: [0, 1, 0, 1],
                 },
-                {}, {}, {}, {},
+                {}, {}, {},
               ]);
               group.items.forEach((item, itemIndex) => {
                 itemRows.push(buildItemRow(item, `${sectionIndex + 1}.${groupIndex + 1}.${itemIndex + 1}`));
@@ -1539,21 +1537,19 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
           sectionBlocks.push({
             table: {
               headerRows: 1,
-              widths: [28, "*", 92, "*", 44],
+              widths: [28, "*", 92, "*"],
               body: [
                 [
                   { text: "№", bold: true, fontSize: 9, fillColor: "#e2e8f0", color: "#0f172a" },
                   { text: "Пункт перевірки", bold: true, fontSize: 9, fillColor: "#e2e8f0", color: "#0f172a" },
                   { text: "Оцінка", bold: true, fontSize: 9, fillColor: "#e2e8f0", color: "#0f172a" },
                   { text: "Коментар", bold: true, fontSize: 9, fillColor: "#e2e8f0", color: "#0f172a" },
-                  { text: "Фото", bold: true, fontSize: 9, alignment: "center", fillColor: "#e2e8f0", color: "#0f172a" },
                 ],
                 ...(itemRows.length ? itemRows : [[
                   { text: "—", fontSize: 9, color: "#334155" },
                   { text: "У розділі відсутні пункти", fontSize: 9, color: "#334155" },
                   { text: "—", fontSize: 9, color: "#334155" },
                   { text: "—", fontSize: 9, color: "#334155" },
-                  { text: "0", fontSize: 9, alignment: "center", color: "#334155" },
                 ]]),
               ],
             },
