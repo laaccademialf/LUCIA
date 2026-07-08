@@ -3440,7 +3440,7 @@ function App() {
                             </tr>
                           </thead>
                           <tbody>
-                            {(ov.perRestaurantAll || []).map((row) => {
+                            {(ov.perRestaurantAll || []).filter((row) => Number(row?.mains || 0) > 0).map((row) => {
                               const trend = getTrendPackForRestaurant(row);
                               return (
                               <tr key={row.id} className="odd:bg-white even:bg-slate-50">
@@ -3480,7 +3480,7 @@ function App() {
                       </div>
 
                       <div className="space-y-2 sm:hidden">
-                        {(ov.perRestaurantAll || []).map((row) => {
+                        {(ov.perRestaurantAll || []).filter((row) => Number(row?.mains || 0) > 0).map((row) => {
                           const trend = getTrendPackForRestaurant(row);
                           return (
                           <div key={`m-${row.id}`} className="rounded-xl border border-slate-200 bg-white p-3">

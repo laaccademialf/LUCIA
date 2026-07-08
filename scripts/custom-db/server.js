@@ -5362,6 +5362,25 @@ const server = http.createServer(async (req, res) => {
       viksoft: nextViksoft,
       updatedAt: new Date().toISOString(),
     });
+    // Персистимо у .env, щоб credentials переживали перезапуск/оновлення сервера
+    // (runtime-settings.json лежить у ефемерній ./tmp/ і може бути втрачений, через
+    // що зникав нічний крон синхронізації). .env читається loadEnvFile() на старті.
+    let persistedToEnv = false;
+    try {
+      await updateEnvFile(RUNTIME_SETTINGS_ENV_FILE, {
+        VIKSOFT_API_BASE: nextViksoft.apiBase || null,
+        VIKSOFT_USER: nextViksoft.user || null,
+        VIKSOFT_PASSWORD: nextViksoft.password || null,
+      });
+      // Оновлюємо process.env, щоб фолбек на env працював негайно й після
+      // будь-якого скидання runtime-override у поточному процесі.
+      if (nextViksoft.apiBase) process.env.VIKSOFT_API_BASE = nextViksoft.apiBase;
+      if (nextViksoft.user) process.env.VIKSOFT_USER = nextViksoft.user;
+      if (nextViksoft.password) process.env.VIKSOFT_PASSWORD = nextViksoft.password;
+      persistedToEnv = true;
+    } catch (e) {
+      console.warn(`[viksoft] persist to env failed: ${e?.message || e}`);
+    }
     // Застосовуємо рантайм-конфіг до vikSoftApi (інвалідовує токен і кеш).
     try {
       const { setVikSoftRuntimeConfig } = await import("../vikSoftApi.js");
@@ -5375,6 +5394,7 @@ const server = http.createServer(async (req, res) => {
     }
     return sendJson(res, 200, {
       ok: true,
+      persistedToEnv,
       saved: { apiBase: nextViksoft.apiBase, user: nextViksoft.user, hasPassword: Boolean(nextViksoft.password), updatedAt: nextViksoft.updatedAt },
     });
   }
