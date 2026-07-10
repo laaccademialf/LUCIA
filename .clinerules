@@ -1,0 +1,48 @@
+# LUCIA Project Guidelines
+
+## 🛠 Tech Stack
+- **Frontend:** React 19, Vite (rolldown-vite), Tailwind CSS 4.
+- **Backend/Data:** Hybrid approach. Primary data via custom-db API (MariaDB/Postgres), optional Firebase integration.
+- **Mobile:** Capacitor (Android).
+
+## 🛡 Coding Standards & Patterns
+
+### 1. Data Integrity & Type Safety
+- **Strict Casting:** Avoid `undefined` or `null` crashes by using explicit casting for external data:
+  - Strings: `String(value || "").trim()`
+  - Numbers: `Number(value) || 0`
+  - Booleans: `Boolean(value)`
+- **Nullish Coalescing:** Always provide default values for API responses: `const data = Array.isArray(payload?.data) ? payload.data : []`.
+
+### 2. API Implementation (src/api/)
+- **URL Management:** Use `normalizeApiBase` and `endpoint()` helper patterns to ensure consistent URL construction.
+- **Authentication:** 
+  - Use `headers()` helper to include `Authorization: Bearer <token>` and `x-session-token`.
+  - Priority for config: `localStorage (lucia_runtime_custom_config)` $\rightarrow$ `.env` $\rightarrow$ `window.location.origin`.
+- **Pagination/Filtering:** Use `URLSearchParams` for constructing query strings.
+- **Error Handling:** When `!response.ok`, always try to read the response body as text to provide detailed error messages: `const body = await response.text().catch(() => "");`.
+
+### 3. Firebase Integration (src/firebase/)
+- **Lazy Init:** Respect the lazy initialization pattern. Do not call Firebase SDKs directly; use the exported proxies (`db`, `auth`, `storage`).
+- **Configuration Check:** Always check `isFirebaseConfigured` before executing Firebase-specific logic to avoid the "Firebase disabled" errors.
+
+### 4. Real-time Updates (SSE)
+- **EventSource Pattern:** When implementing `EventSource`, follow the token rotation pattern:
+  - Close and re-create the `EventSource` instance on error or reconnect.
+  - Fetch the latest token from `localStorage` during every reconnection to prevent persistent 401 errors.
+
+### 5. Styling & UI
+- **Tailwind CSS 4:** Use utility-first classes.
+- **UI Components:** Use `@headlessui/react` for accessible, unstyled components.
+- **Icons:** Use `lucide-react`.
+
+### 6. Project Structure
+- `src/api/`: Resource-specific API modules (e.g., `assetsApi.js`, `metroApi.js`).
+- `src/firebase/`: Firebase configuration and service wrappers.
+- `src/hooks/`: Custom React hooks for state/logic reuse.
+- `src/utils/`: Pure helper functions.
+
+## 🚀 Development Workflow
+- **Environment:** Use `.env.development` for local work.
+- **Dev Server:** If `.env` changes, use `./restart-dev.sh` to apply changes.
+- **Android:** Use `npx cap sync android` after build to update the native project.
