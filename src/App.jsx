@@ -5,6 +5,7 @@ import {
   Archive,
   BarChart3,
   Bell,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -28,6 +29,7 @@ import {
   Wifi,
   WifiOff,
   Wrench,
+  X,
 } from "lucide-react";
 import clsx from "clsx";
 import { AssetTable } from "./components/AssetTable";
@@ -635,6 +637,8 @@ function App() {
                       // Стан для вибраного активу (редагування)
                       const [selected, setSelected] = useState(null);
                       const submitAssetLockRef = useRef(false);
+                      // Підтвердження збереження активу (щоб користувач був певен, що дані пішли на сервер)
+                      const [assetSaveToast, setAssetSaveToast] = useState(null);
                       // Стан для фільтрів таблиці активів
                       const [filters, setFilters] = useState({});
                       const [assetTableSearchQuery, setAssetTableSearchQuery] = useState("");
@@ -826,6 +830,13 @@ function App() {
     setTopTab(nextTopTab);
     setSelected(null);
   }, []);
+
+  // Авто-приховування підтвердження збереження активу
+  useEffect(() => {
+    if (!assetSaveToast) return undefined;
+    const timer = setTimeout(() => setAssetSaveToast(null), 5000);
+    return () => clearTimeout(timer);
+  }, [assetSaveToast]);
 
   useEffect(() => {
     if (!user) return;
@@ -2725,6 +2736,23 @@ function App() {
       if (result?.success === false) {
         throw result.error || new Error("Не вдалося зберегти актив");
       }
+
+      // Підтвердження успішного збереження (важливо при нестабільному інтернеті):
+      // сюди доходимо лише коли запис на сервер підтверджено.
+      const activeSessionForSaved = getActiveAssetInventorySessionForAsset(sanitizedAsset);
+      const savedInvNumber = String(sanitizedAsset?.invNumber || asset?.invNumber || "").trim();
+      const becameInventorized = Boolean(
+        activeSessionForSaved?.id &&
+        Array.isArray(sanitizedAsset?.inventoryChangeHistory) &&
+        sanitizedAsset.inventoryChangeHistory.some(
+          (entry) => String(entry?.inventorySessionId || "") === String(activeSessionForSaved.id)
+        )
+      );
+      setAssetSaveToast({
+        invNumber: savedInvNumber,
+        inventorized: becameInventorized,
+        at: Date.now(),
+      });
 
       setSelected(null);
       return true;
@@ -5473,6 +5501,36 @@ function App() {
           setNotificationPanelOpen(false);
         }}
       />
+
+      {/* Підтвердження збереження активу */}
+      {assetSaveToast && (
+        <div className="fixed inset-x-0 top-4 z-[100] flex justify-center px-4 pointer-events-none">
+          <div className="pointer-events-auto flex items-start gap-3 rounded-xl border border-emerald-400 bg-white px-4 py-3 shadow-2xl shadow-emerald-500/30 max-w-md w-full">
+            <CheckCircle2 size={22} className="mt-0.5 shrink-0 text-emerald-600" />
+            <div className="flex-1 text-sm text-slate-800">
+              <p className="font-bold text-emerald-700">Актив збережено</p>
+              <p className="mt-0.5">
+                {assetSaveToast.invNumber
+                  ? `Інв. № ${assetSaveToast.invNumber} успішно збережено на сервері.`
+                  : "Зміни успішно збережено на сервері."}
+              </p>
+              <p className="mt-0.5 font-semibold">
+                {assetSaveToast.inventorized
+                  ? "Актив позначено як проінвентаризований."
+                  : "Актив збережено (поза активною сесією інвентаризації)."}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAssetSaveToast(null)}
+              aria-label="Закрити"
+              className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
