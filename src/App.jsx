@@ -4572,8 +4572,10 @@ function App() {
                 alert(getAssetEditDisabledReason(asset));
                 return;
               }
+              // Спочатку перемикаємо вкладку, потім виставляємо вибраний актив,
+              // бо handleTopTabChange скидає selected у null.
+              setTopTab('test2');
               setSelected(asset);
-              handleTopTabChange('test2');
             }} />
           </div>
         );
