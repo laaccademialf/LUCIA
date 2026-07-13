@@ -1721,7 +1721,10 @@ function App() {
     }
 
     lastNavigationSnapshotRef.current = snapshot;
-    const historyMode = !hasSyncedBrowserHistoryRef.current || isApplyingBrowserHistoryRef.current ? "replace" : "push";
+    // Only use "push" mode after user interaction to avoid browser warning about 
+    // adding session history entries without user interaction
+    const canPush = hasSyncedBrowserHistoryRef.current && !isApplyingBrowserHistoryRef.current && userInteractedRef.current;
+    const historyMode = canPush ? "push" : "replace";
     hasSyncedBrowserHistoryRef.current = true;
     persistNavigationState(activeNav, normalizedTopTab, historyMode);
     if (isApplyingBrowserHistoryRef.current) {
