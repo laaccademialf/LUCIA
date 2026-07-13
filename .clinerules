@@ -55,6 +55,8 @@
 - **Suspense:** Every lazy module rendered by `Suspense` must be wrapped in an error boundary. A rejected/stale chunk must show a recoverable UI, never an infinite loading state.
 - **Container/MariaDB:** UI code must not assume Firebase or a local in-memory menu. HACCP data and menu structure come from the custom-db/MariaDB API; normalize missing, delayed, malformed, or empty API payloads to safe defaults and render an explicit empty/error state.
 - **Build verification:** Before deployment run `npm run build` and verify that all statically imported compatibility routes are present in the production bundle.
+- **HACCP functional modes:** `HaccpModule` must preserve the three distinct modes: `audit` (conduct/save an audit), `templates` (manage templates), and `report` (read-only reporting). Adding report widgets or exports must not replace the audit/template dispatcher or omit `createAudit`, `updateAudit`, and `removeAudit` from the audit mode.
+- **HACCP routing:** In `App.jsx`, route `ops-checklists` + `haccpaudit` to the audit mode and route only explicit report identifiers (`haccpreport`, `haccp-report`, `haccpmainrepirt`, or report-labelled tabs) to report mode. Do not classify every tab containing the word `audit` as a security audit.
 
 ## 🚀 Development Workflow
 - **Environment:** Use `.env.development` for local work.

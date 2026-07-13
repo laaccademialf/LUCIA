@@ -4404,7 +4404,12 @@ function App() {
 
     if (activeNav === "ops-checklists" || activeNav.includes("ops-checklists")) {
       const checklistTabKey = String(topTab || "").toLowerCase();
-      if (checklistTabKey.includes("haccp")) {
+      const isHaccpReportTab = ["haccpreport", "haccp-report", "haccpmainrepirt"].includes(checklistTabKey)
+        || checklistTabKey.includes("haccp_report")
+        || checklistTabKey.includes("haccp-report");
+      const isHaccpAuditTab = checklistTabKey === "haccpaudit";
+      const isHaccpTemplatesTab = checklistTabKey === "haccptemplates";
+      if (isHaccpAuditTab || isHaccpTemplatesTab || isHaccpReportTab) {
         return (
           <div className="grid grid-cols-1">
             <HaccpModule topTab={topTab} restaurants={restaurants} user={user} userPermissions={userPermissions} />
@@ -4563,7 +4568,7 @@ function App() {
       activeNavKey === "security-audit" ||
       topTabKey === "sitelogtab" ||
       topTabKey.includes("sitelog") ||
-      topTabKey.includes("audit")
+      (topTabKey.includes("audit") && topTabKey !== "haccpaudit")
     ) {
       return (
         <div className="grid grid-cols-1">

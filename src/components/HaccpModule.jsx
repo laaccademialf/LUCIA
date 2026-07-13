@@ -2220,20 +2220,38 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   );
 }
 
-export default function HaccpModule({ 
-  topTab, 
-  restaurants: restaurantsProp, 
-  user: userProp, 
-  userPermissions,
-  forceMode 
-}) {
-  const { user, restaurants, templates, audits } = useHaccp();
+export default function HaccpModule({ topTab, user, restaurants, forceMode = "", userPermissions = {} }) {
+  const mode = forceMode || normalizeHaccpTab(topTab);
+  const {
+    templates,
+    audits,
+    loading,
+    apiEnabled,
+    createTemplate,
+    updateTemplate,
+    removeTemplate,
+    createAudit,
+    updateAudit,
+    removeAudit,
+  } = useHaccp();
 
-  // Use props if provided (from App.jsx when navigating via haccpreport), otherwise use hook data
-  const effectiveUser = userProp || user;
-  const effectiveRestaurants = restaurantsProp || restaurants;
-
-  if (!effectiveUser) return <div className="flex h-full items-center justify-center text-slate-500">Завантаження...</div>;
-
-  return <HaccpReportTab user={effectiveUser} restaurants={effectiveRestaurants} templates={templates} audits={audits} />;
+  if (!apiEnabled) {
+    return (
+      <div className={cardClass}>
+        <div className="flex items-center gap-2 text-amber-700">
+          <AlertTriangle size={18} />
+          <p className="font-semibold">Модуль HACCP потребує підключення до бази даних (API).</p>
+        </div>
+        <p className="mt-2 text-sm text-slate-600">Перевірте налаштування зʼєднання у розділі «Налаштування».</p>
+      </div>
+    );
+  }
+  if (loading) return <div className={cardClass}>Завантаження HACCP...</div>;
+  if (mode === "templates") {
+    return <TemplatesTab user={user} restaurants={restaurants} templates={templates} createTemplate={createTemplate} updateTemplate={updateTemplate} removeTemplate={removeTemplate} userPermissions={userPermissions} />;
+  }
+  if (mode === "report") {
+    return <HaccpReportTab user={user} restaurants={restaurants} templates={templates} audits={audits} />;
+  }
+  return <AuditTab user={user} restaurants={restaurants} templates={templates} audits={audits} createAudit={createAudit} updateAudit={updateAudit} removeAudit={removeAudit} />;
 }
