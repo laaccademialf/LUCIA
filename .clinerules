@@ -49,6 +49,13 @@
 - **Navigation Props:** When routing conditionally renders modules (like HaccpModule), always verify the target component's prop interface matches what's being passed.
 - **Lazy-loaded Components:** For components loaded via `lazy()`, the wrapper component must forward relevant navigation props (`topTab`, `userPermissions`, `forceMode`, etc.) to the actual implementation.
 
+### 8. Production Routing & Deployment Safety (NEW)
+- **Deep links:** Routes received from URL/query parameters or MariaDB menu data must be normalized and rendered even when the corresponding legacy ID is absent from the current menu structure. Do not redirect a valid deep link to the first menu item while menu data is loading.
+- **HACCP reports:** `haccpreport`/`haccp-report` and the historical tab spelling `haccpmainrepirt` are supported compatibility identifiers. Keep the HACCP report entry point statically imported unless the deployment has a verified immutable asset cache strategy.
+- **Suspense:** Every lazy module rendered by `Suspense` must be wrapped in an error boundary. A rejected/stale chunk must show a recoverable UI, never an infinite loading state.
+- **Container/MariaDB:** UI code must not assume Firebase or a local in-memory menu. HACCP data and menu structure come from the custom-db/MariaDB API; normalize missing, delayed, malformed, or empty API payloads to safe defaults and render an explicit empty/error state.
+- **Build verification:** Before deployment run `npm run build` and verify that all statically imported compatibility routes are present in the production bundle.
+
 ## 🚀 Development Workflow
 - **Environment:** Use `.env.development` for local work.
 - **Dev Server:** If `.env` changes, use `./restart-dev.sh` to apply changes.

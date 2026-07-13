@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from "react";
+import { Component, useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from "react";
 import DeployInfo from "./components/DeployInfo";
 import { ClockBadgeTime } from "./components/ClockBadge";
 import {
@@ -42,6 +42,7 @@ import ElectricityTab from "./components/ElectricityTab";
 import DatePickerPopover from "./components/DatePickerPopover";
 import { MaterialResponsibilityManager } from "./components/MaterialResponsibilityManager";
 import AssetTransferWriteoffManager from "./components/AssetTransferWriteoffManager";
+import HaccpModule from "./components/HaccpModule";
 import { useAuth } from "./hooks/useAuth";
 import NotificationPanel from "./components/NotificationPanel";
 import { logoutUser } from "./firebase/auth";
@@ -95,13 +96,45 @@ const TechnologicalCardModule = lazy(() => import("./components/TechnologicalCar
 const ServiceRequestsModule = lazy(() => import("./components/ServiceRequestsModule"));
 const LegalModule = lazy(() => import("./components/LegalModule"));
 const ChecklistModule = lazy(() => import("./components/ChecklistModule"));
-const HaccpModule = lazy(() => import("./components/HaccpModule"));
 const TeamHiringModule = lazy(() => import("./components/TeamHiringModule"));
 const SecurityAuditModule = lazy(() => import("./components/SecurityAuditModule"));
 const PaymentRegistryModule = lazy(() => import("./components/PaymentRegistryModule"));
 const AssortmentMatrixModule = lazy(() => import("./components/AssortmentMatrixModule"));
 const DatabaseConnectionsManager = lazy(() => import("./components/DatabaseConnectionsManager"));
 const ProfileSettingsModal = lazy(() => import("./components/ProfileSettingsModal"));
+
+// Динамічні chunks можуть бути недоступні після деплою, якщо браузер залишив
+// старий index.html у кеші. Без ErrorBoundary Suspense у такому випадку
+// назавжди показує fallback, а користувач бачить лише «Завантаження модуля».
+class LazyModuleErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    console.error("Не вдалося завантажити модуль:", error);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+          <p className="font-semibold">Модуль не завантажився</p>
+          <p className="mt-1">Оновіть сторінку, щоб отримати актуальну версію застосунку.</p>
+          <button type="button" className="mt-3 rounded-lg bg-amber-700 px-3 py-2 font-semibold text-white" onClick={() => window.location.reload()}>
+            Оновити сторінку
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const APP_VERSION = import.meta.env.VITE_APP_VERSION || "1.0.3";
@@ -1688,6 +1721,11 @@ function App() {
 
   useEffect(() => {
     if (topTabs.length === 0) {
+      const activeNavKey = String(activeNav || "").toLowerCase();
+      const isHaccpDeepLink = activeNavKey === "haccpreport" || activeNavKey === "haccp-report";
+      // Legacy HACCP report URLs are valid even when MariaDB menu data does
+      // not contain this compatibility item. Preserve the requested tab.
+      if (isHaccpDeepLink && String(topTab || "").trim()) return;
       if (topTab !== "") {
         setTopTab("");
       }
@@ -5156,10 +5194,14 @@ function App() {
   // якщо активна вкладка недоступна, переключаємо на першу дозволену
   useEffect(() => {
     if (!user) return;
+    const requestedNavKey = String(activeNav || "").toLowerCase();
+    const isDirectHaccpReportRoute = requestedNavKey === "haccpreport" || requestedNavKey === "haccp-report";
     const allowedIds = navItems.flatMap((group) => group.children.map((child) => normalizeNavigationId(child.id)));
     if (allowedIds.length === 0) return;
     const normalizedActiveNav = normalizeNavigationId(activeNav);
-    if (!allowedIds.includes(normalizedActiveNav)) {
+    // URL-сповіщення HACCP може вести на legacy id, якого ще немає в меню,
+    // що прийшло з MariaDB. Не перезаписуємо такий deep-link першим пунктом.
+    if (!isDirectHaccpReportRoute && !allowedIds.includes(normalizedActiveNav)) {
       const defaultNav = allowedIds[0];
       setActiveNav(defaultNav);
       localStorage.setItem('lucia_activeNav', defaultNav);
@@ -5377,9 +5419,11 @@ function App() {
             )}
           >
             <div className={clsx((activeNav.includes("productbooking") || activeNav.includes("inventory-products")) ? "mt-0" : "mt-4")}>
-              <Suspense fallback={<div className="p-4 text-sm text-slate-500">Завантаження модуля...</div>}>
-                {renderContent()}
-              </Suspense>
+              <LazyModuleErrorBoundary>
+                <Suspense fallback={<div className="p-4 text-sm text-slate-500">Завантаження модуля...</div>}>
+                  {renderContent()}
+                </Suspense>
+              </LazyModuleErrorBoundary>
             </div>
           </div>
         </main>
@@ -5388,13 +5432,15 @@ function App() {
 
       {/* Auth Modals */}
       {loginModalElement}
-      <Suspense fallback={null}>
-        <ProfileSettingsModal
-          open={showProfileModal}
-          onClose={() => setShowProfileModal(false)}
-          user={user}
-        />
-      </Suspense>
+      <LazyModuleErrorBoundary>
+        <Suspense fallback={null}>
+          <ProfileSettingsModal
+            open={showProfileModal}
+            onClose={() => setShowProfileModal(false)}
+            user={user}
+          />
+        </Suspense>
+      </LazyModuleErrorBoundary>
 
       {/* Notification Center - Top Level */}
       <NotificationPanel
