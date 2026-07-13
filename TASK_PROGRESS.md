@@ -12,6 +12,7 @@
 - [x] **Implement Excel export** - Multi-sheet Excel export with Summary, Locations, and Sections tabs
 - [x] **Integrate component into `HaccpModule.jsx`** - Added import and rendered the new component at the bottom of the report tab
 - [x] **Fix build errors** - Resolved "Invalid Character `№`" by replacing with "No" in Excel export
+- [x] **Fix runtime errors** - Moved helper functions (`formatDisplayDate`, `getPeriodLabel`, `scoreTrafficLight`, `getRatingFill`) to module scope so they're accessible from `buildReportDocument` function
 - [x] **Verify build passes** - `npx vite build` completes successfully
 
 ## Key Features Implemented
@@ -22,6 +23,7 @@
 4. **Multi-format Export**: Both PDF (via pdfMake) and Excel (via xlsx)
 5. **Ukrainian Localization**: All labels and formatting in Ukrainian
 6. **Professional PDF Layout**: Title page, rating legend, summary table, section details
+7. **Access Control**: Respects admin vs manager restaurant permissions
 
 ## File Changes
 
