@@ -4408,7 +4408,7 @@ function App() {
         || checklistTabKey.includes("haccp_report")
         || checklistTabKey.includes("haccp-report");
       const isHaccpAuditTab = checklistTabKey === "haccpaudit";
-      const isHaccpTemplatesTab = checklistTabKey === "haccptemplates";
+      const isHaccpTemplatesTab = checklistTabKey === "haccptemplates" || checklistTabKey.includes("shablon");
       if (isHaccpAuditTab || isHaccpTemplatesTab || isHaccpReportTab) {
         return (
           <div className="grid grid-cols-1">

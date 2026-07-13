@@ -11,6 +11,32 @@ import { uploadHaccpPhotosApi } from "../api/haccpPhotosApi";
 const TEMPLATES_COLLECTION = "haccpTemplates";
 const AUDITS_COLLECTION = "haccpAudits";
 
+// Клієнтський кеш коротких довідкових даних (шаблони) у localStorage,
+// щоб не робити повторних запитів до БД при кожному рендері/перемиканні вкладок.
+const HACCP_TEMPLATES_CACHE_KEY = "lucia.haccp.templates.v1";
+
+const readTemplatesCache = () => {
+  if (typeof window === "undefined" || !window.localStorage) return null;
+  try {
+    const raw = window.localStorage.getItem(HACCP_TEMPLATES_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed?.data)) return parsed.data;
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const writeTemplatesCache = (data) => {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    window.localStorage.setItem(HACCP_TEMPLATES_CACHE_KEY, JSON.stringify({ data, ts: Date.now() }));
+  } catch {
+    // ігноруємо помилки запису кешу
+  }
+};
+
 const collectUploadTargets = (payload) => {
   const targets = [];
 
@@ -113,6 +139,7 @@ export const useHaccp = () => {
     if (!apiEnabled) return [];
     const data = await listCollectionItemsApi(TEMPLATES_COLLECTION);
     const list = Array.isArray(data) ? data : [];
+    writeTemplatesCache(list);
     if (isMountedRef.current) setTemplates(list);
     return list;
   }, [apiEnabled]);
@@ -134,15 +161,25 @@ export const useHaccp = () => {
         return;
       }
       try {
+        // Спочатку показуємо закешовані шаблони (короткі довідкові дані),
+        // щоб уникнути «миготіння» та повторних запитів.
+        const cachedTemplates = readTemplatesCache();
+        if (cachedTemplates && !cancelled) {
+          setTemplates(cachedTemplates);
+          setLoading(false);
+        }
         const [templatesData, auditsData] = await Promise.all([
           listCollectionItemsApi(TEMPLATES_COLLECTION),
           listCollectionItemsApi(AUDITS_COLLECTION),
         ]);
         if (cancelled) return;
-        setTemplates(Array.isArray(templatesData) ? templatesData : []);
+        const list = Array.isArray(templatesData) ? templatesData : [];
+        writeTemplatesCache(list);
+        setTemplates(list);
         setAudits(Array.isArray(auditsData) ? auditsData : []);
       } catch (err) {
         console.error("Помилка завантаження даних HACCP:", err);
+        // За наявності кешу не скидаємо шаблони у порожній список.
         if (!cancelled) setError(err);
       } finally {
         if (!cancelled) setLoading(false);
