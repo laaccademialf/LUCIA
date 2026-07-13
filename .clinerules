@@ -16,7 +16,7 @@
 
 ### 2. API Implementation (src/api/)
 - **URL Management:** Use `normalizeApiBase` and `endpoint()` helper patterns to ensure consistent URL construction.
-- **Authentication:** 
+- **Authentication:**
   - Use `headers()` helper to include `Authorization: Bearer <token>` and `x-session-token`.
   - Priority for config: `localStorage (lucia_runtime_custom_config)` $\rightarrow$ `.env` $\rightarrow$ `window.location.origin`.
 - **Pagination/Filtering:** Use `URLSearchParams` for constructing query strings.
@@ -41,6 +41,13 @@
 - `src/firebase/`: Firebase configuration and service wrappers.
 - `src/hooks/`: Custom React hooks for state/logic reuse.
 - `src/utils/`: Pure helper functions.
+
+### 7. Component Props & Navigation (NEW)
+- **Prop Consistency:** When passing props from App.jsx routing logic to components, ensure the target component actually accepts and uses those props. 
+  - If a component receives `forceMode`, `topTab`, or similar navigation props, it must either use them or pass them to child components that do.
+  - Avoid passing unused props that could cause confusion or mask bugs.
+- **Navigation Props:** When routing conditionally renders modules (like HaccpModule), always verify the target component's prop interface matches what's being passed.
+- **Lazy-loaded Components:** For components loaded via `lazy()`, the wrapper component must forward relevant navigation props (`topTab`, `userPermissions`, `forceMode`, etc.) to the actual implementation.
 
 ## 🚀 Development Workflow
 - **Environment:** Use `.env.development` for local work.

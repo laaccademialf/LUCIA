@@ -2220,10 +2220,20 @@ function HaccpReportTab({ user, restaurants, templates, audits }) {
   );
 }
 
-export default function HaccpModule() {
+export default function HaccpModule({ 
+  topTab, 
+  restaurants: restaurantsProp, 
+  user: userProp, 
+  userPermissions,
+  forceMode 
+}) {
   const { user, restaurants, templates, audits } = useHaccp();
 
-  if (!user) return <div className="flex h-full items-center justify-center text-slate-500">Завантаження...</div>;
+  // Use props if provided (from App.jsx when navigating via haccpreport), otherwise use hook data
+  const effectiveUser = userProp || user;
+  const effectiveRestaurants = restaurantsProp || restaurants;
 
-  return <HaccpReportTab user={user} restaurants={restaurants} templates={templates} audits={audits} />;
+  if (!effectiveUser) return <div className="flex h-full items-center justify-center text-slate-500">Завантаження...</div>;
+
+  return <HaccpReportTab user={effectiveUser} restaurants={effectiveRestaurants} templates={templates} audits={audits} />;
 }
