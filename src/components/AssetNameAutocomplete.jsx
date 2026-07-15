@@ -7,6 +7,8 @@ const AssetNameAutocomplete = forwardRef(({
   assets = [], 
   onSelectAsset,
   disabled,
+  wrapperClassName = "",
+  simpleSuggestions = false,
   ...props 
 }, ref) => {
   const [inputValue, setInputValue] = useState("");
@@ -143,7 +145,7 @@ const AssetNameAutocomplete = forwardRef(({
         break;
     }
   };
-
+{`form-group ${wrapperClassName}`.trim()}
   return (
     <div className="form-group" ref={wrapperRef}>
       <div className="flex min-w-0 items-center gap-2.5 text-sm">
@@ -184,21 +186,28 @@ const AssetNameAutocomplete = forwardRef(({
         {/* Випадаючий список підказок */}
         {showSuggestions && suggestions.length > 0 && (
           <div className="absolute z-50 w-full mt-1 bg-white border border-slate-300 rounded-lg shadow-xl max-h-80 overflow-auto">
-            <div className="p-2 bg-slate-50 border-b border-slate-200">
-              <p className="text-xs text-slate-600 font-medium">
-                Знайдено {suggestions.reduce((sum, s) => sum + s.count, 0)} активів ({suggestions.length} унікальних)
-              </p>
-            </div>
-            
+            {!simpleSuggestions && (
+              <div className="p-2 bg-slate-50 border-b border-slate-200">
+                <p className="text-xs text-slate-600 font-medium">
+                  Знайдено {suggestions.reduce((sum, s) => sum + s.count, 0)} активів ({suggestions.length} унікальних)
+                </p>
+              </div>
+            )}
+
             {suggestions.map((assetTemplate, index) => (
               <div
                 key={index}
                 onClick={() => handleSelectAsset(assetTemplate)}
                 className={`
-                  p-3 cursor-pointer transition border-b border-slate-100 last:border-b-0
+                  ${simpleSuggestions ? "px-3 py-2" : "p-3"} cursor-pointer transition border-b border-slate-100 last:border-b-0
                   ${selectedIndex === index ? 'bg-indigo-100' : 'hover:bg-slate-50'}
                 `}
               >
+                {simpleSuggestions ? (
+                  <p className="font-medium text-slate-900 truncate">
+                    {assetTemplate.name}
+                  </p>
+                ) : (
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
@@ -243,14 +252,17 @@ const AssetNameAutocomplete = forwardRef(({
                     className="flex-shrink-0 text-emerald-600 mt-0.5" 
                   />
                 </div>
+                )}
               </div>
             ))}
             
-            <div className="p-2 bg-slate-50 border-t border-slate-200">
-              <p className="text-xs text-slate-500 text-center">
-                ↑↓ для навігації, Enter для вибору, Esc для закриття
-              </p>
-            </div>
+            {!simpleSuggestions && (
+              <div className="p-2 bg-slate-50 border-t border-slate-200">
+                <p className="text-xs text-slate-500 text-center">
+                  ↑↓ для навігації, Enter для вибору, Esc для закриття
+                </p>
+              </div>
+            )}
           </div>
         )}
 

@@ -577,19 +577,6 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
     setValue("totalWear", avg);
   }, [physicalWear, moralWear, setValue]);
 
-  // У режимі редагування дозволяємо переміщення по вкладках без обмежень
-  const canAccessTab = (tabId) => {
-    if (isEdit) return true;
-    const tabIndex = tabs.findIndex((t) => t.id === tabId);
-    if (tabIndex === 0) return true;
-    for (let i = 0; i < tabIndex; i++) {
-      if (!completedTabs.includes(tabs[i].id)) {
-        return false;
-      }
-    }
-    return true;
-  };
-
   // Валідація поточної вкладки
   const validateCurrentTab = async () => {
     const currentTabData = tabs.find((t) => t.id === activeTab);
@@ -889,7 +876,15 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
       resolvedPhotoUrls = results.filter(Boolean);
 
       if (uploadFailed > 0) {
-        alert(`Не вдалося зберегти ${uploadFailed} фото на сервері. Збереження продовжено для решти.`);
+        // Не зберігаємо актив з "битими" фото: якщо аплоад не вдався (навіть після
+        // повторних спроб через нестабільний інтернет) — зупиняємо збереження,
+        // залишаємо фото у формі, щоб користувач повторив спробу без втрати даних.
+        alert(
+          `Не вдалося завантажити ${uploadFailed} фото на сервер через нестабільне зʼєднання. ` +
+            `Актив НЕ збережено, щоб не залишити посилання на відсутні фото. ` +
+            `Перевірте інтернет і натисніть «Зберегти актив» ще раз.`
+        );
+        return false;
       }
     }
 
@@ -1036,6 +1031,54 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
     return "";
   };
 
+  // Мемоізуємо панель вкладок: під час набору тексту в полях (watch викликає
+  // ререндер усієї форми) вкладки не перебудовуються, тому інтерфейс не «фрізить».
+  const tabBarElement = useMemo(() => {
+    const isTabAccessible = (tabId) => {
+      if (isEdit) return true;
+      const tabIndex = tabs.findIndex((t) => t.id === tabId);
+      if (tabIndex === 0) return true;
+      for (let i = 0; i < tabIndex; i += 1) {
+        if (!completedTabs.includes(tabs[i].id)) return false;
+      }
+      return true;
+    };
+
+    return (
+      <div className="mt-3 sm:mt-4 flex gap-2 overflow-x-auto pb-1 snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden sm:grid sm:grid-cols-4 sm:gap-2 sm:overflow-visible sm:pb-0">
+        {tabs.map((tab) => {
+          const isCompleted = completedTabs.includes(tab.id);
+          const isActive = activeTab === tab.id;
+          const canAccess = isTabAccessible(tab.id);
+
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => canAccess && setActiveTab(tab.id)}
+              disabled={!canAccess}
+              className={clsx(
+                "relative shrink-0 snap-start min-w-[120px] sm:min-w-0 rounded-md sm:rounded-lg px-2.5 sm:px-4 py-2 sm:py-3.5 text-[13px] sm:text-sm font-bold leading-tight transition-colors duration-100 border-2",
+                isActive
+                  ? "bg-indigo-600 text-white shadow-xl shadow-indigo-500/40 border-indigo-500"
+                  : isCompleted
+                  ? "bg-green-50 text-green-800 border-green-400 hover:bg-green-100"
+                  : canAccess
+                  ? "bg-white text-slate-800 border-slate-300 hover:text-indigo-700 hover:border-indigo-400 hover:shadow-lg"
+                  : "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-50"
+              )}
+            >
+              {isCompleted && (
+                <CheckCircle2 className="absolute -top-2 -right-2 text-green-600 bg-white rounded-full" size={20} />
+              )}
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }, [activeTab, completedTabs, isEdit, setActiveTab]);
+
   return (
     <div className="card p-3 sm:p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
       <div className="sticky top-20 sm:top-11 z-20 -mx-3 sm:-mx-5 mb-3 border-b border-slate-200 bg-white/95 px-3 py-2 backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:px-5 sm:py-3">
@@ -1068,37 +1111,7 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
         )}
       </div>
 
-      <div className="mt-3 sm:mt-4 flex gap-2 overflow-x-auto pb-1 snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden sm:grid sm:grid-cols-4 sm:gap-2 sm:overflow-visible sm:pb-0">
-        {tabs.map((tab, index) => {
-          const isCompleted = completedTabs.includes(tab.id);
-          const isActive = activeTab === tab.id;
-          const canAccess = canAccessTab(tab.id);
-
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => canAccess && setActiveTab(tab.id)}
-              disabled={!canAccess}
-              className={clsx(
-                "relative shrink-0 snap-start min-w-[120px] sm:min-w-0 rounded-md sm:rounded-lg px-2.5 sm:px-4 py-2 sm:py-3.5 text-[13px] sm:text-sm font-bold leading-tight transition-all duration-200 border-2",
-                isActive
-                  ? "bg-indigo-600 text-white shadow-xl shadow-indigo-500/40 border-indigo-500 scale-105"
-                  : isCompleted
-                  ? "bg-green-50 text-green-800 border-green-400 hover:bg-green-100"
-                  : canAccess
-                  ? "bg-white text-slate-800 border-slate-300 hover:text-indigo-700 hover:border-indigo-400 hover:shadow-lg"
-                  : "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-50"
-              )}
-            >
-              {isCompleted && (
-                <CheckCircle2 className="absolute -top-2 -right-2 text-green-600 bg-white rounded-full" size={20} />
-              )}
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
+      {tabBarElement}
 
       <form className="mt-4 sm:mt-6 flex flex-col gap-4 sm:gap-6" onSubmit={handleSubmit(onSubmitForm)}>
         {activeTab === "identification" && (
@@ -1122,7 +1135,9 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
               <Controller
                 name="name"
                 control={control}
-                rules={{ required: true }}
+                rulewrapperClassName="md:col-span-2 lg:col-span-2"
+                    simpleSuggestions={!isEdit}
+                    s={{ required: true }}
                 render={({ field }) => (
                   <AssetNameAutocomplete
                     label={<>Назва активу {requiredMark}</>}

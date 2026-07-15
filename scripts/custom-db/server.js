@@ -715,6 +715,13 @@ const saveImageFile = async ({ fileName, dataUrl, directory, publicBase }) => {
   const absolutePath = path.join(directory, uniqueName);
   await fs.writeFile(absolutePath, buffer);
 
+  // Підтверджуємо, що файл реально записаний і має очікуваний розмір, перш ніж
+  // повертати URL. Так у базу не потрапить посилання на відсутнє/порожнє фото.
+  const stat = await fs.stat(absolutePath);
+  if (!stat.isFile() || stat.size !== buffer.length) {
+    throw new Error("Image file verification failed after write");
+  }
+
   return {
     name: String(fileName || "photo"),
     url: `${String(publicBase || "").trim().replace(/\/+$/, "")}/${uniqueName}`,

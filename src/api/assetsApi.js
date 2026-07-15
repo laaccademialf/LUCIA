@@ -49,6 +49,33 @@ const endpoint = (path) => `${getApiBase()}${path}`;
 
 export const isAssetsApiEnabled = () => Boolean(getApiBase());
 
+// Мережа у користувачів буває нестабільна (мобільний інтернет, перебої Wi-Fi).
+// Через це запис активу чи аплоад фото інколи падав і дані/зображення губилися.
+// fetchWithRetry повторює запит при мережевих збоях та тимчасових помилках
+// сервера (5xx / 429). 4xx (крім 429) не повторюємо — це не транзієнтна помилка.
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fetchWithRetry = async (url, options = {}, { retries = 3, baseDelayMs = 600 } = {}) => {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const response = await fetch(url, options);
+      if ((response.status >= 500 || response.status === 429) && attempt < retries) {
+        lastError = new Error(`Transient HTTP ${response.status}`);
+        await sleep(baseDelayMs * 2 ** attempt);
+        continue;
+      }
+      return response;
+    } catch (error) {
+      // fetch кидає TypeError при обриві зʼєднання/офлайні — повторюємо.
+      lastError = error;
+      if (attempt >= retries) break;
+      await sleep(baseDelayMs * 2 ** attempt);
+    }
+  }
+  throw lastError || new Error("Network request failed");
+};
+
 export const getAssetsApi = async ({ lite = false } = {}) => {
   const url = lite ? endpoint("/api/assets?lite=1") : endpoint("/api/assets");
   const response = await fetch(url, {
@@ -106,7 +133,7 @@ export const getAssetsPageApi = async ({
 };
 
 export const addAssetApi = async (asset) => {
-  const response = await fetch(endpoint("/api/assets"), {
+  const response = await fetchWithRetry(endpoint("/api/assets"), {
     method: "POST",
     headers: headers(),
     body: JSON.stringify(asset || {}),
@@ -120,7 +147,7 @@ export const addAssetApi = async (asset) => {
 };
 
 export const updateAssetApi = async (id, data) => {
-  const response = await fetch(endpoint(`/api/assets/${encodeURIComponent(String(id || ""))}`), {
+  const response = await fetchWithRetry(endpoint(`/api/assets/${encodeURIComponent(String(id || ""))}`), {
     method: "PUT",
     headers: headers(),
     body: JSON.stringify(data || {}),
@@ -170,7 +197,7 @@ export const batchImportAssetsApi = async (items) => {
 };
 
 export const uploadAssetPhotoApi = async ({ fileName, dataUrl }) => {
-  const response = await fetch(endpoint("/api/assets/photos"), {
+  const response = await fetchWithRetry(endpoint("/api/assets/photos"), {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({ fileName, dataUrl }),

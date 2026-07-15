@@ -83,6 +83,10 @@ const normalizeFilterValues = (value) => {
   return normalized ? [normalized] : [];
 };
 
+// Спеціальне значення фільтра для незаповнених (порожніх) полів.
+const EMPTY_FILTER_VALUE = "__LUCIA_EMPTY__";
+const EMPTY_FILTER_LABEL = "(Не заповнено)";
+
 const ALL_FIELD_DEFS = [
   { key: "invNumber", header: "Інв. номер" },
   { key: "invNumber1C", header: "Інв. номер 1С" },
@@ -304,10 +308,17 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
           const selectedValues = normalizeFilterValues(val);
           if (selectedValues.length === 0) return true;
 
+          // Порожнє значення поля вважаємо "не заповнено" і зіставляємо зі спец-опцією.
+          const matchWithEmpty = (actualRaw) => {
+            const actualStr = String(actualRaw || "");
+            if (actualStr.trim() === "") return selectedValues.includes(EMPTY_FILTER_VALUE);
+            return selectedValues.includes(actualStr);
+          };
+
           // Масив у фільтрі означає множинний вибір значень.
-          if (key === "location") return selectedValues.includes(String(item.businessUnit || ""));
-          if (key === "locationName") return selectedValues.includes(String(item.locationName || ""));
-          return selectedValues.includes(String(item[key] || ""));
+          if (key === "location") return matchWithEmpty(item.businessUnit);
+          if (key === "locationName") return matchWithEmpty(item.locationName);
+          return matchWithEmpty(item[key]);
         }
 
         if (!val) return true;
@@ -492,13 +503,18 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
     for (const key of keysToBuild) {
       const seen = new Set();
       const values = [];
+      let hasEmpty = false;
       for (let i = 0; i < data.length; i += 1) {
         const value = data[i]?.[key];
-        if (value && !seen.has(value)) {
+        if (value === undefined || value === null || String(value).trim() === "") {
+          hasEmpty = true;
+        } else if (!seen.has(value)) {
           seen.add(value);
           values.push(value);
         }
       }
+      // Якщо є незаповнені записи — додаємо спец-опцію "(Не заповнено)" на початок.
+      if (hasEmpty) values.unshift(EMPTY_FILTER_VALUE);
       optionsMap[key] = values;
     }
     return optionsMap;
@@ -923,6 +939,8 @@ function MultiFilterSelect({ label, values, options, onChange }) {
 
   const selectedSet = new Set(selectedValues);
 
+  const optionLabel = (opt) => (opt === EMPTY_FILTER_VALUE ? EMPTY_FILTER_LABEL : opt);
+
   const toggleOption = (option) => {
     if (selectedSet.has(option)) {
       onChange(selectedValues.filter((value) => value !== option));
@@ -935,7 +953,7 @@ function MultiFilterSelect({ label, values, options, onChange }) {
     selectedValues.length === 0
       ? "Усі"
       : selectedValues.length === 1
-        ? selectedValues[0]
+        ? optionLabel(selectedValues[0])
         : `Вибрано: ${selectedValues.length}`;
 
   return (
@@ -982,7 +1000,9 @@ function MultiFilterSelect({ label, values, options, onChange }) {
                   >
                     <Check size={12} />
                   </span>
-                  <span className="truncate">{opt}</span>
+                  <span className={clsx("truncate", opt === EMPTY_FILTER_VALUE && "italic text-slate-500")}>
+                    {optionLabel(opt)}
+                  </span>
                 </button>
               );
             })}
