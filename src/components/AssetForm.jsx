@@ -1117,21 +1117,6 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
         {activeTab === "identification" && (
           <div className="space-y-6">
             <FieldGrid>
-              <Input 
-                label={<>Інвентарний номер {requiredMark}</>} 
-                {...register("invNumber", { required: true })}
-                disabled={
-                  // Для адміна завжди доступно
-                  fieldPermsLoading ||
-                  (!isAdmin && isEdit) ||
-                  (!isAdmin && !canEdit("invNumber"))
-                }
-              />
-              <Input
-                label="Інвентарний номер 1С"
-                {...register("invNumber1C")}
-                disabled={fieldPermsLoading || !canEdit("invNumber1C")}
-              />
               <Controller
                 name="name"
                 control={control}
@@ -1154,6 +1139,21 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
                     }}
                   />
                 )}
+              />
+              <Input 
+                label={<>Інвентарний номер {requiredMark}</>} 
+                {...register("invNumber", { required: true })}
+                disabled={
+                  // Для адміна завжди доступно
+                  fieldPermsLoading ||
+                  (!isAdmin && isEdit) ||
+                  (!isAdmin && !canEdit("invNumber"))
+                }
+              />
+              <Input
+                label="Інвентарний номер 1С"
+                {...register("invNumber1C")}
+                disabled={fieldPermsLoading || !canEdit("invNumber1C")}
               />
               <Select
                 label="Категорія"
