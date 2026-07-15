@@ -1135,9 +1135,7 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
               <Controller
                 name="name"
                 control={control}
-                rulewrapperClassName="md:col-span-2 lg:col-span-2"
-                    simpleSuggestions={!isEdit}
-                    s={{ required: true }}
+                rules={{ required: true }}
                 render={({ field }) => (
                   <AssetNameAutocomplete
                     label={<>Назва активу {requiredMark}</>}
@@ -1145,6 +1143,8 @@ export function AssetForm({ selectedAsset, onSubmit, onCancel, currentUser, rest
                     assets={assetsProp}
                     disabled={!canEdit("name")}
                     error={errors.name}
+                    wrapperClassName="md:col-span-2 lg:col-span-2"
+                    simpleSuggestions={!isEdit}
                     onSelectAsset={(assetTemplate) => {
                       // Автозаповнення полів з обраного активу
                       if (assetTemplate.category) setValue("category", assetTemplate.category);

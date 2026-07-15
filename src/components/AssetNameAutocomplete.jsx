@@ -145,9 +145,9 @@ const AssetNameAutocomplete = forwardRef(({
         break;
     }
   };
-{`form-group ${wrapperClassName}`.trim()}
+
   return (
-    <div className="form-group" ref={wrapperRef}>
+    <div className={`form-group ${wrapperClassName}`.trim()} ref={wrapperRef}>
       <div className="flex min-w-0 items-center gap-2.5 text-sm">
         {label && (
           <label className="w-40 lg:w-44 shrink-0 text-[13px] leading-tight font-semibold text-slate-700">
