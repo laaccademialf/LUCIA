@@ -521,8 +521,7 @@ function App() {
       }
 
       const probeTargets = [
-        `https://api.ipify.org?format=json&net_probe=${Date.now()}`,
-        `https://httpbin.org/ip?net_probe=${Date.now()}`,
+        `/health?net_probe=${Date.now()}`,
       ];
 
       let hasSuccess = false;
@@ -536,9 +535,7 @@ function App() {
             method: "GET",
             cache: "no-store",
             credentials: "omit",
-            headers: {
-              Accept: "application/json",
-            },
+            headers: { Accept: "application/json" },
             signal: controller.signal,
           });
 
@@ -546,12 +543,8 @@ function App() {
             continue;
           }
 
-          const payload = await response.json();
-          const ipValue = String(payload?.ip || payload?.origin || "").trim();
-          if (ipValue) {
-            hasSuccess = true;
-            break;
-          }
+          hasSuccess = true;
+          break;
         } catch {
           // Try the next probe target.
         } finally {
