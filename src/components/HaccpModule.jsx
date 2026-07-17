@@ -2660,7 +2660,8 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
       setGallery(migrated.gallery);
       setCurrentAuditId(match.id);
       setStatus(match.status || "draft");
-      setAuditStartedAt(String(match.startedAt || ""));
+      // Fallback до createdAt: чернетка без startedAt все одно має бути редагованою.
+      setAuditStartedAt(String(match.startedAt || match.createdAt || ""));
     } else {
       setResponses({});
       setGallery([]);
@@ -3017,6 +3018,33 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
     if (!result.success) alert("Не вдалося видалити аудит.");
   };
 
+  // Відкриває чернетку з історії у формі аудиту для редагування.
+  // Виставляємо заклад/шаблон/дату — форма підвантажить саме цей аудит,
+  // і одразу завантажуємо стан, щоб уникнути «блимання» попереднього аудиту.
+  const handleEditAudit = (audit) => {
+    if (!audit) return;
+    if (String(audit.status || "") === "completed") return;
+    if (dirty && !confirm("Є незбережені зміни. Відкрити цю чернетку для редагування?")) return;
+
+    const restaurantId = String(audit.restaurantId || "").trim();
+    const canAccess = availableRestaurants.some((item) => String(item?.id || "") === restaurantId);
+    if (restaurantId && canAccess) setSelectedRestaurantId(restaurantId);
+    setSelectedTemplateId(String(audit.templateId || ""));
+    setSelectedDate(String(audit.date || todayDate()));
+
+    const migrated = migrateAuditPhotos(audit.gallery, audit.responses);
+    setResponses(migrated.responses);
+    setGallery(migrated.gallery);
+    setCurrentAuditId(audit.id);
+    setStatus(audit.status || "draft");
+    setAuditStartedAt(String(audit.startedAt || audit.createdAt || new Date().toISOString()));
+    setDirty(false);
+
+    setHistoryAuditPreview(null);
+    setShowHistory(false);
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   return (
     <div className="space-y-4">
       <div className="card border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-xl sticky top-0 z-20">
@@ -3315,6 +3343,11 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                       </td>
                       <td className="py-2 pr-3">
                         <div className="flex items-center justify-end gap-2">
+                          {audit.status !== "completed" ? (
+                            <button type="button" onClick={() => handleEditAudit(audit)} className="rounded bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-200">
+                              Редагувати
+                            </button>
+                          ) : null}
                           <button type="button" onClick={() => openHistoryAuditPreview(audit)} className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">
                             Відкрити
                           </button>
