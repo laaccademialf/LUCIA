@@ -1642,6 +1642,33 @@ const getCollectionItemData = async (collectionName, id, dbConfig) => {
   throw new Error(`Unsupported engine for collection ${collection}: ${dbConfig.dbEngine}`);
 };
 
+// Колекції з глибоко вкладеними / динамічними ключами (аудити, чек-листи,
+// шаблони). Розгортання їх у скалярні колонки роздуває схему на сотні-тисячі
+// стовпців і впирається в ліміти MySQL (row size 65535 байт / кількість колонок)
+// → 500 під час збереження. Для них зберігаємо ЛИШЕ JSON-payload без flatten.
+const PAYLOAD_ONLY_COLLECTIONS = new Set([
+  "haccpaudits",
+  "haccptemplates",
+  "haccpactionplans",
+  "checklisttemplates",
+  "checklistexecutions",
+]);
+
+const isPayloadOnlyCollection = (collectionName) =>
+  PAYLOAD_ONLY_COLLECTIONS.has(String(collectionName || "").trim().toLowerCase());
+
+// Самовідновлення «роздутих» _flat таблиць: прибираємо всі похідні скалярні
+// колонки, лишаючи джерело істини (payload) та службові поля. Безпечно, бо
+// повний документ зберігається у payload, а читання відновлюється саме з нього.
+const dropDerivedFlatColumnsMySql = async (conn, tableName) => {
+  const KEEP = new Set(["id", "payload", "created_at", "updated_at"]);
+  const columnTypes = await getMySqlColumnTypes(conn, tableName);
+  const toDrop = Object.keys(columnTypes).filter((col) => col && !KEEP.has(col));
+  if (toDrop.length === 0) return;
+  const dropSql = toDrop.map((col) => `DROP COLUMN ${quoteIdentMySql(col)}`).join(", ");
+  await conn.execute(`ALTER TABLE ${quoteIdentMySql(tableName)} ${dropSql}`);
+};
+
 // Єдина точка запису документа в MySQL-таблицю колекції.
 // strictInsert=true → чистий INSERT без ON DUPLICATE KEY UPDATE: конфлікт
 // PRIMARY KEY (id) чи UNIQUE (email) дає помилку ER_DUP_ENTRY замість тихого
@@ -1649,7 +1676,15 @@ const getCollectionItemData = async (collectionName, id, dbConfig) => {
 const writeCollectionItemMySql = async (conn, collection, nextId, normalized, { strictInsert = false } = {}) => {
   const tableName = await resolveCollectionTableMySql(conn, collection);
   const isFlatTable = String(tableName || "").endsWith("_flat");
+  const payloadOnly = isPayloadOnlyCollection(collection);
   const existingColumns = await getMySqlColumns(conn, tableName);
+  // Payload-only колекції: payload — джерело істини. Гарантуємо наявність колонки.
+  if (payloadOnly && !existingColumns.has("payload")) {
+    await conn.execute(
+      `ALTER TABLE ${quoteIdentMySql(tableName)} ADD COLUMN ${quoteIdentMySql("payload")} JSON NULL`
+    );
+    existingColumns.add("payload");
+  }
   const hasPayloadColumn = existingColumns.has("payload");
   const shouldPersistPayload = hasPayloadColumn;
 
@@ -1671,12 +1706,21 @@ const writeCollectionItemMySql = async (conn, collection, nextId, normalized, { 
     return next;
   })();
 
-  const flat = flattenScalarFields(flatSource);
+  const flat = payloadOnly ? {} : flattenScalarFields(flatSource);
   // Видаляємо ключі, що перевищують ліміт MySQL на довжину ідентифікатора
   for (const col of Object.keys(flat)) {
     if (col.length > MAX_MYSQL_IDENTIFIER_LENGTH) {
       delete flat[col];
     }
+  }
+
+  // Самовідновлення «роздутих» _flat таблиць для payload-only колекцій:
+  // одноразово прибираємо всі похідні скалярні колонки. Після цього таблиця
+  // містить лише id + payload (+ службові), і запис не впирається в row size.
+  if (payloadOnly) {
+    await dropDerivedFlatColumnsMySql(conn, tableName).catch((error) => {
+      console.warn(`[payload-only] cleanup failed for ${tableName}: ${error?.message || error}`);
+    });
   }
   const typeMap = Object.entries(flat).reduce((acc, [col, value]) => {
     acc[col] = mergeTypes(acc[col], detectValueType(value));
