@@ -77,60 +77,105 @@ import { isLegalUser, LEGAL_NAV_ID, getLegalUserIdentityKeys, normalizeLegalIden
 
 const loadExcelHelpers = () => import("./utils/excelHelpers");
 
-const RolesPositionsManager = lazy(() =>
+// На мобільних мережах динамічний import() чанку інколи падає через тимчасовий
+// обрив зʼєднання — і тоді користувач бачив екран помилки / був змушений
+// перезавантажувати сторінку. lazyWithRetry повторює завантаження чанку кілька
+// разів із невеликою затримкою, тож транзієнтні збої мережі не ламають UI.
+const lazyWithRetry = (factory, retries = 3, delayMs = 500) =>
+  lazy(() => {
+    const attempt = (remaining) =>
+      factory().catch((error) => {
+        if (remaining <= 0) throw error;
+        return new Promise((resolve) => setTimeout(resolve, delayMs)).then(() =>
+          attempt(remaining - 1)
+        );
+      });
+    return attempt(retries);
+  });
+
+const RolesPositionsManager = lazyWithRetry(() =>
   import("./components/RolesPositionsManager").then((module) => ({ default: module.RolesPositionsManager }))
 );
-const RolePermissionsManager = lazy(() =>
+const RolePermissionsManager = lazyWithRetry(() =>
   import("./components/RolePermissionsManager").then((module) => ({ default: module.RolePermissionsManager }))
 );
-const FieldPermissionsManager = lazy(() =>
+const FieldPermissionsManager = lazyWithRetry(() =>
   import("./components/FieldPermissionsManager").then((module) => ({ default: module.FieldPermissionsManager }))
 );
-const AssetFieldsManager = lazy(() =>
+const AssetFieldsManager = lazyWithRetry(() =>
   import("./components/AssetFieldsManager").then((module) => ({ default: module.AssetFieldsManager }))
 );
-const FinancialAssetsReport = lazy(() => import("./components/FinancialAssetsReport"));
-const AssetDetailedReport = lazy(() => import("./components/AssetDetailedReport"));
-const MenuStructureEditor = lazy(() => import("./components/MenuStructureEditor"));
-const ProductBookingModule = lazy(() => import("./components/ProductBookingModule"));
-const CateringOperationsModule = lazy(() => import("./components/CateringOperationsModule"));
-const TechnologicalCardModule = lazy(() => import("./components/TechnologicalCardModule"));
-const ServiceRequestsModule = lazy(() => import("./components/ServiceRequestsModule"));
-const LegalModule = lazy(() => import("./components/LegalModule"));
-const ChecklistModule = lazy(() => import("./components/ChecklistModule"));
-const TeamHiringModule = lazy(() => import("./components/TeamHiringModule"));
-const SecurityAuditModule = lazy(() => import("./components/SecurityAuditModule"));
-const PaymentRegistryModule = lazy(() => import("./components/PaymentRegistryModule"));
-const AssortmentMatrixModule = lazy(() => import("./components/AssortmentMatrixModule"));
-const DatabaseConnectionsManager = lazy(() => import("./components/DatabaseConnectionsManager"));
-const ProfileSettingsModal = lazy(() => import("./components/ProfileSettingsModal"));
+const FinancialAssetsReport = lazyWithRetry(() => import("./components/FinancialAssetsReport"));
+const AssetDetailedReport = lazyWithRetry(() => import("./components/AssetDetailedReport"));
+const MenuStructureEditor = lazyWithRetry(() => import("./components/MenuStructureEditor"));
+const ProductBookingModule = lazyWithRetry(() => import("./components/ProductBookingModule"));
+const CateringOperationsModule = lazyWithRetry(() => import("./components/CateringOperationsModule"));
+const TechnologicalCardModule = lazyWithRetry(() => import("./components/TechnologicalCardModule"));
+const ServiceRequestsModule = lazyWithRetry(() => import("./components/ServiceRequestsModule"));
+const LegalModule = lazyWithRetry(() => import("./components/LegalModule"));
+const ChecklistModule = lazyWithRetry(() => import("./components/ChecklistModule"));
+const TeamHiringModule = lazyWithRetry(() => import("./components/TeamHiringModule"));
+const SecurityAuditModule = lazyWithRetry(() => import("./components/SecurityAuditModule"));
+const PaymentRegistryModule = lazyWithRetry(() => import("./components/PaymentRegistryModule"));
+const AssortmentMatrixModule = lazyWithRetry(() => import("./components/AssortmentMatrixModule"));
+const DatabaseConnectionsManager = lazyWithRetry(() => import("./components/DatabaseConnectionsManager"));
+const ProfileSettingsModal = lazyWithRetry(() => import("./components/ProfileSettingsModal"));
 
 // Динамічні chunks можуть бути недоступні після деплою, якщо браузер залишив
 // старий index.html у кеші. Без ErrorBoundary Suspense у такому випадку
 // назавжди показує fallback, а користувач бачить лише «Завантаження модуля».
+//
+// ВАЖЛИВО: цей boundary також ловить БУДЬ-ЯКУ помилку рендеру вмісту. Раніше він
+// не скидався сам і показував екран «Оновіть сторінку», через що користувач був
+// змушений перезавантажувати сторінку (особливо часто на мобільному та для
+// не-адмінів, чиї вкладки/дані відрізняються). Тепер boundary автоматично
+// скидається при зміні resetKey (навігація), тож користувач може просто перейти
+// в інший розділ і продовжити роботу БЕЗ перезавантаження.
 class LazyModuleErrorBoundary extends Component {
   constructor(props) {
     super(props);
-    this.state = { error: null };
+    this.state = { error: null, resetKey: props.resetKey };
   }
 
   static getDerivedStateFromError(error) {
     return { error };
   }
 
-  componentDidCatch(error) {
-    console.error("Не вдалося завантажити модуль:", error);
+  static getDerivedStateFromProps(props, state) {
+    // Скидаємо помилку, коли змінюється resetKey (напр., користувач перейшов
+    // на іншу вкладку/розділ) — щоб не «залипати» на екрані помилки.
+    if (props.resetKey !== state.resetKey) {
+      return { error: null, resetKey: props.resetKey };
+    }
+    return null;
+  }
+
+  componentDidCatch(error, info) {
+    console.error("Помилка рендеру модуля:", error, info);
   }
 
   render() {
     if (this.state.error) {
       return (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
-          <p className="font-semibold">Модуль не завантажився</p>
-          <p className="mt-1">Оновіть сторінку, щоб отримати актуальну версію застосунку.</p>
-          <button type="button" className="mt-3 rounded-lg bg-amber-700 px-3 py-2 font-semibold text-white" onClick={() => window.location.reload()}>
-            Оновити сторінку
-          </button>
+          <p className="font-semibold">Не вдалося відобразити розділ</p>
+          <p className="mt-1">Оберіть інший розділ у меню або спробуйте ще раз. Якщо не допомагає — оновіть сторінку.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="rounded-lg bg-amber-700 px-3 py-2 font-semibold text-white hover:bg-amber-600"
+              onClick={() => this.setState({ error: null })}
+            >
+              Спробувати ще раз
+            </button>
+            <button
+              type="button"
+              className="rounded-lg border border-amber-300 bg-white px-3 py-2 font-semibold text-amber-800 hover:bg-amber-100"
+              onClick={() => window.location.reload()}
+            >
+              Оновити сторінку
+            </button>
+          </div>
         </div>
       );
     }
@@ -5445,7 +5490,7 @@ function App() {
             )}
           >
             <div className={clsx((activeNav.includes("productbooking") || activeNav.includes("inventory-products")) ? "mt-0" : "mt-4")}>
-              <LazyModuleErrorBoundary>
+              <LazyModuleErrorBoundary resetKey={`${activeNav}:${topTab}`}>
                 <Suspense fallback={<div className="p-4 text-sm text-slate-500">Завантаження модуля...</div>}>
                   {renderContent()}
                 </Suspense>
