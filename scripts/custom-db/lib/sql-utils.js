@@ -33,6 +33,11 @@ export const ALWAYS_JSON_FIELDS = new Set([
   "assignmentTypes", "assignment_types",
   "pricingByRestaurantId", "pricing_by_restaurant_id",
   "pricingByRestaurantGroup", "pricing_by_restaurant_group",
+  // Dynamic answer maps (e.g. HACCP/checklists) must stay as JSON to avoid
+  // creating unbounded per-question columns in _flat tables.
+  "responses",
+  "sectionScores", "section_scores",
+  "templateSnapshot", "template_snapshot",
 ]);
 
 export const flattenScalarFields = (input, prefix = "", out = {}) => {
