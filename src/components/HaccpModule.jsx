@@ -3348,8 +3348,18 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                               Редагувати
                             </button>
                           ) : null}
-                          <button type="button" onClick={() => openHistoryAuditPreview(audit)} className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200">
-                            Відкрити
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (audit.status !== "completed") {
+                                handleEditAudit(audit);
+                                return;
+                              }
+                              openHistoryAuditPreview(audit);
+                            }}
+                            className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200"
+                          >
+                            {audit.status !== "completed" ? "Відкрити для редагування" : "Відкрити"}
                           </button>
                           {isAdmin ? (
                             <button type="button" onClick={() => handleDeleteAudit(audit)} className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-200">
@@ -3381,6 +3391,15 @@ function AuditTab({ user, restaurants, templates, audits, createAudit, updateAud
                 <p className="mt-1 text-xs text-slate-500">{String(historyAuditPreview?.templateName || historyPreviewTemplate?.name || "Шаблон")}</p>
               </div>
               <div className="flex items-center gap-2">
+                {historyAuditPreview?.status !== "completed" ? (
+                  <button
+                    type="button"
+                    onClick={() => handleEditAudit(historyAuditPreview)}
+                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                  >
+                    Редагувати чернетку
+                  </button>
+                ) : null}
                 <ScoreBadge percent={Number(historyAuditPreview?.totalPercent || 0)} />
                 <button
                   type="button"
