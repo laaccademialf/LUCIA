@@ -199,11 +199,6 @@ const EnergoCenterMetersPanel = ({ autoLoad = false, reportDate: reportDateProp,
   if (controlsOnly) {
     return (
       <div className="flex flex-wrap items-center gap-2">
-        <DatePickerPopover
-          value={reportDate}
-          max={getYesterdayIso()}
-          onChange={(iso) => setReportDate(iso)}
-        />
         <button
           type="button"
           onClick={onSave ? handleAutoUpdate : () => load({ force: true })}
