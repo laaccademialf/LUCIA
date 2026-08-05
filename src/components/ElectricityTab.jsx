@@ -367,8 +367,11 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
             <input
               type="date"
               value={rangeFrom}
-              max={rangeTo || undefined}
-              onChange={(e) => setRangeFrom(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setRangeFrom(v);
+                if (v && rangeTo && v > rangeTo) setRangeTo(v);
+              }}
               onClick={(e) => e.currentTarget.showPicker?.()}
               className="cursor-pointer rounded border border-slate-300 px-2 py-1 text-xs text-slate-900"
             />
@@ -378,8 +381,11 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
             <input
               type="date"
               value={rangeTo}
-              min={rangeFrom || undefined}
-              onChange={(e) => setRangeTo(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setRangeTo(v);
+                if (v && rangeFrom && v < rangeFrom) setRangeFrom(v);
+              }}
               onClick={(e) => e.currentTarget.showPicker?.()}
               className="cursor-pointer rounded border border-slate-300 px-2 py-1 text-xs text-slate-900"
             />
