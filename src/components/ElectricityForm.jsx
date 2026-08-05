@@ -26,8 +26,34 @@ const ElectricityForm = ({
     }))
   );
 
-  // Місяць історії, що відображається (YYYY-MM). За замовчуванням — поточний.
-  const [historyMonth, setHistoryMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  // Проміжок дат для перегляду історії (YYYY-MM-DD). Дефолт — поточний місяць.
+  const toIsoDate = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+  const [rangeFrom, setRangeFrom] = useState(() => {
+    const now = new Date();
+    return toIsoDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  });
+  const [rangeTo, setRangeTo] = useState(() => toIsoDate(new Date()));
+  const setQuickRange = (kind) => {
+    const now = new Date();
+    if (kind === "thisMonth") {
+      setRangeFrom(toIsoDate(new Date(now.getFullYear(), now.getMonth(), 1)));
+      setRangeTo(toIsoDate(now));
+    } else if (kind === "prevMonth") {
+      setRangeFrom(toIsoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1)));
+      setRangeTo(toIsoDate(new Date(now.getFullYear(), now.getMonth(), 0)));
+    } else if (kind === "last7") {
+      const s = new Date(now); s.setDate(s.getDate() - 6);
+      setRangeFrom(toIsoDate(s)); setRangeTo(toIsoDate(now));
+    } else if (kind === "last30") {
+      const s = new Date(now); s.setDate(s.getDate() - 29);
+      setRangeFrom(toIsoDate(s)); setRangeTo(toIsoDate(now));
+    }
+  };
 
   // Оновлення значень лічильника
   const handleMeterChange = (idx, field, value) => {
@@ -68,25 +94,14 @@ const ElectricityForm = ({
   const sortedHistory = [...history].sort((a, b) =>
     String(rowDateIso(b?.date) || b?.createdAt || "").localeCompare(String(rowDateIso(a?.date) || a?.createdAt || ""))
   );
-  // Доступні місяці (YYYY-MM) за спаданням.
-  const availableMonths = [...new Set(
-    sortedHistory.map((row) => rowDateIso(row?.date).slice(0, 7)).filter((m) => /^\d{4}-\d{2}$/.test(m))
-  )];
-  // Якщо у поточному місяці немає записів — показуємо найновіший доступний.
-  const effectiveMonth = availableMonths.includes(historyMonth)
-    ? historyMonth
-    : (availableMonths[0] || historyMonth);
-  const monthIndex = availableMonths.indexOf(effectiveMonth);
-  const hasOlderMonth = monthIndex >= 0 && monthIndex < availableMonths.length - 1;
-  const hasNewerMonth = monthIndex > 0;
-  const monthLabel = (m) => {
-    const mm = /^(\d{4})-(\d{2})$/.exec(m || "");
-    if (!mm) return m || "";
-    const names = ["січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"];
-    return `${names[Number(mm[2]) - 1] || ""} ${mm[1]}`.trim();
+  // Записи в обраному проміжку дат (вже відсортовані за спаданням дати).
+  const inSelectedRange = (iso) => {
+    if (!iso) return false;
+    if (rangeFrom && iso < rangeFrom) return false;
+    if (rangeTo && iso > rangeTo) return false;
+    return true;
   };
-  // Записи лише обраного місяця (вже відсортовані за спаданням дати).
-  const visibleHistory = sortedHistory.filter((row) => rowDateIso(row?.date).slice(0, 7) === effectiveMonth);
+  const visibleHistory = sortedHistory.filter((row) => inSelectedRange(rowDateIso(row?.date)));
 
   return (
     <div className="space-y-2">
@@ -213,33 +228,11 @@ const ElectricityForm = ({
             }
           }
 
-          // Компактний фільтр місяця — праворуч у заголовку.
-          const monthNav = (
-            <span className="flex items-center gap-1 text-[11px] font-normal text-slate-600">
-              <button
-                type="button"
-                disabled={!hasOlderMonth}
-                onClick={() => { if (hasOlderMonth) setHistoryMonth(availableMonths[monthIndex + 1]); }}
-                className="rounded border border-slate-300 bg-white px-1.5 py-0.5 font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                title="Старіші"
-              >←</button>
-              <span className="min-w-[88px] text-center font-semibold text-slate-800">{monthLabel(effectiveMonth)}</span>
-              <button
-                type="button"
-                disabled={!hasNewerMonth}
-                onClick={() => { if (hasNewerMonth) setHistoryMonth(availableMonths[monthIndex - 1]); }}
-                className="rounded border border-slate-300 bg-white px-1.5 py-0.5 font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                title="Новіші"
-              >→</button>
-            </span>
-          );
-
           if (columns.length === 0) {
             return (
               <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-3 mt-2">
-                <h4 className="font-semibold text-slate-800 text-sm flex items-center justify-between gap-2">
+                <h4 className="font-semibold text-slate-800 text-sm flex items-center gap-2">
                   <span className="flex items-center gap-2"><Zap size={14} className="text-yellow-400" /> Історія показників — {group.title}</span>
-                  {monthNav}
                 </h4>
                 <p className="text-slate-500 text-sm mt-1">Немає даних</p>
               </div>
@@ -261,9 +254,8 @@ const ElectricityForm = ({
 
           return (
             <div key={group.key} className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 mt-2">
-              <h4 className="font-semibold text-slate-800 mb-2 text-sm flex items-center justify-between gap-2">
+              <h4 className="font-semibold text-slate-800 mb-2 text-sm flex items-center gap-2">
                 <span className="flex items-center gap-1.5"><Zap size={14} className="text-yellow-400" /> Історія показників — {group.title}</span>
-                {monthNav}
               </h4>
               {canEditReadings && !canEditCoefficients && (
                 <p className="mb-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
@@ -308,7 +300,7 @@ const ElectricityForm = ({
                       ))}
                     </tr>
                     <tr className="bg-indigo-50 font-semibold text-indigo-900">
-                      <td className="px-2 py-0.5 whitespace-nowrap border border-slate-200">Разом за місяць</td>
+                      <td className="px-2 py-0.5 whitespace-nowrap border border-slate-200">Разом за період</td>
                       {columns.map((c) => (
                         <Fragment key={`tot-${c}`}>
                           <td className="min-w-[7rem] px-2 py-0.5 text-right tabular-nums border border-slate-200 text-slate-400">—</td>
@@ -400,6 +392,34 @@ const ElectricityForm = ({
 
         return (
           <div className="mt-2 space-y-2">
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+              <span className="text-xs font-semibold text-slate-700">Проміжок:</span>
+              <label className="flex items-center gap-1 text-xs text-slate-600">
+                з
+                <input
+                  type="date"
+                  value={rangeFrom}
+                  max={rangeTo || undefined}
+                  onChange={(e) => setRangeFrom(e.target.value)}
+                  className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-900"
+                />
+              </label>
+              <label className="flex items-center gap-1 text-xs text-slate-600">
+                по
+                <input
+                  type="date"
+                  value={rangeTo}
+                  min={rangeFrom || undefined}
+                  onChange={(e) => setRangeTo(e.target.value)}
+                  className="rounded border border-slate-300 px-2 py-1 text-xs text-slate-900"
+                />
+              </label>
+              <span className="mx-1 h-4 w-px bg-slate-200" />
+              <button type="button" onClick={() => setQuickRange("thisMonth")} className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">Цей місяць</button>
+              <button type="button" onClick={() => setQuickRange("prevMonth")} className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">Минулий місяць</button>
+              <button type="button" onClick={() => setQuickRange("last7")} className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">7 днів</button>
+              <button type="button" onClick={() => setQuickRange("last30")} className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">30 днів</button>
+            </div>
             {groups.map(renderGroup)}
           </div>
         );
