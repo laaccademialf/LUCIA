@@ -21,6 +21,34 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
     d.setDate(d.getDate() - 1);
     return d.toISOString().slice(0, 10);
   });
+  // Проміжок дат для перегляду історії (YYYY-MM-DD). Дефолт — поточний місяць.
+  const toIsoDate = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+  const [rangeFrom, setRangeFrom] = useState(() => {
+    const now = new Date();
+    return toIsoDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  });
+  const [rangeTo, setRangeTo] = useState(() => toIsoDate(new Date()));
+  const setQuickRange = (kind) => {
+    const now = new Date();
+    if (kind === "thisMonth") {
+      setRangeFrom(toIsoDate(new Date(now.getFullYear(), now.getMonth(), 1)));
+      setRangeTo(toIsoDate(now));
+    } else if (kind === "prevMonth") {
+      setRangeFrom(toIsoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1)));
+      setRangeTo(toIsoDate(new Date(now.getFullYear(), now.getMonth(), 0)));
+    } else if (kind === "last7") {
+      const s = new Date(now); s.setDate(s.getDate() - 6);
+      setRangeFrom(toIsoDate(s)); setRangeTo(toIsoDate(now));
+    } else if (kind === "last30") {
+      const s = new Date(now); s.setDate(s.getDate() - 29);
+      setRangeFrom(toIsoDate(s)); setRangeTo(toIsoDate(now));
+    }
+  };
   const [energoData, setEnergoData] = useState(null);
   // Коефіцієнти трансформації лічильників поточного закладу: { [meterNumber]: number }.
   const [meterCoefficients, setMeterCoefficients] = useState({});
@@ -332,6 +360,36 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
             canSave={!user || user.role !== "admin" || Boolean(currentRestaurantId)}
           />
         </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2">
+          <span className="text-sm font-semibold text-slate-700">Проміжок:</span>
+          <label className="flex items-center gap-1 text-xs text-slate-600">
+            з
+            <input
+              type="date"
+              value={rangeFrom}
+              max={rangeTo || undefined}
+              onChange={(e) => setRangeFrom(e.target.value)}
+              onClick={(e) => e.currentTarget.showPicker?.()}
+              className="cursor-pointer rounded border border-slate-300 px-2 py-1 text-xs text-slate-900"
+            />
+          </label>
+          <label className="flex items-center gap-1 text-xs text-slate-600">
+            по
+            <input
+              type="date"
+              value={rangeTo}
+              min={rangeFrom || undefined}
+              onChange={(e) => setRangeTo(e.target.value)}
+              onClick={(e) => e.currentTarget.showPicker?.()}
+              className="cursor-pointer rounded border border-slate-300 px-2 py-1 text-xs text-slate-900"
+            />
+          </label>
+          <span className="mx-1 h-4 w-px bg-slate-200" />
+          <button type="button" onClick={() => setQuickRange("thisMonth")} className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">Цей місяць</button>
+          <button type="button" onClick={() => setQuickRange("prevMonth")} className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">Минулий місяць</button>
+          <button type="button" onClick={() => setQuickRange("last7")} className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">7 днів</button>
+          <button type="button" onClick={() => setQuickRange("last30")} className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50">30 днів</button>
+        </div>
         {status && <p className="text-sm text-slate-600 mt-2">{status}</p>}
         {user?.role === "admin" && !currentRestaurantId && (
           <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2">
@@ -360,6 +418,8 @@ const ElectricityTab = ({ user, restaurants, utilityMeters }) => {
           onSubmit={handleElectricitySubmit}
           responsible={user?.displayName || user?.fullName || ""}
           reportDate={reportDate}
+          rangeFrom={rangeFrom}
+          rangeTo={rangeTo}
           energoRows={Array.isArray(energoData?.rows) ? energoData.rows : []}
           onDeleteHistory={isAdmin ? handleDeleteHistory : undefined}
           coefficients={meterCoefficients}
