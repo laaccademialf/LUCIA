@@ -121,22 +121,23 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
           </div>
 
           <button
-            type="submit"
-            disabled={loading}
-            className="w-full px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 disabled:bg-indigo-400 disabled:cursor-not-allowed transition"
-          >
-            {loading ? "Вхід..." : "Увійти"}
-          </button>
-          <button
             type="button"
             onClick={() => {
               setResetMode(true);
               setError("");
               setResetMessage("");
             }}
-            className="w-full text-sm text-indigo-600 hover:text-indigo-500"
+            className="-mt-2 block text-left text-sm text-indigo-600 hover:text-indigo-500"
           >
             Забули пароль?
+          </button>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 disabled:bg-indigo-400 disabled:cursor-not-allowed transition"
+          >
+            {loading ? "Вхід..." : "Увійти"}
           </button>
         </form> : (
           <div className="space-y-4">
