@@ -863,12 +863,16 @@ const getEffectiveNotificationSettings = async (dbConfig) => {
   const stored = await getStoredNotificationSettings(dbConfig);
   if (stored) return stored;
   return {
+    provider: process.env.MAIL_PROVIDER || "smtp",
     host: process.env.SMTP_HOST || "",
     port: process.env.SMTP_PORT || "587",
     secure: process.env.SMTP_SECURE === "true",
     user: process.env.SMTP_USER || "",
     password: process.env.SMTP_PASSWORD || "",
     from: process.env.MAIL_FROM || process.env.SMTP_USER || "",
+    tenantId: process.env.MS_GRAPH_TENANT_ID || "",
+    clientId: process.env.MS_GRAPH_CLIENT_ID || "",
+    clientSecret: process.env.MS_GRAPH_CLIENT_SECRET || "",
   };
 };
 
@@ -5562,13 +5566,19 @@ const server = http.createServer(async (req, res) => {
     const settings = await getStoredNotificationSettings(getAssetsRuntimeConfig());
     return sendJson(res, 200, {
       ok: true,
-      configured: Boolean(settings?.host && settings?.user && settings?.password && settings?.from),
+      configured: Boolean(settings?.provider === "graph"
+        ? settings?.tenantId && settings?.clientId && settings?.clientSecret && settings?.from
+        : settings?.host && settings?.user && settings?.password && settings?.from),
+      provider: String(settings?.provider || "smtp"),
       host: String(settings?.host || ""),
       port: Number(settings?.port || 587),
       secure: Boolean(settings?.secure),
       user: String(settings?.user || ""),
       from: String(settings?.from || ""),
       hasPassword: Boolean(settings?.password),
+      tenantId: String(settings?.tenantId || ""),
+      clientId: String(settings?.clientId || ""),
+      hasClientSecret: Boolean(settings?.clientSecret),
     });
   }
 
@@ -5582,6 +5592,7 @@ const server = http.createServer(async (req, res) => {
     }
     const previous = await getStoredNotificationSettings(getAssetsRuntimeConfig()) || {};
     const next = {
+      provider: String(payload?.provider || "smtp").trim().toLowerCase() === "graph" ? "graph" : "smtp",
       host: String(payload?.host || "").trim(),
       port: Number.parseInt(String(payload?.port || 587), 10) || 587,
       secure: Boolean(payload?.secure),
@@ -5590,9 +5601,18 @@ const server = http.createServer(async (req, res) => {
         ? String(payload.password)
         : String(previous.password || ""),
       from: String(payload?.from || payload?.user || "").trim(),
+      tenantId: String(payload?.tenantId || "").trim(),
+      clientId: String(payload?.clientId || "").trim(),
+      clientSecret: Object.prototype.hasOwnProperty.call(payload || {}, "clientSecret") && String(payload.clientSecret || "")
+        ? String(payload.clientSecret)
+        : String(previous.clientSecret || ""),
     };
-    if (!next.host || !next.user || !next.password || !next.from) {
-      return sendJson(res, 400, { ok: false, error: "SMTP host, user, password and sender are required" });
+    const validSmtp = next.provider === "smtp" && next.host && next.user && next.password && next.from;
+    const validGraph = next.provider === "graph" && next.tenantId && next.clientId && next.clientSecret && next.from;
+    if (!validSmtp && !validGraph) {
+      return sendJson(res, 400, { ok: false, error: next.provider === "graph"
+        ? "Graph Tenant ID, Client ID, Client Secret and sender are required"
+        : "SMTP host, user, password and sender are required" });
     }
     const settingsPayload = {
       id: NOTIFICATION_SETTINGS_ID,
@@ -5607,7 +5627,7 @@ const server = http.createServer(async (req, res) => {
     } else {
       await createCollectionItemData("notificationSettings", settingsPayload, settingsDbConfig);
     }
-    return sendJson(res, 200, { ok: true, configured: true, host: next.host, port: next.port, secure: next.secure, user: next.user, from: next.from, hasPassword: true });
+    return sendJson(res, 200, { ok: true, configured: true, provider: next.provider, host: next.host, port: next.port, secure: next.secure, user: next.user, from: next.from, hasPassword: Boolean(next.password), tenantId: next.tenantId, clientId: next.clientId, hasClientSecret: Boolean(next.clientSecret) });
   }
 
   if (pathname === "/api/settings/notifications/test" && method === "POST") {

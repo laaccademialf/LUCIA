@@ -6,17 +6,22 @@ import {
 } from "../api/notificationSettingsApi";
 
 const initialForm = {
+  provider: "graph",
   host: "smtp.office365.com",
   port: 587,
   secure: false,
   user: "",
   password: "",
   from: "",
+  tenantId: "",
+  clientId: "",
+  clientSecret: "",
 };
 
 export const NotificationSettingsModule = () => {
   const [form, setForm] = useState(initialForm);
   const [hasPassword, setHasPassword] = useState(false);
+  const [hasClientSecret, setHasClientSecret] = useState(false);
   const [configured, setConfigured] = useState(false);
   const [testRecipient, setTestRecipient] = useState("");
   const [status, setStatus] = useState("");
@@ -29,13 +34,17 @@ export const NotificationSettingsModule = () => {
       .then((data) => {
         setForm((current) => ({
           ...current,
+          provider: data.provider || current.provider,
           host: data.host || current.host,
           port: data.port || current.port,
           secure: Boolean(data.secure),
           user: data.user || "",
           from: data.from || data.user || "",
+          tenantId: data.tenantId || "",
+          clientId: data.clientId || "",
         }));
         setHasPassword(Boolean(data.hasPassword));
+        setHasClientSecret(Boolean(data.hasClientSecret));
         setConfigured(Boolean(data.configured));
       })
       .catch((loadError) => setError(loadError.message))
@@ -96,6 +105,35 @@ export const NotificationSettingsModule = () => {
       {status && <div className="mb-4 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">{status}</div>}
 
       <form onSubmit={handleSave} className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <label className="text-sm font-medium text-slate-700 md:col-span-2">
+          Провайдер відправки
+          <select className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" value={form.provider} onChange={(e) => update("provider", e.target.value)}>
+            <option value="graph">Microsoft Graph OAuth2 (рекомендовано для Office 365)</option>
+            <option value="smtp">SMTP</option>
+          </select>
+        </label>
+        {form.provider === "graph" ? (
+          <>
+            <label className="text-sm font-medium text-slate-700">
+              Microsoft Tenant ID
+              <input className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" value={form.tenantId} onChange={(e) => update("tenantId", e.target.value)} required />
+            </label>
+            <label className="text-sm font-medium text-slate-700">
+              Application Client ID
+              <input className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" value={form.clientId} onChange={(e) => update("clientId", e.target.value)} required />
+            </label>
+            <label className="text-sm font-medium text-slate-700 md:col-span-2">
+              Client Secret {hasClientSecret && <span className="font-normal text-slate-400">(залиште порожнім, щоб не змінювати)</span>}
+              <input className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" type="password" value={form.clientSecret} onChange={(e) => update("clientSecret", e.target.value)} autoComplete="new-password" required={!hasClientSecret} />
+            </label>
+            <label className="text-sm font-medium text-slate-700 md:col-span-2">
+              From email
+              <input className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" type="email" value={form.from} onChange={(e) => update("from", e.target.value)} placeholder="luci@lafamiglia.ua" autoComplete="email" required />
+            </label>
+          </>
+        ) : null}
+        {form.provider === "smtp" ? (
+          <>
         <label className="text-sm font-medium text-slate-700">
           SMTP сервер
           <input className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" value={form.host} onChange={(e) => update("host", e.target.value)} placeholder="smtp.office365.com" required />
@@ -120,6 +158,8 @@ export const NotificationSettingsModule = () => {
           <input type="checkbox" checked={form.secure} onChange={(e) => update("secure", e.target.checked)} />
           Використовувати SSL без STARTTLS (зазвичай для Office 365 залишити вимкненим)
         </label>
+          </>
+        ) : null}
         <div className="flex flex-wrap gap-2 md:col-span-2">
           <button type="submit" disabled={saving} className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white disabled:opacity-50">{saving ? "Збереження..." : "Зберегти налаштування"}</button>
         </div>

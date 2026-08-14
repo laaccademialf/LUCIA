@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { ConfidentialClientApplication } from "@azure/msal-node";
 
 const getConfig = (override = {}) => ({
   host: String(override.host || process.env.SMTP_HOST || "").trim(),
@@ -26,6 +27,9 @@ const getTransporter = (config) => {
 };
 
 export const isEmailServiceConfigured = (override = {}) => {
+  if (String(override.provider || "").toLowerCase() === "graph") {
+    return Boolean(override.tenantId && override.clientId && override.clientSecret && override.from);
+  }
   const config = getConfig(override);
   return Boolean(config.host && config.user && config.password && config.from);
 };
@@ -33,6 +37,43 @@ export const isEmailServiceConfigured = (override = {}) => {
 export const sendEmail = async ({ to, subject, text, html, smtp }) => {
   const recipient = String(to || "").trim();
   if (!recipient) throw new Error("Email recipient is required");
+
+  if (String(smtp?.provider || "").toLowerCase() === "graph") {
+    const tenantId = String(smtp.tenantId || "").trim();
+    const clientId = String(smtp.clientId || "").trim();
+    const clientSecret = String(smtp.clientSecret || "");
+    const from = String(smtp.from || "").trim();
+    if (!isEmailServiceConfigured({ provider: "graph", tenantId, clientId, clientSecret, from })) {
+      throw new Error("Microsoft Graph email service is not configured");
+    }
+    const client = new ConfidentialClientApplication({
+      auth: { clientId, clientSecret, authority: `https://login.microsoftonline.com/${tenantId}` },
+    });
+    const tokenResult = await client.acquireTokenByClientCredential({
+      scopes: ["https://graph.microsoft.com/.default"],
+    });
+    if (!tokenResult?.accessToken) throw new Error("Microsoft Graph access token was not returned");
+    const graphResponse = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(from)}/sendMail`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tokenResult.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: {
+          subject: String(subject || "LUCIA notification"),
+          body: { contentType: "HTML", content: String(html || text || "") },
+          toRecipients: [{ emailAddress: { address: recipient } }],
+        },
+        saveToSentItems: true,
+      }),
+    });
+    if (!graphResponse.ok) {
+      const detail = await graphResponse.text().catch(() => "");
+      throw new Error(`Microsoft Graph sendMail failed (${graphResponse.status}): ${detail.slice(0, 300)}`);
+    }
+    return { provider: "graph", status: graphResponse.status };
+  }
 
   const config = getConfig(smtp);
   return getTransporter(config).sendMail({
