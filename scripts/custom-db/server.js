@@ -5621,13 +5621,22 @@ const server = http.createServer(async (req, res) => {
     const smtp = await getEffectiveNotificationSettings(getAssetsRuntimeConfig());
     const recipient = String(payload?.to || smtp.user || "").trim();
     if (!isEmailServiceConfigured(smtp)) return sendJson(res, 400, { ok: false, error: "SMTP is not configured" });
-    await sendEmail({
-      to: recipient,
-      subject: "LUCIA: тест email налаштувань",
-      text: "Це тестовий лист від платформи LUCIA. SMTP налаштування працюють.",
-      html: "<p>Це тестовий лист від платформи <strong>LUCIA</strong>. SMTP налаштування працюють.</p>",
-      smtp,
-    });
+    try {
+      await sendEmail({
+        to: recipient,
+        subject: "LUCIA: тест email налаштувань",
+        text: "Це тестовий лист від платформи LUCIA. SMTP налаштування працюють.",
+        html: "<p>Це тестовий лист від платформи <strong>LUCIA</strong>. SMTP налаштування працюють.</p>",
+        smtp,
+      });
+    } catch (error) {
+      console.error(`[email] SMTP test failed: ${error?.code || "SMTP_ERROR"} ${error?.message || error}`);
+      return sendJson(res, 502, {
+        ok: false,
+        error: "Не вдалося підключитися до Office 365 SMTP. Перевірте SMTP AUTH, логін, пароль і порт 587.",
+        code: String(error?.code || "SMTP_ERROR"),
+      });
+    }
     return sendJson(res, 200, { ok: true, sentTo: recipient });
   }
 

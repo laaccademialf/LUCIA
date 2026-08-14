@@ -19,6 +19,9 @@ const getTransporter = (config) => {
     port: Number.isFinite(config.port) ? config.port : 587,
     secure: config.secure,
     auth: { user: config.user, pass: config.password },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
   });
 };
 
