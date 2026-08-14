@@ -1,39 +1,39 @@
 import nodemailer from "nodemailer";
 
-const smtpHost = String(process.env.SMTP_HOST || "").trim();
-const smtpPort = Number.parseInt(String(process.env.SMTP_PORT || "587"), 10);
-const smtpUser = String(process.env.SMTP_USER || "").trim();
-const smtpPassword = String(process.env.SMTP_PASSWORD || "");
-const smtpSecure = String(process.env.SMTP_SECURE || "false").trim().toLowerCase() === "true";
-const mailFrom = String(process.env.MAIL_FROM || smtpUser).trim();
-const appName = String(process.env.MAIL_APP_NAME || "LUCIA").trim() || "LUCIA";
+const getConfig = (override = {}) => ({
+  host: String(override.host || process.env.SMTP_HOST || "").trim(),
+  port: Number.parseInt(String(override.port || process.env.SMTP_PORT || "587"), 10),
+  user: String(override.user || process.env.SMTP_USER || "").trim(),
+  password: String(override.password ?? process.env.SMTP_PASSWORD ?? ""),
+  secure: String(override.secure ?? process.env.SMTP_SECURE ?? "false").trim().toLowerCase() === "true",
+  from: String(override.from || process.env.MAIL_FROM || override.user || process.env.SMTP_USER || "").trim(),
+});
 
-let transporter = null;
-
-const getTransporter = () => {
-  if (transporter) return transporter;
-  if (!smtpHost || !smtpUser || !smtpPassword || !mailFrom) {
+const getTransporter = (config) => {
+  if (!config.host || !config.user || !config.password || !config.from) {
     throw new Error("SMTP email service is not configured");
   }
 
-  transporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: Number.isFinite(smtpPort) ? smtpPort : 587,
-    secure: smtpSecure,
-    auth: { user: smtpUser, pass: smtpPassword },
+  return nodemailer.createTransport({
+    host: config.host,
+    port: Number.isFinite(config.port) ? config.port : 587,
+    secure: config.secure,
+    auth: { user: config.user, pass: config.password },
   });
-  return transporter;
 };
 
-export const isEmailServiceConfigured = () =>
-  Boolean(smtpHost && smtpUser && smtpPassword && mailFrom);
+export const isEmailServiceConfigured = (override = {}) => {
+  const config = getConfig(override);
+  return Boolean(config.host && config.user && config.password && config.from);
+};
 
-export const sendEmail = async ({ to, subject, text, html }) => {
+export const sendEmail = async ({ to, subject, text, html, smtp }) => {
   const recipient = String(to || "").trim();
   if (!recipient) throw new Error("Email recipient is required");
 
-  return getTransporter().sendMail({
-    from: mailFrom,
+  const config = getConfig(smtp);
+  return getTransporter(config).sendMail({
+    from: config.from,
     to: recipient,
     subject: String(subject || `${appName} notification`),
     text: String(text || ""),
@@ -41,7 +41,7 @@ export const sendEmail = async ({ to, subject, text, html }) => {
   });
 };
 
-export const sendTemporaryPasswordEmail = async (email, temporaryPassword) => {
+export const sendTemporaryPasswordEmail = async (email, temporaryPassword, smtp) => {
   const recipient = String(email || "").trim();
   const password = String(temporaryPassword || "");
   const subject = `${appName}: тимчасовий пароль`;
@@ -59,5 +59,6 @@ export const sendTemporaryPasswordEmail = async (email, temporaryPassword) => {
     subject,
     text,
     html: `<p>Для вашого облікового запису <strong>${appName}</strong> створено тимчасовий пароль.</p><p><strong>Тимчасовий пароль:</strong> ${password}</p><p>Увійдіть у систему та одразу змініть цей пароль у профілі.</p><p>Якщо ви не запитували відновлення, зверніться до адміністратора платформи.</p>`,
+    smtp,
   });
 };

@@ -6,7 +6,7 @@ export const KNOWN_COLLECTIONS = [
   "assets", "restaurants", "users", "authUsers", "authSessions",
   "menuStructure", "settings", "positions", "workRoles",
   "rolePermissions", "fieldPermissions", "platformAuditLogs",
-  // asset dictionaries
+    "notificationSettings", // new collection for encrypted SMTP settings
   "assetCategories", "assetSubcategories", "assetAccountingTypes",
   "assetBusinessUnits", "assetStatuses", "assetConditions", "assetDecisions",
   "assetPlacementZones", "assetResponsibilityCenters", "assetResponsiblePersons",

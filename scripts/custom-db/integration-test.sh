@@ -111,12 +111,26 @@ echo "=== 6. Логін після консолідації ==="
 LOGIN=$(curl -s -X POST "http://127.0.0.1:$API_PORT/auth/login" -H "Content-Type: application/json" -d '{"email":"fresh@int.ua","password":"Int123!"}')
 assert "логін успішний" '"ok":true' "$LOGIN"
 assert "роль підтягнулась" '"role":"admin"' "$LOGIN"
+LOGIN_TOKEN=$(LOGIN_JSON="$LOGIN" node -e 'console.log(JSON.parse(process.env.LOGIN_JSON).token)')
+NOTIFY_TOKEN_ONLY=$(curl -s "http://127.0.0.1:$API_PORT/api/settings/notifications" -H "Authorization: Bearer $TOKEN")
+assert "notification settings без session заборонені" "Authentication required" "$NOTIFY_TOKEN_ONLY"
+NOTIFY_SAVE=$(curl -s -X PUT "http://127.0.0.1:$API_PORT/api/settings/notifications" -H "x-session-token: $LOGIN_TOKEN" -H "Content-Type: application/json" -d '{"host":"smtp.office365.com","port":587,"secure":false,"user":"platform@example.com","password":"test-secret","from":"platform@example.com"}')
+assert "notification settings збережені через admin session" '"configured":true' "$NOTIFY_SAVE"
+NOTIFY_GET=$(curl -s "http://127.0.0.1:$API_PORT/api/settings/notifications" -H "x-session-token: $LOGIN_TOKEN")
+assert "notification settings читаються" '"hasPassword":true' "$NOTIFY_GET"
+if [[ "$NOTIFY_GET" != *'"password"'* ]]; then
+  echo "  ✓ SMTP password не повертається"
+  PASS=$((PASS+1))
+else
+  echo "  ✗ SMTP password не повертається"
+  FAIL=$((FAIL+1))
+fi
 ROLE_TOKEN_ONLY=$(curl -s -X PUT "http://127.0.0.1:$API_PORT/api/collections/users/user1" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"role":"user"}')
 assert "role mutation без admin session заборонена" "Authenticated admin session required" "$ROLE_TOKEN_ONLY"
 BAD=$(curl -s -X POST "http://127.0.0.1:$API_PORT/auth/login" -H "Content-Type: application/json" -d '{"email":"fresh@int.ua","password":"WRONG"}')
 assert "невірний пароль → Invalid credentials" "Invalid credentials" "$BAD"
 FORGOT=$(curl -s -X POST "http://127.0.0.1:$API_PORT/auth/forgot-password" -H "Content-Type: application/json" -d '{"email":"unknown@int.ua"}')
-assert "forgot-password endpoint public" "Email service is temporarily unavailable" "$FORGOT"
+assert "forgot-password endpoint public" '"ok":true' "$FORGOT"
 
 echo "=== 7. Реєстр колекцій ==="
 UNKNOWN_READ=$(curl -s "http://127.0.0.1:$API_PORT/api/collections/totallyUnknownThing" -H "Authorization: Bearer $TOKEN")

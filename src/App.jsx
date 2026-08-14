@@ -47,6 +47,7 @@ import AssetTransferWriteoffManager from "./components/AssetTransferWriteoffMana
 import HaccpModule from "./components/HaccpModule";
 import { useAuth } from "./hooks/useAuth";
 import NotificationPanel from "./components/NotificationPanel";
+import { NotificationSettingsModule } from "./components/NotificationSettingsModule";
 import { logoutUser } from "./firebase/auth";
 import { useMenuStructure } from "./hooks/useMenuStructure";
 import { getRolePermissions } from "./firebase/permissions";
@@ -4450,6 +4451,17 @@ function App() {
           </div>
         );
       }
+    }
+
+    if (
+      ["settings-system", "systemsettings", "systemsetings", "settings-systemsettings"].includes(String(activeNav || "").toLowerCase()) &&
+      ["notificationsettings", "notificationsetings", "notification-settings", "notifications"].includes(String(topTab || "").toLowerCase())
+    ) {
+      return (
+        <div className="grid grid-cols-1">
+          <NotificationSettingsModule />
+        </div>
+      );
     }
 
     if (activeNav === "ops-maintenance" || activeNav.includes("ops-maintenance")) {

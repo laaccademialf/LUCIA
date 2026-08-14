@@ -9,6 +9,7 @@ import { DEFAULT_MENU_STRUCTURE } from "../../src/data/defaultMenuStructure.js";
 import { KNOWN_COLLECTIONS } from "./collections.js";
 import {
   isEmailServiceConfigured,
+  sendEmail,
   sendTemporaryPasswordEmail,
 } from "../emailService.js";
 import {
@@ -817,6 +818,58 @@ const nowIso = () => new Date().toISOString();
 const hashPassword = (password, salt = crypto.randomBytes(16).toString("hex")) => {
   const hash = crypto.scryptSync(String(password || ""), salt, 64).toString("hex");
   return { salt, hash };
+};
+
+const NOTIFICATION_SETTINGS_ID = "default";
+const getNotificationSettingsKey = () => {
+  if (!TOKEN) throw new Error("CUSTOM_MIGRATION_TOKEN is required to encrypt notification settings");
+  return crypto.createHash("sha256").update(`lucia:notification-settings:${TOKEN}`).digest();
+};
+
+const encryptNotificationSettings = (settings) => {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", getNotificationSettingsKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(settings), "utf8"), cipher.final()]);
+  return {
+    algorithm: "aes-256-gcm",
+    iv: iv.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url"),
+    data: encrypted.toString("base64url"),
+  };
+};
+
+const decryptNotificationSettings = (record) => {
+  if (!record?.data || !record?.iv || !record?.tag) return null;
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    getNotificationSettingsKey(),
+    Buffer.from(String(record.iv), "base64url")
+  );
+  decipher.setAuthTag(Buffer.from(String(record.tag), "base64url"));
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(String(record.data), "base64url")),
+    decipher.final(),
+  ]);
+  return JSON.parse(decrypted.toString("utf8"));
+};
+
+const getStoredNotificationSettings = async (dbConfig) => {
+  const record = await getCollectionItemData("notificationSettings", NOTIFICATION_SETTINGS_ID, dbConfig);
+  if (!record?.encrypted) return null;
+  return decryptNotificationSettings(record.encrypted);
+};
+
+const getEffectiveNotificationSettings = async (dbConfig) => {
+  const stored = await getStoredNotificationSettings(dbConfig);
+  if (stored) return stored;
+  return {
+    host: process.env.SMTP_HOST || "",
+    port: process.env.SMTP_PORT || "587",
+    secure: process.env.SMTP_SECURE === "true",
+    user: process.env.SMTP_USER || "",
+    password: process.env.SMTP_PASSWORD || "",
+    from: process.env.MAIL_FROM || process.env.SMTP_USER || "",
+  };
 };
 
 const verifyPassword = (password, salt, hash) => {
@@ -3617,12 +3670,13 @@ const handleAuthForgotPassword = async (req, res) => {
   if (isPasswordRecoveryRateLimited(req, email)) {
     return sendJson(res, 429, { ok: false, error: "Забагато запитів. Спробуйте пізніше." });
   }
-  if (!isEmailServiceConfigured()) {
+
+  const dbConfig = getAssetsRuntimeConfig();
+  const smtp = await getEffectiveNotificationSettings(dbConfig);
+  if (!isEmailServiceConfigured(smtp)) {
     console.error("[email] Password recovery requested but SMTP is not configured");
     return sendJson(res, 503, { ok: false, error: "Email service is temporarily unavailable" });
   }
-
-  const dbConfig = getAssetsRuntimeConfig();
   const authUser = await getAuthUserByEmail(email, dbConfig);
   if (!authUser) return sendJson(res, 200, genericResponse);
 
@@ -3651,7 +3705,7 @@ const handleAuthForgotPassword = async (req, res) => {
   );
 
   try {
-    await sendTemporaryPasswordEmail(email, temporaryPassword);
+    await sendTemporaryPasswordEmail(email, temporaryPassword, smtp);
   } catch (error) {
     await updateAuthUserRecord(
       String(authUser.id),
@@ -5499,6 +5553,82 @@ const server = http.createServer(async (req, res) => {
 
   if ((pathname === "/settings/firebase-runtime" || pathname === "/api/settings/firebase-runtime") && method === "DELETE") {
     return handleDeleteRuntimeSettings(req, res);
+  }
+
+  if (pathname === "/api/settings/notifications" && method === "GET") {
+    const { profile } = await resolveAuthContext(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    if (!hasAdminRole(profile)) return sendJson(res, 403, { ok: false, error: "Only admin can view notification settings" });
+    const settings = await getStoredNotificationSettings(getAssetsRuntimeConfig());
+    return sendJson(res, 200, {
+      ok: true,
+      configured: Boolean(settings?.host && settings?.user && settings?.password && settings?.from),
+      host: String(settings?.host || ""),
+      port: Number(settings?.port || 587),
+      secure: Boolean(settings?.secure),
+      user: String(settings?.user || ""),
+      from: String(settings?.from || ""),
+      hasPassword: Boolean(settings?.password),
+    });
+  }
+
+  if (pathname === "/api/settings/notifications" && method === "PUT") {
+    const { profile } = await resolveAuthContext(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    if (!hasAdminRole(profile)) return sendJson(res, 403, { ok: false, error: "Only admin can change notification settings" });
+    let payload;
+    try { payload = await parseJsonBody(req); } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+    }
+    const previous = await getStoredNotificationSettings(getAssetsRuntimeConfig()) || {};
+    const next = {
+      host: String(payload?.host || "").trim(),
+      port: Number.parseInt(String(payload?.port || 587), 10) || 587,
+      secure: Boolean(payload?.secure),
+      user: String(payload?.user || "").trim(),
+      password: Object.prototype.hasOwnProperty.call(payload || {}, "password") && String(payload.password || "")
+        ? String(payload.password)
+        : String(previous.password || ""),
+      from: String(payload?.from || payload?.user || "").trim(),
+    };
+    if (!next.host || !next.user || !next.password || !next.from) {
+      return sendJson(res, 400, { ok: false, error: "SMTP host, user, password and sender are required" });
+    }
+    const settingsPayload = {
+      id: NOTIFICATION_SETTINGS_ID,
+      encrypted: encryptNotificationSettings(next),
+      updatedAt: nowIso(),
+      updatedBy: String(profile.id),
+    };
+    const settingsDbConfig = getAssetsRuntimeConfig();
+    const existingSettings = await getCollectionItemData("notificationSettings", NOTIFICATION_SETTINGS_ID, settingsDbConfig);
+    if (existingSettings) {
+      await updateCollectionItemData("notificationSettings", NOTIFICATION_SETTINGS_ID, settingsPayload, settingsDbConfig);
+    } else {
+      await createCollectionItemData("notificationSettings", settingsPayload, settingsDbConfig);
+    }
+    return sendJson(res, 200, { ok: true, configured: true, host: next.host, port: next.port, secure: next.secure, user: next.user, from: next.from, hasPassword: true });
+  }
+
+  if (pathname === "/api/settings/notifications/test" && method === "POST") {
+    const { profile } = await resolveAuthContext(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    if (!hasAdminRole(profile)) return sendJson(res, 403, { ok: false, error: "Only admin can test notification settings" });
+    let payload;
+    try { payload = await parseJsonBody(req); } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+    }
+    const smtp = await getEffectiveNotificationSettings(getAssetsRuntimeConfig());
+    const recipient = String(payload?.to || smtp.user || "").trim();
+    if (!isEmailServiceConfigured(smtp)) return sendJson(res, 400, { ok: false, error: "SMTP is not configured" });
+    await sendEmail({
+      to: recipient,
+      subject: "LUCIA: тест email налаштувань",
+      text: "Це тестовий лист від платформи LUCIA. SMTP налаштування працюють.",
+      html: "<p>Це тестовий лист від платформи <strong>LUCIA</strong>. SMTP налаштування працюють.</p>",
+      smtp,
+    });
+    return sendJson(res, 200, { ok: true, sentTo: recipient });
   }
 
   // ---- Vik-Soft API settings (керування через UI «Управління утилітами») ----
