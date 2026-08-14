@@ -117,6 +117,7 @@ const LegalModule = lazyWithRetry(() => import("./components/LegalModule"));
 const ChecklistModule = lazyWithRetry(() => import("./components/ChecklistModule"));
 const TeamHiringModule = lazyWithRetry(() => import("./components/TeamHiringModule"));
 const SecurityAuditModule = lazyWithRetry(() => import("./components/SecurityAuditModule"));
+const ProjectManagementModule = lazyWithRetry(() => import("./components/ProjectManagementModule"));
 const PaymentRegistryModule = lazyWithRetry(() => import("./components/PaymentRegistryModule"));
 const AssortmentMatrixModule = lazyWithRetry(() => import("./components/AssortmentMatrixModule"));
 const DatabaseConnectionsManager = lazyWithRetry(() => import("./components/DatabaseConnectionsManager"));
@@ -4476,6 +4477,15 @@ function App() {
       return (
         <div className="grid grid-cols-1">
           <ServiceRequestsModule topTab={topTab} restaurants={restaurants} user={user} />
+        </div>
+      );
+    }
+
+    const projectManagementNavKey = String(activeNav || "").toLowerCase();
+    if (projectManagementNavKey.includes("projectmanagment") || projectManagementNavKey.includes("projectmanagement")) {
+      return (
+        <div className="grid grid-cols-1">
+          <ProjectManagementModule topTab={topTab} user={user} />
         </div>
       );
     }

@@ -7,6 +7,21 @@ export const DEFAULT_MENU_STRUCTURE = [
     ],
   },
   {
+    id: "projectmanagment",
+    label: "Управління задачами",
+    children: [
+      {
+        id: "projectmanagment",
+        label: "Задачі команди",
+        tabs: ["newtask", "taskreport"],
+        tabLabels: [
+          { id: "newtask", label: "Нова задача" },
+          { id: "taskreport", label: "Звіт із задач" },
+        ],
+      },
+    ],
+  },
+  {
     id: "settings",
     label: "Налаштування",
     children: [
