@@ -115,7 +115,7 @@ const Field = ({ label, value, onChange, placeholder }) => (
 export default function DatabaseConnectionsManager() {
   const [connections, setConnections] = useState(() => getConnections());
   const [primaryId, setPrimaryId] = useState(() => getPrimaryConnectionId());
-  const [connectionType, setConnectionType] = useState("firebase");
+  const [connectionType, setConnectionType] = useState("custom");
   const [firebaseForm, setFirebaseForm] = useState(emptyFirebaseForm);
   const [customForm, setCustomForm] = useState(emptyCustomForm);
   const [status, setStatus] = useState("");
@@ -648,7 +648,6 @@ export default function DatabaseConnectionsManager() {
               onChange={(e) => setConnectionType(e.target.value)}
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             >
-              <option value="firebase">Firebase</option>
               <option value="custom">Custom Server DB (API)</option>
             </select>
           </label>

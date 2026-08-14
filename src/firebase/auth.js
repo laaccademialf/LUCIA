@@ -26,7 +26,7 @@ const ENV_AUTH_API_TOKEN = String(
 ).trim();
 const AUTH_SESSION_KEY = "lucia_auth_session_token";
 const AUTH_USER_CACHE_KEY = "lucia_auth_user_cache";
-const DEFAULT_PLATFORM_ADMIN_EMAILS = ["andrii.disha@gmail.com"];
+const DEFAULT_PLATFORM_ADMIN_EMAILS = [];
 const ENV_PLATFORM_ADMIN_EMAILS = String(import.meta.env.VITE_PLATFORM_ADMIN_EMAILS || "")
   .split(",")
   .map((item) => item.trim().toLowerCase())
@@ -453,7 +453,6 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
   const primaryRestaurant = String(restaurant || restaurantsList[0] || "").trim();
 
   if (isAuthApiEnabled()) {
-    const effectiveCurrentUser = currentUser || authApiCurrentUser || getCachedAuthUser();
     const payload = await authApiRequest("/auth/admin-create-user", {
       method: "POST",
       headers: authApiHeaders(true),
@@ -467,7 +466,6 @@ export const createUserByAdmin = async (email, password, displayName, currentUse
         workRole,
         role,
         currentPassword,
-        currentUserId: effectiveCurrentUser?.uid || effectiveCurrentUser?.id || "",
       }),
     });
 
@@ -550,6 +548,18 @@ export const loginUser = async (email, password) => {
     console.error("Помилка входу:", error);
     throw error;
   }
+};
+
+export const requestPasswordReset = async (email) => {
+  if (!isAuthApiEnabled()) {
+    throw new Error("Відновлення пароля доступне лише через custom-db API");
+  }
+
+  return authApiRequest("/auth/forgot-password", {
+    method: "POST",
+    headers: authApiHeaders(true),
+    body: JSON.stringify({ email: String(email || "").trim() }),
+  });
 };
 
 /**
@@ -659,14 +669,12 @@ export const changeCurrentUserPassword = async ({ currentPassword, newPassword }
   }
 
   if (isAuthApiEnabled()) {
-    const effectiveUser = authApiCurrentUser || getCachedAuthUser();
     await authApiRequest("/auth/change-password", {
       method: "POST",
       headers: authApiHeaders(true),
       body: JSON.stringify({
         currentPassword: currentPwd,
         newPassword: nextPwd,
-        currentUserId: effectiveUser?.uid || effectiveUser?.id || "",
       }),
     });
     return true;
@@ -683,7 +691,7 @@ export const changeCurrentUserPassword = async ({ currentPassword, newPassword }
   return true;
 };
 
-export const adminResetUserPassword = async (targetUserId, currentPassword, defaultPassword = "Qwerty1") => {
+export const adminResetUserPassword = async (targetUserId, currentPassword) => {
   if (!isAuthApiEnabled()) {
     throw new Error("Admin reset password доступний лише в API режимі");
   }
@@ -697,21 +705,18 @@ export const adminResetUserPassword = async (targetUserId, currentPassword, defa
     throw new Error("Введіть ваш пароль для підтвердження");
   }
 
-  const effectiveUser = authApiCurrentUser || getCachedAuthUser();
   const payload = await authApiRequest("/auth/admin-reset-user-password", {
     method: "POST",
     headers: authApiHeaders(true),
     body: JSON.stringify({
       targetUserId: normalizedTargetUserId,
       currentPassword: normalizedCurrentPassword,
-      defaultPassword: String(defaultPassword || "Qwerty1").trim() || "Qwerty1",
-      currentUserId: effectiveUser?.uid || effectiveUser?.id || "",
     }),
   });
 
   return {
     ok: Boolean(payload?.ok),
-    defaultPassword: String(payload?.defaultPassword || defaultPassword || "Qwerty1"),
+    temporaryPassword: String(payload?.temporaryPassword || ""),
   };
 };
 

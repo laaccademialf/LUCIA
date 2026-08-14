@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X } from "lucide-react";
-import { loginUser } from "../firebase/auth";
+import { loginUser, requestPasswordReset } from "../firebase/auth";
 import { useAuth } from "../hooks/useAuth";
 
 export const LoginModal = ({ onClose, onLoginSuccess }) => {
@@ -9,6 +9,8 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [resetMode, setResetMode] = useState(false);
+  const [resetMessage, setResetMessage] = useState("");
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -42,6 +44,24 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
     }
   };
 
+  const handlePasswordReset = async () => {
+    setError("");
+    setResetMessage("");
+    if (!email.trim()) {
+      setError("Введіть email, на який надіслати тимчасовий пароль");
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await requestPasswordReset(email);
+      setResetMessage(response?.message || "Якщо акаунт існує, лист буде надіслано.");
+    } catch (resetError) {
+      setError(resetError?.message || "Не вдалося надіслати лист. Спробуйте пізніше.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
@@ -63,7 +83,13 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        {resetMessage && (
+          <div className="mb-4 p-3 bg-emerald-100 text-emerald-700 rounded-lg text-sm">
+            {resetMessage}
+          </div>
+        )}
+
+        {!resetMode ? <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-2">
               Email
@@ -101,7 +127,43 @@ export const LoginModal = ({ onClose, onLoginSuccess }) => {
           >
             {loading ? "Вхід..." : "Увійти"}
           </button>
-        </form>
+          <button
+            type="button"
+            onClick={() => {
+              setResetMode(true);
+              setError("");
+              setResetMessage("");
+            }}
+            className="w-full text-sm text-indigo-600 hover:text-indigo-500"
+          >
+            Забули пароль?
+          </button>
+        </form> : (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              Введіть email. Якщо акаунт існує, на нього прийде тимчасовий пароль.
+            </p>
+            <button
+              type="button"
+              onClick={handlePasswordReset}
+              disabled={loading}
+              className="w-full px-4 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 disabled:bg-indigo-400 disabled:cursor-not-allowed transition"
+            >
+              {loading ? "Надсилання..." : "Надіслати тимчасовий пароль"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setResetMode(false);
+                setError("");
+                setResetMessage("");
+              }}
+              className="w-full text-sm text-slate-500 hover:text-slate-700"
+            >
+              Повернутися до входу
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

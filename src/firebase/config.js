@@ -46,8 +46,9 @@ const readRuntimeConfig = () => {
   }
 };
 
-const runtimeConfig = readRuntimeConfig();
-const firebaseConfig = runtimeConfig || (isRealConfig(firebaseConfigFromEnv) ? firebaseConfigFromEnv : null);
+// Firebase більше не використовується: дані та auth працюють через custom-db API.
+const runtimeConfig = null;
+const firebaseConfig = null;
 
 export const isFirebaseConfigured = Boolean(firebaseConfig);
 

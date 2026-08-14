@@ -111,8 +111,12 @@ echo "=== 6. Логін після консолідації ==="
 LOGIN=$(curl -s -X POST "http://127.0.0.1:$API_PORT/auth/login" -H "Content-Type: application/json" -d '{"email":"fresh@int.ua","password":"Int123!"}')
 assert "логін успішний" '"ok":true' "$LOGIN"
 assert "роль підтягнулась" '"role":"admin"' "$LOGIN"
+ROLE_TOKEN_ONLY=$(curl -s -X PUT "http://127.0.0.1:$API_PORT/api/collections/users/user1" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"role":"user"}')
+assert "role mutation без admin session заборонена" "Authenticated admin session required" "$ROLE_TOKEN_ONLY"
 BAD=$(curl -s -X POST "http://127.0.0.1:$API_PORT/auth/login" -H "Content-Type: application/json" -d '{"email":"fresh@int.ua","password":"WRONG"}')
 assert "невірний пароль → Invalid credentials" "Invalid credentials" "$BAD"
+FORGOT=$(curl -s -X POST "http://127.0.0.1:$API_PORT/auth/forgot-password" -H "Content-Type: application/json" -d '{"email":"unknown@int.ua"}')
+assert "forgot-password endpoint public" "Email service is temporarily unavailable" "$FORGOT"
 
 echo "=== 7. Реєстр колекцій ==="
 UNKNOWN_READ=$(curl -s "http://127.0.0.1:$API_PORT/api/collections/totallyUnknownThing" -H "Authorization: Bearer $TOKEN")

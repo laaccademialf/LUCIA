@@ -207,15 +207,15 @@ export const UsersTable = ({ currentUser }) => {
     }
 
     const confirmed = window.confirm(
-      `Скинути пароль користувача ${targetUser.displayName || targetUser.email || targetUser.id} до значення Qwerty1?`
+      `Згенерувати одноразовий тимчасовий пароль для ${targetUser.displayName || targetUser.email || targetUser.id}?`
     );
     if (!confirmed) return;
 
     try {
       setResettingPasswordUserId(targetUser.id);
       setError("");
-      await adminResetUserPassword(targetUser.id, adminPassword, "Qwerty1");
-      alert(`Пароль користувача ${targetUser.displayName || targetUser.email || targetUser.id} скинуто до Qwerty1`);
+      const result = await adminResetUserPassword(targetUser.id, adminPassword);
+      alert(`Тимчасовий пароль: ${result.temporaryPassword || "не вдалося отримати"}`);
     } catch (resetError) {
       console.error("Помилка скидання пароля:", resetError);
       setError(resetError?.message || "Не вдалося скинути пароль користувача");
@@ -512,7 +512,7 @@ export const UsersTable = ({ currentUser }) => {
                             className={`text-amber-600 hover:text-amber-800 disabled:text-amber-300 disabled:cursor-not-allowed transition ${
                               isCurrentUser ? "opacity-30" : ""
                             }`}
-                            title={isCurrentUser ? "Для себе змініть пароль у профілі" : "Скинути пароль до Qwerty1"}
+                            title={isCurrentUser ? "Для себе змініть пароль у профілі" : "Згенерувати тимчасовий пароль"}
                           >
                             {isResettingPassword ? (
                               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current"></div>

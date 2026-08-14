@@ -8,6 +8,10 @@ import zlib from "node:zlib";
 import { DEFAULT_MENU_STRUCTURE } from "../../src/data/defaultMenuStructure.js";
 import { KNOWN_COLLECTIONS } from "./collections.js";
 import {
+  isEmailServiceConfigured,
+  sendTemporaryPasswordEmail,
+} from "../emailService.js";
+import {
   quoteIdentMySql,
   sanitizeColumnName,
   MAX_MYSQL_IDENTIFIER_LENGTH,
@@ -1061,19 +1065,6 @@ const ensureBootstrapAdminUser = async (dbConfig) => {
 };
 
 const hasAdminRole = (profile) => String(mapUserProfile(profile).role || "").toLowerCase() === "admin";
-
-const hasUserManagementPermission = (profile) => {
-  const mapped = mapUserProfile(profile);
-  const role = String(mapped?.role || "").toLowerCase();
-  const workRole = String(mapped?.workRole || "").toLowerCase();
-
-  if (role === "admin") return true;
-  if (role.includes("manager")) return true;
-  if (workRole.includes("керуюч")) return true;
-  if (workRole.includes("manager")) return true;
-
-  return false;
-};
 
 const resolveAuthProfileWithFallback = async (req, dbConfig, fallbackUserId = "") => {
   const { profile } = await resolveAuthContext(req, dbConfig);
@@ -3568,7 +3559,10 @@ const handleAuthLogin = async (req, res) => {
     return sendJson(res, 200, {
       ok: true,
       token,
-      user: mapUserProfile(recoveredProfile),
+      user: {
+        ...mapUserProfile(recoveredProfile),
+        mustChangePassword: Boolean(authUser?.mustChangePassword),
+      },
       recoveredProfile: true,
     });
   }
@@ -3578,8 +3572,104 @@ const handleAuthLogin = async (req, res) => {
   return sendJson(res, 200, {
     ok: true,
     token,
-    user: mapUserProfile(profile),
+    user: {
+      ...mapUserProfile(profile),
+      mustChangePassword: Boolean(authUser?.mustChangePassword),
+    },
   });
+};
+
+const PASSWORD_RECOVERY_RATE_WINDOW_MS = 15 * 60 * 1000;
+const PASSWORD_RECOVERY_RATE_LIMIT = 5;
+const passwordRecoveryAttempts = new Map();
+
+const isPasswordRecoveryRateLimited = (req, email) => {
+  const now = Date.now();
+  const keys = [`ip:${clientIpFromRequest(req)}`, `email:${email}`];
+  const attempts = keys.map((key) => {
+    const current = passwordRecoveryAttempts.get(key) || [];
+    const fresh = current.filter((timestamp) => now - timestamp < PASSWORD_RECOVERY_RATE_WINDOW_MS);
+    passwordRecoveryAttempts.set(key, fresh);
+    return fresh.length;
+  });
+  if (attempts.some((count) => count >= PASSWORD_RECOVERY_RATE_LIMIT)) return true;
+  keys.forEach((key) => passwordRecoveryAttempts.set(key, [
+    ...(passwordRecoveryAttempts.get(key) || []),
+    now,
+  ]));
+  return false;
+};
+
+const handleAuthForgotPassword = async (req, res) => {
+  let payload;
+  try {
+    payload = await parseJsonBody(req);
+  } catch (error) {
+    return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+  }
+
+  const email = normalizeEmail(payload?.email);
+  const genericResponse = {
+    ok: true,
+    message: "Якщо обліковий запис існує, лист із тимчасовим паролем буде надіслано.",
+  };
+  if (!email || !email.includes("@")) return sendJson(res, 200, genericResponse);
+  if (isPasswordRecoveryRateLimited(req, email)) {
+    return sendJson(res, 429, { ok: false, error: "Забагато запитів. Спробуйте пізніше." });
+  }
+  if (!isEmailServiceConfigured()) {
+    console.error("[email] Password recovery requested but SMTP is not configured");
+    return sendJson(res, 503, { ok: false, error: "Email service is temporarily unavailable" });
+  }
+
+  const dbConfig = getAssetsRuntimeConfig();
+  const authUser = await getAuthUserByEmail(email, dbConfig);
+  if (!authUser) return sendJson(res, 200, genericResponse);
+
+  const temporaryPassword = crypto.randomBytes(18).toString("base64url");
+  const nextPassword = hashPassword(temporaryPassword);
+  const previousCredentials = getAuthPasswordCredentials(authUser);
+  const previousMustChangePassword = Boolean(authUser?.mustChangePassword);
+  const previousResetAt = authUser?.passwordResetAt || null;
+  await updateAuthUserRecord(
+    String(authUser.id),
+    {
+      ...buildPasswordStoragePayload(nextPassword),
+      mustChangePassword: true,
+      passwordResetAt: nowIso(),
+      passwordResetDefault: false,
+      updatedAt: nowIso(),
+    },
+    dbConfig
+  );
+
+  const sessions = await getCollectionItemsData("authSessions", dbConfig);
+  await Promise.all(
+    sessions
+      .filter((session) => String(session?.userId || "") === String(authUser.id))
+      .map((session) => deleteSession(session.id, dbConfig).catch(() => {}))
+  );
+
+  try {
+    await sendTemporaryPasswordEmail(email, temporaryPassword);
+  } catch (error) {
+    await updateAuthUserRecord(
+      String(authUser.id),
+      {
+        ...buildPasswordStoragePayload(previousCredentials),
+        mustChangePassword: previousMustChangePassword,
+        passwordResetAt: previousResetAt,
+        updatedAt: nowIso(),
+      },
+      dbConfig
+    ).catch((rollbackError) => {
+      console.error(`[email] Password recovery rollback failed: ${rollbackError?.message || rollbackError}`);
+    });
+    console.error(`[email] Password recovery delivery failed: ${error?.message || error}`);
+    return sendJson(res, 503, { ok: false, error: "Email service is temporarily unavailable" });
+  }
+
+  return sendJson(res, 200, genericResponse);
 };
 
 const handleAuthMe = async (req, res) => {
@@ -3588,7 +3678,14 @@ const handleAuthMe = async (req, res) => {
   if (!profile) {
     return sendJson(res, 200, { ok: true, user: null });
   }
-  return sendJson(res, 200, { ok: true, user: mapUserProfile(profile) });
+  const authUser = await getAuthUserById(profile.id, dbConfig);
+  return sendJson(res, 200, {
+    ok: true,
+    user: {
+      ...mapUserProfile(profile),
+      mustChangePassword: Boolean(authUser?.mustChangePassword),
+    },
+  });
 };
 
 const handleAuthLogout = async (req, res) => {
@@ -3680,9 +3777,7 @@ const handleAuthChangePassword = async (req, res) => {
 
   const currentPassword = String(payload?.currentPassword || "");
   const newPassword = String(payload?.newPassword || "");
-  const currentUserId = String(payload?.currentUserId || payload?.current_user_id || "").trim();
-
-  const profile = await resolveAuthProfileWithFallback(req, dbConfig, currentUserId);
+  const { profile } = await resolveAuthContext(req, dbConfig);
   if (!profile?.id) {
     return sendJson(res, 401, { ok: false, error: "Authentication required" });
   }
@@ -3707,6 +3802,7 @@ const handleAuthChangePassword = async (req, res) => {
     String(profile.id),
     {
       ...buildPasswordStoragePayload(nextPassword),
+      mustChangePassword: false,
       updatedAt: nowIso(),
     },
     dbConfig
@@ -3745,11 +3841,13 @@ const handleAuthAdminCreateUser = async (req, res) => {
   const position = String(payload?.position || "").trim();
   const workRole = String(payload?.workRole || "").trim();
   const currentPassword = String(payload?.currentPassword || "");
-  const currentUserId = String(payload?.currentUserId || payload?.current_user_id || "").trim();
-
-  const profile = await resolveAuthProfileWithFallback(req, dbConfig, currentUserId);
+  const { profile } = await resolveAuthContext(req, dbConfig);
   if (!profile?.id) {
     return sendJson(res, 401, { ok: false, error: "Authentication required" });
+  }
+
+  if (!hasAdminRole(profile)) {
+    return sendJson(res, 403, { ok: false, error: "Only admin can create users" });
   }
 
   if (!currentPassword) {
@@ -3765,15 +3863,6 @@ const handleAuthAdminCreateUser = async (req, res) => {
   const isValidCurrentPassword = verifyPassword(currentPassword, currentCredentials.salt, currentCredentials.hash);
   if (!isValidCurrentPassword) {
     return sendJson(res, 401, { ok: false, error: "Current password is invalid" });
-  }
-
-  if (!hasUserManagementPermission(profile)) {
-    return sendJson(res, 403, { ok: false, error: "Insufficient permissions" });
-  }
-
-  const normalizedRequestedRole = String(role || "user").trim().toLowerCase();
-  if (normalizedRequestedRole === "admin" && !hasAdminRole(profile)) {
-    return sendJson(res, 403, { ok: false, error: "Only admin can create admin users" });
   }
 
   if (!email || !password || password.length < 6) {
@@ -3840,8 +3929,6 @@ const handleAuthAdminResetUserPassword = async (req, res) => {
 
   const targetUserId = String(payload?.targetUserId || payload?.target_user_id || payload?.userId || "").trim();
   const currentPassword = String(payload?.currentPassword || "");
-  const currentUserId = String(payload?.currentUserId || payload?.current_user_id || "").trim();
-  const defaultPassword = String(payload?.defaultPassword || "Qwerty1").trim() || "Qwerty1";
 
   if (!targetUserId) {
     return sendJson(res, 400, { ok: false, error: "targetUserId is required" });
@@ -3851,7 +3938,7 @@ const handleAuthAdminResetUserPassword = async (req, res) => {
     return sendJson(res, 400, { ok: false, error: "Current password is required" });
   }
 
-  const profile = await resolveAuthProfileWithFallback(req, dbConfig, currentUserId);
+  const { profile } = await resolveAuthContext(req, dbConfig);
   if (!profile?.id) {
     return sendJson(res, 401, { ok: false, error: "Authentication required" });
   }
@@ -3876,7 +3963,8 @@ const handleAuthAdminResetUserPassword = async (req, res) => {
     return sendJson(res, 404, { ok: false, error: "Target auth user not found" });
   }
 
-  const nextPassword = hashPassword(defaultPassword);
+  const temporaryPassword = crypto.randomBytes(18).toString("base64url");
+  const nextPassword = hashPassword(temporaryPassword);
   await updateAuthUserRecord(
     targetUserId,
     {
@@ -3884,12 +3972,13 @@ const handleAuthAdminResetUserPassword = async (req, res) => {
       updatedAt: nowIso(),
       passwordResetAt: nowIso(),
       passwordResetBy: String(profile.id || ""),
-      passwordResetDefault: true,
+      passwordResetDefault: false,
+      mustChangePassword: true,
     },
     dbConfig
   );
 
-  return sendJson(res, 200, { ok: true, defaultPassword });
+  return sendJson(res, 200, { ok: true, temporaryPassword });
 };
 
 /* ---------- Batch import assets (single HTTP request for N assets) ---------- */
@@ -4415,8 +4504,14 @@ const isSensitiveCollection = (collectionName) => {
   return SENSITIVE_COLLECTIONS.has(normalized);
 };
 
+const ADMIN_MUTATION_COLLECTIONS = new Set([
+  "users",
+  "rolepermissions",
+  "fieldpermissions",
+]);
+
 const handleCollectionsApi = async (req, res, collectionName, itemId) => {
-  if (!isAuthorized(req)) {
+  if (!isAuthorized(req) && !(await isSessionAuthorized(req))) {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
   }
 
@@ -4429,6 +4524,19 @@ const handleCollectionsApi = async (req, res, collectionName, itemId) => {
 
   const dbConfig = getAssetsRuntimeConfig();
   const method = req.method || "GET";
+
+  if (
+    ["POST", "PUT", "DELETE"].includes(method) &&
+    ADMIN_MUTATION_COLLECTIONS.has(String(collectionName || "").trim().toLowerCase())
+  ) {
+    const { profile } = await resolveAuthContext(req, dbConfig);
+    if (!profile?.id) {
+      return sendJson(res, 401, { ok: false, error: "Authenticated admin session required" });
+    }
+    if (!hasAdminRole(profile)) {
+      return sendJson(res, 403, { ok: false, error: "Only admin can modify this collection" });
+    }
+  }
 
   const normalizeUsersPayloadAliases = (input) => {
     if (!input || typeof input !== "object") return input;
@@ -5026,8 +5134,10 @@ const handleDeleteRuntimeSettings = async (req, res) => {
 const PUBLIC_PATHS = new Set([
   "/health",
   "/auth/login",
+  "/auth/forgot-password",
   "/auth/register",
   "/api/auth/login",
+  "/api/auth/forgot-password",
   "/api/auth/register",
 ]);
 // Публічні статичні медіа (фото активів, HACCP, юридичні вкладення):
@@ -5151,6 +5261,29 @@ const isSessionAuthorized = async (req) => {
   return isSessionTokenValid(sessionTokenFromRequest(req));
 };
 
+const PASSWORD_CHANGE_EXEMPT_PATHS = new Set([
+  "/auth/me",
+  "/api/auth/me",
+  "/auth/logout",
+  "/api/auth/logout",
+  "/auth/change-password",
+  "/api/auth/change-password",
+]);
+
+const isPasswordChangeRequired = async (req) => {
+  const token = sessionTokenFromRequest(req);
+  if (!token) return false;
+
+  try {
+    const session = await getSessionByToken(token, getAssetsRuntimeConfig());
+    if (!session?.userId) return false;
+    const authUser = await getAuthUserById(session.userId, getAssetsRuntimeConfig());
+    return Boolean(authUser?.mustChangePassword);
+  } catch {
+    return false;
+  }
+};
+
 const server = http.createServer(async (req, res) => {
   const method = req.method || "GET";
   const url = req.url || "/";
@@ -5195,7 +5328,22 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 401, { ok: false, error: "Unauthorized" });
   }
 
+  if (
+    !PUBLIC_PATHS.has(pathname) &&
+    !PASSWORD_CHANGE_EXEMPT_PATHS.has(pathname) &&
+    (await isPasswordChangeRequired(req))
+  ) {
+    return sendJson(res, 403, {
+      ok: false,
+      error: "Password change required before continuing",
+      code: "PASSWORD_CHANGE_REQUIRED",
+    });
+  }
+
   if (method === "GET" && pathname === "/health") {
+    if (!isAuthorized(req) && !(await isSessionAuthorized(req))) {
+      return sendJson(res, 200, { ok: true });
+    }
     if (!ALLOWED_ENGINES.has(ENGINE)) {
       return sendJson(res, 500, {
         ok: false,
@@ -5284,6 +5432,15 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  if (method === "POST" && (pathname === "/auth/forgot-password" || pathname === "/api/auth/forgot-password")) {
+    try {
+      return await handleAuthForgotPassword(req, res);
+    } catch (error) {
+      console.error("[auth] Forgot password failed:", error);
+      return sendJson(res, 500, { ok: false, error: "Password recovery failed" });
+    }
+  }
+
   if (method === "GET" && (pathname === "/auth/me" || pathname === "/api/auth/me")) {
     try {
       return await handleAuthMe(req, res);
@@ -5348,9 +5505,9 @@ const server = http.createServer(async (req, res) => {
   // Зберігаємо в тому ж runtime-settings.json під ключем `viksoft`.
   // GET повертає apiBase + user + hasPassword (БЕЗ пароля).
   if (pathname === "/api/settings/viksoft" && method === "GET") {
-    if (!isAuthorized(req)) {
-      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
-    }
+    const profile = await resolveAuthProfileWithFallback(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    if (!hasAdminRole(profile)) return sendJson(res, 403, { ok: false, error: "Only admin can view VikSoft settings" });
     try {
       const settings = await readSettingsFile();
       const saved = (settings && settings.viksoft) || {};
@@ -5359,12 +5516,9 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         ok: true,
         saved: {
-          apiBase: String(saved.apiBase || ""),
-          user: String(saved.user || ""),
-          hasPassword: Boolean(saved.password),
+          configured: Boolean(saved.password || effective?.password),
           updatedAt: saved.updatedAt || null,
         },
-        effective, // що реально використає сервер зараз (env або runtime)
       });
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
@@ -5372,9 +5526,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === "/api/settings/viksoft" && method === "PUT") {
-    if (!isAuthorized(req)) {
-      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
-    }
+    const profile = await resolveAuthProfileWithFallback(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    if (!hasAdminRole(profile)) return sendJson(res, 403, { ok: false, error: "Only admin can change VikSoft settings" });
     let payload;
     try {
       payload = await parseJsonBody(req);
@@ -5446,14 +5600,14 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, {
       ok: true,
       persistedToEnv,
-      saved: { apiBase: nextViksoft.apiBase, user: nextViksoft.user, hasPassword: Boolean(nextViksoft.password), updatedAt: nextViksoft.updatedAt },
+      saved: { configured: Boolean(nextViksoft.password), updatedAt: nextViksoft.updatedAt },
     });
   }
 
   if (pathname === "/api/settings/viksoft/test" && method === "POST") {
-    if (!isAuthorized(req)) {
-      return sendJson(res, 401, { ok: false, error: "Unauthorized" });
-    }
+    const profile = await resolveAuthProfileWithFallback(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    if (!hasAdminRole(profile)) return sendJson(res, 403, { ok: false, error: "Only admin can test VikSoft settings" });
     let payload = {};
     try {
       payload = await parseJsonBody(req);

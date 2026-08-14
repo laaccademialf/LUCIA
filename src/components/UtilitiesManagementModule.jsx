@@ -80,10 +80,14 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
     setClientCtx(getVikSoftApiClientContext());
     try {
       const data = await getVikSoftSettings();
-      setSavedInfo(data.saved || null);
+      const saved = data.saved || {};
+      setSavedInfo({
+        ...saved,
+        hasPassword: Boolean(saved.hasPassword ?? saved.configured),
+      });
       setEffective(data.effective || null);
-      setApiBase(String(data.saved?.apiBase || data.effective?.apiBase || ""));
-      setUser(String(data.saved?.user || data.effective?.user || ""));
+      setApiBase(String(saved.apiBase || data.effective?.apiBase || ""));
+      setUser(String(saved.user || data.effective?.user || ""));
       setPassword("");
       setPasswordChanged(false);
     } catch (e) {
@@ -277,7 +281,7 @@ const UtilitiesManagementModule = ({ restaurants = [], onUpdateRestaurant }) => 
                   value={apiBase}
                   onChange={(e) => setApiBase(e.target.value)}
                   onBlur={(e) => setApiBase(normalizeApiBase(e.target.value))}
-                  placeholder="http://194.183.165.59:8765"
+                  placeholder="https://viksoft.example/api"
                   spellCheck={false}
                 />
                 <span className="mt-1 block text-xs text-slate-400">

@@ -19,10 +19,10 @@
 
 | Name | Value (з вашого .env) |
 |------|----------------------|
-| `VITE_FIREBASE_API_KEY` | `AIzaSyAPq7JuEXivxE9_jFCxZdKGFv78fNufnKQ` |
-| `VITE_FIREBASE_AUTH_DOMAIN` | `luci-f1285.firebaseapp.com` |
-| `VITE_FIREBASE_PROJECT_ID` | `luci-f1285` |
-| `VITE_FIREBASE_STORAGE_BUCKET` | `luci-f1285.firebasestorage.app` |
+| `VITE_FIREBASE_API_KEY` | не використовується, Firebase вимкнено |
+| `VITE_FIREBASE_AUTH_DOMAIN` | не використовується |
+| `VITE_FIREBASE_PROJECT_ID` | не використовується |
+| `VITE_FIREBASE_STORAGE_BUCKET` | не використовується |
 | `VITE_FIREBASE_MESSAGING_SENDER_ID` | `27065662746` |
 | `VITE_FIREBASE_APP_ID` | `1:27065662746:web:1ebada5c79b5181b4cc0a3` |
 | `VITE_FIREBASE_MEASUREMENT_ID` | `G-W0E0FGF0VP` |
@@ -95,7 +95,7 @@ echo "✅ Змінні додано! Запустіть: vercel --prod"
 
 ### Важливо: Додайте Vercel домен в Firebase
 
-1. Відкрийте Firebase Console: https://console.firebase.google.com/project/luci-f1285
+1. Firebase не використовується. Налаштуйте тільки змінні custom-db API та MariaDB.
 2. **Authentication** → **Settings** → **Authorized domains**
 3. Додайте ваш Vercel домен:
    - `your-project.vercel.app`

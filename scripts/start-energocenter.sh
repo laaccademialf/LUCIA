@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 if [ ! -f .env.energocenter ]; then
   echo "[!] .env.energocenter не знайдено. Створи його з:"
-  echo "    VIKSOFT_API_BASE=http://194.183.165.59:8765"
+  echo "    VIKSOFT_API_BASE=https://your-viksoft-host.example"
   echo "    VIKSOFT_USER=<login>"
   echo "    VIKSOFT_PASSWORD=<password>"
   exit 1
