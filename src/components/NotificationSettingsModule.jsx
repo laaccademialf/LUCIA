@@ -106,7 +106,7 @@ export const NotificationSettingsModule = () => {
         </label>
         <label className="text-sm font-medium text-slate-700">
           Поштова скринька / логін
-          <input className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" type="email" value={form.user} onChange={(e) => update("user", e.target.value)} placeholder="platform@company.com" required />
+          <input className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" type="email" value={form.user} onChange={(e) => update("user", e.target.value)} placeholder="platform@company.com" autoComplete="username" required />
         </label>
         <label className="text-sm font-medium text-slate-700">
           Адреса відправника

@@ -1,4 +1,7 @@
-const normalizeBase = (value) => String(value || "").trim().replace(/\/+$/, "");
+const normalizeBase = (value) => String(value || "")
+  .trim()
+  .replace(/\/+$/, "")
+  .replace(/\/api$/i, "");
 const readRuntime = () => {
   try {
     return typeof localStorage !== "undefined"
