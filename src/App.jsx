@@ -4485,7 +4485,7 @@ function App() {
     if (projectManagementNavKey.includes("projectmanagment") || projectManagementNavKey.includes("projectmanagement")) {
       return (
         <div className="grid grid-cols-1">
-          <ProjectManagementModule topTab={topTab} user={user} />
+          <ProjectManagementModule topTab={topTab} user={user} restaurants={restaurants} />
         </div>
       );
     }
