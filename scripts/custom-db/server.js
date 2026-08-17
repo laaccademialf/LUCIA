@@ -5672,11 +5672,22 @@ const server = http.createServer(async (req, res) => {
       const saved = (settings && settings.viksoft) || {};
       const { getVikSoftPublicConfig } = await import("../vikSoftApi.js");
       const effective = getVikSoftPublicConfig();
+      // Адреса й логін віддаються ЛИШЕ адміну з валідною сесією (гейт вище),
+      // інакше адмін не може відновити конфіг через UI. Пароль не повертаємо.
       return sendJson(res, 200, {
         ok: true,
         saved: {
           configured: Boolean(saved.password || effective?.password),
+          apiBase: String(saved.apiBase || ""),
+          user: String(saved.user || ""),
+          hasPassword: Boolean(saved.password),
           updatedAt: saved.updatedAt || null,
+        },
+        effective: {
+          apiBase: String(effective?.apiBase || ""),
+          user: String(effective?.user || ""),
+          hasPassword: Boolean(effective?.hasPassword),
+          source: String(effective?.source || ""),
         },
       });
     } catch (error) {

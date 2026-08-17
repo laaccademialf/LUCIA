@@ -389,6 +389,11 @@ const extractApiError = (json, body) => {
 //   → 200 { "Token": "....=" }  |  401 {"errors":[{"detail":"Incorrect password"}]}
 // POST — основний метод; GET лишаємо як фолбек на випадок змін API.
 const login = async (cfg) => {
+  if (!cfg.apiBase) {
+    throw new Error(
+      "VikSoft API base не налаштовано. Вкажіть адресу в «Управління утилітами» або VIKSOFT_API_BASE."
+    );
+  }
   const qs = `user=${encodeURIComponent(cfg.user)}&pass=${encodeURIComponent(cfg.password)}`;
   const url = `${cfg.apiBase}/api/v1/login?${qs}`;
 
