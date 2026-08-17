@@ -5283,7 +5283,13 @@ const serveStaticMediaFile = async (req, res, pathname) => {
 // Роути, де дозволяємо аутентифікацію сесією користувача (x-session-token)
 // без обов'язкового глобального API-токена. Додаткова перевірка виконується
 // в самому handler'і через resolveAuthContext/profile.
-const SESSION_AUTH_PATHS = new Set(["/api/print-label", "/api/settings/viksoft", "/api/settings/notifications"]);
+const SESSION_AUTH_PATHS = new Set([
+  "/api/print-label",
+  "/api/settings/viksoft",
+  "/api/settings/viksoft/test",
+  "/api/settings/notifications",
+  "/api/settings/notifications/test",
+]);
 
 // Session-based авторизація для глобального gate: якщо запит несе валідний
 // сесійний токен (x-session-token або Bearer), пропускаємо його без API-токена.
