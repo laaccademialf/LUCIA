@@ -1105,7 +1105,7 @@ export default function ProjectManagementModule({
           )}
         </div>
       </div>
-      <div className="mx-auto mb-4 grid max-w-5xl gap-2 sm:grid-cols-4">
+      <div className="mb-4 grid gap-2 sm:grid-cols-4">
           <TaskStatCard
           label="Всього задач"
           value={stats.total}
