@@ -1,15 +1,15 @@
 [
   {
-    "id": "user_1773059370940_qq2xvl",
+    "id": "user_1786966287444_ucumni",
     "data": {
-      "email": "auth.test@example.com",
-      "displayName": "Auth Test",
-      "role": "user",
+      "email": "admin@test.local",
+      "displayName": "Admin",
+      "role": "admin",
       "restaurant": "",
       "position": "",
       "workRole": "",
-      "createdAt": "2026-03-09T12:29:30.998Z",
-      "updatedAt": "2026-03-09T12:29:30.998Z"
+      "createdAt": "2026-08-17T11:31:27.510Z",
+      "updatedAt": "2026-08-17T11:31:27.510Z"
     }
   }
 ]

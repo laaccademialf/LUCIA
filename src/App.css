@@ -78,3 +78,23 @@
   color: #94a3b8;
   margin-right: 0.25rem;
 }
+
+.gantt-scrollbar {
+  scrollbar-color: rgba(148, 163, 184, 0.65) transparent;
+  scrollbar-width: thin;
+}
+
+.gantt-scrollbar::-webkit-scrollbar {
+  height: 6px;
+}
+
+.gantt-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.gantt-scrollbar::-webkit-scrollbar-thumb {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.65);
+  background-clip: padding-box;
+}

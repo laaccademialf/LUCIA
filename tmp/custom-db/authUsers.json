@@ -1,12 +1,14 @@
 [
   {
-    "id": "user_1773059370940_qq2xvl",
+    "id": "user_1786966287444_ucumni",
     "data": {
-      "email": "auth.test@example.com",
-      "passwordHash": "301434dab033fecc3b4ee5eacd33351aa19f68c87514d12554b1e1bcfb92b79f7a49861378ef424610a109ab2e0c31e78a02be94c19f70ada5a66a7f974d0392",
-      "passwordSalt": "baebc84b2901268ebec58fb3663b28a3",
-      "createdAt": "2026-03-09T12:29:30.995Z",
-      "updatedAt": "2026-03-09T12:29:30.996Z"
+      "email": "admin@test.local",
+      "passwordHash": "d2d6b903c462283a00d146493dbbdcce561f4d4974205c05682a2253b2d2285ab3fcbd0541fc8a48a5ec137b91cd394707743ca2c8ccde75b247199e907a383b",
+      "passwordSalt": "bd96839adf3a606117e1e0791268e41d",
+      "password_hash": "d2d6b903c462283a00d146493dbbdcce561f4d4974205c05682a2253b2d2285ab3fcbd0541fc8a48a5ec137b91cd394707743ca2c8ccde75b247199e907a383b",
+      "password_salt": "bd96839adf3a606117e1e0791268e41d",
+      "createdAt": "2026-08-17T11:31:27.506Z",
+      "updatedAt": "2026-08-17T11:31:27.506Z"
     }
   }
 ]

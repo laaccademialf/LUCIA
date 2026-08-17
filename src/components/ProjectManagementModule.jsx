@@ -1,23 +1,28 @@
-import { useEffect, useMemo, useState } from "react";
+import { createElement, useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   CalendarDays,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ClipboardList,
   CircleDot,
   Clock3,
+  Download,
   Filter,
   Flag,
   LayoutList,
   Plus,
   RefreshCw,
+  TriangleAlert,
   Users,
   X,
 } from "lucide-react";
 import { getUsers } from "../firebase/users";
 import { useLegalTasks } from "../hooks/useLegalTasks";
 import LegalRequestModal from "./LegalRequestModal";
+import pdfMake from "pdfmake/build/pdfmake";
+import pdfFonts from "pdfmake/build/vfs_fonts";
 import {
   createCollectionItemApi,
   isCollectionsApiEnabled,
@@ -27,6 +32,12 @@ import {
 
 const COLLECTION = "projectTasks";
 const LOCAL_KEY = "lucia_project_tasks";
+const pdfMakeApi = pdfMake?.createPdf ? pdfMake : pdfMake?.default?.createPdf ? pdfMake.default : null;
+const pdfFontMap = pdfFonts?.default || pdfFonts?.pdfMake?.vfs || pdfFonts;
+if (pdfMakeApi) {
+  if (typeof pdfMakeApi.addVirtualFileSystem === "function") pdfMakeApi.addVirtualFileSystem(pdfFontMap);
+  else pdfMakeApi.vfs = pdfFontMap;
+}
 const STATUS = [
   {
     id: "todo",
@@ -122,6 +133,27 @@ const calendarDays = (month) => {
     return day < 1 || day > daysInMonth ? null : new Date(month.getFullYear(), month.getMonth(), day, 12);
   });
 };
+const downloadTaskPdf = ({ filters, stats, byAssignee, criticalTasks, averageCompletionTime }) => {
+  if (!pdfMakeApi) return;
+  const filterLabels = { period: { all: "Увесь період", today: "Сьогодні", week: "Цей тиждень", month: "Цей місяць", quarter: "Цей квартал" }, department: filters.department === "all" ? "Усі підрозділи" : filters.department, location: filters.location === "all" ? "Усі об'єкти" : filters.location, priority: filters.priority === "all" ? "Усі пріоритети" : PRIORITY.find((item) => item.id === filters.priority)?.label };
+  pdfMakeApi.createPdf({
+    pageSize: "A4",
+    pageMargins: [32, 36, 32, 36],
+    defaultStyle: { font: "Roboto", fontSize: 9, color: "#172033" },
+    content: [
+      { text: "Звіт із задач", style: "title" },
+      { text: `Сформовано: ${new Intl.DateTimeFormat("uk-UA", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}`, color: "#64748b", margin: [0, 3, 0, 12] },
+      { table: { widths: ["*", "*"], body: [["Період", filterLabels.period[filters.period]], ["Підрозділ", filterLabels.department], ["Заклад / філія", filterLabels.location], ["Пріоритет", filterLabels.priority]] }, layout: "lightHorizontalLines", margin: [0, 0, 0, 14] },
+      { columns: [{ text: `Всього\n${stats.total}`, style: "metric" }, { text: `В роботі\n${stats.open}`, style: "metric" }, { text: `Виконано\n${stats.done}`, style: "metric" }, { text: `Прострочено\n${stats.late}`, style: "metric" }] },
+      { text: "Навантаження за адресатами", style: "section" },
+      { table: { headerRows: 1, widths: ["*", 60, 70, 80], body: [["Адресат", "Виконано", "Прострочено", "Сер. час"], ...byAssignee.map((row) => [row.name, `${row.done}/${row.total}`, String(row.late), row.averageHours == null ? "—" : formatDuration(row.averageHours)])] }, layout: "lightHorizontalLines" },
+      { text: "Топ задач, що потребують уваги", style: "section" },
+      { table: { headerRows: 1, widths: ["*", 85, 70], body: [["Задача / відповідальний", "Статус", "Дедлайн"], ...criticalTasks.map((task) => [`${task.title}\n${task.target || "—"}`, isLate(task) ? "Прострочено" : PRIORITY.find((item) => item.id === task.priority)?.label || "—", formatDate(task.dueDate)])] }, layout: "lightHorizontalLines" },
+      { text: `Середній час виконання всіх задач: ${averageCompletionTime}`, margin: [0, 14, 0, 0], bold: true },
+    ],
+    styles: { title: { fontSize: 20, bold: true, color: "#111827" }, section: { fontSize: 13, bold: true, color: "#312e81", margin: [0, 16, 0, 7] }, metric: { fontSize: 10, bold: true, color: "#4338ca", alignment: "center" } },
+  }).download(`zvit-zadach-${today()}.pdf`);
+};
 
 const initialForm = {
   title: "",
@@ -144,6 +176,40 @@ function StatusBadge({ status }) {
       <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
       {meta.label}
     </span>
+  );
+}
+
+function TaskStatCard({ label, value, detail, icon, accentClass }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+          {label}
+        </p>
+        <span className={`rounded-lg p-2 ${accentClass}`}>
+          {createElement(icon, { size: 18 })}
+        </span>
+      </div>
+      <p className={`mt-2 text-2xl font-black ${accentClass.split(" ").find((className) => className.startsWith("text-")) || "text-slate-900"}`}>{value}</p>
+      <p className="mt-1 text-xs font-semibold text-slate-500">{detail}</p>
+    </div>
+  );
+}
+
+function ReportTaskDialog({ tasks, onClose }) {
+  if (!tasks) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div role="dialog" aria-modal="true" aria-labelledby="late-tasks-title" className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
+          <div><p className="text-xs font-bold uppercase tracking-[0.18em] text-rose-600">Потребують уваги</p><h2 id="late-tasks-title" className="mt-1 text-xl font-bold text-slate-950">Прострочені задачі</h2></div>
+          <button type="button" onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100" title="Закрити"><X size={20} /></button>
+        </div>
+        <div className="mt-4 max-h-[55vh] space-y-2 overflow-y-auto">
+          {tasks.length ? tasks.map((task) => <div key={task.id} className="rounded-xl border border-rose-100 bg-rose-50/50 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-semibold text-slate-900">{task.title}</span><span className="text-xs font-bold text-rose-700">Дедлайн: {formatDate(task.dueDate)}</span></div><p className="mt-1 text-xs text-slate-600">Відповідальний: {task.target || "—"} · Призначив: {task.createdByName || "—"}</p></div>) : <p className="py-8 text-center text-sm text-slate-400">Прострочених задач немає.</p>}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -414,23 +480,56 @@ function Gantt({ tasks }) {
         Задачі з датами з'являться тут
       </div>
     );
+  const currentDate = fromDateKey(today());
   const minDate = new Date(
-    Math.min(...visible.map((task) => new Date(`${task.startDate}T12:00:00`))),
+    Math.min(currentDate, ...visible.map((task) => new Date(`${task.startDate}T12:00:00`))),
   );
-  const maxDate = new Date(
+  const taskMaxDate = new Date(
     Math.max(...visible.map((task) => new Date(`${task.dueDate}T12:00:00`))),
   );
+  const maxDate = new Date(Math.max(taskMaxDate, currentDate, new Date(minDate).setDate(minDate.getDate() + 13)));
   const total = Math.max(1, Math.round((maxDate - minDate) / 86400000) + 1);
+  const timelineDays = Array.from({ length: total }, (_, index) => {
+    const date = new Date(minDate);
+    date.setDate(date.getDate() + index);
+    return date;
+  });
   const rangeStartOffset = rangeStart ? Math.round((fromDateKey(rangeStart) - minDate) / 86400000) : -1;
   const rangeEndOffset = rangeEnd ? Math.round((fromDateKey(rangeEnd) - minDate) / 86400000) : -1;
+  const todayOffset = Math.round((currentDate - minDate) / 86400000);
+  const todayPosition = todayOffset >= 0 && todayOffset <= total ? `${(todayOffset / total) * 100}%` : null;
   const rangeStartPosition = rangeStartOffset >= 0 && rangeStartOffset <= total ? `${(rangeStartOffset / total) * 100}%` : null;
   const rangeEndPosition = rangeEndOffset >= 0 && rangeEndOffset <= total ? `${(rangeEndOffset / total) * 100}%` : null;
   return (
     <div className="relative z-20" style={{ minHeight: `${Math.max(100, visible.length * 36 + 12)}px` }}>
       <div className="mb-3 flex justify-end"><DateRangePopover rangeStart={rangeStart} rangeEnd={rangeEnd} onChange={(start, end) => { setRangeStart(start); setRangeEnd(end); }} /></div>
-      <div className="overflow-x-auto">
-        <div className="min-w-[620px] space-y-2">
-        {visible.map((task) => {
+      <div className="overflow-x-auto gantt-scrollbar">
+        <div className="min-w-[900px]">
+        <div className="grid grid-cols-[170px_1fr] items-end gap-3 border-b border-slate-200 pb-2">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Задача</span>
+          <div className="grid" style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}>
+            {timelineDays.map((date, index) => (
+              <div key={toDateKey(date)} className={`text-center text-[10px] font-semibold ${date.getDay() === 0 || date.getDay() === 6 ? "text-indigo-500" : "text-slate-500"}`}>
+                <span className="block">{date.getDate()}</span>
+                {(index === 0 || date.getDate() === 1 || total <= 14) && <span className="block text-[9px] font-normal text-slate-400">{new Intl.DateTimeFormat("uk-UA", { month: "short" }).format(date)}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="relative">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-0"
+            style={{ backgroundImage: "linear-gradient(to right, rgba(148, 163, 184, 0.16) 1px, transparent 1px)", backgroundSize: `calc((100% - 0px) / ${total}) 100%` }}
+          />
+          {todayPosition && (
+            <div className="pointer-events-none absolute inset-y-0 z-20" style={{ left: todayPosition }}>
+              <div className="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-500 px-1.5 py-0.5 text-[9px] font-bold text-white">Сьогодні</div>
+              <div className="h-full border-l border-dashed border-rose-500" />
+            </div>
+          )}
+          <div className="relative z-10 space-y-2 pt-2">
+          {visible.map((task) => {
           const start = Math.max(
             0,
             Math.round(
@@ -449,9 +548,11 @@ function Gantt({ tasks }) {
               >
                 {task.title}
               </div>
-              <div className="relative h-7 rounded-md bg-slate-50">
+              <div className="relative h-7 rounded-md bg-slate-50/80">
                 <div
-                  className={`absolute top-1 h-5 rounded-md ${task.status === "done" ? "bg-emerald-400" : "bg-indigo-500"}`}
+                  className={`absolute top-1 h-5 rounded-md shadow-sm ${task.status === "done" ? "bg-emerald-400" : isLate(task) ? "bg-rose-500" : "bg-indigo-500"}`}
+                  title={`${formatDate(task.startDate)} — ${formatDate(task.dueDate)}`}
+                  aria-label={`${task.title}: ${formatDate(task.startDate)} — ${formatDate(task.dueDate)}`}
                   style={{
                     left: `${(start / total) * 100}%`,
                     width: `${Math.max(8, (width / total) * 100)}%`,
@@ -465,13 +566,12 @@ function Gantt({ tasks }) {
                   />
                 )}
                 {rangeEndPosition && <div className="absolute inset-y-0 z-10 w-px bg-rose-500" style={{ left: rangeEndPosition }} title={`Кінець: ${formatDate(rangeEnd)}`} />}
-                <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-slate-500">
-                  {formatDate(task.startDate)} — {formatDate(task.dueDate)}
-                </span>
               </div>
             </div>
           );
         })}
+          </div>
+        </div>
         </div>
       </div>
     </div>
@@ -618,6 +718,7 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus }) {
             >
               <div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${task.priority === "critical" ? "bg-red-500" : task.priority === "high" ? "bg-orange-500" : task.priority === "normal" ? "bg-blue-500" : "bg-slate-400"}`} title={`Пріоритет: ${PRIORITY.find((priority) => priority.id === task.priority)?.label || "Низький"}`} />
                   <span className="font-semibold">{task.title}</span>
                   <StatusBadge status={task.status} />
                   {task.priority === "critical" && (
@@ -628,7 +729,7 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus }) {
                   {task.targetType === "department" ? "Департамент" : "Виконавець"}: {task.target || "—"} · Дедлайн: {formatDate(task.dueDate)}
                 </p>
               </div>
-              <span className={`self-center text-xs font-bold ${isLate(task) ? "text-rose-600" : "text-slate-400"}`}>
+              <span className={`w-24 self-center text-right text-xs font-bold ${isLate(task) ? "text-rose-600" : "text-slate-400"}`}>
                 {isLate(task) ? "Прострочено" : task.status === "done" ? "Завершено" : "В терміні"}
               </span>
             </div>
@@ -658,6 +759,8 @@ export default function ProjectManagementModule({
   const [showComposer, setShowComposer] = useState(false);
   const [showLegalRequest, setShowLegalRequest] = useState(false);
   const [filters, setFilters] = useState({ newtask: "all", mytask: "all", report: "all" });
+  const [reportFilters, setReportFilters] = useState({ period: "all", department: "all", location: "all", priority: "all" });
+  const [drillDownTasks, setDrillDownTasks] = useState(null);
   const legal = useLegalTasks(user);
   const isReports = String(topTab).toLowerCase().includes("report");
   const isMyTasks = /my.?task/i.test(String(topTab));
@@ -777,7 +880,24 @@ export default function ProjectManagementModule({
           (task.targetType === "person" && task.target === displayName(user)),
       )
     : tasks;
-  const activeTasks = assignedTasks.filter(
+  const reportDepartments = useMemo(() => Array.from(new Set(tasks.map((task) => task.department).filter(Boolean))).sort(), [tasks]);
+  const reportLocations = useMemo(() => Array.from(new Set(tasks.map((task) => task.restaurant || task.branch || task.location).filter(Boolean))).sort(), [tasks]);
+  const reportTasks = useMemo(() => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+    const periodStart = reportFilters.period === "today" ? start : reportFilters.period === "week" ? new Date(start.getTime() - ((start.getDay() + 6) % 7) * 86400000) : reportFilters.period === "month" ? new Date(now.getFullYear(), now.getMonth(), 1, 12) : reportFilters.period === "quarter" ? new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1, 12) : null;
+    const periodEnd = reportFilters.period === "today" ? start : reportFilters.period === "week" ? new Date(periodStart.getTime() + 6 * 86400000) : reportFilters.period === "month" ? new Date(now.getFullYear(), now.getMonth() + 1, 0, 12) : reportFilters.period === "quarter" ? new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3 + 3, 0, 12) : null;
+    return tasks.filter((task) => {
+      const taskDate = task.dueDate ? fromDateKey(task.dueDate) : null;
+      const location = task.restaurant || task.branch || task.location || "";
+      return (!periodStart || (taskDate && taskDate >= periodStart && taskDate <= periodEnd)) &&
+        (reportFilters.department === "all" || task.department === reportFilters.department) &&
+        (reportFilters.location === "all" || location === reportFilters.location) &&
+        (reportFilters.priority === "all" || task.priority === reportFilters.priority);
+    });
+  }, [tasks, reportFilters]);
+  const dashboardTasks = isReports ? reportTasks : assignedTasks;
+  const activeTasks = dashboardTasks.filter(
     (task) =>
       filter === "all" ||
       task.status === filter ||
@@ -785,15 +905,16 @@ export default function ProjectManagementModule({
   );
   const stats = useMemo(
     () => ({
-      total: assignedTasks.length,
-      done: assignedTasks.filter((task) => task.status === "done").length,
-      late: assignedTasks.filter(isLate).length,
-      open: assignedTasks.filter((task) => task.status !== "done").length,
+      total: dashboardTasks.length,
+      done: dashboardTasks.filter((task) => task.status === "done").length,
+      late: dashboardTasks.filter(isLate).length,
+      open: dashboardTasks.filter((task) => task.status !== "done").length,
     }),
-    [assignedTasks],
+    [dashboardTasks],
   );
+  const completionRate = stats.total ? Math.round((stats.done / stats.total) * 100) : 0;
   const averageCompletionTime = useMemo(() => {
-    const completed = assignedTasks
+    const completed = dashboardTasks
       .filter(
         (task) => task.status === "done" && task.createdAt && task.updatedAt,
       )
@@ -807,26 +928,42 @@ export default function ProjectManagementModule({
           completed.reduce((sum, hours) => sum + hours, 0) / completed.length,
         )
       : "—";
-  }, [assignedTasks]);
-  const byAssignee = useMemo(
-    () =>
-      Object.values(
-        tasks.reduce((result, task) => {
+  }, [dashboardTasks]);
+  const byAssignee = useMemo(() => {
+    const rows = Object.values(
+      reportTasks.reduce((result, task) => {
           const key = task.target || "Без адресата";
           result[key] = result[key] || {
             name: key,
             total: 0,
             done: 0,
             late: 0,
+            completionHours: [],
           };
           result[key].total += 1;
           if (task.status === "done") result[key].done += 1;
           if (isLate(task)) result[key].late += 1;
+          if (task.status === "done" && task.createdAt && task.updatedAt) {
+            const hours = (new Date(task.updatedAt) - new Date(task.createdAt)) / 3600000;
+            if (Number.isFinite(hours) && hours >= 0) result[key].completionHours.push(hours);
+          }
           return result;
         }, {}),
-      ).sort((a, b) => b.total - a.total),
-    [tasks],
-  );
+    );
+    return rows
+      .map((row) => ({
+        ...row,
+        averageHours: row.completionHours.length
+          ? row.completionHours.reduce((sum, hours) => sum + hours, 0) / row.completionHours.length
+          : null,
+      }))
+      .sort((left, right) => right.total - left.total);
+  }, [reportTasks]);
+  const criticalTasks = useMemo(() => reportTasks.filter((task) => task.status !== "done").sort((left, right) => {
+    const score = (task) => (isLate(task) ? 10 : 0) + ({ critical: 4, high: 3, normal: 2, low: 1 }[task.priority] || 0);
+    return score(right) - score(left) || String(left.dueDate || "9999").localeCompare(String(right.dueDate || "9999"));
+  }).slice(0, 5), [reportTasks]);
+  const longestAssigneeCompletionTime = Math.max(1, ...byAssignee.map((row) => row.averageHours || 0));
 
   return (
     <section className="min-h-[680px] rounded-2xl bg-[#f5f7fb] p-4 text-slate-900 sm:p-6">
@@ -861,6 +998,11 @@ export default function ProjectManagementModule({
               <Plus size={18} /> Нова задача
             </button>
           )}
+          {isReports && (
+            <button type="button" onClick={() => downloadTaskPdf({ filters: reportFilters, stats, byAssignee, criticalTasks, averageCompletionTime })} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50">
+              <Download size={18} /> Експорт PDF
+            </button>
+          )}
           {isNewTask && (
             <button
               type="button"
@@ -873,36 +1015,43 @@ export default function ProjectManagementModule({
         </div>
       </div>
       <div className="mb-6 grid gap-3 sm:grid-cols-4">
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Всього задач
-          </p>
-          <p className="mt-2 text-2xl font-black">{stats.total}</p>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            В роботі
-          </p>
-          <p className="mt-2 text-2xl font-black text-amber-600">
-            {stats.open}
-          </p>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Виконано
-          </p>
-          <p className="mt-2 text-2xl font-black text-emerald-600">
-            {stats.done}
-          </p>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Потрібна увага
-          </p>
-          <p className="mt-2 text-2xl font-black text-rose-600">{stats.late}</p>
-        </div>
+        <TaskStatCard
+          label="Всього задач"
+          value={stats.total}
+          detail={stats.open ? `${stats.open} відкрито зараз` : "Усі задачі завершено"}
+          icon={ClipboardList}
+          accentClass="bg-indigo-50 text-indigo-600"
+        />
+        <TaskStatCard
+          label="В роботі"
+          value={stats.open}
+          detail={stats.total ? `${Math.round((stats.open / stats.total) * 100)}% від усіх задач` : "Немає активних задач"}
+          icon={Clock3}
+          accentClass="bg-amber-50 text-amber-600"
+        />
+        <TaskStatCard
+          label="Виконано"
+          value={stats.done}
+          detail={stats.total ? `${completionRate}% завершено` : "Ще немає задач"}
+          icon={CheckCircle2}
+          accentClass="bg-emerald-50 text-emerald-600"
+        />
+        <TaskStatCard
+          label="Потрібна увага"
+          value={stats.late}
+          detail={stats.late ? "Є прострочені задачі" : "Прострочень немає"}
+          icon={TriangleAlert}
+          accentClass="bg-rose-50 text-rose-600"
+        />
       </div>
       {isReports ? (
+        <>
+          <div className="mb-5 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-2 xl:grid-cols-4">
+            <label className="text-xs font-bold text-slate-600">Період<select value={reportFilters.period} onChange={(event) => setReportFilters((current) => ({ ...current, period: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-semibold"><option value="all">Увесь період</option><option value="today">Сьогодні</option><option value="week">Цей тиждень</option><option value="month">Цей місяць</option><option value="quarter">Цей квартал</option></select></label>
+            <label className="text-xs font-bold text-slate-600">Підрозділ<select value={reportFilters.department} onChange={(event) => setReportFilters((current) => ({ ...current, department: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-semibold"><option value="all">Усі підрозділи</option>{reportDepartments.map((department) => <option key={department} value={department}>{department}</option>)}</select></label>
+            <label className="text-xs font-bold text-slate-600">Заклад / філія<select value={reportFilters.location} onChange={(event) => setReportFilters((current) => ({ ...current, location: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-semibold"><option value="all">Усі об'єкти</option>{reportLocations.map((location) => <option key={location} value={location}>{location}</option>)}</select></label>
+            <label className="text-xs font-bold text-slate-600">Пріоритетність<select value={reportFilters.priority} onChange={(event) => setReportFilters((current) => ({ ...current, priority: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm font-semibold"><option value="all">Усі пріоритети</option>{PRIORITY.map((priority) => <option key={priority.id} value={priority.id}>{priority.label}</option>)}</select></label>
+          </div>
         <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <div className="mb-5 flex items-center justify-between">
@@ -930,10 +1079,18 @@ export default function ProjectManagementModule({
                         style={{ width: `${(row.done / row.total) * 100}%` }}
                       />
                     </div>
+                    <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                      <Clock3 size={14} className="text-indigo-500" />
+                      <span className="w-28 shrink-0">Сер. час: <strong className="text-slate-700">{row.averageHours == null ? "—" : formatDuration(row.averageHours)}</strong></span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                        <div className="h-full rounded-full bg-sky-500" style={{ width: `${row.averageHours == null ? 0 : Math.max(8, (row.averageHours / longestAssigneeCompletionTime) * 100)}%` }} />
+                      </div>
+                    </div>
                     {row.late > 0 && (
-                      <p className="mt-1 text-xs font-semibold text-rose-600">
+                      <button type="button" onClick={() => setDrillDownTasks(reportTasks.filter((task) => (task.target || "Без адресата") === row.name && isLate(task)))} className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-1 text-xs font-bold text-rose-700 hover:bg-rose-200">
+                        <TriangleAlert size={14} />
                         {row.late} прострочено
-                      </p>
+                      </button>
                     )}
                   </div>
                 ))
@@ -945,39 +1102,15 @@ export default function ProjectManagementModule({
             </div>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5">
-            <h2 className="font-bold">Стан портфеля</h2>
-            <div className="mt-5 space-y-3">
-              {STATUS.map((status) => {
-                const count = tasks.filter(
-                  (task) => task.status === status.id,
-                ).length;
-                return (
-                  <div
-                    key={status.id}
-                    className="flex items-center justify-between rounded-lg bg-slate-50 p-3"
-                  >
-                    <span className="flex items-center gap-2 text-sm font-semibold">
-                      <span className={`h-2 w-2 rounded-full ${status.dot}`} />
-                      {status.label}
-                    </span>
-                    <span className="font-black">{count}</span>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="mt-6 border-t border-slate-100 pt-4 text-sm text-slate-500">
-              <Clock3 size={16} className="mr-2 inline text-indigo-500" />
-              Середній час виконання:{" "}
-              <strong className="text-slate-900">
-                {averageCompletionTime}
-              </strong>
-            </div>
+            <div className="flex items-center justify-between"><div><h2 className="font-bold">Топ задач, що потребують уваги</h2><p className="mt-1 text-xs text-slate-400">Прострочені та високопріоритетні задачі</p></div><TriangleAlert className="text-rose-500" size={20} /></div>
+            <div className="mt-4 divide-y divide-slate-100">{criticalTasks.length ? criticalTasks.map((task) => <div key={task.id} className="py-3"><p className="font-semibold text-slate-900">{task.title}</p><div className="mt-1 flex items-center justify-between gap-2 text-xs"><span className="text-slate-500">{task.target || "—"}</span><span className={`font-bold ${isLate(task) ? "text-rose-600" : "text-orange-600"}`}>{isLate(task) ? "Прострочено" : PRIORITY.find((priority) => priority.id === task.priority)?.label}</span></div><p className="mt-1 text-xs font-semibold text-slate-500">{formatDate(task.dueDate)}</p></div>) : <p className="py-8 text-center text-sm text-slate-400">За поточними фільтрами критичних задач немає.</p>}</div>
           </div>
         </div>
+        </>
       ) : (
         <>
           {isMyTasks ? (
-            <div className="mb-5 grid gap-5 lg:grid-cols-[1fr_1.35fr]">
+            <div className="mb-5 space-y-5">
               <TaskList
                 loading={loading}
                 activeTasks={activeTasks}
@@ -999,7 +1132,7 @@ export default function ProjectManagementModule({
             </div>
           ) : (
             <>
-              <div className="mb-5 grid gap-5 lg:grid-cols-[1.35fr_1fr]">
+              <div className="mb-5 space-y-5">
                 <TaskList
                   loading={loading}
                   activeTasks={activeTasks}
@@ -1041,6 +1174,7 @@ export default function ProjectManagementModule({
           onSuccess={createLegalLinkedTask}
         />
       )}
+      <ReportTaskDialog tasks={drillDownTasks} onClose={() => setDrillDownTasks(null)} />
     </section>
   );
 }

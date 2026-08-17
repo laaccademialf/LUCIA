@@ -1,5 +1,11 @@
 {
   "primaryConnectionId": "",
   "runtimeConfig": null,
-  "updatedAt": "2026-03-09T10:51:38.089Z"
+  "viksoft": {
+    "apiBase": "http://194.183.165.59:8765",
+    "user": "la_familia",
+    "password": "test123",
+    "updatedAt": "2026-08-17T11:31:29.916Z"
+  },
+  "updatedAt": "2026-08-17T11:31:29.916Z"
 }
