@@ -1,4 +1,4 @@
-import { createElement, useEffect, useMemo, useRef, useState } from "react";
+import { createElement, useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   CalendarDays,
@@ -498,9 +498,6 @@ function Gantt({ tasks, onTaskClick }) {
   const currentDate = fromDateKey(today());
   const [selectedMonth, setSelectedMonth] = useState(currentDate.getMonth());
   const [selectedYear, setSelectedYear] = useState(currentDate.getFullYear());
-  const [pageSize, setPageSize] = useState(10);
-  const [page, setPage] = useState(1);
-  const timelineRef = useRef(null);
   const isAllMonths = selectedMonth === "all";
   const monthStart = new Date(selectedYear, isAllMonths ? 0 : selectedMonth, 1, 12);
   const monthEnd = new Date(selectedYear, isAllMonths ? 12 : selectedMonth + 1, 0, 12);
@@ -526,27 +523,14 @@ function Gantt({ tasks, onTaskClick }) {
       return taskStart <= monthEnd && taskEnd >= monthStart;
     })
     .sort((left, right) => Number(left.status === "done") - Number(right.status === "done") || String(ganttDate(left, "end")).localeCompare(String(ganttDate(right, "end"))));
-  const totalPages = Math.max(1, Math.ceil(matchingTasks.length / pageSize));
-  const visible = matchingTasks.slice((page - 1) * pageSize, page * pageSize);
+  const visible = matchingTasks; // Показати всі задачі місяця
   const total = daysInMonth;
   const goToNextWeek = () => {
-    if (isAllMonths) {
-      timelineRef.current?.scrollBy({ left: Math.max(280, timelineRef.current.clientWidth * 0.35), behavior: "smooth" });
-      return;
-    }
-    const timeline = timelineRef.current;
-    const step = Math.max(280, timeline?.clientWidth * 0.35 || 280);
-    const atEnd = !timeline || timeline.scrollWidth <= timeline.clientWidth || timeline.scrollLeft + timeline.clientWidth + step >= timeline.scrollWidth - 4;
-    if (atEnd) {
-      const nextMonth = selectedMonth === 11 ? 0 : selectedMonth + 1;
-      setSelectedMonth(nextMonth);
-      if (selectedMonth === 11) setSelectedYear((year) => year + 1);
-      requestAnimationFrame(() => {
-        if (timeline) timeline.scrollLeft = 0;
-      });
-    } else {
-      timeline.scrollBy({ left: step, behavior: "smooth" });
-    }
+    // Переміщення на 7 днів вперед
+    const nextMonthDate = new Date(selectedYear, selectedMonth, 7, 12);
+    nextMonthDate.setDate(nextMonthDate.getDate() + 7);
+    setSelectedMonth(nextMonthDate.getMonth());
+    if (nextMonthDate.getFullYear() > selectedYear) setSelectedYear(nextMonthDate.getFullYear());
   };
   const timelineDays = Array.from({ length: total }, (_, index) => {
     return new Date(selectedYear, isAllMonths ? 0 : selectedMonth, index + 1, 12);
@@ -558,7 +542,7 @@ function Gantt({ tasks, onTaskClick }) {
     <div className="relative z-20" style={{ minHeight: `${Math.max(100, visible.length * 36 + 12)}px` }}>
       <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
         <span className="mr-1 text-xs font-semibold capitalize text-slate-500">{monthLabel}</span>
-        <select value={selectedMonth} onChange={(event) => { setSelectedMonth(event.target.value === "all" ? "all" : Number(event.target.value)); setPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Місяць ґанта">
+        <select value={selectedMonth} onChange={(event) => { setSelectedMonth(event.target.value === "all" ? "all" : Number(event.target.value)); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Місяць ґанта">
           <option value="all">Усі місяці</option>
           {Array.from({ length: 12 }, (_, month) => <option key={month} value={month}>{new Intl.DateTimeFormat("uk-UA", { month: "long" }).format(new Date(2020, month, 1))}</option>)}
         </select>
@@ -566,8 +550,8 @@ function Gantt({ tasks, onTaskClick }) {
           {years.map((year) => <option key={year} value={year}>{year}</option>)}
         </select>
       </div>
-      <div ref={timelineRef} className="overflow-x-auto gantt-scrollbar">
-        <div className="min-w-[1500px]">
+      <div className="">
+        <div style={{ display: "grid", gridTemplateColumns: `repeat(${total}, 1fr)`, gap: "0px", minWidth: "100%" }}>
         <div className="grid grid-cols-[170px_1fr] items-end gap-3 border-b border-slate-200 pb-2">
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Задача</span>
           <div className="grid" style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}>
@@ -642,20 +626,8 @@ function Gantt({ tasks, onTaskClick }) {
         })}
           </div>
         </div>
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <span>На сторінці</span>
-            <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1 font-semibold">
-              {[10, 15, 20, 25].map((size) => <option key={size} value={size}>{size}</option>)}
-            </select>
-            <span>задач</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={goToNextWeek} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">Наступний тиждень <ChevronRight size={14} className="ml-1 inline" /></button>
-            <button type="button" disabled={page <= 1} onClick={() => setPage((current) => current - 1)} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold disabled:opacity-40">Назад</button>
-            <span className="text-xs font-semibold text-slate-500">{page} / {totalPages}</span>
-            <button type="button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold disabled:opacity-40">Далі</button>
-          </div>
+        <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+          <button type="button" onClick={goToNextWeek} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">Наступний тиждень <ChevronRight size={14} className="ml-1 inline" /></button>
         </div>
         </div>
       </div>
