@@ -550,8 +550,7 @@ function Gantt({ tasks, onTaskClick }) {
           {years.map((year) => <option key={year} value={year}>{year}</option>)}
         </select>
       </div>
-      <div className="">
-        <div style={{ display: "grid", gridTemplateColumns: `repeat(${total}, 1fr)`, gap: "0px", minWidth: "100%" }}>
+      <div className="space-y-3">
         <div className="grid grid-cols-[170px_1fr] items-end gap-3 border-b border-slate-200 pb-2">
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Задача</span>
           <div className="grid" style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}>
@@ -563,72 +562,72 @@ function Gantt({ tasks, onTaskClick }) {
             ))}
           </div>
         </div>
-        <div className="relative">
-          {!visible.length && (
-            <div className="flex min-h-24 items-center justify-center text-sm text-slate-400">
-              У цьому періоді задач із датами немає
-            </div>
-          )}
+        <div className="relative space-y-2" style={{ minHeight: `${Math.max(200, visible.length * 44 + 24)}px` }}>
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-0"
-            style={{ backgroundImage: "linear-gradient(to right, rgba(148, 163, 184, 0.16) 1px, transparent 1px)", backgroundSize: `calc((100% - 0px) / ${total}) 100%` }}
+            className="pointer-events-none absolute inset-0 z-0 rounded-lg"
+            style={{ backgroundImage: `linear-gradient(to right, rgba(148, 163, 184, 0.12) 1px, transparent 1px)`, backgroundSize: `calc(100% / ${total}) 100%`, backgroundColor: "rgba(248, 250, 252, 0.5)" }}
           />
           {todayPosition && (
             <div className="pointer-events-none absolute inset-y-0 z-20" style={{ left: todayPosition }}>
-              <div className="absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-500 px-1.5 py-0.5 text-[9px] font-bold text-white">Сьогодні</div>
-              <div className="h-full border-l border-dashed border-rose-500" />
+              <div className="absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-500 px-1.5 py-0.5 text-[9px] font-bold text-white">Сьогодні</div>
+              <div className="h-full border-l-2 border-dashed border-rose-500" />
             </div>
           )}
-          <div className="relative z-10 space-y-2 pt-2">
-          {visible.map((task) => {
-          const startDate = ganttDate(task, "start");
-          const endDate = ganttDate(task, "end");
-          const taskStart = fromDateKey(startDate);
-          const taskEnd = fromDateKey(endDate);
-          const clippedStart = taskStart < monthStart ? monthStart : taskStart;
-          const clippedEnd = taskEnd > monthEnd ? monthEnd : taskEnd;
-          const start = Math.max(0, Math.round((clippedStart - timelineStart) / 86400000));
-          const end = Math.min(total, Math.max(start + 1, Math.round((clippedEnd - timelineStart) / 86400000) + 1));
-          return (
-            <div
-              key={task.id}
-              className="grid cursor-pointer grid-cols-[170px_1fr] items-center gap-3"
-              role="button"
-              tabIndex={0}
-              onClick={() => onTaskClick?.(task)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onTaskClick?.(task);
-                }
-              }}
-            >
-              <div
-                className="truncate text-xs font-semibold text-slate-600"
-                title={task.title}
-              >
-                {task.title}
-              </div>
-              <div className="relative h-7 rounded-md bg-slate-50/80">
-                <div
-                  className={`absolute top-1 h-5 rounded-md shadow-sm ${ganttTaskColor(task)}`}
-                  title={`${formatDate(startDate)} — ${formatDate(endDate)}`}
-                  aria-label={`${task.title}: ${formatDate(startDate)} — ${formatDate(endDate)}`}
-                  style={{
-                    left: `${(start / total) * 100}%`,
-                    right: `${Math.max(0, 100 - (end / total) * 100)}%`,
-                  }}
-                />
-              </div>
+          <div className="relative z-10">
+          {!visible.length ? (
+            <div className="flex h-24 items-center justify-center text-sm text-slate-400">
+              У цьому періоді задач із датами немає
             </div>
-          );
-        })}
+          ) : (
+            visible.map((task) => {
+              const startDate = ganttDate(task, "start");
+              const endDate = ganttDate(task, "end");
+              const taskStart = fromDateKey(startDate);
+              const taskEnd = fromDateKey(endDate);
+              const clippedStart = taskStart < monthStart ? monthStart : taskStart;
+              const clippedEnd = taskEnd > monthEnd ? monthEnd : taskEnd;
+              const start = Math.max(0, Math.round((clippedStart - timelineStart) / 86400000));
+              const end = Math.min(total, Math.max(start + 1, Math.round((clippedEnd - timelineStart) / 86400000) + 1));
+              return (
+                <div
+                  key={task.id}
+                  className="grid cursor-pointer grid-cols-[170px_1fr] items-center gap-3"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onTaskClick?.(task)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onTaskClick?.(task);
+                    }
+                  }}
+                >
+                  <div
+                    className="truncate text-xs font-semibold text-slate-700"
+                    title={task.title}
+                  >
+                    {task.title}
+                  </div>
+                  <div className="relative h-8 rounded-md bg-white">
+                    <div
+                      className={`absolute top-1.5 h-6 rounded shadow-sm transition-all ${ganttTaskColor(task)}`}
+                      title={`${formatDate(startDate)} — ${formatDate(endDate)}`}
+                      aria-label={`${task.title}: ${formatDate(startDate)} — ${formatDate(endDate)}`}
+                      style={{
+                        left: `${(start / total) * 100}%`,
+                        right: `${Math.max(0, 100 - (end / total) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })
+          )}
           </div>
         </div>
         <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
           <button type="button" onClick={goToNextWeek} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">Наступний тиждень <ChevronRight size={14} className="ml-1 inline" /></button>
-        </div>
         </div>
       </div>
     </div>
