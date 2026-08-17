@@ -598,6 +598,21 @@ export function AssetTable({ data, onEdit, onDelete, filters, setFilters, onExpo
               <SlidersHorizontal size={14} />
               <span>Фільтри</span>
             </button>
+            {Object.keys(filters).length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFilters({});
+                  setSearchQuery("");
+                  setInventoryStateFilter("all");
+                }}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md font-semibold text-xs border border-rose-300 bg-white text-rose-700 hover:bg-rose-50 whitespace-nowrap"
+                title="Очистити всі фільтри, пошук та фільтр інвентаризації"
+              >
+                <RotateCcw size={14} />
+                <span>Скидання</span>
+              </button>
+            )}
             {isAdminOnly && onDownloadTemplate && (
               <button
                 type="button"

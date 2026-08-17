@@ -1,4 +1,4 @@
-import { createElement, useEffect, useMemo, useState } from "react";
+import { createElement, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   CalendarDays,
@@ -29,7 +29,6 @@ import {
   listCollectionItemsApi,
   updateCollectionItemApi,
 } from "../api/collectionsApi";
-
 const COLLECTION = "projectTasks";
 const LOCAL_KEY = "lucia_project_tasks";
 const pdfMakeApi = pdfMake?.createPdf ? pdfMake : pdfMake?.default?.createPdf ? pdfMake.default : null;
@@ -90,24 +89,47 @@ const displayName = (user) =>
   ).trim();
 const idOf = (user) =>
   String(user?.id || user?.uid || user?.userId || user?.email || "").trim();
+const calendarDateKey = (value) => {
+  if (!value) return "";
+  if (value instanceof Date) return toDateKey(value);
+  if (typeof value === "object" && typeof value.toDate === "function") return toDateKey(value.toDate());
+  if (typeof value === "object" && Number.isFinite(value.seconds)) return toDateKey(new Date(value.seconds * 1000));
+  const text = String(value);
+  const isoMatch = text.match(/\d{4}-\d{2}-\d{2}/);
+  if (isoMatch) return isoMatch[0];
+  const europeanMatch = text.match(/^(\d{2})[./-](\d{2})[./-](\d{4})/);
+  return europeanMatch ? `${europeanMatch[3]}-${europeanMatch[2]}-${europeanMatch[1]}` : text.slice(0, 10);
+};
 const formatDate = (value) =>
   value
     ? new Intl.DateTimeFormat("uk-UA", {
         day: "2-digit",
         month: "short",
-      }).format(new Date(`${value}T12:00:00`))
+      }).format(new Date(`${calendarDateKey(value)}T12:00:00`))
     : "—";
-const daysBetween = (start, end) =>
-  Math.max(
-    1,
-    Math.round(
-      (new Date(`${end}T12:00:00`) - new Date(`${start}T12:00:00`)) / 86400000,
-    ) + 1,
-  );
+const formatFullDate = (value) =>
+  value
+    ? new Intl.DateTimeFormat("uk-UA", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+      }).format(new Date(`${calendarDateKey(value)}T12:00:00`))
+    : "—";
 const isLate = (task) =>
   task.status !== "done" &&
   task.dueDate &&
-  new Date(`${task.dueDate}T23:59:59`) < new Date();
+  new Date(`${calendarDateKey(task.dueDate)}T23:59:59`) < new Date();
+const isDueWithin48Hours = (task) => {
+  if (task.status === "done" || !task.dueDate) return false;
+  const hoursUntilDeadline = (new Date(`${calendarDateKey(task.dueDate)}T23:59:59`) - new Date()) / 3600000;
+  return hoursUntilDeadline >= 0 && hoursUntilDeadline <= 48;
+};
+const ganttTaskColor = (task) => {
+  if (task.priority === "critical") return "bg-purple-500";
+  if (isLate(task)) return "bg-rose-500";
+  if (isDueWithin48Hours(task)) return "bg-amber-400";
+  return task.status === "done" ? "bg-emerald-400" : "bg-blue-500";
+};
 const formatDuration = (hours) =>
   hours < 24
     ? `${Math.max(1, Math.round(hours))} год`
@@ -122,7 +144,11 @@ const readLocalTasks = () => {
 };
 
 const toDateKey = (date) => date.toISOString().slice(0, 10);
-const fromDateKey = (value) => new Date(`${value}T12:00:00`);
+const fromDateKey = (value) => new Date(`${calendarDateKey(value)}T12:00:00`);
+const ganttDate = (task, type) => {
+  if (type === "start") return task.startDate || task.start || "";
+  return task.dueDate || task.deadline || task.endDate || "";
+};
 const startOfMonth = (date) => new Date(date.getFullYear(), date.getMonth(), 1, 12);
 const calendarDays = (month) => {
   const first = startOfMonth(month);
@@ -181,7 +207,7 @@ function StatusBadge({ status }) {
 
 function TaskStatCard({ label, value, detail, icon, accentClass }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
+    <div className="rounded-xl border border-slate-200 bg-white p-3">
       <div className="flex items-start justify-between gap-3">
         <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
           {label}
@@ -190,8 +216,8 @@ function TaskStatCard({ label, value, detail, icon, accentClass }) {
           {createElement(icon, { size: 18 })}
         </span>
       </div>
-      <p className={`mt-2 text-2xl font-black ${accentClass.split(" ").find((className) => className.startsWith("text-")) || "text-slate-900"}`}>{value}</p>
-      <p className="mt-1 text-xs font-semibold text-slate-500">{detail}</p>
+      <p className={`mt-1 text-2xl font-black ${accentClass.split(" ").find((className) => className.startsWith("text-")) || "text-slate-900"}`}>{value}</p>
+      <p className="text-[11px] font-semibold text-slate-500">{detail}</p>
     </div>
   );
 }
@@ -468,43 +494,80 @@ function DateRangePopover({ rangeStart, rangeEnd, onChange }) {
   );
 }
 
-function Gantt({ tasks }) {
-  const [rangeStart, setRangeStart] = useState("");
-  const [rangeEnd, setRangeEnd] = useState("");
-  const visible = tasks
-    .filter((task) => task.startDate && task.dueDate)
-    .slice(0, 8);
-  if (!visible.length)
-    return (
-      <div className="flex min-h-24 items-center justify-center text-sm text-slate-400">
-        Задачі з датами з'являться тут
-      </div>
-    );
+function Gantt({ tasks, onTaskClick }) {
   const currentDate = fromDateKey(today());
-  const minDate = new Date(
-    Math.min(currentDate, ...visible.map((task) => new Date(`${task.startDate}T12:00:00`))),
-  );
-  const taskMaxDate = new Date(
-    Math.max(...visible.map((task) => new Date(`${task.dueDate}T12:00:00`))),
-  );
-  const maxDate = new Date(Math.max(taskMaxDate, currentDate, new Date(minDate).setDate(minDate.getDate() + 13)));
-  const total = Math.max(1, Math.round((maxDate - minDate) / 86400000) + 1);
+  const [selectedMonth, setSelectedMonth] = useState(currentDate.getMonth());
+  const [selectedYear, setSelectedYear] = useState(currentDate.getFullYear());
+  const [pageSize, setPageSize] = useState(10);
+  const [page, setPage] = useState(1);
+  const timelineRef = useRef(null);
+  const isAllMonths = selectedMonth === "all";
+  const monthStart = new Date(selectedYear, isAllMonths ? 0 : selectedMonth, 1, 12);
+  const monthEnd = new Date(selectedYear, isAllMonths ? 12 : selectedMonth + 1, 0, 12);
+  const isCurrentMonth = selectedYear === currentDate.getFullYear() && selectedMonth === currentDate.getMonth();
+  const timelineStart = monthStart;
+  const daysInMonth = isAllMonths
+    ? Math.round((new Date(selectedYear + 1, 0, 1, 12) - monthStart) / 86400000)
+    : monthEnd.getDate();
+  const years = Array.from(new Set([
+    currentDate.getFullYear() - 1,
+    currentDate.getFullYear(),
+    currentDate.getFullYear() + 1,
+    ...tasks.map((task) => ganttDate(task, "start") ? fromDateKey(ganttDate(task, "start")).getFullYear() : null),
+    ...tasks.map((task) => ganttDate(task, "end") ? fromDateKey(ganttDate(task, "end")).getFullYear() : null),
+  ].filter(Boolean))).sort((left, right) => left - right);
+  const matchingTasks = tasks
+    .filter((task) => {
+      const startDate = ganttDate(task, "start");
+      const endDate = ganttDate(task, "end");
+      if (!startDate || !endDate) return false;
+      const taskStart = fromDateKey(startDate);
+      const taskEnd = fromDateKey(endDate);
+      return taskStart <= monthEnd && taskEnd >= monthStart;
+    })
+    .sort((left, right) => Number(left.status === "done") - Number(right.status === "done") || String(ganttDate(left, "end")).localeCompare(String(ganttDate(right, "end"))));
+  const totalPages = Math.max(1, Math.ceil(matchingTasks.length / pageSize));
+  const visible = matchingTasks.slice((page - 1) * pageSize, page * pageSize);
+  const total = daysInMonth;
+  const goToNextWeek = () => {
+    if (isAllMonths) {
+      timelineRef.current?.scrollBy({ left: Math.max(280, timelineRef.current.clientWidth * 0.35), behavior: "smooth" });
+      return;
+    }
+    const timeline = timelineRef.current;
+    const step = Math.max(280, timeline?.clientWidth * 0.35 || 280);
+    const atEnd = !timeline || timeline.scrollWidth <= timeline.clientWidth || timeline.scrollLeft + timeline.clientWidth + step >= timeline.scrollWidth - 4;
+    if (atEnd) {
+      const nextMonth = selectedMonth === 11 ? 0 : selectedMonth + 1;
+      setSelectedMonth(nextMonth);
+      if (selectedMonth === 11) setSelectedYear((year) => year + 1);
+      requestAnimationFrame(() => {
+        if (timeline) timeline.scrollLeft = 0;
+      });
+    } else {
+      timeline.scrollBy({ left: step, behavior: "smooth" });
+    }
+  };
   const timelineDays = Array.from({ length: total }, (_, index) => {
-    const date = new Date(minDate);
-    date.setDate(date.getDate() + index);
-    return date;
+    return new Date(selectedYear, isAllMonths ? 0 : selectedMonth, index + 1, 12);
   });
-  const rangeStartOffset = rangeStart ? Math.round((fromDateKey(rangeStart) - minDate) / 86400000) : -1;
-  const rangeEndOffset = rangeEnd ? Math.round((fromDateKey(rangeEnd) - minDate) / 86400000) : -1;
-  const todayOffset = Math.round((currentDate - minDate) / 86400000);
-  const todayPosition = todayOffset >= 0 && todayOffset <= total ? `${(todayOffset / total) * 100}%` : null;
-  const rangeStartPosition = rangeStartOffset >= 0 && rangeStartOffset <= total ? `${(rangeStartOffset / total) * 100}%` : null;
-  const rangeEndPosition = rangeEndOffset >= 0 && rangeEndOffset <= total ? `${(rangeEndOffset / total) * 100}%` : null;
+  const todayOffset = isCurrentMonth ? currentDate.getDate() - 1 : -1;
+  const todayPosition = todayOffset >= 0 ? `${(todayOffset / total) * 100}%` : null;
+  const monthLabel = isAllMonths ? `Усі місяці ${selectedYear} р.` : new Intl.DateTimeFormat("uk-UA", { month: "long", year: "numeric" }).format(monthStart);
   return (
     <div className="relative z-20" style={{ minHeight: `${Math.max(100, visible.length * 36 + 12)}px` }}>
-      <div className="mb-3 flex justify-end"><DateRangePopover rangeStart={rangeStart} rangeEnd={rangeEnd} onChange={(start, end) => { setRangeStart(start); setRangeEnd(end); }} /></div>
-      <div className="overflow-x-auto gantt-scrollbar">
-        <div className="min-w-[900px]">
+      <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+        <span className="mr-1 text-xs font-semibold capitalize text-slate-500">{monthLabel}</span>
+        <select value={selectedMonth} onChange={(event) => { setSelectedMonth(event.target.value === "all" ? "all" : Number(event.target.value)); setPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Місяць ґанта">
+          <option value="all">Усі місяці</option>
+          {Array.from({ length: 12 }, (_, month) => <option key={month} value={month}>{new Intl.DateTimeFormat("uk-UA", { month: "long" }).format(new Date(2020, month, 1))}</option>)}
+        </select>
+        <select value={selectedYear} onChange={(event) => setSelectedYear(Number(event.target.value))} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Рік ґанта">
+          {years.map((year) => <option key={year} value={year}>{year}</option>)}
+        </select>
+      </div>
+      <div ref={timelineRef} className="overflow-x-auto gantt-scrollbar">
+        <div className="min-w-[1500px]">
         <div className="grid grid-cols-[170px_1fr] items-end gap-3 border-b border-slate-200 pb-2">
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Задача</span>
           <div className="grid" style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}>
@@ -517,6 +580,11 @@ function Gantt({ tasks }) {
           </div>
         </div>
         <div className="relative">
+          {!visible.length && (
+            <div className="flex min-h-24 items-center justify-center text-sm text-slate-400">
+              У цьому періоді задач із датами немає
+            </div>
+          )}
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 z-0"
@@ -530,17 +598,27 @@ function Gantt({ tasks }) {
           )}
           <div className="relative z-10 space-y-2 pt-2">
           {visible.map((task) => {
-          const start = Math.max(
-            0,
-            Math.round(
-              (new Date(`${task.startDate}T12:00:00`) - minDate) / 86400000,
-            ),
-          );
-          const width = daysBetween(task.startDate, task.dueDate);
+          const startDate = ganttDate(task, "start");
+          const endDate = ganttDate(task, "end");
+          const taskStart = fromDateKey(startDate);
+          const taskEnd = fromDateKey(endDate);
+          const clippedStart = taskStart < monthStart ? monthStart : taskStart;
+          const clippedEnd = taskEnd > monthEnd ? monthEnd : taskEnd;
+          const start = Math.max(0, Math.round((clippedStart - timelineStart) / 86400000));
+          const end = Math.min(total, Math.max(start + 1, Math.round((clippedEnd - timelineStart) / 86400000) + 1));
           return (
             <div
               key={task.id}
-              className="grid grid-cols-[170px_1fr] items-center gap-3"
+              className="grid cursor-pointer grid-cols-[170px_1fr] items-center gap-3"
+              role="button"
+              tabIndex={0}
+              onClick={() => onTaskClick?.(task)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onTaskClick?.(task);
+                }
+              }}
             >
               <div
                 className="truncate text-xs font-semibold text-slate-600"
@@ -550,26 +628,33 @@ function Gantt({ tasks }) {
               </div>
               <div className="relative h-7 rounded-md bg-slate-50/80">
                 <div
-                  className={`absolute top-1 h-5 rounded-md shadow-sm ${task.status === "done" ? "bg-emerald-400" : isLate(task) ? "bg-rose-500" : "bg-indigo-500"}`}
-                  title={`${formatDate(task.startDate)} — ${formatDate(task.dueDate)}`}
-                  aria-label={`${task.title}: ${formatDate(task.startDate)} — ${formatDate(task.dueDate)}`}
+                  className={`absolute top-1 h-5 rounded-md shadow-sm ${ganttTaskColor(task)}`}
+                  title={`${formatDate(startDate)} — ${formatDate(endDate)}`}
+                  aria-label={`${task.title}: ${formatDate(startDate)} — ${formatDate(endDate)}`}
                   style={{
                     left: `${(start / total) * 100}%`,
-                    width: `${Math.max(8, (width / total) * 100)}%`,
+                    right: `${Math.max(0, 100 - (end / total) * 100)}%`,
                   }}
                 />
-                {rangeStartPosition && (
-                  <div
-                    className="absolute inset-y-0 z-10 w-px bg-rose-500"
-                    style={{ left: rangeStartPosition }}
-                    title={`Початок: ${formatDate(rangeStart)}`}
-                  />
-                )}
-                {rangeEndPosition && <div className="absolute inset-y-0 z-10 w-px bg-rose-500" style={{ left: rangeEndPosition }} title={`Кінець: ${formatDate(rangeEnd)}`} />}
               </div>
             </div>
           );
         })}
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <span>На сторінці</span>
+            <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1 font-semibold">
+              {[10, 15, 20, 25].map((size) => <option key={size} value={size}>{size}</option>)}
+            </select>
+            <span>задач</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={goToNextWeek} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">Наступний тиждень <ChevronRight size={14} className="ml-1 inline" /></button>
+            <button type="button" disabled={page <= 1} onClick={() => setPage((current) => current - 1)} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold disabled:opacity-40">Назад</button>
+            <span className="text-xs font-semibold text-slate-500">{page} / {totalPages}</span>
+            <button type="button" disabled={page >= totalPages} onClick={() => setPage((current) => current + 1)} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold disabled:opacity-40">Далі</button>
           </div>
         </div>
         </div>
@@ -578,7 +663,16 @@ function Gantt({ tasks }) {
   );
 }
 
-function TaskDetailsDialog({ task, onClose, updateStatus }) {
+function TaskDetailsDialog({ task, onClose, updateStatus, onCreateSubtask }) {
+  const [showSubtaskForm, setShowSubtaskForm] = useState(false);
+  const [subtask, setSubtask] = useState({ title: "", startDate: today(), dueDate: "", priority: "normal" });
+  const submitSubtask = async (event) => {
+    event.preventDefault();
+    if (!subtask.title.trim() || !subtask.dueDate) return;
+    await onCreateSubtask?.(task, subtask);
+    setSubtask({ title: "", startDate: today(), dueDate: "", priority: "normal" });
+    setShowSubtaskForm(false);
+  };
   if (!task) return null;
   const comments = Array.isArray(task.comments)
     ? task.comments
@@ -619,7 +713,7 @@ function TaskDetailsDialog({ task, onClose, updateStatus }) {
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
           <div className="rounded-xl bg-slate-50 p-3">
             <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Дедлайн</p>
-            <p className="mt-1 font-semibold text-slate-900">{formatDate(task.dueDate)}</p>
+            <p className="mt-1 font-semibold text-slate-900">{formatFullDate(task.dueDate)}</p>
           </div>
           <div className="rounded-xl bg-slate-50 p-3">
             <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Призначив</p>
@@ -645,6 +739,22 @@ function TaskDetailsDialog({ task, onClose, updateStatus }) {
             {task.description || "Опис не додано."}
           </p>
         </div>
+        {onCreateSubtask && (
+          <div className="mt-5 border-t border-slate-100 pt-5">
+            <button type="button" onClick={() => setShowSubtaskForm((current) => !current)} className="inline-flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-2 text-sm font-bold text-indigo-700 hover:bg-indigo-100">
+              <Plus size={16} /> Додати підзадачу
+            </button>
+            {showSubtaskForm && (
+              <form onSubmit={submitSubtask} className="mt-3 grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-2">
+                <input value={subtask.title} onChange={(event) => setSubtask((current) => ({ ...current, title: event.target.value }))} placeholder="Назва підзадачі" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm sm:col-span-2" />
+                <label className="text-xs font-bold text-slate-600">Початок<input type="date" value={subtask.startDate} onChange={(event) => setSubtask((current) => ({ ...current, startDate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" /></label>
+                <label className="text-xs font-bold text-slate-600">Дедлайн<input type="date" min={subtask.startDate} value={subtask.dueDate} onChange={(event) => setSubtask((current) => ({ ...current, dueDate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" /></label>
+                <label className="text-xs font-bold text-slate-600 sm:col-span-2">Пріоритет<select value={subtask.priority} onChange={(event) => setSubtask((current) => ({ ...current, priority: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">{PRIORITY.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+                <button type="submit" className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-bold text-white sm:col-span-2">Створити підзадачу</button>
+              </form>
+            )}
+          </div>
+        )}
         <div className="mt-5 border-t border-slate-100 pt-5">
           <h3 className="text-sm font-bold text-slate-900">Коментарі</h3>
           {comments.length ? (
@@ -664,12 +774,18 @@ function TaskDetailsDialog({ task, onClose, updateStatus }) {
   );
 }
 
-function TaskList({ loading, activeTasks, filter, setFilter, updateStatus }) {
+function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCreateSubtask }) {
   const [selectedTask, setSelectedTask] = useState(null);
+  const [priorityFilter, setPriorityFilter] = useState("all");
+  const [deadlineFilter, setDeadlineFilter] = useState("all");
   const handleStatusChange = async (task, status) => {
     setSelectedTask((current) => current?.id === task.id ? { ...current, status } : current);
     await updateStatus(task, status);
   };
+  const filteredTasks = activeTasks.filter((task) =>
+    (priorityFilter === "all" || task.priority === priorityFilter) &&
+    (deadlineFilter === "all" || (deadlineFilter === "late" && isLate(task)) || (deadlineFilter === "soon" && isDueWithin48Hours(task))),
+  );
 
   return (
     <>
@@ -681,29 +797,17 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus }) {
         </div>
         <div className="flex items-center gap-2">
           <Filter size={15} className="text-slate-400" />
-          <select
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold"
-          >
-            <option value="all">Усі задачі</option>
-            {STATUS.map((status) => (
-              <option key={status.id} value={status.id}>
-                {status.label}
-              </option>
-            ))}
-            <option value="late">Прострочені</option>
-          </select>
         </div>
       </div>
       {loading ? (
         <div className="py-12 text-center text-sm text-slate-400">
           Завантаження портфеля...
         </div>
-      ) : activeTasks.length ? (
-        <div className="space-y-2">
-          {activeTasks.map((task) => (
-            <div
+      ) : filteredTasks.length ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-left text-sm">
+            <thead className="border-b border-slate-100 text-xs uppercase tracking-wider text-slate-400"><tr><th className="px-3 py-2">Задача</th><th className="px-3 py-2">Відповідальний</th><th className="px-3 py-2"><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр пріоритету"><option value="all">Усі пріоритети</option>{PRIORITY.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></th><th className="px-3 py-2"><select value={deadlineFilter} onChange={(event) => setDeadlineFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр дедлайну"><option value="all">Усі дедлайни</option><option value="late">Прострочені</option><option value="soon">До 48 годин</option></select></th><th className="px-3 py-2"><select value={filter} onChange={(event) => setFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр статусу"><option value="all">Усі статуси</option>{STATUS.map((status) => <option key={status.id} value={status.id}>{status.label}</option>)}<option value="late">Прострочені</option></select></th></tr></thead>
+            <tbody>{filteredTasks.map((task) => <tr
               key={task.id}
               role="button"
               tabIndex={0}
@@ -714,26 +818,18 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus }) {
                   setSelectedTask(task);
                 }
               }}
-              className="grid gap-3 rounded-xl border border-slate-100 p-3 transition hover:border-indigo-200 hover:bg-indigo-50/30 sm:grid-cols-[1fr_auto]"
+              className="cursor-pointer border-b border-slate-100 transition hover:bg-indigo-50/30"
             >
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
+              <td className="px-3 py-3"><div className="flex flex-wrap items-center gap-2">
                   <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${task.priority === "critical" ? "bg-red-500" : task.priority === "high" ? "bg-orange-500" : task.priority === "normal" ? "bg-blue-500" : "bg-slate-400"}`} title={`Пріоритет: ${PRIORITY.find((priority) => priority.id === task.priority)?.label || "Низький"}`} />
-                  <span className="font-semibold">{task.title}</span>
-                  <StatusBadge status={task.status} />
-                  {task.priority === "critical" && (
-                    <Flag size={14} className="text-red-500" />
-                  )}
-                </div>
-                <p className="mt-1 text-xs text-slate-500">
-                  {task.targetType === "department" ? "Департамент" : "Виконавець"}: {task.target || "—"} · Дедлайн: {formatDate(task.dueDate)}
-                </p>
-              </div>
-              <span className={`w-24 self-center text-right text-xs font-bold ${isLate(task) ? "text-rose-600" : "text-slate-400"}`}>
-                {isLate(task) ? "Прострочено" : task.status === "done" ? "Завершено" : "В терміні"}
-              </span>
-            </div>
-          ))}
+                  <span className="font-semibold">{task.title}</span><StatusBadge status={task.status} />
+                </div><p className="mt-1 text-xs text-slate-500">{task.description || "Без опису"}</p></td>
+              <td className="px-3 py-3 text-slate-600">{task.target || "—"}</td>
+              <td className="px-3 py-3">{PRIORITY.find((item) => item.id === task.priority)?.label || "Низький"}</td>
+              <td className={`px-3 py-3 font-semibold ${isLate(task) ? "text-rose-600" : "text-slate-600"}`}>{formatFullDate(task.dueDate)}</td>
+              <td className="px-3 py-3 text-xs font-bold">{isLate(task) ? "Прострочено" : task.status === "done" ? "Завершено" : "В терміні"}</td>
+            </tr>)}</tbody>
+          </table>
         </div>
       ) : (
         <div className="rounded-xl bg-slate-50 py-12 text-center">
@@ -743,7 +839,7 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus }) {
         </div>
       )}
       </div>
-      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} updateStatus={handleStatusChange} />
+      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} updateStatus={handleStatusChange} onCreateSubtask={onCreateSubtask} />
     </>
   );
 }
@@ -761,6 +857,7 @@ export default function ProjectManagementModule({
   const [filters, setFilters] = useState({ newtask: "all", mytask: "all", report: "all" });
   const [reportFilters, setReportFilters] = useState({ period: "all", department: "all", location: "all", priority: "all" });
   const [drillDownTasks, setDrillDownTasks] = useState(null);
+  const [selectedGanttTask, setSelectedGanttTask] = useState(null);
   const legal = useLegalTasks(user);
   const isReports = String(topTab).toLowerCase().includes("report");
   const isMyTasks = /my.?task/i.test(String(topTab));
@@ -873,6 +970,35 @@ export default function ProjectManagementModule({
       /* optimistic UI remains usable */
     }
   };
+  const createSubtask = async (parentTask, form) => {
+    const subtask = {
+      ...form,
+      title: form.title.trim(),
+      id: `task_${Date.now()}`,
+      parentTaskId: parentTask.id,
+      parentTaskTitle: parentTask.title,
+      targetType: parentTask.targetType,
+      assigneeId: parentTask.assigneeId || "",
+      assigneeName: parentTask.assigneeName || parentTask.target || "",
+      target: parentTask.target || "",
+      status: "todo",
+      createdBy: idOf(user),
+      createdByName: displayName(user),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      if (isCollectionsApiEnabled()) {
+        const id = await createCollectionItemApi(COLLECTION, subtask);
+        subtask.id = id || subtask.id;
+      }
+    } catch {
+      /* keep the subtask locally when the API is temporarily unavailable */
+    }
+    const next = [subtask, ...tasks];
+    setTasks(next);
+    localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
+  };
   const assignedTasks = isMyTasks
     ? tasks.filter(
         (task) =>
@@ -972,13 +1098,6 @@ export default function ProjectManagementModule({
           <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-indigo-600">
             <CircleDot size={14} /> Центр управління
           </div>
-          <h1 className="text-3xl font-black tracking-tight text-slate-950">
-            {isMyTasks ? "Мої задачі" : "Задачі команди"}
-          </h1>
-          <p className="mt-1 max-w-2xl text-sm text-slate-500">
-            Одна картина для рішень: хто відповідає, що блокує рух і де потрібна
-            увага.
-          </p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -989,7 +1108,7 @@ export default function ProjectManagementModule({
           >
             <RefreshCw size={18} />
           </button>
-          {!isMyTasks && (
+          {isNewTask && (
             <button
               type="button"
               onClick={() => setShowComposer(true)}
@@ -1014,8 +1133,8 @@ export default function ProjectManagementModule({
           )}
         </div>
       </div>
-      <div className="mb-6 grid gap-3 sm:grid-cols-4">
-        <TaskStatCard
+      <div className="mx-auto mb-4 grid max-w-5xl gap-2 sm:grid-cols-4">
+          <TaskStatCard
           label="Всього задач"
           value={stats.total}
           detail={stats.open ? `${stats.open} відкрито зараз` : "Усі задачі завершено"}
@@ -1111,46 +1230,42 @@ export default function ProjectManagementModule({
         <>
           {isMyTasks ? (
             <div className="mb-5 space-y-5">
+              <div className="rounded-xl border border-slate-200 bg-white p-5">
+                <div className="mb-5 flex items-center justify-between">
+                  <div>
+                    <h2 className="font-bold">План виконання</h2>
+                  </div>
+                </div>
+                <Gantt tasks={assignedTasks} onTaskClick={setSelectedGanttTask} />
+              </div>
               <TaskList
                 loading={loading}
                 activeTasks={activeTasks}
                 filter={filter}
                 setFilter={setFilter}
                 updateStatus={updateStatus}
+                onCreateSubtask={createSubtask}
               />
-              <div className="rounded-xl border border-slate-200 bg-white p-5">
-                <div className="mb-5 flex items-center justify-between">
-                  <div>
-                    <h2 className="font-bold">План виконання</h2>
-                    <p className="mt-1 text-xs text-slate-400">
-                      Гант за найближчими задачами
-                    </p>
-                  </div>
-                </div>
-                <Gantt tasks={assignedTasks} />
-              </div>
             </div>
           ) : (
             <>
               <div className="mb-5 space-y-5">
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                  <div className="mb-5 flex items-center justify-between">
+                    <div>
+                      <h2 className="font-bold">План виконання</h2>
+                    </div>
+                  </div>
+                  <Gantt tasks={assignedTasks} onTaskClick={setSelectedGanttTask} />
+                </div>
                 <TaskList
                   loading={loading}
                   activeTasks={activeTasks}
                   filter={filter}
                   setFilter={setFilter}
                   updateStatus={updateStatus}
+                  onCreateSubtask={createSubtask}
                 />
-                <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <div className="mb-5 flex items-center justify-between">
-                    <div>
-                      <h2 className="font-bold">План виконання</h2>
-                      <p className="mt-1 text-xs text-slate-400">
-                        Гант за найближчими задачами
-                      </p>
-                    </div>
-                  </div>
-                  <Gantt tasks={assignedTasks} />
-                </div>
               </div>
             </>
           )}
@@ -1175,6 +1290,7 @@ export default function ProjectManagementModule({
         />
       )}
       <ReportTaskDialog tasks={drillDownTasks} onClose={() => setDrillDownTasks(null)} />
+      <TaskDetailsDialog task={selectedGanttTask} onClose={() => setSelectedGanttTask(null)} updateStatus={updateStatus} onCreateSubtask={createSubtask} />
     </section>
   );
 }

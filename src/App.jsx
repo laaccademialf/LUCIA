@@ -679,10 +679,54 @@ function App() {
                       const submitAssetLockRef = useRef(false);
                       // Підтвердження збереження активу (щоб користувач був певен, що дані пішли на сервер)
                       const [assetSaveToast, setAssetSaveToast] = useState(null);
-                      // Стан для фільтрів таблиці активів
-                      const [filters, setFilters] = useState({});
-                      const [assetTableSearchQuery, setAssetTableSearchQuery] = useState("");
-                      const [assetTableInventoryStateFilter, setAssetTableInventoryStateFilter] = useState("all");
+                      // Стан для фільтрів таблиці активів (завантажуємо з localStorage)
+                      const [filters, setFilters] = useState(() => {
+                        try {
+                          const saved = localStorage.getItem("lucia_asset_filters");
+                          return saved ? JSON.parse(saved) : {};
+                        } catch {
+                          return {};
+                        }
+                      });
+                      const [assetTableSearchQuery, setAssetTableSearchQuery] = useState(() => {
+                        try {
+                          return localStorage.getItem("lucia_asset_search_query") || "";
+                        } catch {
+                          return "";
+                        }
+                      });
+                      const [assetTableInventoryStateFilter, setAssetTableInventoryStateFilter] = useState(() => {
+                        try {
+                          return localStorage.getItem("lucia_asset_inventory_state_filter") || "all";
+                        } catch {
+                          return "all";
+                        }
+                      });
+                      
+                      // Синхронізація фільтрів з localStorage
+                      useEffect(() => {
+                        try {
+                          localStorage.setItem("lucia_asset_filters", JSON.stringify(filters || {}));
+                        } catch {
+                          // ignore localStorage errors
+                        }
+                      }, [filters]);
+                      
+                      useEffect(() => {
+                        try {
+                          localStorage.setItem("lucia_asset_search_query", String(assetTableSearchQuery || ""));
+                        } catch {
+                          // ignore localStorage errors
+                        }
+                      }, [assetTableSearchQuery]);
+                      
+                      useEffect(() => {
+                        try {
+                          localStorage.setItem("lucia_asset_inventory_state_filter", String(assetTableInventoryStateFilter || "all"));
+                        } catch {
+                          // ignore localStorage errors
+                        }
+                      }, [assetTableInventoryStateFilter]);
                       // Стан для центрів відповідальності (business units)
                       const [businessUnits, setBusinessUnits] = useState([]);
                       // Стан для фільтрації ресторану у графіку
