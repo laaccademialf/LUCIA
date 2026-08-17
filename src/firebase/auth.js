@@ -746,7 +746,14 @@ export const getCurrentUser = () => {
 
         // Деякі проксі можуть загубити нестандартний заголовок сесії на окремих запитах.
         // Якщо токен локально є, але /auth/me повернув user:null, зберігаємо поточну сесію.
+        // Виняток: tokenSeen=true означає, що сервер токен отримав і відхилив — сесія мертва.
         if (!user) {
+          if (payload?.tokenSeen === true) {
+            setAuthSessionToken("");
+            notifyAuthApiSubscribers(null);
+            resolve(null);
+            return;
+          }
           const cachedUser = getCachedAuthUser();
           if (token && cachedUser) {
             notifyAuthApiSubscribers(cachedUser);

@@ -3734,7 +3734,12 @@ const handleAuthMe = async (req, res) => {
   const dbConfig = getAssetsRuntimeConfig();
   const { profile } = await resolveAuthContext(req, dbConfig);
   if (!profile) {
-    return sendJson(res, 200, { ok: true, user: null });
+    // tokenSeen дає фронту змогу відрізнити мертву сесію від проксі, що зрізало заголовок.
+    return sendJson(res, 200, {
+      ok: true,
+      user: null,
+      tokenSeen: Boolean(sessionTokenFromRequest(req)),
+    });
   }
   const authUser = await getAuthUserById(profile.id, dbConfig);
   return sendJson(res, 200, {
