@@ -1,4 +1,4 @@
-import { collection, getDocs, getDoc, doc, updateDoc, deleteDoc, query, orderBy } from "firebase/firestore";
+import { collection, getDocs, getDoc, doc, updateDoc, deleteDoc } from "firebase/firestore";
 import { db } from "./config";
 import {
   deleteCollectionItemApi,
@@ -108,13 +108,15 @@ export const getUsers = async () => {
   }
 
   try {
+    // Без orderBy у запиті: Firestore тихо виключає документи без поля сортування з вибірки.
     const usersRef = collection(db, "users");
-    const q = query(usersRef, orderBy("createdAt", "desc"));
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
+    const snapshot = await getDocs(usersRef);
+    return snapshot.docs
+      .map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }))
+      .sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")));
   } catch (error) {
     console.error("Помилка отримання користувачів:", error);
     throw error;

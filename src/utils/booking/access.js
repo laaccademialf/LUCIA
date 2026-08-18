@@ -28,4 +28,8 @@ export const hasSupplierPortalAccess = (user) => {
 };
 
 // Глобальний адміністратор.
-export const isGlobalAdminUser = (user) => String(user?.role || "").toLowerCase() === "admin";
+export const isGlobalAdminUser = (user) => {
+  const roleValue = String(user?.role || user?.workRole || "").toLowerCase();
+  const terms = ["admin", "administrator", "адмін", "адміністратор"];
+  return terms.some((term) => roleValue.includes(term));
+};

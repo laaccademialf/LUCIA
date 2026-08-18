@@ -18,9 +18,18 @@ import {
   X,
 } from "lucide-react";
 import { getUsers } from "../firebase/users";
+import { getPositions, getWorkRoles } from "../firebase/rolesPositions";
 import { useLegalTasks } from "../hooks/useLegalTasks";
 import LegalRequestModal from "./LegalRequestModal";
-import { PAGINATION_OPTIONS, paginateItems, shiftDateByDays } from "./projectManagementUtils";
+import {
+  PAGINATION_OPTIONS,
+  displayName,
+  getAssignableUsers,
+  getUserTaskScope,
+  idOf,
+  paginateItems,
+  shiftDateByDays,
+} from "./projectManagementUtils";
 import pdfMake from "pdfmake/build/pdfmake";
 import pdfFonts from "pdfmake/build/vfs_fonts";
 import {
@@ -79,16 +88,6 @@ const DEPARTMENTS = [
   "HR",
 ];
 const today = () => new Date().toISOString().slice(0, 10);
-const displayName = (user) =>
-  String(
-    user?.displayName ||
-      user?.name ||
-      user?.fullName ||
-      user?.email ||
-      "Без імені",
-  ).trim();
-const idOf = (user) =>
-  String(user?.id || user?.uid || user?.userId || user?.email || "").trim();
 const calendarDateKey = (value) => {
   if (!value) return "";
   if (value instanceof Date) return toDateKey(value);
@@ -260,10 +259,10 @@ function ReportTaskDialog({ tasks, onClose }) {
   );
 }
 
-function TaskComposer({ users, user, onClose, onCreate, onLegalSelect }) {
+function TaskComposer({ users, user, onClose, onCreate, onLegalSelect, workRoles = [], positions = [], usersLoadError = false }) {
   const [form, setForm] = useState(initialForm);
   const [saving, setSaving] = useState(false);
-  const people = users.filter((row) => idOf(row) !== idOf(user));
+  const people = getAssignableUsers(users, user, workRoles, positions);
   const set = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }));
     if (key === "department" && value === "Юридичний відділ") onLegalSelect?.();
@@ -395,6 +394,13 @@ function TaskComposer({ users, user, onClose, onCreate, onLegalSelect }) {
                       </option>
                     ))}
               </select>
+              {form.targetType === "person" && people.length === 0 && (
+                <p className="mt-1.5 text-xs font-semibold text-rose-600">
+                  {usersLoadError
+                    ? "Не вдалося завантажити список користувачів. Натисніть «Оновити» вгорі сторінки і спробуйте ще раз."
+                    : "Немає доступних людей для призначення за поточною ієрархією посад."}
+                </p>
+              )}
             </label>
           </div>
         </div>
@@ -715,16 +721,63 @@ function Gantt({ tasks, onTaskClick }) {
   );
 }
 
-function TaskDetailsDialog({ task, onClose, updateStatus, onCreateSubtask }) {
-  const [showSubtaskForm, setShowSubtaskForm] = useState(false);
-  const [subtask, setSubtask] = useState({ title: "", startDate: today(), dueDate: "", priority: "normal" });
+function SubtaskForm({ task, people, onCreateSubtask, onDone, usersLoadError = false }) {
+  const [subtask, setSubtask] = useState(() => {
+    const fallbackAssignee =
+      people.find((row) => idOf(row) === String(task?.assigneeId || "")) ||
+      people.find((row) => displayName(row) === String(task?.assigneeName || task?.target || ""));
+
+    return {
+      title: "",
+      startDate: today(),
+      dueDate: "",
+      priority: "normal",
+      assigneeId: fallbackAssignee ? idOf(fallbackAssignee) : String(task?.assigneeId || ""),
+      assigneeName: fallbackAssignee ? displayName(fallbackAssignee) : String(task?.assigneeName || task?.target || ""),
+    };
+  });
+
   const submitSubtask = async (event) => {
     event.preventDefault();
-    if (!subtask.title.trim() || !subtask.dueDate) return;
+    if (!subtask.title.trim() || !subtask.dueDate || !subtask.assigneeId) return;
     await onCreateSubtask?.(task, subtask);
-    setSubtask({ title: "", startDate: today(), dueDate: "", priority: "normal" });
-    setShowSubtaskForm(false);
+    onDone?.();
   };
+
+  return (
+    <form onSubmit={submitSubtask} className="mt-3 grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-2">
+      <input value={subtask.title} onChange={(event) => setSubtask((current) => ({ ...current, title: event.target.value }))} placeholder="Назва підзадачі" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm sm:col-span-2" />
+      <label className="text-xs font-bold text-slate-600 sm:col-span-2">Відповідальний<select value={subtask.assigneeId} onChange={(event) => {
+        const assignee = people.find((row) => idOf(row) === event.target.value);
+        setSubtask((current) => ({
+          ...current,
+          assigneeId: event.target.value,
+          assigneeName: assignee ? displayName(assignee) : "",
+        }));
+      }} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+        <option value="">Оберіть відповідального</option>
+        {people.map((row) => <option key={idOf(row)} value={idOf(row)}>{displayName(row)}</option>)}
+      </select>
+      {people.length === 0 && (
+        <p className="mt-1 text-xs font-semibold text-rose-600">
+          {usersLoadError
+            ? "Не вдалося завантажити список користувачів. Натисніть «Оновити» вгорі сторінки."
+            : "Немає доступних людей для призначення за поточною ієрархією посад."}
+        </p>
+      )}
+      </label>
+      <label className="text-xs font-bold text-slate-600">Початок<input type="date" value={subtask.startDate} onChange={(event) => setSubtask((current) => ({ ...current, startDate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" /></label>
+      <label className="text-xs font-bold text-slate-600">Дедлайн<input type="date" min={subtask.startDate} value={subtask.dueDate} onChange={(event) => setSubtask((current) => ({ ...current, dueDate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" /></label>
+      <label className="text-xs font-bold text-slate-600 sm:col-span-2">Пріоритет<select value={subtask.priority} onChange={(event) => setSubtask((current) => ({ ...current, priority: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">{PRIORITY.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+      <button type="submit" className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-bold text-white sm:col-span-2">Створити підзадачу</button>
+    </form>
+  );
+}
+
+function TaskDetailsDialog({ task, onClose, updateStatus, onCreateSubtask, users = [], user, workRoles = [], positions = [], usersLoadError = false }) {
+  const [showSubtaskForm, setShowSubtaskForm] = useState(false);
+  const people = getAssignableUsers(users, user, workRoles, positions).filter(Boolean);
+
   if (!task) return null;
   const comments = Array.isArray(task.comments)
     ? task.comments
@@ -797,13 +850,7 @@ function TaskDetailsDialog({ task, onClose, updateStatus, onCreateSubtask }) {
               <Plus size={16} /> Додати підзадачу
             </button>
             {showSubtaskForm && (
-              <form onSubmit={submitSubtask} className="mt-3 grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-2">
-                <input value={subtask.title} onChange={(event) => setSubtask((current) => ({ ...current, title: event.target.value }))} placeholder="Назва підзадачі" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm sm:col-span-2" />
-                <label className="text-xs font-bold text-slate-600">Початок<input type="date" value={subtask.startDate} onChange={(event) => setSubtask((current) => ({ ...current, startDate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" /></label>
-                <label className="text-xs font-bold text-slate-600">Дедлайн<input type="date" min={subtask.startDate} value={subtask.dueDate} onChange={(event) => setSubtask((current) => ({ ...current, dueDate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" /></label>
-                <label className="text-xs font-bold text-slate-600 sm:col-span-2">Пріоритет<select value={subtask.priority} onChange={(event) => setSubtask((current) => ({ ...current, priority: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">{PRIORITY.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-                <button type="submit" className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-bold text-white sm:col-span-2">Створити підзадачу</button>
-              </form>
+              <SubtaskForm key={task.id} task={task} people={people} onCreateSubtask={onCreateSubtask} onDone={() => setShowSubtaskForm(false)} usersLoadError={usersLoadError} />
             )}
           </div>
         )}
@@ -826,7 +873,7 @@ function TaskDetailsDialog({ task, onClose, updateStatus, onCreateSubtask }) {
   );
 }
 
-function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCreateSubtask }) {
+function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCreateSubtask, users = [], user, workRoles = [], positions = [], usersLoadError = false }) {
   const [selectedTask, setSelectedTask] = useState(null);
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [deadlineFilter, setDeadlineFilter] = useState("all");
@@ -913,7 +960,7 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCre
         </div>
       )}
       </div>
-      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} updateStatus={handleStatusChange} onCreateSubtask={onCreateSubtask} />
+      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} updateStatus={handleStatusChange} onCreateSubtask={onCreateSubtask} users={users} user={user} workRoles={workRoles} positions={positions} usersLoadError={usersLoadError} />
     </>
   );
 }
@@ -925,6 +972,9 @@ export default function ProjectManagementModule({
 }) {
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
+  const [usersLoadError, setUsersLoadError] = useState(false);
+  const [workRoles, setWorkRoles] = useState([]);
+  const [positions, setPositions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showComposer, setShowComposer] = useState(false);
   const [showLegalRequest, setShowLegalRequest] = useState(false);
@@ -942,12 +992,19 @@ export default function ProjectManagementModule({
 
   const load = async () => {
     setLoading(true);
+    setUsersLoadError(false);
     try {
-      const [remote, people] = await Promise.all([
+      const [remote, people, roles, rolePositions] = await Promise.all([
         isCollectionsApiEnabled()
           ? listCollectionItemsApi(COLLECTION)
           : Promise.resolve(readLocalTasks()),
-        getUsers().catch(() => []),
+        getUsers().catch((error) => {
+          console.error("Не вдалося завантажити користувачів для призначення відповідальних:", error);
+          setUsersLoadError(true);
+          return [];
+        }),
+        getWorkRoles().catch(() => []),
+        getPositions().catch(() => []),
       ]);
       setTasks(
         (Array.isArray(remote) ? remote : []).sort((a, b) =>
@@ -955,6 +1012,8 @@ export default function ProjectManagementModule({
         ),
       );
       setUsers(Array.isArray(people) ? people : []);
+      setWorkRoles(Array.isArray(roles) ? roles : []);
+      setPositions(Array.isArray(rolePositions) ? rolePositions : []);
     } catch {
       setTasks(readLocalTasks());
     } finally {
@@ -1045,16 +1104,22 @@ export default function ProjectManagementModule({
     }
   };
   const createSubtask = async (parentTask, form) => {
+    const assigneeId = String(form.assigneeId || parentTask.assigneeId || "");
+    const assigneeName = String(form.assigneeName || parentTask.assigneeName || parentTask.target || "").trim();
+    const targetType = form.targetType === "department" ? "department" : "person";
+    const target = targetType === "person" ? assigneeName : String(form.department || parentTask.department || parentTask.target || "").trim();
+
     const subtask = {
       ...form,
       title: form.title.trim(),
       id: `task_${Date.now()}`,
       parentTaskId: parentTask.id,
       parentTaskTitle: parentTask.title,
-      targetType: parentTask.targetType,
-      assigneeId: parentTask.assigneeId || "",
-      assigneeName: parentTask.assigneeName || parentTask.target || "",
-      target: parentTask.target || "",
+      targetType,
+      assigneeId,
+      assigneeName,
+      target,
+      department: targetType === "department" ? target : parentTask.department || "",
       status: "todo",
       createdBy: idOf(user),
       createdByName: displayName(user),
@@ -1073,12 +1138,9 @@ export default function ProjectManagementModule({
     setTasks(next);
     localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
   };
+  const visibleTaskIds = useMemo(() => getUserTaskScope(tasks, user), [tasks, user]);
   const assignedTasks = isMyTasks
-    ? tasks.filter(
-        (task) =>
-          String(task.assigneeId || "") === idOf(user) ||
-          (task.targetType === "person" && task.target === displayName(user)),
-      )
+    ? tasks.filter((task) => visibleTaskIds.has(String(task.id)))
     : tasks;
   const reportDepartments = useMemo(() => Array.from(new Set(tasks.map((task) => task.department).filter(Boolean))).sort(), [tasks]);
   const reportLocations = useMemo(() => Array.from(new Set(tasks.map((task) => task.restaurant || task.branch || task.location).filter(Boolean))).sort(), [tasks]);
@@ -1316,6 +1378,11 @@ export default function ProjectManagementModule({
                 setFilter={setFilter}
                 updateStatus={updateStatus}
                 onCreateSubtask={createSubtask}
+                users={users}
+                user={user}
+                workRoles={workRoles}
+                positions={positions}
+                usersLoadError={usersLoadError}
               />
             </div>
           ) : (
@@ -1331,6 +1398,11 @@ export default function ProjectManagementModule({
                   setFilter={setFilter}
                   updateStatus={updateStatus}
                   onCreateSubtask={createSubtask}
+                  users={users}
+                  user={user}
+                  workRoles={workRoles}
+                  positions={positions}
+                  usersLoadError={usersLoadError}
                 />
               </div>
             </>
@@ -1341,6 +1413,9 @@ export default function ProjectManagementModule({
         <TaskComposer
           users={users}
           user={user}
+          workRoles={workRoles}
+          positions={positions}
+          usersLoadError={usersLoadError}
           onClose={() => setShowComposer(false)}
           onCreate={createTask}
           onLegalSelect={openLegalRequest}
