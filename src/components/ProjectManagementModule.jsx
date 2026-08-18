@@ -9,7 +9,6 @@ import {
   CircleDot,
   Clock3,
   Download,
-  Filter,
   Flag,
   LayoutList,
   Plus,
@@ -150,6 +149,25 @@ const ganttDate = (task, type) => {
   if (type === "start") return task.startDate || task.start || "";
   return task.dueDate || task.deadline || task.endDate || "";
 };
+const flattenTaskHierarchy = (tasks) => {
+  const taskIds = new Set(tasks.map((task) => String(task.id)));
+  const childrenMap = tasks.reduce((map, task) => {
+    const parentId = String(task.parentTaskId || "");
+    if (!map.has(parentId)) map.set(parentId, []);
+    map.get(parentId).push(task);
+    return map;
+  }, new Map());
+  const ordered = [];
+  const addBranch = (task, level, visited) => {
+    const taskId = String(task.id);
+    if (visited.has(taskId)) return;
+    const nextVisited = new Set(visited).add(taskId);
+    ordered.push({ task, level });
+    (childrenMap.get(taskId) || []).forEach((child) => addBranch(child, level + 1, nextVisited));
+  };
+  tasks.filter((task) => !taskIds.has(String(task.parentTaskId || ""))).forEach((task) => addBranch(task, 0, new Set()));
+  return ordered;
+};
 const startOfMonth = (date) => new Date(date.getFullYear(), date.getMonth(), 1, 12);
 const calendarDays = (month) => {
   const first = startOfMonth(month);
@@ -217,8 +235,10 @@ function TaskStatCard({ label, value, detail, icon, accentClass }) {
           {createElement(icon, { size: 16 })}
         </span>
       </div>
-      <p className={`mt-0.5 text-2xl font-black leading-tight ${accentClass.split(" ").find((className) => className.startsWith("text-")) || "text-slate-900"}`}>{value}</p>
-      <p className="text-[11px] font-bold leading-tight text-slate-600">{detail}</p>
+      <div className="mt-0.5 flex items-baseline gap-1.5 whitespace-nowrap">
+        <p className={`text-2xl font-black leading-tight ${accentClass.split(" ").find((className) => className.startsWith("text-")) || "text-slate-900"}`}>{value}</p>
+        <span className="text-[11px] font-bold leading-tight text-slate-600">/ {detail}</span>
+      </div>
     </div>
   );
 }
@@ -495,17 +515,45 @@ function DateRangePopover({ rangeStart, rangeEnd, onChange }) {
   );
 }
 
+const GANTT_PERIODS = [
+  { id: "week", label: "Тиждень" },
+  { id: "month", label: "Місяць" },
+  { id: "quarter", label: "Квартал" },
+  { id: "halfYear", label: "Пів року" },
+  { id: "year", label: "Рік" },
+];
+const startOfGanttPeriod = (date, period) => {
+  if (period === "week") return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12);
+  if (period === "quarter") return new Date(date.getFullYear(), Math.floor(date.getMonth() / 3) * 3, 1, 12);
+  if (period === "halfYear") return new Date(date.getFullYear(), date.getMonth() < 6 ? 0 : 6, 1, 12);
+  if (period === "year") return new Date(date.getFullYear(), 0, 1, 12);
+  return new Date(date.getFullYear(), date.getMonth(), 1, 12);
+};
+const shiftGanttPeriod = (date, period, amount) => {
+  if (period === "week") return shiftDateByDays(date, amount * 7);
+  const months = period === "quarter" ? 3 : period === "halfYear" ? 6 : period === "year" ? 12 : 1;
+  return new Date(date.getFullYear(), date.getMonth() + amount * months, 1, 12);
+};
+
 function Gantt({ tasks, onTaskClick }) {
-  const currentDate = fromDateKey(today());
-  const [weekStart, setWeekStart] = useState(currentDate);
+  const currentDate = new Date();
+  currentDate.setHours(12, 0, 0, 0);
+  const [ganttPeriod, setGanttPeriod] = useState("week");
+  const [periodStart, setPeriodStart] = useState(startOfGanttPeriod(currentDate, "week"));
   const [pageSize, setPageSize] = useState(PAGINATION_OPTIONS[0]);
   const [currentPage, setCurrentPage] = useState(1);
-  const timelineStart = weekStart;
-  const timelineEnd = shiftDateByDays(weekStart, 6);
-  const total = 7;
-  const isCurrentWeek = currentDate >= timelineStart && currentDate <= timelineEnd;
-  const selectedMonth = weekStart.getMonth();
-  const selectedYear = weekStart.getFullYear();
+  const timelineStart = periodStart;
+  const periodEnd = shiftGanttPeriod(periodStart, ganttPeriod, 1);
+  const timelineEnd = shiftDateByDays(periodEnd, -1);
+  const timelineDuration = Math.max(1, (timelineEnd - timelineStart) / 86400000 + 1);
+  const timelineUsesDays = ganttPeriod === "week" || ganttPeriod === "month";
+  const timelineDays = timelineUsesDays
+    ? Array.from({ length: Math.ceil(timelineDuration) }, (_, index) => shiftDateByDays(timelineStart, index))
+    : Array.from({ length: ganttPeriod === "quarter" ? 3 : ganttPeriod === "halfYear" ? 6 : 12 }, (_, index) => new Date(timelineStart.getFullYear(), timelineStart.getMonth() + index, 1, 12));
+  const total = timelineDays.length;
+  const isCurrentPeriod = currentDate >= timelineStart && currentDate <= timelineEnd;
+  const selectedMonth = periodStart.getMonth();
+  const selectedYear = periodStart.getFullYear();
   const years = Array.from(new Set([
     currentDate.getFullYear() - 1,
     currentDate.getFullYear(),
@@ -513,7 +561,7 @@ function Gantt({ tasks, onTaskClick }) {
     ...tasks.map((task) => ganttDate(task, "start") ? fromDateKey(ganttDate(task, "start")).getFullYear() : null),
     ...tasks.map((task) => ganttDate(task, "end") ? fromDateKey(ganttDate(task, "end")).getFullYear() : null),
   ].filter(Boolean))).sort((left, right) => left - right);
-  const matchingTasks = tasks
+  const periodTasks = tasks
     .filter((task) => {
       const startDate = ganttDate(task, "start");
       const endDate = ganttDate(task, "end");
@@ -523,46 +571,56 @@ function Gantt({ tasks, onTaskClick }) {
       return taskStart <= timelineEnd && taskEnd >= timelineStart;
     })
     .sort((left, right) => Number(left.status === "done") - Number(right.status === "done") || String(ganttDate(left, "end")).localeCompare(String(ganttDate(right, "end"))));
-  const { items: visible, totalPages, currentPage: safePage } = useMemo(
-    () => paginateItems(matchingTasks, currentPage, pageSize),
-    [matchingTasks, currentPage, pageSize],
-  );
+  const matchingIds = new Set(periodTasks.map((task) => String(task.id)));
+  const matchingTasks = tasks.filter((task) => {
+    if (matchingIds.has(String(task.id))) return true;
+    let parentId = String(task.parentTaskId || "");
+    while (parentId) {
+      if (matchingIds.has(parentId)) return true;
+      parentId = String(tasks.find((candidate) => String(candidate.id) === parentId)?.parentTaskId || "");
+    }
+    return false;
+  });
+  const orderedTasks = flattenTaskHierarchy(matchingTasks);
+  const { items: visible, totalPages, currentPage: safePage } = paginateItems(orderedTasks, currentPage, pageSize);
   const goToNextWeek = () => {
-    setWeekStart((date) => shiftDateByDays(date, 7));
+    setPeriodStart((date) => shiftGanttPeriod(date, ganttPeriod, 1));
     setCurrentPage(1);
   };
   const goToPreviousWeek = () => {
-    setWeekStart((date) => shiftDateByDays(date, -7));
+    setPeriodStart((date) => shiftGanttPeriod(date, ganttPeriod, -1));
     setCurrentPage(1);
   };
-  const timelineDays = Array.from({ length: total }, (_, index) => {
-    return shiftDateByDays(timelineStart, index);
-  });
-  const todayOffset = isCurrentWeek ? Math.round((currentDate - timelineStart) / 86400000) : -1;
-  const todayPosition = todayOffset >= 0 ? `${(todayOffset / total) * 100}%` : null;
+  const todayPosition = isCurrentPeriod ? `${((((currentDate - timelineStart) / 86400000) + 0.5) / timelineDuration) * 100}%` : null;
   const monthLabel = `${formatDate(timelineStart)} — ${formatDate(timelineEnd)}`;
   return (
     <div className="relative z-20" style={{ minHeight: `${Math.max(100, visible.length * 36 + 12)}px` }}>
-      <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-bold">План виконання</h2>
+        <div className="flex flex-wrap items-center justify-end gap-2">
         <span className="mr-1 text-xs font-semibold capitalize text-slate-500">{monthLabel}</span>
-        <select value={selectedMonth} onChange={(event) => { setWeekStart(new Date(selectedYear, Number(event.target.value), 1, 12)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Місяць ґанта">
+        <select value={ganttPeriod} onChange={(event) => { const nextPeriod = event.target.value; setGanttPeriod(nextPeriod); setPeriodStart(startOfGanttPeriod(periodStart, nextPeriod)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Період ґанта">
+          {GANTT_PERIODS.map((period) => <option key={period.id} value={period.id}>{period.label}</option>)}
+        </select>
+        <select value={selectedMonth} onChange={(event) => { setPeriodStart(startOfGanttPeriod(new Date(selectedYear, Number(event.target.value), 1, 12), ganttPeriod)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Місяць ґанта">
           {Array.from({ length: 12 }, (_, month) => <option key={month} value={month}>{new Intl.DateTimeFormat("uk-UA", { month: "long" }).format(new Date(2020, month, 1))}</option>)}
         </select>
-        <select value={selectedYear} onChange={(event) => { setWeekStart(new Date(Number(event.target.value), selectedMonth, 1, 12)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Рік ґанта">
+        <select value={selectedYear} onChange={(event) => { setPeriodStart(startOfGanttPeriod(new Date(Number(event.target.value), selectedMonth, 1, 12), ganttPeriod)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Рік ґанта">
           {years.map((year) => <option key={year} value={year}>{year}</option>)}
         </select>
         <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Кількість задач у Ганті">
           {PAGINATION_OPTIONS.map((option) => <option key={option} value={option}>{option} задач</option>)}
         </select>
+        </div>
       </div>
       <div className="space-y-3">
         <div className="grid grid-cols-[170px_1fr] items-end gap-3 border-b border-slate-200 pb-2">
           <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Задача</span>
           <div className="grid" style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}>
             {timelineDays.map((date, index) => (
-              <div key={toDateKey(date)} className={`text-center text-[10px] font-semibold ${date.getDay() === 0 || date.getDay() === 6 ? "text-indigo-500" : "text-slate-500"}`}>
-                <span className="block">{date.getDate()}</span>
-                {(index === 0 || date.getDate() === 1 || total <= 14) && <span className="block text-[9px] font-normal text-slate-400">{new Intl.DateTimeFormat("uk-UA", { month: "short" }).format(date)}</span>}
+              <div key={toDateKey(date)} className={`text-center text-[10px] font-bold ${date.getDay() === 0 || date.getDay() === 6 ? "text-indigo-700" : "text-slate-700"}`}>
+                <span className="block">{timelineUsesDays ? date.getDate() : new Intl.DateTimeFormat("uk-UA", { month: "short" }).format(date)}</span>
+                {(timelineUsesDays && (index === 0 || date.getDate() === 1 || total <= 14)) && <span className="block text-[9px] font-semibold text-slate-600">{new Intl.DateTimeFormat("uk-UA", { month: "short" }).format(date)}</span>}
               </div>
             ))}
           </div>
@@ -574,9 +632,11 @@ function Gantt({ tasks, onTaskClick }) {
             style={{ backgroundImage: `linear-gradient(to right, rgba(148, 163, 184, 0.12) 1px, transparent 1px)`, backgroundSize: `calc(100% / ${total}) 100%`, backgroundColor: "rgba(248, 250, 252, 0.5)" }}
           />
           {todayPosition && (
-            <div className="pointer-events-none absolute inset-y-0 z-20" style={{ left: todayPosition }}>
-              <div className="absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-500 px-1.5 py-0.5 text-[9px] font-bold text-white">Сьогодні</div>
-              <div className="h-full border-l-2 border-dashed border-rose-500" />
+            <div className="pointer-events-none absolute inset-y-0 left-0 right-0 z-20">
+              <div className="absolute inset-y-0" style={{ left: `calc(182px + (100% - 182px) * ${todayPosition / 100})` }}>
+                <div className="absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-500 px-1.5 py-0.5 text-[9px] font-bold text-white">Сьогодні</div>
+                <div className="h-full border-l-2 border-dashed border-rose-500" />
+              </div>
             </div>
           )}
           <div className="relative z-10">
@@ -585,15 +645,15 @@ function Gantt({ tasks, onTaskClick }) {
               У цьому періоді задач із датами немає
             </div>
           ) : (
-            visible.map((task) => {
+            visible.map(({ task, level }) => {
               const startDate = ganttDate(task, "start");
               const endDate = ganttDate(task, "end");
               const taskStart = fromDateKey(startDate);
               const taskEnd = fromDateKey(endDate);
               const clippedStart = taskStart < timelineStart ? timelineStart : taskStart;
               const clippedEnd = taskEnd > timelineEnd ? timelineEnd : taskEnd;
-              const start = Math.max(0, Math.round((clippedStart - timelineStart) / 86400000));
-              const end = Math.min(total, Math.max(start + 1, Math.round((clippedEnd - timelineStart) / 86400000) + 1));
+              const startRatio = Math.max(0, (clippedStart - timelineStart) / 86400000 / timelineDuration);
+              const endRatio = Math.min(1, Math.max(startRatio + 1 / timelineDuration, (clippedEnd - timelineStart) / 86400000 / timelineDuration));
               return (
                 <div
                   key={task.id}
@@ -611,17 +671,24 @@ function Gantt({ tasks, onTaskClick }) {
                   <div
                     className="truncate text-xs font-semibold text-slate-700"
                     title={task.title}
+                    style={{ paddingLeft: `${level * 14}px` }}
                   >
                     {task.title}
                   </div>
-                  <div className="relative h-8 rounded-md bg-white">
+                  <div
+                    className="relative h-8 rounded-md bg-white"
+                    style={{
+                      marginLeft: `${level * 18}px`,
+                      width: `calc(100% - ${level * 18}px)`,
+                    }}
+                  >
                     <div
                       className={`absolute top-1.5 h-6 rounded shadow-sm transition-all ${ganttTaskColor(task)}`}
                       title={`${formatDate(startDate)} — ${formatDate(endDate)}`}
                       aria-label={`${task.title}: ${formatDate(startDate)} — ${formatDate(endDate)}`}
                       style={{
-                        left: `${(start / total) * 100}%`,
-                        right: `${Math.max(0, 100 - (end / total) * 100)}%`,
+                        left: `${startRatio * 100}%`,
+                        right: `${Math.max(0, 100 - endRatio * 100)}%`,
                       }}
                     />
                   </div>
@@ -633,7 +700,7 @@ function Gantt({ tasks, onTaskClick }) {
         </div>
         <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
           <button type="button" onClick={goToPreviousWeek} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">Назад <ChevronLeft size={14} className="mr-1 inline" /></button>
-          <button type="button" onClick={goToNextWeek} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">Наступний тиждень <ChevronRight size={14} className="ml-1 inline" /></button>
+          <button type="button" onClick={goToNextWeek} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">Далі <ChevronRight size={14} className="ml-1 inline" /></button>
         </div>
         {totalPages > 1 && (
           <div className="flex items-center justify-end gap-2">
@@ -773,10 +840,8 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCre
     (priorityFilter === "all" || task.priority === priorityFilter) &&
     (deadlineFilter === "all" || (deadlineFilter === "late" && isLate(task)) || (deadlineFilter === "soon" && isDueWithin48Hours(task))),
   );
-  const { items: paginatedTasks, totalPages, currentPage: safePage } = useMemo(
-    () => paginateItems(filteredTasks, currentPage, pageSize),
-    [filteredTasks, currentPage, pageSize],
-  );
+  const hierarchicalTasks = flattenTaskHierarchy(filteredTasks);
+  const { items: paginatedTasks, totalPages, currentPage: safePage } = paginateItems(hierarchicalTasks, currentPage, pageSize);
   return (
     <>
       <div className="rounded-xl border border-slate-200 bg-white p-5">
@@ -785,9 +850,6 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCre
           <LayoutList size={18} className="text-indigo-500" />
           <h2 className="font-bold">Список задач</h2>
         </div>
-        <div className="flex items-center gap-2">
-          <Filter size={15} className="text-slate-400" />
-        </div>
       </div>
       {loading ? (
         <div className="py-12 text-center text-sm text-slate-400">
@@ -795,21 +857,10 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCre
         </div>
       ) : filteredTasks.length ? (
         <>
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-xs text-slate-500">
-              <span>Показати</span>
-              <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 font-semibold text-slate-700" aria-label="Кількість задач на сторінці">
-                {PAGINATION_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
-            </div>
-            <div className="text-xs text-slate-500">
-              Сторінка {safePage} з {totalPages}
-            </div>
-          </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left text-sm">
-              <thead className="border-b border-slate-100 text-xs uppercase tracking-wider text-slate-400"><tr><th className="px-3 py-2">Задача</th><th className="px-3 py-2">Відповідальний</th><th className="px-3 py-2"><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр пріоритету"><option value="all">Усі пріоритети</option>{PRIORITY.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></th><th className="px-3 py-2"><select value={deadlineFilter} onChange={(event) => setDeadlineFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр дедлайну"><option value="all">Усі дедлайни</option><option value="late">Прострочені</option><option value="soon">До 48 годин</option></select></th><th className="px-3 py-2"><select value={filter} onChange={(event) => setFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр статусу"><option value="all">Усі статуси</option>{STATUS.map((status) => <option key={status.id} value={status.id}>{status.label}</option>)}<option value="late">Прострочені</option></select></th></tr></thead>
-              <tbody>{paginatedTasks.map((task) => <tr
+              <thead className="border-b-2 border-slate-300 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-3 py-2">Задача</th><th className="px-3 py-2">Відповідальний</th><th className="px-3 py-2"><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр пріоритету"><option value="all">Усі пріоритети</option>{PRIORITY.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></th><th className="px-3 py-2"><select value={deadlineFilter} onChange={(event) => setDeadlineFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр дедлайну"><option value="all">Усі дедлайни</option><option value="late">Прострочені</option><option value="soon">До 48 годин</option></select></th><th className="px-3 py-2"><select value={filter} onChange={(event) => setFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр статусу"><option value="all">Усі статуси</option>{STATUS.map((status) => <option key={status.id} value={status.id}>{status.label}</option>)}<option value="late">Прострочені</option></select></th></tr></thead>
+              <tbody>{paginatedTasks.map(({ task, level }) => <tr
                 key={task.id}
                 role="button"
                 tabIndex={0}
@@ -820,21 +871,29 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCre
                     setSelectedTask(task);
                   }
                 }}
-                className="cursor-pointer border-b border-slate-100 transition hover:bg-indigo-50/30"
+                className="cursor-pointer border-b-2 border-slate-200 transition hover:bg-indigo-50/30"
               >
-                <td className="px-3 py-3"><div className="flex flex-wrap items-center gap-2">
+                <td className="px-3 py-2.5"><div className="flex min-w-0 items-center gap-2" style={{ paddingLeft: `${level * 18}px` }}>
                     <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${task.priority === "critical" ? "bg-red-500" : task.priority === "high" ? "bg-orange-500" : task.priority === "normal" ? "bg-blue-500" : "bg-slate-400"}`} title={`Пріоритет: ${PRIORITY.find((priority) => priority.id === task.priority)?.label || "Низький"}`} />
-                    <span className="font-semibold">{task.title}</span><StatusBadge status={task.status} />
-                  </div><p className="mt-1 text-xs text-slate-500">{task.description || "Без опису"}</p></td>
-                <td className="px-3 py-3 text-slate-600">{task.target || "—"}</td>
-                <td className="px-3 py-3">{PRIORITY.find((item) => item.id === task.priority)?.label || "Низький"}</td>
-                <td className={`px-3 py-3 font-semibold ${isLate(task) ? "text-rose-600" : "text-slate-600"}`}>{formatFullDate(task.dueDate)}</td>
-                <td className="px-3 py-3 text-xs font-bold">{isLate(task) ? "Прострочено" : task.status === "done" ? "Завершено" : "В терміні"}</td>
+                    <span className="shrink-0 font-semibold">{task.title}</span><StatusBadge status={task.status} /><span className="min-w-0 truncate text-xs text-slate-500" title={task.description || "Без опису"}>{task.description || "Без опису"}</span>
+                  </div></td>
+              <td className="px-3 py-2.5 text-slate-600">{task.target || "—"}</td>
+                <td className="px-3 py-2.5">{PRIORITY.find((item) => item.id === task.priority)?.label || "Низький"}</td>
+                <td className={`px-3 py-2.5 font-semibold ${isLate(task) ? "text-rose-600" : "text-slate-600"}`}>{formatFullDate(task.dueDate)}</td>
+                <td className="px-3 py-2.5 text-xs font-bold">{isLate(task) ? "Прострочено" : task.status === "done" ? "Завершено" : "В терміні"}</td>
               </tr>)}</tbody>
             </table>
           </div>
-          {totalPages > 1 && (
-            <div className="mt-4 flex items-center justify-end gap-2">
+          <div className="mt-4 flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 pt-3">
+            <div className="mr-auto flex items-center gap-2 text-xs text-slate-500">
+              <span>Показати</span>
+              <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 font-semibold text-slate-700" aria-label="Кількість задач на сторінці">
+                {PAGINATION_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+              <span>· Сторінка {safePage} з {totalPages}</span>
+            </div>
+            {totalPages > 1 && (
+              <>
               <button type="button" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={safePage === 1} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">Назад</button>
               {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
                 <button key={page} type="button" onClick={() => setCurrentPage(page)} className={`h-8 min-w-8 rounded-lg border px-2 text-xs font-semibold ${page === safePage ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
@@ -842,8 +901,9 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCre
                 </button>
               ))}
               <button type="button" onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} disabled={safePage === totalPages} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">Далі</button>
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </>
       ) : (
         <div className="rounded-xl bg-slate-50 py-12 text-center">
@@ -1161,7 +1221,7 @@ export default function ProjectManagementModule({
         />
         </div>
         {isNewTask && (
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <div className="flex shrink-0 flex-col items-stretch justify-center gap-2">
             <button
               type="button"
               onClick={() => setShowComposer(true)}
@@ -1247,11 +1307,6 @@ export default function ProjectManagementModule({
           {isMyTasks ? (
             <div className="mb-5 space-y-5">
               <div className="rounded-xl border border-slate-200 bg-white p-5">
-                <div className="mb-5 flex items-center justify-between">
-                  <div>
-                    <h2 className="font-bold">План виконання</h2>
-                  </div>
-                </div>
                 <Gantt tasks={assignedTasks} onTaskClick={setSelectedGanttTask} />
               </div>
               <TaskList
@@ -1267,11 +1322,6 @@ export default function ProjectManagementModule({
             <>
               <div className="mb-5 space-y-5">
                 <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <div className="mb-5 flex items-center justify-between">
-                    <div>
-                      <h2 className="font-bold">План виконання</h2>
-                    </div>
-                  </div>
                   <Gantt tasks={assignedTasks} onTaskClick={setSelectedGanttTask} />
                 </div>
                 <TaskList
