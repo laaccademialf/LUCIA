@@ -632,8 +632,8 @@ function Gantt({ tasks, onTaskClick }) {
             style={{ backgroundImage: `linear-gradient(to right, rgba(148, 163, 184, 0.12) 1px, transparent 1px)`, backgroundSize: `calc(100% / ${total}) 100%`, backgroundColor: "rgba(248, 250, 252, 0.5)" }}
           />
           {todayPosition && (
-            <div className="pointer-events-none absolute inset-y-0 left-0 right-0 z-20">
-              <div className="absolute inset-y-0" style={{ left: `calc(182px + (100% - 182px) * ${todayPosition / 100})` }}>
+            <div className="pointer-events-none absolute inset-y-0 left-[182px] right-0 z-20">
+              <div className="absolute inset-y-0" style={{ left: todayPosition }}>
                 <div className="absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-rose-500 px-1.5 py-0.5 text-[9px] font-bold text-white">Сьогодні</div>
                 <div className="h-full border-l-2 border-dashed border-rose-500" />
               </div>
