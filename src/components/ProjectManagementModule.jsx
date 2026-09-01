@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardList,
-  CircleDot,
   Clock3,
   Download,
   FileText,
@@ -244,9 +243,14 @@ function StatusBadge({ status }) {
   );
 }
 
-function TaskStatCard({ label, value, detail, icon, accentClass }) {
+function TaskStatCard({ label, value, detail, icon, accentClass, onClick, active }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`rounded-xl border bg-white px-3 py-2 text-left transition ${active ? "border-indigo-400 ring-2 ring-indigo-200" : "border-slate-200 hover:border-indigo-200 hover:bg-indigo-50/30"}`}
+    >
       <div className="flex items-start justify-between gap-3">
         <p className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
           {label}
@@ -259,7 +263,7 @@ function TaskStatCard({ label, value, detail, icon, accentClass }) {
         <p className={`text-2xl font-black leading-tight ${accentClass.split(" ").find((className) => className.startsWith("text-")) || "text-slate-900"}`}>{value}</p>
         <span className="text-[11px] font-bold leading-tight text-slate-600">/ {detail}</span>
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -690,18 +694,44 @@ const shiftGanttPeriod = (date, period, amount) => {
   return new Date(date.getFullYear(), date.getMonth() + amount * months, 1, 12);
 };
 
-function Gantt({ tasks, onTaskClick }) {
+function Gantt({ tasks, onTaskClick, focusFilter }) {
   const currentDate = new Date();
   currentDate.setHours(12, 0, 0, 0);
   const [ganttPeriod, setGanttPeriod] = useState("week");
   const [periodStart, setPeriodStart] = useState(startOfGanttPeriod(currentDate, "week"));
   const [pageSize, setPageSize] = useState(PAGINATION_OPTIONS[0]);
   const [currentPage, setCurrentPage] = useState(1);
-  const timelineStart = periodStart;
+  const [customRange, setCustomRange] = useState(null);
+  const [trackedFocusFilter, setTrackedFocusFilter] = useState(focusFilter);
+  // Adjust the visible range during render when the tile filter changes (see React docs on resetting state from props).
+  if (focusFilter !== trackedFocusFilter) {
+    setTrackedFocusFilter(focusFilter);
+    const dated = tasks
+      .map((task) => {
+        const start = ganttDate(task, "start");
+        const end = ganttDate(task, "end");
+        return start && end ? { start: fromDateKey(start), end: fromDateKey(end) } : null;
+      })
+      .filter(Boolean);
+    if (dated.length) {
+      const minStart = dated.reduce((min, range) => (range.start < min ? range.start : min), dated[0].start);
+      const maxEnd = dated.reduce((max, range) => (range.end > max ? range.end : max), dated[0].end);
+      // Cap the forward window to 14 days past today so long-running tasks don't stretch the timeline for months.
+      const forwardCap = shiftDateByDays(currentDate, 14);
+      // "Всього задач" only needs a short 3-day lookback, not the full task history.
+      const rangeStart = focusFilter === "all" ? shiftDateByDays(currentDate, -3) : minStart;
+      const rangeEnd = maxEnd < forwardCap ? maxEnd : forwardCap;
+      setCustomRange({ start: rangeStart, end: rangeEnd });
+    } else {
+      setCustomRange(null);
+    }
+    setCurrentPage(1);
+  }
+  const timelineStart = customRange ? customRange.start : periodStart;
   const periodEnd = shiftGanttPeriod(periodStart, ganttPeriod, 1);
-  const timelineEnd = shiftDateByDays(periodEnd, -1);
+  const timelineEnd = customRange ? customRange.end : shiftDateByDays(periodEnd, -1);
   const timelineDuration = Math.max(1, (timelineEnd - timelineStart) / 86400000 + 1);
-  const timelineUsesDays = ganttPeriod === "week" || ganttPeriod === "month";
+  const timelineUsesDays = Boolean(customRange) || ganttPeriod === "week" || ganttPeriod === "month";
   const timelineDays = timelineUsesDays
     ? Array.from({ length: Math.ceil(timelineDuration) }, (_, index) => shiftDateByDays(timelineStart, index))
     : Array.from({ length: ganttPeriod === "quarter" ? 3 : ganttPeriod === "halfYear" ? 6 : 12 }, (_, index) => new Date(timelineStart.getFullYear(), timelineStart.getMonth() + index, 1, 12));
@@ -721,6 +751,8 @@ function Gantt({ tasks, onTaskClick }) {
       const startDate = ganttDate(task, "start");
       const endDate = ganttDate(task, "end");
       if (!startDate || !endDate) return false;
+      // Only the auto-focused "Всього задач" view lists every task regardless of the narrow visible window.
+      if (customRange && focusFilter === "all") return true;
       const taskStart = fromDateKey(startDate);
       const taskEnd = fromDateKey(endDate);
       return taskStart <= timelineEnd && taskEnd >= timelineStart;
@@ -739,20 +771,24 @@ function Gantt({ tasks, onTaskClick }) {
   const orderedTasks = flattenTaskHierarchy(matchingTasks);
   const { items: visible, totalPages, currentPage: safePage } = paginateItems(orderedTasks, currentPage, pageSize);
   const goToNextWeek = () => {
+    setCustomRange(null);
     setPeriodStart((date) => shiftGanttPeriod(date, ganttPeriod, 1));
     setCurrentPage(1);
   };
   const goToPreviousWeek = () => {
+    setCustomRange(null);
     setPeriodStart((date) => shiftGanttPeriod(date, ganttPeriod, -1));
     setCurrentPage(1);
   };
   const goToToday = () => {
+    setCustomRange(null);
     setGanttPeriod("week");
     setPeriodStart(startOfGanttPeriod(currentDate, "week"));
     setCurrentPage(1);
   };
   const handlePeriodChange = (event) => {
     const nextPeriod = event.target.value;
+    setCustomRange(null);
     if (nextPeriod === "today") {
       goToToday();
       return;
@@ -776,10 +812,10 @@ function Gantt({ tasks, onTaskClick }) {
         <select value={ganttPeriod} onChange={handlePeriodChange} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Період ґанта">
           {GANTT_PERIODS.map((period) => <option key={period.id} value={period.id}>{period.label}</option>)}
         </select>
-        <select value={selectedMonth} onChange={(event) => { setPeriodStart(startOfGanttPeriod(new Date(selectedYear, Number(event.target.value), 1, 12), ganttPeriod)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Місяць ґанта">
+        <select value={selectedMonth} onChange={(event) => { setCustomRange(null); setPeriodStart(startOfGanttPeriod(new Date(selectedYear, Number(event.target.value), 1, 12), ganttPeriod)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Місяць ґанта">
           {Array.from({ length: 12 }, (_, month) => <option key={month} value={month}>{new Intl.DateTimeFormat("uk-UA", { month: "long" }).format(new Date(2020, month, 1))}</option>)}
         </select>
-        <select value={selectedYear} onChange={(event) => { setPeriodStart(startOfGanttPeriod(new Date(Number(event.target.value), selectedMonth, 1, 12), ganttPeriod)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Рік ґанта">
+        <select value={selectedYear} onChange={(event) => { setCustomRange(null); setPeriodStart(startOfGanttPeriod(new Date(Number(event.target.value), selectedMonth, 1, 12), ganttPeriod)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Рік ґанта">
           {years.map((year) => <option key={year} value={year}>{year}</option>)}
         </select>
         <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Кількість задач у Ганті">
@@ -1192,7 +1228,7 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCre
         <>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left text-sm">
-              <thead className="border-b-2 border-slate-300 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-3 py-2">Задача</th><th className="px-3 py-2">Відповідальний</th><th className="px-3 py-2"><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр пріоритету"><option value="all">Усі пріоритети</option>{PRIORITY.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></th><th className="px-3 py-2"><select value={deadlineFilter} onChange={(event) => setDeadlineFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр дедлайну"><option value="all">Усі дедлайни</option><option value="late">Прострочені</option><option value="soon">До 48 годин</option></select></th><th className="px-3 py-2"><select value={filter} onChange={(event) => setFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр статусу"><option value="all">Усі статуси</option>{STATUS.map((status) => <option key={status.id} value={status.id}>{status.label}</option>)}<option value="late">Прострочені</option></select></th></tr></thead>
+              <thead className="border-b-2 border-slate-300 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-3 py-2">Задача</th><th className="px-3 py-2">Відповідальний</th><th className="px-3 py-2"><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр пріоритету"><option value="all">Усі пріоритети</option>{PRIORITY.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></th><th className="px-3 py-2"><select value={deadlineFilter} onChange={(event) => setDeadlineFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр дедлайну"><option value="all">Усі дедлайни</option><option value="late">Прострочені</option><option value="soon">До 48 годин</option></select></th><th className="px-3 py-2"><select value={filter} onChange={(event) => setFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр статусу"><option value="all">Усі статуси</option><option value="open">В роботі</option>{STATUS.map((status) => <option key={status.id} value={status.id}>{status.label}</option>)}<option value="late">Прострочені</option></select></th></tr></thead>
               <tbody>{paginatedTasks.map(({ task, level }) => <tr
                 key={task.id}
                 role="button"
@@ -1471,7 +1507,7 @@ export default function ProjectManagementModule({
   const activeTasks = dashboardTasks.filter(
     (task) =>
       filter === "all" ||
-      task.status === filter ||
+      (filter === "open" ? task.status !== "done" : task.status === filter) ||
       (filter === "late" && isLate(task)),
   );
   const stats = useMemo(
@@ -1538,28 +1574,6 @@ export default function ProjectManagementModule({
 
   return (
     <section className="min-h-[680px] rounded-2xl bg-[#f5f7fb] p-4 text-slate-900 sm:p-6">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-indigo-600">
-            <CircleDot size={14} /> Центр управління
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={load}
-            className="rounded-xl border border-slate-200 bg-white p-2.5 text-slate-500 hover:text-indigo-600"
-            title="Оновити"
-          >
-            <RefreshCw size={18} />
-          </button>
-          {isReports && (
-            <button type="button" onClick={() => downloadTaskPdf({ filters: reportFilters, stats, byAssignee, criticalTasks, averageCompletionTime })} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50">
-              <Download size={18} /> Експорт PDF
-            </button>
-          )}
-        </div>
-      </div>
       <div className="mb-4 flex flex-wrap items-center gap-4">
         <div className="grid min-w-0 flex-1 gap-2 sm:grid-cols-4">
           <TaskStatCard
@@ -1568,6 +1582,8 @@ export default function ProjectManagementModule({
           detail={stats.open ? `${stats.open} відкрито зараз` : "Усі задачі завершено"}
           icon={ClipboardList}
           accentClass="bg-indigo-50 text-indigo-600"
+          active={filter === "all"}
+          onClick={() => setFilter("all")}
         />
         <TaskStatCard
           label="В роботі"
@@ -1575,6 +1591,8 @@ export default function ProjectManagementModule({
           detail={stats.total ? `${Math.round((stats.open / stats.total) * 100)}% від усіх задач` : "Немає активних задач"}
           icon={Clock3}
           accentClass="bg-amber-50 text-amber-600"
+          active={filter === "open"}
+          onClick={() => setFilter("open")}
         />
         <TaskStatCard
           label="Виконано"
@@ -1582,6 +1600,8 @@ export default function ProjectManagementModule({
           detail={stats.total ? `${completionRate}% завершено` : "Ще немає задач"}
           icon={CheckCircle2}
           accentClass="bg-emerald-50 text-emerald-600"
+          active={filter === "done"}
+          onClick={() => setFilter("done")}
         />
         <TaskStatCard
           label="Потрібна увага"
@@ -1589,27 +1609,45 @@ export default function ProjectManagementModule({
           detail={stats.late ? "Є прострочені задачі" : "Прострочень немає"}
           icon={TriangleAlert}
           accentClass="bg-rose-50 text-rose-600"
+          active={filter === "late"}
+          onClick={() => setFilter("late")}
         />
         </div>
-        {isNewTask && (
-          <div className="flex shrink-0 flex-col items-stretch justify-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowComposer(true)}
-              className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700"
-            >
-              <Plus size={18} /> Нова задача
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {isNewTask && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowComposer(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white shadow-md shadow-indigo-200 hover:bg-indigo-700"
+              >
+                <Plus size={14} /> Нова задача
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilter("late")}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-50"
+              >
+                Показати прострочені <ChevronRight size={14} />
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={load}
+            className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 hover:text-indigo-600"
+            title="Оновити"
+          >
+            <RefreshCw size={16} />
+          </button>
+          {isReports && (
+            <button type="button" onClick={() => downloadTaskPdf({ filters: reportFilters, stats, byAssignee, criticalTasks, averageCompletionTime })} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50">
+              <Download size={18} /> Експорт PDF
             </button>
-            <button
-              type="button"
-              onClick={() => setFilter("late")}
-              className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-white px-4 py-2.5 text-sm font-bold text-rose-600 hover:bg-rose-50"
-            >
-              Показати прострочені <ChevronRight size={16} />
-            </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
+
       {isReports ? (
         <>
           <div className="mb-5 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -1678,7 +1716,7 @@ export default function ProjectManagementModule({
           {isMyTasks ? (
             <div className="mb-5 space-y-5">
               <div className="rounded-xl border border-slate-200 bg-white p-5">
-                <Gantt tasks={assignedTasks} onTaskClick={setSelectedGanttTask} />
+                <Gantt tasks={activeTasks} onTaskClick={setSelectedGanttTask} focusFilter={filter} />
               </div>
               <TaskList
                 loading={loading}
@@ -1698,7 +1736,7 @@ export default function ProjectManagementModule({
             <>
               <div className="mb-5 space-y-5">
                 <div className="rounded-xl border border-slate-200 bg-white p-5">
-                  <Gantt tasks={assignedTasks} onTaskClick={setSelectedGanttTask} />
+                  <Gantt tasks={activeTasks} onTaskClick={setSelectedGanttTask} focusFilter={filter} />
                 </div>
                 <TaskList
                   loading={loading}
