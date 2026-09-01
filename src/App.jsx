@@ -1030,7 +1030,7 @@ function App() {
             const createdTs = Date.parse(String(item?.createdAt || ""));
             if (Number.isFinite(createdTs) && nowTs - createdTs > notificationMaxAgeMs) return false;
             const source = String(item?.source || "").trim();
-            if (source && source !== "legal" && source !== "haccp" && source !== "service") return false;
+            if (source && source !== "legal" && source !== "haccp" && source !== "service" && source !== "project") return false;
             const targetUserId = normalizeLegalIdentity(item?.targetUserId);
             const targetRole = String(item?.targetRole || "");
             if (targetUserId && currentUserIdentityKeys.includes(targetUserId)) return true;
@@ -1052,7 +1052,8 @@ function App() {
             const source = String(item?.source || "legal").trim() || "legal";
             const isHaccp = source === "haccp";
             const isService = source === "service";
-            const fallbackTitle = isHaccp ? "HACCP сповіщення" : isService ? "Сервісна заявка" : "Юридична задача";
+            const isProject = source === "project";
+            const fallbackTitle = isHaccp ? "HACCP сповіщення" : isService ? "Сервісна заявка" : isProject ? "Нова задача" : "Юридична задача";
             return {
               key,
               id: key,
@@ -1064,8 +1065,8 @@ function App() {
               body: String(item.body || ""),
               createdAt: String(item.createdAt || ""),
               read: false,
-              actionUrl: String(item.actionUrl || (isHaccp ? "haccpreport" : isService ? "ops-maintenance" : LEGAL_NAV_ID)),
-              actionTab: String(item.actionTab || (isHaccp ? "haccpmainrepirt" : isService ? "Processingofapplications" : "legalrequest")),
+              actionUrl: String(item.actionUrl || (isHaccp ? "haccpreport" : isService ? "ops-maintenance" : isProject ? "projectmanagment" : LEGAL_NAV_ID)),
+              actionTab: String(item.actionTab || (isHaccp ? "haccpmainrepirt" : isService ? "Processingofapplications" : isProject ? "mytask" : "legalrequest")),
               targetRequestId: isService ? String(item.taskId || "") : "",
               priority: "normal",
             };
@@ -1078,10 +1079,19 @@ function App() {
 
     loadLegal();
     window.addEventListener("lucia:notifications-updated", loadLegal);
-    const timer = setInterval(loadLegal, 20000);
+    // Оновлюємо миттєво, коли користувач повертається на вкладку/у фокус —
+    // це закриває розрив між подіями опитування без потреби у WebSocket.
+    const handleFocusRefresh = () => {
+      if (document.visibilityState === "visible") loadLegal();
+    };
+    window.addEventListener("focus", handleFocusRefresh);
+    document.addEventListener("visibilitychange", handleFocusRefresh);
+    const timer = setInterval(loadLegal, 5000);
     return () => {
       cancelled = true;
       window.removeEventListener("lucia:notifications-updated", loadLegal);
+      window.removeEventListener("focus", handleFocusRefresh);
+      document.removeEventListener("visibilitychange", handleFocusRefresh);
       clearInterval(timer);
     };
   }, [user, userPermissions]);

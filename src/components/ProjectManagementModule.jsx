@@ -1,4 +1,4 @@
-import { createElement, useEffect, useMemo, useState } from "react";
+import { createElement, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   CalendarDays,
@@ -9,10 +9,13 @@ import {
   CircleDot,
   Clock3,
   Download,
+  FileText,
   Flag,
   LayoutList,
+  Paperclip,
   Plus,
   RefreshCw,
+  Search,
   TriangleAlert,
   Users,
   X,
@@ -21,6 +24,8 @@ import { getUsers } from "../firebase/users";
 import { getPositions, getWorkRoles } from "../firebase/rolesPositions";
 import { useLegalTasks } from "../hooks/useLegalTasks";
 import LegalRequestModal from "./LegalRequestModal";
+import DatePickerPopover from "./DatePickerPopover";
+import { addLegalNotificationApi, isLegalApiEnabled } from "../api/legalTasksApi";
 import {
   PAGINATION_OPTIONS,
   displayName,
@@ -209,6 +214,22 @@ const initialForm = {
   startDate: today(),
   dueDate: "",
   priority: "normal",
+  attachments: [],
+};
+const MAX_TASK_ATTACHMENTS = 6;
+const MAX_TASK_ATTACHMENT_SIZE = 5 * 1024 * 1024;
+const readFileAsDataUrl = (file) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+const formatFileSize = (bytes) => {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} Б`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} КБ`;
+  return `${(size / (1024 * 1024)).toFixed(1)} МБ`;
 };
 
 function StatusBadge({ status }) {
@@ -259,13 +280,110 @@ function ReportTaskDialog({ tasks, onClose }) {
   );
 }
 
+function AssigneeCombobox({ people, value, valueName, onSelect }) {
+  const [query, setQuery] = useState(valueName || "");
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+
+  useEffect(() => {
+    setQuery(valueName || "");
+  }, [valueName]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDocClick = (event) => {
+      if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const filtered = people.filter((row) =>
+    displayName(row).toLowerCase().includes(query.trim().toLowerCase()),
+  );
+
+  return (
+    <div ref={rootRef} className="relative mt-1.5">
+      <div className="relative">
+        <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <input
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+            if (value) onSelect(null);
+          }}
+          onFocus={() => setOpen(true)}
+          placeholder="Пошук за іменем..."
+          className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 font-normal outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+        />
+      </div>
+      {open && (
+        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white p-1 shadow-xl">
+          {filtered.length ? (
+            filtered.map((row) => (
+              <button
+                key={idOf(row)}
+                type="button"
+                onClick={() => {
+                  onSelect(row);
+                  setQuery(displayName(row));
+                  setOpen(false);
+                }}
+                className={`block w-full rounded-lg px-3 py-2 text-left text-sm font-normal hover:bg-indigo-50 ${String(value) === idOf(row) ? "bg-indigo-50 font-semibold text-indigo-700" : "text-slate-700"}`}
+              >
+                {displayName(row)}
+              </button>
+            ))
+          ) : (
+            <p className="px-3 py-2 text-sm text-slate-400">Нікого не знайдено</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TaskComposer({ users, user, onClose, onCreate, onLegalSelect, workRoles = [], positions = [], usersLoadError = false }) {
   const [form, setForm] = useState(initialForm);
   const [saving, setSaving] = useState(false);
+  const [attachError, setAttachError] = useState("");
   const people = getAssignableUsers(users, user, workRoles, positions);
   const set = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }));
     if (key === "department" && value === "Юридичний відділ") onLegalSelect?.();
+  };
+  const selectAttachments = async (event) => {
+    const selected = Array.from(event.target.files || []).slice(
+      0,
+      MAX_TASK_ATTACHMENTS - form.attachments.length,
+    );
+    if (!selected.length) return;
+    if (selected.some((file) => file.size > MAX_TASK_ATTACHMENT_SIZE)) {
+      setAttachError("Кожен файл має бути до 5 MB.");
+      return;
+    }
+    try {
+      const encoded = await Promise.all(
+        selected.map(async (file) => ({
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          dataUrl: await readFileAsDataUrl(file),
+        })),
+      );
+      setForm((current) => ({ ...current, attachments: [...current.attachments, ...encoded] }));
+      setAttachError("");
+      event.target.value = "";
+    } catch {
+      setAttachError("Не вдалося додати файл.");
+    }
+  };
+  const removeAttachment = (index) => {
+    setForm((current) => ({
+      ...current,
+      attachments: current.attachments.filter((_, itemIndex) => itemIndex !== index),
+    }));
   };
   const submit = async (event) => {
     event.preventDefault();
@@ -326,7 +444,7 @@ function TaskComposer({ users, user, onClose, onCreate, onLegalSelect, workRoles
             placeholder="Наприклад: Підготувати план закупівель на вересень"
           />
         </label>
-        <label className="mb-5 block text-sm font-semibold text-slate-700">
+        <label className="mb-2 block text-sm font-semibold text-slate-700">
           Що потрібно зробити?
           <textarea
             value={form.description}
@@ -335,6 +453,39 @@ function TaskComposer({ users, user, onClose, onCreate, onLegalSelect, workRoles
             placeholder="Опишіть очікуваний результат, критерії готовності або важливі посилання"
           />
         </label>
+        <div className="mb-5">
+          <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 px-3 py-3 text-sm font-semibold text-slate-500 hover:border-indigo-400 hover:bg-indigo-50">
+            <Paperclip size={16} />
+            Додати файли або фото (до {MAX_TASK_ATTACHMENTS}, кожен до 5 MB)
+            <input type="file" multiple accept="*/*" className="hidden" onChange={selectAttachments} />
+          </label>
+          {attachError && <p className="mt-1.5 text-xs font-semibold text-rose-600">{attachError}</p>}
+          {form.attachments.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {form.attachments.map((file, index) => (
+                <span
+                  key={`${file.name}-${index}`}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-600"
+                >
+                  {file.type?.startsWith("image/") ? (
+                    <img src={file.dataUrl} alt={file.name} className="h-5 w-5 rounded object-cover" />
+                  ) : (
+                    <FileText size={14} className="text-slate-400" />
+                  )}
+                  {file.name} · {formatFileSize(file.size)}
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(index)}
+                    className="text-slate-400 hover:text-rose-600"
+                    title="Прибрати файл"
+                  >
+                    <X size={13} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="mb-5 grid gap-4 sm:grid-cols-2">
           <div>
             <p className="mb-2 text-sm font-semibold text-slate-700">
@@ -358,72 +509,68 @@ function TaskComposer({ users, user, onClose, onCreate, onLegalSelect, workRoles
             </div>
           </div>
           <div>
-            <label className="text-sm font-semibold text-slate-700">
-              {form.targetType === "person" ? "Виконавець" : "Департамент"}
-              <select
-                value={
-                  form.targetType === "person"
-                    ? form.assigneeId
-                    : form.department
-                }
-                onChange={(event) =>
-                  form.targetType === "person"
-                    ? setForm((current) => ({
-                        ...current,
-                        assigneeId: event.target.value,
-                        assigneeName: displayName(
-                          people.find(
-                            (row) => idOf(row) === event.target.value,
-                          ),
-                        ),
-                      }))
-                    : set("department", event.target.value)
-                }
-                className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 font-normal outline-none focus:border-indigo-500"
-              >
-                <option value="">Оберіть адресата</option>
-                {form.targetType === "person"
-                  ? people.map((row) => (
-                      <option key={idOf(row)} value={idOf(row)}>
-                        {displayName(row)}
-                      </option>
-                    ))
-                  : DEPARTMENTS.map((department) => (
-                      <option key={department} value={department}>
-                        {department}
-                      </option>
-                    ))}
-              </select>
-              {form.targetType === "person" && people.length === 0 && (
-                <p className="mt-1.5 text-xs font-semibold text-rose-600">
-                  {usersLoadError
-                    ? "Не вдалося завантажити список користувачів. Натисніть «Оновити» вгорі сторінки і спробуйте ще раз."
-                    : "Немає доступних людей для призначення за поточною ієрархією посад."}
-                </p>
-              )}
-            </label>
+            {form.targetType === "person" ? (
+              <label className="text-sm font-semibold text-slate-700">
+                Виконавець
+                <AssigneeCombobox
+                  people={people}
+                  value={form.assigneeId}
+                  valueName={form.assigneeName}
+                  onSelect={(row) =>
+                    setForm((current) => ({
+                      ...current,
+                      assigneeId: row ? idOf(row) : "",
+                      assigneeName: row ? displayName(row) : "",
+                    }))
+                  }
+                />
+              </label>
+            ) : (
+              <label className="text-sm font-semibold text-slate-700">
+                Департамент
+                <select
+                  value={form.department}
+                  onChange={(event) => set("department", event.target.value)}
+                  className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 font-normal outline-none focus:border-indigo-500"
+                >
+                  <option value="">Оберіть адресата</option>
+                  {DEPARTMENTS.map((department) => (
+                    <option key={department} value={department}>
+                      {department}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {form.targetType === "person" && people.length === 0 && (
+              <p className="mt-1.5 text-xs font-semibold text-rose-600">
+                {usersLoadError
+                  ? "Не вдалося завантажити список користувачів. Натисніть «Оновити» вгорі сторінки і спробуйте ще раз."
+                  : "Немає доступних людей для призначення за поточною ієрархією посад."}
+              </p>
+            )}
           </div>
         </div>
         <div className="mb-5 grid gap-4 sm:grid-cols-3">
-          <label className="text-sm font-semibold text-slate-700">
-            Початок
-            <input
-              type="date"
+          <div>
+            <p className="text-sm font-semibold text-slate-700">Початок</p>
+            <DatePickerPopover
               value={form.startDate}
-              onChange={(event) => set("startDate", event.target.value)}
-              className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 font-normal"
+              onChange={(iso) => set("startDate", iso)}
+              label=""
+              className="mt-1.5"
             />
-          </label>
-          <label className="text-sm font-semibold text-slate-700">
-            Дедлайн
-            <input
-              type="date"
-              min={form.startDate}
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-slate-700">Дедлайн</p>
+            <DatePickerPopover
               value={form.dueDate}
-              onChange={(event) => set("dueDate", event.target.value)}
-              className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-2.5 font-normal"
+              min={form.startDate}
+              onChange={(iso) => set("dueDate", iso)}
+              label=""
+              className="mt-1.5"
             />
-          </label>
+          </div>
           <label className="text-sm font-semibold text-slate-700">
             Пріоритет
             <select
@@ -522,12 +669,14 @@ function DateRangePopover({ rangeStart, rangeEnd, onChange }) {
 }
 
 const GANTT_PERIODS = [
+  { id: "today", label: "Сьогодні" },
   { id: "week", label: "Тиждень" },
   { id: "month", label: "Місяць" },
   { id: "quarter", label: "Квартал" },
   { id: "halfYear", label: "Пів року" },
   { id: "year", label: "Рік" },
 ];
+const GANTT_ROW_HEIGHT = 40;
 const startOfGanttPeriod = (date, period) => {
   if (period === "week") return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12);
   if (period === "quarter") return new Date(date.getFullYear(), Math.floor(date.getMonth() / 3) * 3, 1, 12);
@@ -597,6 +746,21 @@ function Gantt({ tasks, onTaskClick }) {
     setPeriodStart((date) => shiftGanttPeriod(date, ganttPeriod, -1));
     setCurrentPage(1);
   };
+  const goToToday = () => {
+    setGanttPeriod("week");
+    setPeriodStart(startOfGanttPeriod(currentDate, "week"));
+    setCurrentPage(1);
+  };
+  const handlePeriodChange = (event) => {
+    const nextPeriod = event.target.value;
+    if (nextPeriod === "today") {
+      goToToday();
+      return;
+    }
+    setGanttPeriod(nextPeriod);
+    setPeriodStart(startOfGanttPeriod(periodStart, nextPeriod));
+    setCurrentPage(1);
+  };
   const todayPosition = isCurrentPeriod ? `${((((currentDate - timelineStart) / 86400000) + 0.5) / timelineDuration) * 100}%` : null;
   const monthLabel = `${formatDate(timelineStart)} — ${formatDate(timelineEnd)}`;
   return (
@@ -605,7 +769,11 @@ function Gantt({ tasks, onTaskClick }) {
         <h2 className="font-bold">План виконання</h2>
         <div className="flex flex-wrap items-center justify-end gap-2">
         <span className="mr-1 text-xs font-semibold capitalize text-slate-500">{monthLabel}</span>
-        <select value={ganttPeriod} onChange={(event) => { const nextPeriod = event.target.value; setGanttPeriod(nextPeriod); setPeriodStart(startOfGanttPeriod(periodStart, nextPeriod)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Період ґанта">
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={goToPreviousWeek} className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50" title="Попередній період"><ChevronLeft size={14} /></button>
+          <button type="button" onClick={goToNextWeek} className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50" title="Наступний період"><ChevronRight size={14} /></button>
+        </div>
+        <select value={ganttPeriod} onChange={handlePeriodChange} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Період ґанта">
           {GANTT_PERIODS.map((period) => <option key={period.id} value={period.id}>{period.label}</option>)}
         </select>
         <select value={selectedMonth} onChange={(event) => { setPeriodStart(startOfGanttPeriod(new Date(selectedYear, Number(event.target.value), 1, 12), ganttPeriod)); setCurrentPage(1); }} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-700" aria-label="Місяць ґанта">
@@ -621,7 +789,7 @@ function Gantt({ tasks, onTaskClick }) {
       </div>
       <div className="space-y-3">
         <div className="grid grid-cols-[170px_1fr] items-end gap-3 border-b border-slate-200 pb-2">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Задача</span>
+          <span className="pl-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">Задача</span>
           <div className="grid" style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}>
             {timelineDays.map((date, index) => (
               <div key={toDateKey(date)} className={`text-center text-[10px] font-bold ${date.getDay() === 0 || date.getDay() === 6 ? "text-indigo-700" : "text-slate-700"}`}>
@@ -631,12 +799,19 @@ function Gantt({ tasks, onTaskClick }) {
             ))}
           </div>
         </div>
-        <div className="relative space-y-2" style={{ minHeight: `${Math.max(200, visible.length * 44 + 24)}px` }}>
+        <div className="relative" style={{ minHeight: `${Math.max(200, visible.length * GANTT_ROW_HEIGHT + 24)}px` }}>
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-0 rounded-lg"
-            style={{ backgroundImage: `linear-gradient(to right, rgba(148, 163, 184, 0.12) 1px, transparent 1px)`, backgroundSize: `calc(100% / ${total}) 100%`, backgroundColor: "rgba(248, 250, 252, 0.5)" }}
-          />
+            className="pointer-events-none absolute inset-y-0 left-[182px] right-0 z-0 grid overflow-hidden rounded-lg border border-slate-200"
+            style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}
+          >
+            {timelineDays.map((date, index) => (
+              <div
+                key={toDateKey(date)}
+                className={`border-r border-slate-200 last:border-r-0 ${date.getDay() === 0 || date.getDay() === 6 ? "bg-slate-100/70" : "bg-white"}`}
+              />
+            ))}
+          </div>
           {todayPosition && (
             <div className="pointer-events-none absolute inset-y-0 left-[182px] right-0 z-20">
               <div className="absolute inset-y-0" style={{ left: todayPosition }}>
@@ -651,7 +826,39 @@ function Gantt({ tasks, onTaskClick }) {
               У цьому періоді задач із датами немає
             </div>
           ) : (
-            visible.map(({ task, level }) => {
+            <>
+            <svg
+              className="pointer-events-none absolute left-0 top-0 z-20 overflow-visible"
+              width="170"
+              height={visible.length * GANTT_ROW_HEIGHT}
+              aria-hidden="true"
+            >
+              <defs>
+                <marker id="gantt-subtask-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="#a5b4fc" />
+                </marker>
+              </defs>
+              {visible.map(({ task, level }, index) => {
+                if (!level) return null;
+                const parentIndex = visible.findIndex((row) => String(row.task.id) === String(task.parentTaskId || ""));
+                if (parentIndex === -1) return null;
+                const originX = (level - 1) * 14 + 12;
+                const targetX = level * 14 + 12;
+                const originY = parentIndex * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT / 2;
+                const targetY = index * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT / 2;
+                return (
+                  <path
+                    key={`arrow-${task.id}`}
+                    d={`M ${originX} ${originY} V ${targetY} H ${targetX}`}
+                    fill="none"
+                    stroke="#a5b4fc"
+                    strokeWidth="1.5"
+                    markerEnd="url(#gantt-subtask-arrow)"
+                  />
+                );
+              })}
+            </svg>
+            {visible.map(({ task, level }) => {
               const startDate = ganttDate(task, "start");
               const endDate = ganttDate(task, "end");
               const taskStart = fromDateKey(startDate);
@@ -660,10 +867,13 @@ function Gantt({ tasks, onTaskClick }) {
               const clippedEnd = taskEnd > timelineEnd ? timelineEnd : taskEnd;
               const startRatio = Math.max(0, (clippedStart - timelineStart) / 86400000 / timelineDuration);
               const endRatio = Math.min(1, Math.max(startRatio + 1 / timelineDuration, (clippedEnd - timelineStart) / 86400000 / timelineDuration));
+              const parentTask = level > 0 ? tasks.find((candidate) => String(candidate.id) === String(task.parentTaskId || "")) : null;
+              const barColorClass = parentTask ? ganttTaskColor(parentTask) : ganttTaskColor(task);
               return (
                 <div
                   key={task.id}
-                  className="grid cursor-pointer grid-cols-[170px_1fr] items-center gap-3"
+                  className="grid cursor-pointer grid-cols-[170px_1fr] items-center gap-3 border-b border-slate-100 last:border-b-0 hover:bg-indigo-50/30"
+                  style={{ height: `${GANTT_ROW_HEIGHT}px` }}
                   role="button"
                   tabIndex={0}
                   onClick={() => onTaskClick?.(task)}
@@ -675,21 +885,21 @@ function Gantt({ tasks, onTaskClick }) {
                   }}
                 >
                   <div
-                    className="truncate text-xs font-semibold text-slate-700"
+                    className="truncate pl-3 text-xs font-semibold text-slate-700"
                     title={task.title}
-                    style={{ paddingLeft: `${level * 14}px` }}
+                    style={{ paddingLeft: `${14 + level * 14}px` }}
                   >
                     {task.title}
                   </div>
                   <div
-                    className="relative h-8 rounded-md bg-white"
+                    className="relative h-8"
                     style={{
                       marginLeft: `${level * 18}px`,
                       width: `calc(100% - ${level * 18}px)`,
                     }}
                   >
                     <div
-                      className={`absolute top-1.5 h-6 rounded shadow-sm transition-all ${ganttTaskColor(task)}`}
+                      className={`absolute top-1.5 h-6 rounded shadow-sm transition-all ${barColorClass} ${level > 0 ? "opacity-60" : ""}`}
                       title={`${formatDate(startDate)} — ${formatDate(endDate)}`}
                       aria-label={`${task.title}: ${formatDate(startDate)} — ${formatDate(endDate)}`}
                       style={{
@@ -700,16 +910,13 @@ function Gantt({ tasks, onTaskClick }) {
                   </div>
                 </div>
               );
-            })
+            })}
+            </>
           )}
           </div>
         </div>
-        <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
-          <button type="button" onClick={goToPreviousWeek} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">Назад <ChevronLeft size={14} className="mr-1 inline" /></button>
-          <button type="button" onClick={goToNextWeek} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">Далі <ChevronRight size={14} className="ml-1 inline" /></button>
-        </div>
         {totalPages > 1 && (
-          <div className="flex items-center justify-end gap-2">
+          <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
             <span className="text-xs text-slate-500">Сторінка {safePage} з {totalPages}</span>
             <button type="button" onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={safePage === 1} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 disabled:opacity-40">Назад</button>
             {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => <button key={page} type="button" onClick={() => setCurrentPage(page)} className={`h-7 min-w-7 rounded-lg border px-2 text-xs font-semibold ${page === safePage ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-200 bg-white text-slate-600"}`}>{page}</button>)}
@@ -720,6 +927,7 @@ function Gantt({ tasks, onTaskClick }) {
     </div>
   );
 }
+
 
 function SubtaskForm({ task, people, onCreateSubtask, onDone, usersLoadError = false }) {
   const [subtask, setSubtask] = useState(() => {
@@ -734,8 +942,43 @@ function SubtaskForm({ task, people, onCreateSubtask, onDone, usersLoadError = f
       priority: "normal",
       assigneeId: fallbackAssignee ? idOf(fallbackAssignee) : String(task?.assigneeId || ""),
       assigneeName: fallbackAssignee ? displayName(fallbackAssignee) : String(task?.assigneeName || task?.target || ""),
+      attachments: [],
     };
   });
+  const [attachError, setAttachError] = useState("");
+
+  const selectAttachments = async (event) => {
+    const selected = Array.from(event.target.files || []).slice(
+      0,
+      MAX_TASK_ATTACHMENTS - subtask.attachments.length,
+    );
+    if (!selected.length) return;
+    if (selected.some((file) => file.size > MAX_TASK_ATTACHMENT_SIZE)) {
+      setAttachError("Кожен файл має бути до 5 MB.");
+      return;
+    }
+    try {
+      const encoded = await Promise.all(
+        selected.map(async (file) => ({
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          dataUrl: await readFileAsDataUrl(file),
+        })),
+      );
+      setSubtask((current) => ({ ...current, attachments: [...current.attachments, ...encoded] }));
+      setAttachError("");
+      event.target.value = "";
+    } catch {
+      setAttachError("Не вдалося додати файл.");
+    }
+  };
+  const removeAttachment = (index) => {
+    setSubtask((current) => ({
+      ...current,
+      attachments: current.attachments.filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
 
   const submitSubtask = async (event) => {
     event.preventDefault();
@@ -769,6 +1012,31 @@ function SubtaskForm({ task, people, onCreateSubtask, onDone, usersLoadError = f
       <label className="text-xs font-bold text-slate-600">Початок<input type="date" value={subtask.startDate} onChange={(event) => setSubtask((current) => ({ ...current, startDate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" /></label>
       <label className="text-xs font-bold text-slate-600">Дедлайн<input type="date" min={subtask.startDate} value={subtask.dueDate} onChange={(event) => setSubtask((current) => ({ ...current, dueDate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" /></label>
       <label className="text-xs font-bold text-slate-600 sm:col-span-2">Пріоритет<select value={subtask.priority} onChange={(event) => setSubtask((current) => ({ ...current, priority: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">{PRIORITY.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+      <div className="sm:col-span-2">
+        <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-500 hover:border-indigo-400 hover:bg-indigo-50">
+          <Paperclip size={14} />
+          Додати фото або файли (до {MAX_TASK_ATTACHMENTS})
+          <input type="file" multiple accept="*/*" className="hidden" onChange={selectAttachments} />
+        </label>
+        {attachError && <p className="mt-1 text-xs font-semibold text-rose-600">{attachError}</p>}
+        {subtask.attachments.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {subtask.attachments.map((file, index) => (
+              <span key={`${file.name}-${index}`} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2 py-1 text-xs text-slate-600 ring-1 ring-slate-200">
+                {file.type?.startsWith("image/") ? (
+                  <img src={file.dataUrl} alt={file.name} className="h-5 w-5 rounded object-cover" />
+                ) : (
+                  <FileText size={14} className="text-slate-400" />
+                )}
+                {file.name}
+                <button type="button" onClick={() => removeAttachment(index)} className="text-slate-400 hover:text-rose-600" title="Прибрати файл">
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
       <button type="submit" className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-bold text-white sm:col-span-2">Створити підзадачу</button>
     </form>
   );
@@ -797,14 +1065,15 @@ function TaskDetailsDialog({ task, onClose, updateStatus, onCreateSubtask, users
         className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-3">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-indigo-600">
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-indigo-600">
               Деталі задачі
             </p>
-            <h2 id="task-details-title" className="mt-1 text-2xl font-bold tracking-tight text-slate-950">
+            <h2 id="task-details-title" className="mt-0.5 text-base font-bold tracking-tight text-slate-950">
               {task.title}
             </h2>
+            <p className="mt-0.5 text-xs text-slate-500">Призначив: {task.createdByName || "—"}</p>
           </div>
           <button
             type="button"
@@ -815,34 +1084,51 @@ function TaskDetailsDialog({ task, onClose, updateStatus, onCreateSubtask, users
             <X size={20} />
           </button>
         </div>
-        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <div className="rounded-xl bg-slate-50 p-3">
             <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Дедлайн</p>
             <p className="mt-1 font-semibold text-slate-900">{formatFullDate(task.dueDate)}</p>
           </div>
           <div className="rounded-xl bg-slate-50 p-3">
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Призначив</p>
-            <p className="mt-1 font-semibold text-slate-900">{task.createdByName || "—"}</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Статус</p>
+            <select
+              value={task.status}
+              onChange={(event) => updateStatus(task, event.target.value)}
+              className="mt-1 w-full rounded-lg border-none bg-transparent p-0 font-semibold text-slate-900 outline-none"
+            >
+              <option value="todo">До виконання</option>
+              <option value="in_progress">В роботі</option>
+              <option value="review">На перевірці</option>
+              <option value="done">Виконано</option>
+            </select>
           </div>
         </div>
-        <label className="mt-3 block text-sm font-semibold text-slate-700">
-          Статус
-          <select
-            value={task.status}
-            onChange={(event) => updateStatus(task, event.target.value)}
-            className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 font-normal"
-          >
-            <option value="todo">До виконання</option>
-            <option value="in_progress">В роботі</option>
-            <option value="review">На перевірці</option>
-            <option value="done">Виконано</option>
-          </select>
-        </label>
         <div className="mt-5">
           <h3 className="text-sm font-bold text-slate-900">Опис</h3>
           <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600">
             {task.description || "Опис не додано."}
           </p>
+          {Array.isArray(task.attachments) && task.attachments.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {task.attachments.map((file, index) => (
+                <a
+                  key={`${file.name}-${index}`}
+                  href={file.dataUrl || file.url}
+                  download={file.name}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+                >
+                  {String(file.type || "").startsWith("image/") ? (
+                    <img src={file.dataUrl || file.url} alt={file.name} className="h-5 w-5 rounded object-cover" />
+                  ) : (
+                    <FileText size={14} className="text-slate-400" />
+                  )}
+                  {file.name}
+                </a>
+              ))}
+            </div>
+          )}
         </div>
         {onCreateSubtask && (
           <div className="mt-5 border-t border-slate-100 pt-5">
@@ -1024,6 +1310,27 @@ export default function ProjectManagementModule({
     load();
   }, []);
 
+  // Пише сповіщення одразу в БД і будить локальний центр сповіщень поточної
+  // вкладки; отримувач бачить задачу без очікування наступного циклу опитування.
+  const notifyTaskAssignee = (task) => {
+    if (!task || task.targetType !== "person" || !task.assigneeId) return;
+    if (!isLegalApiEnabled()) return;
+    addLegalNotificationApi({
+      taskId: String(task.id || ""),
+      taskTitle: String(task.title || ""),
+      title: "Нова задача",
+      body: `${displayName(user)} доручив(-ла) вам задачу «${task.title}»${task.dueDate ? ` · дедлайн ${formatDate(task.dueDate)}` : ""}`,
+      targetUserId: String(task.assigneeId || ""),
+      targetRole: "",
+      actorUserId: idOf(user),
+      actionUrl: "projectmanagment",
+      actionTab: "mytask",
+      source: "project",
+      createdAt: new Date().toISOString(),
+    })
+      .then(() => window.dispatchEvent(new CustomEvent("lucia:notifications-updated")))
+      .catch((error) => console.warn("Не вдалося надіслати сповіщення про нову задачу:", error));
+  };
   const createTask = async (form) => {
     const task = {
       ...form,
@@ -1046,6 +1353,7 @@ export default function ProjectManagementModule({
     setTasks(next);
     localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
     setShowComposer(false);
+    notifyTaskAssignee(task);
   };
   const openLegalRequest = () => {
     setShowComposer(false);
@@ -1137,6 +1445,7 @@ export default function ProjectManagementModule({
     const next = [subtask, ...tasks];
     setTasks(next);
     localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
+    notifyTaskAssignee(subtask);
   };
   const visibleTaskIds = useMemo(() => getUserTaskScope(tasks, user), [tasks, user]);
   const assignedTasks = isMyTasks
