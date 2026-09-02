@@ -520,14 +520,17 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         </div>
       )}
 
-      <MonthlyPlanModal
-        open={monthlyModalOpen}
-        onClose={() => { if (!monthlyGenerating) setMonthlyModalOpen(false); }}
-        defaultMonth={date.slice(0, 7)}
-        onGenerate={handleGenerateMonthlyPlan}
-        generating={monthlyGenerating}
-        status={monthlyStatus}
-      />
+      {monthlyModalOpen && (
+        <MonthlyPlanModal
+          key={selectedRestaurantId}
+          open={monthlyModalOpen}
+          onClose={() => { if (!monthlyGenerating) setMonthlyModalOpen(false); }}
+          defaultMonth={date.slice(0, 7)}
+          onGenerate={handleGenerateMonthlyPlan}
+          generating={monthlyGenerating}
+          status={monthlyStatus}
+        />
+      )}
     </div>
   );
 }
