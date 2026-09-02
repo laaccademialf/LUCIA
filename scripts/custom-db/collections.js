@@ -14,6 +14,8 @@ export const KNOWN_COLLECTIONS = [
   "assetInventorySessions",
   // utilities / electricity
   "utilityMeters", "electricityReadings", "electricitySettings",
+  // sales planning (план/факт по годинах)
+  "salesHourlyPlans",
   // product booking / inventory
   "bookingProducts", "bookingSuppliers", "bookingTypicalFields",
   "productOrders", "productInventories", "productInventorySessions",

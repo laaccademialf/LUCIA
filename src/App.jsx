@@ -119,6 +119,7 @@ const TeamHiringModule = lazyWithRetry(() => import("./components/TeamHiringModu
 const SecurityAuditModule = lazyWithRetry(() => import("./components/SecurityAuditModule"));
 const ProjectManagementModule = lazyWithRetry(() => import("./components/ProjectManagementModule"));
 const PaymentRegistryModule = lazyWithRetry(() => import("./components/PaymentRegistryModule"));
+const SalesPlanningModule = lazyWithRetry(() => import("./components/SalesPlanningModule"));
 const AssortmentMatrixModule = lazyWithRetry(() => import("./components/AssortmentMatrixModule"));
 const DatabaseConnectionsManager = lazyWithRetry(() => import("./components/DatabaseConnectionsManager"));
 const ProfileSettingsModal = lazyWithRetry(() => import("./components/ProfileSettingsModal"));
@@ -731,6 +732,9 @@ function App() {
                       const [businessUnits, setBusinessUnits] = useState([]);
                       // Стан для фільтрації ресторану у графіку
                       const [restaurantFilter, setRestaurantFilter] = useState("");
+                      // Чернетка графіка роботи, що редагується до натискання "Зберегти"
+                      const [scheduleDraft, setScheduleDraft] = useState(null);
+                      const [scheduleSaving, setScheduleSaving] = useState(false);
                       // Фільтр закладу для дашборду утиліт ("" = всі доступні заклади).
                       const [dashboardRestaurantFilter, setDashboardRestaurantFilter] = useState("");
                       // Фільтр дати для дашборду утиліт ("" = вчора).
@@ -3749,13 +3753,47 @@ function App() {
       ];
 
       // Фільтруємо ресторани або показуємо всі
-      const currentSchedule = restaurantFilter
-        ? restaurants.find((r) => r.id === parseInt(restaurantFilter))?.schedule || schedule
-        : schedule;
+      const selectedScheduleRestaurant = restaurantFilter
+        ? restaurants.find((r) => String(r.id) === String(restaurantFilter))
+        : null;
 
-      const currentRestaurantName = restaurantFilter
-        ? restaurants.find((r) => r.id === parseInt(restaurantFilter))?.name || ""
-        : "";
+      const baseSchedule = selectedScheduleRestaurant?.schedule || schedule;
+      const currentSchedule = scheduleDraft || baseSchedule;
+      const hasUnsavedChanges = Boolean(scheduleDraft);
+
+      const currentRestaurantName = selectedScheduleRestaurant?.name || "";
+
+      const handleScheduleTimeChange = (dayKey, field, value) => {
+        setScheduleDraft((prev) => {
+          const base = prev || baseSchedule;
+          return {
+            ...base,
+            [dayKey]: { ...base[dayKey], [field]: value },
+          };
+        });
+      };
+
+      const handleSaveSchedule = async () => {
+        const scheduleToSave = scheduleDraft || currentSchedule;
+        if (selectedScheduleRestaurant) {
+          setScheduleSaving(true);
+          try {
+            await updateRestaurantInFirebase(selectedScheduleRestaurant.id, {
+              ...selectedScheduleRestaurant,
+              schedule: scheduleToSave,
+            });
+            setScheduleDraft(null);
+          } catch (error) {
+            console.error("Помилка збереження графіка:", error);
+            alert("Не вдалося зберегти графік роботи");
+          } finally {
+            setScheduleSaving(false);
+          }
+        } else {
+          setSchedule(scheduleToSave);
+          setScheduleDraft(null);
+        }
+      };
 
       return (
         <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
@@ -3768,7 +3806,10 @@ function App() {
               <select
                 className={`${baseInput} w-64`}
                 value={restaurantFilter}
-                onChange={(e) => setRestaurantFilter(e.target.value)}
+                onChange={(e) => {
+                  setRestaurantFilter(e.target.value);
+                  setScheduleDraft(null);
+                }}
               >
                 <option value="">Всі ресторани</option>
                 {restaurants.map((restaurant) => (
@@ -3788,66 +3829,31 @@ function App() {
                     type="time"
                     className={baseInput}
                     value={currentSchedule[d.key].from}
-                    onChange={async (e) => {
-                      if (restaurantFilter) {
-                        const restId = restaurantFilter;
-                        const restaurant = restaurants.find((r) => r.id === restId);
-                        if (restaurant) {
-                          const updatedSchedule = {
-                            ...restaurant.schedule,
-                            [d.key]: { ...restaurant.schedule[d.key], from: e.target.value },
-                          };
-                          try {
-                            await updateRestaurantInFirebase(restId, {
-                              ...restaurant,
-                              schedule: updatedSchedule,
-                            });
-                          } catch (error) {
-                            console.error("Помилка оновлення графіка:", error);
-                          }
-                        }
-                      } else {
-                        setSchedule((p) => ({
-                          ...p,
-                          [d.key]: { ...p[d.key], from: e.target.value },
-                        }));
-                      }
-                    }}
+                    onChange={(e) => handleScheduleTimeChange(d.key, "from", e.target.value)}
                   />
                   <span className="text-xs text-slate-500">до</span>
                   <input
                     type="time"
                     className={baseInput}
                     value={currentSchedule[d.key].to}
-                    onChange={async (e) => {
-                      if (restaurantFilter) {
-                        const restId = restaurantFilter;
-                        const restaurant = restaurants.find((r) => r.id === restId);
-                        if (restaurant) {
-                          const updatedSchedule = {
-                            ...restaurant.schedule,
-                            [d.key]: { ...restaurant.schedule[d.key], to: e.target.value },
-                          };
-                          try {
-                            await updateRestaurantInFirebase(restId, {
-                              ...restaurant,
-                              schedule: updatedSchedule,
-                            });
-                          } catch (error) {
-                            console.error("Помилка оновлення графіка:", error);
-                          }
-                        }
-                      } else {
-                        setSchedule((p) => ({
-                          ...p,
-                          [d.key]: { ...p[d.key], to: e.target.value },
-                        }));
-                      }
-                    }}
+                    onChange={(e) => handleScheduleTimeChange(d.key, "to", e.target.value)}
                   />
                 </div>
               </div>
             ))}
+          </div>
+          <div className="flex items-center justify-end gap-3 mt-4">
+            {hasUnsavedChanges && (
+              <span className="text-sm text-amber-600">Є незбережені зміни</span>
+            )}
+            <button
+              type="button"
+              onClick={handleSaveSchedule}
+              disabled={scheduleSaving}
+              className="px-5 py-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-500 shadow disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {scheduleSaving ? "Збереження..." : "Зберегти"}
+            </button>
           </div>
         </div>
       );
@@ -5171,6 +5177,20 @@ function App() {
             user={user}
             onAuditEvent={writeAuditLog}
           />
+        </div>
+      );
+    }
+
+    // Продажі — план/факт по годинах для керівників ресторанів
+    const isSalesNav =
+      activeNavKey === "sale" ||
+      activeNavKey.includes("sale") ||
+      activeNavLabel.includes("продаж");
+
+    if (isSalesNav) {
+      return (
+        <div className="grid grid-cols-1">
+          <SalesPlanningModule topTab={topTab} restaurants={firebaseRestaurants} user={user} />
         </div>
       );
     }
