@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import DatePickerPopover from "./DatePickerPopover";
 import ServioSalesSettings from "./ServioSalesSettings";
+import MonthlyPlanModal from "./MonthlyPlanModal";
 import {
   createCollectionItemApi,
   getCollectionItemApi,
+  listCollectionItemsApi,
   isCollectionsApiEnabled,
 } from "../api/collectionsApi";
 import {
@@ -11,6 +13,7 @@ import {
   getServioSettings,
   isServioApiEnabled,
 } from "../api/servioSettingsApi";
+import { buildMonthlyPlan } from "../utils/salesPlanDistribution";
 
 // Погодинні рядки з 08:00 до 23:00 включно, як у паперовому шаблоні планування.
 const HOURS = Array.from({ length: 16 }, (_, i) => `${String(i + 8).padStart(2, "0")}:00:00`);
@@ -97,6 +100,9 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   const [status, setStatus] = useState("");
   const [servioMapping, setServioMapping] = useState({});
   const [fetchingFact, setFetchingFact] = useState(false);
+  const [monthlyModalOpen, setMonthlyModalOpen] = useState(false);
+  const [monthlyGenerating, setMonthlyGenerating] = useState(false);
+  const [monthlyStatus, setMonthlyStatus] = useState("");
 
   const isSettingsTab = /setting|налашт/.test(String(topTab || "").toLowerCase());
 
@@ -271,6 +277,79 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     }
   };
 
+  // Розкладає місячний план ТО/Гості по днях і годинах за історичними частками,
+  // зберігаючи наявний факт у кожному дні.
+  const handleGenerateMonthlyPlan = async ({ year, month, monthlyTo, monthlyGuests }) => {
+    if (!canEdit || !selectedRestaurantId) return;
+    if (!isCollectionsApiEnabled()) {
+      setMonthlyStatus("Збереження недоступне: не налаштований API даних.");
+      return;
+    }
+    setMonthlyGenerating(true);
+    setMonthlyStatus("Аналіз історії та розрахунок...");
+    try {
+      const all = await listCollectionItemsApi("salesHourlyPlans").catch(() => []);
+      const history = (Array.isArray(all) ? all : []).filter(
+        (rec) => String(rec?.restaurantId || "") === String(selectedRestaurantId)
+      );
+      const existingByDate = new Map(
+        history.map((rec) => [String(rec?.date || "").slice(0, 10), rec])
+      );
+
+      const plan = buildMonthlyPlan({
+        year,
+        month,
+        monthlyTo,
+        monthlyGuests,
+        history,
+        getHoursForDate: (iso) => getVisibleHours(currentRestaurant?.schedule, iso),
+      });
+
+      let saved = 0;
+      for (const day of plan.days) {
+        const existing = existingByDate.get(day.date);
+        const existingHours = existing?.hours && typeof existing.hours === "object" ? existing.hours : {};
+        const mergedHours = { ...existingHours };
+        for (const [hour, values] of Object.entries(day.hours)) {
+          mergedHours[hour] = {
+            ...(existingHours[hour] || emptyHourRow()),
+            planTo: String(values.planTo || ""),
+            planGosti: String(values.planGosti || ""),
+          };
+        }
+        await createCollectionItemApi("salesHourlyPlans", {
+          id: buildDocId(selectedRestaurantId, day.date),
+          restaurantId: selectedRestaurantId,
+          date: day.date,
+          hours: mergedHours,
+          updatedAt: new Date().toISOString(),
+          updatedBy: user?.displayName || user?.email || "",
+        });
+        saved += 1;
+        if (saved % 5 === 0) setMonthlyStatus(`Збереження... ${saved}/${plan.days.length}`);
+      }
+
+      const histNote = plan.meta.hasHistory
+        ? `на основі історії (${plan.meta.historyDays} дн.)`
+        : "рівномірно (історія відсутня)";
+      setMonthlyStatus(`Готово: розподілено ${saved} днів ${histNote}.`);
+
+      // Оновлюємо поточну відкриту дату, якщо вона в цьому місяці.
+      const [curY, curM] = date.split("-").map(Number);
+      if (curY === year && curM === month) {
+        const currentDoc = await getCollectionItemApi("salesHourlyPlans", buildDocId(selectedRestaurantId, date)).catch(() => null);
+        const savedHours = currentDoc?.hours && typeof currentDoc.hours === "object" ? currentDoc.hours : {};
+        setHourlyData({ ...emptyHours(), ...savedHours });
+      }
+      setMonthlyModalOpen(false);
+      setStatus("Місячний план збережено.");
+    } catch (error) {
+      setMonthlyStatus(`Помилка: ${error?.message || error}`);
+    } finally {
+      setMonthlyGenerating(false);
+    }
+  };
+
   if (isSettingsTab) {
     return <ServioSalesSettings restaurants={restaurantOptions} />;
   }
@@ -295,6 +374,16 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
             </select>
           )}
           <DatePickerPopover value={date} onChange={setDate} />
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => { setMonthlyStatus(""); setMonthlyModalOpen(true); }}
+              title="Ввести план на місяць і розкласти його по днях/годинах за історією"
+              className="inline-flex items-center gap-2 rounded-lg border border-indigo-300 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50"
+            >
+              План на місяць
+            </button>
+          )}
           {canEdit && isServioApiEnabled() && (
             <button
               type="button"
@@ -430,6 +519,15 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
           </table>
         </div>
       )}
+
+      <MonthlyPlanModal
+        open={monthlyModalOpen}
+        onClose={() => { if (!monthlyGenerating) setMonthlyModalOpen(false); }}
+        defaultMonth={date.slice(0, 7)}
+        onGenerate={handleGenerateMonthlyPlan}
+        generating={monthlyGenerating}
+        status={monthlyStatus}
+      />
     </div>
   );
 }
