@@ -14,6 +14,7 @@ import {
   isServioApiEnabled,
 } from "../api/servioSettingsApi";
 import { buildMonthlyPlan } from "../utils/salesPlanDistribution";
+import { fetchKyivWeather, weatherLabel } from "../api/weatherApi";
 
 // Погодинні рядки з 08:00 до 23:00 включно, як у паперовому шаблоні планування.
 const HOURS = Array.from({ length: 16 }, (_, i) => `${String(i + 8).padStart(2, "0")}:00:00`);
@@ -279,7 +280,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
 
   // Розкладає місячний план ТО/Гості по днях і годинах за історичними частками,
   // зберігаючи наявний факт у кожному дні.
-  const handleGenerateMonthlyPlan = async ({ year, month, monthlyTo, monthlyGuests }) => {
+  const handleGenerateMonthlyPlan = async ({ year, month, monthlyTo, monthlyGuests, useWeather }) => {
     if (!canEdit || !selectedRestaurantId) return;
     if (!isCollectionsApiEnabled()) {
       setMonthlyStatus("Збереження недоступне: не налаштований API даних.");
@@ -296,6 +297,23 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         history.map((rec) => [String(rec?.date || "").slice(0, 10), rec])
       );
 
+      // Прогноз погоди для Києва на місяць (для найближчих днів у межах горизонту).
+      let weatherByDate = {};
+      if (useWeather) {
+        setMonthlyStatus("Завантаження прогнозу погоди...");
+        const lastDay = new Date(year, month, 0).getDate();
+        const pad = (n) => String(n).padStart(2, "0");
+        try {
+          weatherByDate = await fetchKyivWeather({
+            startDate: `${year}-${pad(month)}-01`,
+            endDate: `${year}-${pad(month)}-${pad(lastDay)}`,
+          });
+        } catch (e) {
+          setMonthlyStatus(`Погода недоступна (${e?.message || e}). Продовжую без неї...`);
+          weatherByDate = {};
+        }
+      }
+
       const plan = buildMonthlyPlan({
         year,
         month,
@@ -303,6 +321,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         monthlyGuests,
         history,
         getHoursForDate: (iso) => getVisibleHours(currentRestaurant?.schedule, iso),
+        weatherByDate,
       });
 
       let saved = 0;
@@ -310,11 +329,13 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         const existing = existingByDate.get(day.date);
         const existingHours = existing?.hours && typeof existing.hours === "object" ? existing.hours : {};
         const mergedHours = { ...existingHours };
+        const weatherText = weatherLabel(day.weather);
         for (const [hour, values] of Object.entries(day.hours)) {
           mergedHours[hour] = {
             ...(existingHours[hour] || emptyHourRow()),
             planTo: String(values.planTo || ""),
             planGosti: String(values.planGosti || ""),
+            ...(weatherText ? { weather: weatherText } : {}),
           };
         }
         await createCollectionItemApi("salesHourlyPlans", {
@@ -332,7 +353,10 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
       const histNote = plan.meta.hasHistory
         ? `на основі історії (${plan.meta.historyDays} дн.)`
         : "рівномірно (історія відсутня)";
-      setMonthlyStatus(`Готово: розподілено ${saved} днів ${histNote}.`);
+      const weatherNote = useWeather && Object.keys(weatherByDate).length
+        ? `, погода: ${Object.keys(weatherByDate).length} дн.`
+        : "";
+      setMonthlyStatus(`Готово: розподілено ${saved} днів ${histNote}${weatherNote}.`);
 
       // Оновлюємо поточну відкриту дату, якщо вона в цьому місяці.
       const [curY, curM] = date.split("-").map(Number);

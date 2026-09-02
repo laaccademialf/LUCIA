@@ -34,6 +34,7 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
   const [month, setMonth] = useState(initial.month);
   const [monthlyTo, setMonthlyTo] = useState("");
   const [monthlyGuests, setMonthlyGuests] = useState("");
+  const [useWeather, setUseWeather] = useState(true);
 
   const avgCheck = useMemo(() => {
     const to = toNum(monthlyTo);
@@ -49,7 +50,7 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
 
   const handleGenerate = () => {
     if (!canGenerate) return;
-    onGenerate({ year, month, monthlyTo: toNum(monthlyTo), monthlyGuests: toNum(monthlyGuests) });
+    onGenerate({ year, month, monthlyTo: toNum(monthlyTo), monthlyGuests: toNum(monthlyGuests), useWeather });
   };
 
   return (
@@ -98,6 +99,21 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
             <span className="text-lg font-bold text-slate-900">{formatNumber(avgCheck)}</span>
           </div>
         </div>
+
+        <label className="mt-3 flex items-start gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={useWeather}
+            onChange={(e) => setUseWeather(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400"
+          />
+          <span>
+            Врахувати прогноз погоди (Київ)
+            <span className="block text-xs text-slate-500">
+              Коригує розподіл по днях за прогнозом і заповнює колонку «Погода» (діє на найближчі ~16 днів).
+            </span>
+          </span>
+        </label>
 
         {status && <p className="mt-3 text-sm text-slate-600">{status}</p>}
 

@@ -97,6 +97,20 @@ const recentSameWeekdayDates = (index, weekday, cutoffIso, limit, metric) => {
 
 const average = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
 
+// Зважене середнє з більшою вагою на СВІЖІ значення (values — від найновішого).
+// Так враховується тренд останніх тижнів: приріст/спад останніх дат домінує.
+const recencyWeightedAverage = (values) => {
+  if (!values.length) return 0;
+  let sum = 0;
+  let wsum = 0;
+  values.forEach((v, i) => {
+    const w = 1 / (i + 1); // 1, 1/2, 1/3, 1/4 ...
+    sum += v * w;
+    wsum += w;
+  });
+  return wsum > 0 ? sum / wsum : 0;
+};
+
 // Погодинний профіль (частки за годинами, сума = 1) для дня тижня.
 // Усереднює частку кожної години по недавніх днях того самого дня тижня.
 const hourProfileForWeekday = (index, weekday, cutoffIso, limit, metric) => {
@@ -142,7 +156,10 @@ const WEIGHT_LASTYEAR = 0.3; // вага «цей день рік тому»
 const historicalDayValue = (index, isoDate, cutoffIso, metric) => {
   const weekday = weekdayOf(isoDate);
   const recentDates = recentSameWeekdayDates(index, weekday, cutoffIso, RECENT_FOR_WEIGHT, metric);
-  const recentAvg = average(recentDates.map((d) => (metric === "guests" ? index.get(d).guests : index.get(d).to)));
+  // recentDates — від найсвіжішої; рецентне зважування ловить тренд останніх тижнів.
+  const recentAvg = recencyWeightedAverage(
+    recentDates.map((d) => (metric === "guests" ? index.get(d).guests : index.get(d).to))
+  );
 
   const [y, m, d] = isoDate.split("-").map(Number);
   const lastYearIso = isoOf(y - 1, m, d);
@@ -166,7 +183,8 @@ const historicalDayValue = (index, isoDate, cutoffIso, metric) => {
  * @param {Array}  p.history         записи { date, hours:{ 'HH:00:00': { factTo, factGosti } } }
  * @param {(iso:string)=>string[]} p.getHoursForDate  робочі години дня (за графіком закладу)
  * @param {string} [p.cutoffIso]     дати історії ДО цієї (типово 1-ше число місяця)
- * @returns {{ days: Array<{date, weekday, hours: Record<string,{planTo:number, planGosti:number}>}>,
+ * @param {Record<string,{factor:number, description?:string}>} [p.weatherByDate] погодні множники по днях
+ * @returns {{ days: Array<{date, weekday, weather?:object, hours: Record<string,{planTo:number, planGosti:number}>}>,
  *            totals: { to:number, guests:number }, meta: { historyDays:number, hasHistory:boolean } }}
  */
 export const buildMonthlyPlan = ({
@@ -177,6 +195,7 @@ export const buildMonthlyPlan = ({
   history,
   getHoursForDate,
   cutoffIso,
+  weatherByDate,
 }) => {
   const index = buildHistoryIndex(history);
   const cutoff = cutoffIso || isoOf(year, month, 1);
@@ -216,9 +235,18 @@ export const buildMonthlyPlan = ({
   const weightsTo = fillWeights(rawWeightsTo);
   const weightsGuests = fillWeights(rawWeightsGuests);
 
+  // Поправка на погоду: множимо денні ваги на прогнозний множник (де він є).
+  const applyWeather = (weights) =>
+    weights.map((w, i) => {
+      const factor = weatherByDate && weatherByDate[dates[i]] ? Number(weatherByDate[dates[i]].factor) : 1;
+      return w * (Number.isFinite(factor) && factor > 0 ? factor : 1);
+    });
+  const weatherWeightsTo = applyWeather(weightsTo);
+  const weatherWeightsGuests = applyWeather(weightsGuests);
+
   // --- Розподіл місячного тоталу по днях (цілі числа з точною сумою) ---
-  const dayTo = largestRemainderDistribute(weightsTo, monthlyTo);
-  const dayGuests = largestRemainderDistribute(weightsGuests, monthlyGuests);
+  const dayTo = largestRemainderDistribute(weatherWeightsTo, monthlyTo);
+  const dayGuests = largestRemainderDistribute(weatherWeightsGuests, monthlyGuests);
 
   // Профілі годин за днями тижня (кеш), з фолбеком на загальний профіль.
   const profileCache = new Map();
@@ -249,7 +277,7 @@ export const buildMonthlyPlan = ({
       hours[h] = { planTo: hourTo[hi], planGosti: hourGuests[hi] };
     });
 
-    return { date: iso, weekday, hours };
+    return { date: iso, weekday, weather: (weatherByDate && weatherByDate[iso]) || null, hours };
   });
 
   return {
