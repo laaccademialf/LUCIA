@@ -60,6 +60,26 @@ const toIsoDate = (d) => {
   return `${y}-${m}-${day}`;
 };
 
+// 7 дат тижня (Пн–Нд), що містить задану дату.
+const getWeekDates = (isoDate) => {
+  const base = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(base.getTime())) return [];
+  const dow = (base.getDay() + 6) % 7; // 0 = понеділок
+  const monday = new Date(base);
+  monday.setDate(base.getDate() - dow);
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return toIsoDate(d);
+  });
+};
+
+const WEEKDAY_LABELS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
+const formatDayLabel = (iso) => {
+  const [, m, d] = iso.split("-");
+  return `${d}.${m}`;
+};
+
 const toNumber = (value) => {
   const n = Number(String(value ?? "").trim().replace(",", "."));
   return Number.isFinite(n) ? n : 0;
@@ -104,6 +124,9 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   const [monthlyModalOpen, setMonthlyModalOpen] = useState(false);
   const [monthlyGenerating, setMonthlyGenerating] = useState(false);
   const [monthlyStatus, setMonthlyStatus] = useState("");
+  const [viewMode, setViewMode] = useState("day"); // "day" | "week"
+  const [weekData, setWeekData] = useState({}); // { iso: hoursObject }
+  const [weekLoading, setWeekLoading] = useState(false);
 
   const isSettingsTab = /setting|налашт/.test(String(topTab || "").toLowerCase());
 
@@ -168,6 +191,68 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     void load();
     return () => { cancelled = true; };
   }, [selectedRestaurantId, date]);
+
+  // Тижневий режим: вантажимо 7 днів (Пн–Нд) обраного тижня.
+  const weekDates = useMemo(() => getWeekDates(date), [date]);
+  useEffect(() => {
+    if (viewMode !== "week" || !selectedRestaurantId) return;
+    let cancelled = false;
+    const load = async () => {
+      setWeekLoading(true);
+      try {
+        if (!isCollectionsApiEnabled()) {
+          if (!cancelled) setWeekData({});
+          return;
+        }
+        const docs = await Promise.all(
+          weekDates.map((iso) =>
+            getCollectionItemApi("salesHourlyPlans", buildDocId(selectedRestaurantId, iso)).catch(() => null)
+          )
+        );
+        if (cancelled) return;
+        const next = {};
+        weekDates.forEach((iso, i) => {
+          const saved = docs[i];
+          next[iso] = saved?.hours && typeof saved.hours === "object" ? saved.hours : {};
+        });
+        setWeekData(next);
+      } finally {
+        if (!cancelled) setWeekLoading(false);
+      }
+    };
+    void load();
+    return () => { cancelled = true; };
+  }, [viewMode, selectedRestaurantId, weekDates]);
+
+  // Денні підсумки тижня (сума по робочих годинах кожного дня).
+  const weekRows = useMemo(() => {
+    return weekDates.map((iso) => {
+      const hours = weekData[iso] || {};
+      const dayHours = getVisibleHours(currentRestaurant?.schedule, iso);
+      const acc = dayHours.reduce((a, hour) => {
+        const row = hours[hour] || {};
+        a.planTo += toNumber(row.planTo);
+        a.factTo += toNumber(row.factTo);
+        a.planGosti += toNumber(row.planGosti);
+        a.factGosti += toNumber(row.factGosti);
+        if (!a.weather && row.weather) a.weather = row.weather;
+        return a;
+      }, { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0, weather: "" });
+      const dow = (new Date(`${iso}T00:00:00`).getDay() + 6) % 7;
+      return { iso, weekdayLabel: WEEKDAY_LABELS[dow], ...acc };
+    });
+  }, [weekDates, weekData, currentRestaurant?.schedule]);
+
+  const weekTotals = useMemo(
+    () => weekRows.reduce(
+      (a, r) => {
+        a.planTo += r.planTo; a.factTo += r.factTo; a.planGosti += r.planGosti; a.factGosti += r.factGosti;
+        return a;
+      },
+      { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0 }
+    ),
+    [weekRows]
+  );
 
   const totals = useMemo(() => visibleHours.reduce((acc, hour) => {
     const row = hourlyData[hour] || emptyHourRow();
@@ -386,6 +471,22 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
           <p className="text-sm text-slate-600">{currentRestaurant?.name || "Оберіть заклад"}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex overflow-hidden rounded-lg border border-slate-300">
+            <button
+              type="button"
+              onClick={() => setViewMode("day")}
+              className={`px-3 py-2 text-sm font-semibold transition ${viewMode === "day" ? "bg-indigo-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
+            >
+              День
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("week")}
+              className={`px-3 py-2 text-sm font-semibold transition ${viewMode === "week" ? "bg-indigo-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
+            >
+              Тиждень
+            </button>
+          </div>
           {restaurantOptions.length > 1 && (
             <select
               value={selectedRestaurantId}
@@ -408,7 +509,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
               План на місяць
             </button>
           )}
-          {canEdit && isServioApiEnabled() && (
+          {viewMode === "day" && canEdit && isServioApiEnabled() && (
             <button
               type="button"
               onClick={handleFetchFactFromServio}
@@ -419,7 +520,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
               {fetchingFact ? "Завантаження..." : "Підтягнути факт із Servio"}
             </button>
           )}
-          {canEdit && (
+          {viewMode === "day" && canEdit && (
             <button
               type="button"
               onClick={handleSave}
@@ -433,10 +534,64 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
       </div>
 
       {status && <p className="mb-3 text-sm text-slate-600">{status}</p>}
-      {currentRestaurant && <p className="mb-3 text-sm text-slate-500">{scheduleHint}</p>}
+      {viewMode === "day" && currentRestaurant && <p className="mb-3 text-sm text-slate-500">{scheduleHint}</p>}
 
       {restaurantOptions.length === 0 ? (
         <p className="text-sm text-slate-500">Немає закладів, доступних для перегляду.</p>
+      ) : viewMode === "week" ? (
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+            <span className="font-semibold text-slate-700">
+              Тиждень: {formatDayLabel(weekDates[0] || date)}–{formatDayLabel(weekDates[6] || date)}
+            </span>
+            {weekLoading && <span className="text-slate-500">Завантаження…</span>}
+          </div>
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-700">
+              <tr>
+                <th className="px-3 py-2 text-left">День</th>
+                <th className="px-2 py-2 text-right">План ТО</th>
+                <th className="px-2 py-2 text-right">Факт ТО</th>
+                <th className="px-2 py-2 text-right">План Гості</th>
+                <th className="px-2 py-2 text-right">Факт Гості</th>
+                <th className="px-2 py-2 text-right">План Сер. чек</th>
+                <th className="px-2 py-2 text-right">Факт Сер. чек</th>
+                <th className="px-3 py-2 text-left">Погода</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-t border-slate-200 bg-amber-50 font-semibold">
+                <td className="px-3 py-2">Тотал</td>
+                <td className="px-2 py-2 text-right">{formatNumber(weekTotals.planTo)}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(weekTotals.factTo)}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(weekTotals.planGosti)}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(weekTotals.factGosti)}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(averageCheck(weekTotals.planTo, weekTotals.planGosti))}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(averageCheck(weekTotals.factTo, weekTotals.factGosti))}</td>
+                <td className="px-3 py-2"></td>
+              </tr>
+              {weekRows.map((r) => (
+                <tr
+                  key={r.iso}
+                  onClick={() => { setDate(r.iso); setViewMode("day"); }}
+                  title="Відкрити день"
+                  className={`cursor-pointer border-t border-slate-200 hover:bg-indigo-50 ${r.iso === date ? "bg-indigo-50/50" : ""}`}
+                >
+                  <td className="px-3 py-2 font-medium text-slate-700">
+                    {r.weekdayLabel} · {formatDayLabel(r.iso)}
+                  </td>
+                  <td className="px-2 py-2 text-right">{formatNumber(r.planTo)}</td>
+                  <td className="px-2 py-2 text-right">{formatNumber(r.factTo)}</td>
+                  <td className="px-2 py-2 text-right">{formatNumber(r.planGosti)}</td>
+                  <td className="px-2 py-2 text-right">{formatNumber(r.factGosti)}</td>
+                  <td className="px-2 py-2 text-right text-slate-600">{formatNumber(averageCheck(r.planTo, r.planGosti))}</td>
+                  <td className="px-2 py-2 text-right text-slate-600">{formatNumber(averageCheck(r.factTo, r.factGosti))}</td>
+                  <td className="px-3 py-2 text-slate-500">{r.weather || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <div className="overflow-x-auto rounded-lg border border-slate-200">
           <table className="w-full table-fixed text-xs">
