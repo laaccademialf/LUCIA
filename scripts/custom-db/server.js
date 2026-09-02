@@ -5294,6 +5294,10 @@ const SESSION_AUTH_PATHS = new Set([
   "/api/settings/viksoft/test",
   "/api/settings/notifications",
   "/api/settings/notifications/test",
+  "/api/settings/servio",
+  "/api/settings/servio/test",
+  "/api/servio/restaurants",
+  "/api/servio/sales",
 ]);
 
 // Session-based авторизація для глобального gate: якщо запит несе валідний
@@ -5858,6 +5862,175 @@ const server = http.createServer(async (req, res) => {
       }
 
       return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
+    }
+  }
+
+  // ---- Servio (MS SQL) settings + fact-продажів ----
+  // Зберігаємо в тому ж runtime-settings.json під ключем `servio`.
+  if (pathname === "/api/settings/servio" && method === "GET") {
+    const profile = await resolveAuthProfileWithFallback(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    if (!hasAdminRole(profile)) return sendJson(res, 403, { ok: false, error: "Only admin can view Servio settings" });
+    try {
+      const settings = await readSettingsFile();
+      const saved = (settings && settings.servio) || {};
+      const { getServioPublicConfig } = await import("../servioApi.js");
+      const effective = getServioPublicConfig();
+      return sendJson(res, 200, {
+        ok: true,
+        saved: {
+          configured: Boolean(saved.password),
+          host: String(saved.host || ""),
+          port: Number(saved.port || 1433),
+          database: String(saved.database || "Loyalty"),
+          user: String(saved.user || ""),
+          hasPassword: Boolean(saved.password),
+          mapping: (saved.mapping && typeof saved.mapping === "object") ? saved.mapping : {},
+          restaurants: Array.isArray(saved.restaurants) ? saved.restaurants : [],
+          updatedAt: saved.updatedAt || null,
+        },
+        effective,
+      });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
+    }
+  }
+
+  if (pathname === "/api/settings/servio" && method === "PUT") {
+    const profile = await resolveAuthProfileWithFallback(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    if (!hasAdminRole(profile)) return sendJson(res, 403, { ok: false, error: "Only admin can change Servio settings" });
+    let payload;
+    try {
+      payload = await parseJsonBody(req);
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, error: `Invalid JSON: ${error.message}` });
+    }
+    const host = String(payload?.host || "").trim();
+    const port = Number.parseInt(String(payload?.port ?? 1433), 10) || 1433;
+    const database = String(payload?.database || "").trim() || "Loyalty";
+    const user = String(payload?.user || "").trim();
+    const passwordProvided = Object.prototype.hasOwnProperty.call(payload || {}, "password");
+    const newPassword = passwordProvided ? String(payload.password || "") : null;
+
+    if (!host) return sendJson(res, 400, { ok: false, error: "host (IP) обовʼязковий" });
+    if (!user) return sendJson(res, 400, { ok: false, error: "user (login) обовʼязковий" });
+
+    const settings = await readSettingsFile();
+    const prev = (settings && settings.servio) || {};
+    const nextServio = {
+      host,
+      port,
+      database,
+      user,
+      password: newPassword !== null ? newPassword : (prev.password || ""),
+      mapping: (payload?.mapping && typeof payload.mapping === "object") ? payload.mapping : (prev.mapping || {}),
+      restaurants: Array.isArray(payload?.restaurants) ? payload.restaurants : (prev.restaurants || []),
+      updatedAt: new Date().toISOString(),
+    };
+    await writeSettingsFile({
+      ...settings,
+      servio: nextServio,
+      updatedAt: new Date().toISOString(),
+    });
+    let persistedToEnv = false;
+    try {
+      await updateEnvFile(RUNTIME_SETTINGS_ENV_FILE, {
+        SERVIO_HOST: nextServio.host || null,
+        SERVIO_PORT: String(nextServio.port || 1433),
+        SERVIO_DATABASE: nextServio.database || null,
+        SERVIO_USER: nextServio.user || null,
+        SERVIO_PASSWORD: nextServio.password || null,
+      });
+      if (nextServio.host) process.env.SERVIO_HOST = nextServio.host;
+      if (nextServio.port) process.env.SERVIO_PORT = String(nextServio.port);
+      if (nextServio.database) process.env.SERVIO_DATABASE = nextServio.database;
+      if (nextServio.user) process.env.SERVIO_USER = nextServio.user;
+      if (nextServio.password) process.env.SERVIO_PASSWORD = nextServio.password;
+      persistedToEnv = true;
+    } catch (e) {
+      console.warn(`[servio] persist to env failed: ${e?.message || e}`);
+    }
+    try {
+      const { setServioRuntimeConfig } = await import("../servioApi.js");
+      setServioRuntimeConfig({
+        host: nextServio.host,
+        port: nextServio.port,
+        database: nextServio.database,
+        user: nextServio.user,
+        password: nextServio.password,
+      });
+    } catch (e) {
+      console.warn(`[servio] runtime apply failed: ${e?.message || e}`);
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      persistedToEnv,
+      saved: { configured: Boolean(nextServio.password), updatedAt: nextServio.updatedAt },
+    });
+  }
+
+  if (pathname === "/api/settings/servio/test" && method === "POST") {
+    const profile = await resolveAuthProfileWithFallback(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    if (!hasAdminRole(profile)) return sendJson(res, 403, { ok: false, error: "Only admin can test Servio settings" });
+    let payload = {};
+    try { payload = await parseJsonBody(req); } catch { payload = {}; }
+    try {
+      const { testServioConnection } = await import("../servioApi.js");
+      const override = (payload && (payload.host || payload.user || payload.password || payload.port || payload.database))
+        ? { host: payload.host, port: payload.port, database: payload.database, user: payload.user, password: payload.password }
+        : undefined;
+      const result = await testServioConnection(override);
+      return sendJson(res, 200, result);
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
+    }
+  }
+
+  // Довідник ресторанів Servio (BaseExternalID + BaseExternalName).
+  if (pathname === "/api/servio/restaurants" && method === "GET") {
+    const profile = await resolveAuthProfileWithFallback(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    if (!hasAdminRole(profile)) return sendJson(res, 403, { ok: false, error: "Only admin can sync Servio restaurants" });
+    try {
+      const { fetchServioRestaurants } = await import("../servioApi.js");
+      const restaurants = await fetchServioRestaurants();
+      // Кешуємо довідник у налаштуваннях для мапінгу без повторного запиту.
+      try {
+        const settings = await readSettingsFile();
+        await writeSettingsFile({
+          ...settings,
+          servio: { ...(settings?.servio || {}), restaurants, updatedAt: new Date().toISOString() },
+          updatedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.warn(`[servio] cache restaurants failed: ${e?.message || e}`);
+      }
+      return sendJson(res, 200, { ok: true, restaurants });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
+    }
+  }
+
+  // Погодинний факт продажів за період + restCode (CSV BaseExternalID).
+  if (pathname === "/api/servio/sales" && method === "POST") {
+    const profile = await resolveAuthProfileWithFallback(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    let payload = {};
+    try { payload = await parseJsonBody(req); } catch { payload = {}; }
+    const startDate = String(payload?.startDate || "").trim();
+    const endDate = String(payload?.endDate || "").trim();
+    const restCode = String(payload?.restCode ?? "").trim();
+    if (!startDate || !endDate) {
+      return sendJson(res, 400, { ok: false, error: "startDate та endDate обовʼязкові" });
+    }
+    try {
+      const { fetchServioHourlySales } = await import("../servioApi.js");
+      const rows = await fetchServioHourlySales({ startDate, endDate, restCode });
+      return sendJson(res, 200, { ok: true, rows });
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
     }

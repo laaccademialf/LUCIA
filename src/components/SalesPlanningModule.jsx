@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import DatePickerPopover from "./DatePickerPopover";
+import ServioSalesSettings from "./ServioSalesSettings";
 import {
   createCollectionItemApi,
   getCollectionItemApi,
   isCollectionsApiEnabled,
 } from "../api/collectionsApi";
+import {
+  fetchServioSales,
+  getServioSettings,
+  isServioApiEnabled,
+} from "../api/servioSettingsApi";
 
 // Погодинні рядки з 08:00 до 23:00 включно, як у паперовому шаблоні планування.
 const HOURS = Array.from({ length: 16 }, (_, i) => `${String(i + 8).padStart(2, "0")}:00:00`);
@@ -34,11 +40,12 @@ const getVisibleHours = (schedule, isoDate) => {
   if (!Number.isFinite(openHour) || !Number.isFinite(closeHour)) return HOURS;
   if (closeHour <= openHour && !(closeMinute > 0)) return HOURS; // цілодобово або некоректний графік — показуємо всі години
 
-  // Годину закриття теж показуємо, щоб графік роботи повністю відображався у таблиці.
+  // Рядок з міткою "hh:00" відображає годину роботи, що завершується о цій годині,
+  // тож перший рядок — це openHour+1 (перша повна робоча година), а останній — closeHour.
   const lastHour = closeHour;
   return HOURS.filter((hour) => {
     const hh = Number(hour.split(":")[0]);
-    return hh >= openHour && hh <= lastHour;
+    return hh > openHour && hh <= lastHour;
   });
 };
 
@@ -58,6 +65,20 @@ const formatNumber = (value) => (value ? new Intl.NumberFormat("uk-UA", { maximu
 const averageCheck = (turnover, guests) => (guests > 0 ? Math.round(turnover / guests) : 0);
 const buildDocId = (restaurantId, date) => `${restaurantId}__${date}`;
 
+// Розподіляє введене вручну загальне значення порівну на кількість робочих годин
+// (залишок додається до перших годин), точно зберігаючи суму, що дорівнює введеному тоталу.
+const distributeTotalAcrossHours = (hours, targetTotal) => {
+  const n = hours.length;
+  if (n === 0) return {};
+  const total = Math.round(targetTotal);
+  const base = Math.floor(total / n);
+  const remainder = total - base * n;
+
+  return Object.fromEntries(
+    hours.map((hour, i) => [hour, String(base + (i < remainder ? 1 : 0))])
+  );
+};
+
 export default function SalesPlanningModule({ user, restaurants = [], topTab }) {
   const isAdmin = user?.role === "admin";
   const userRestaurantIds = (Array.isArray(user?.restaurants) && user.restaurants.length
@@ -74,6 +95,25 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   const [hourlyData, setHourlyData] = useState(emptyHours);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
+  const [servioMapping, setServioMapping] = useState({});
+  const [fetchingFact, setFetchingFact] = useState(false);
+
+  const isSettingsTab = /setting|налашт/.test(String(topTab || "").toLowerCase());
+
+  // Мапінг «заклад LUCIA → BaseExternalID Servio» для підстановки в @RestCode.
+  useEffect(() => {
+    if (isSettingsTab || !isServioApiEnabled()) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await getServioSettings();
+        if (!cancelled) setServioMapping(res?.saved?.mapping && typeof res.saved.mapping === "object" ? res.saved.mapping : {});
+      } catch {
+        // ignore — факт із Servio просто буде недоступний
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isSettingsTab]);
 
   useEffect(() => {
     if (selectedRestaurantId && restaurantOptions.some((r) => String(r.id) === selectedRestaurantId)) return;
@@ -138,6 +178,31 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     }));
   };
 
+  // Ручне введення тотала по "План ТО" / "План Гості" автоматично розносить значення по годинах.
+  const handleTotalPlanChange = (field, value) => {
+    const targetTotal = toNumber(value);
+    setHourlyData((prev) => {
+      const distributed = distributeTotalAcrossHours(visibleHours, targetTotal);
+      const next = { ...prev };
+      visibleHours.forEach((hour) => {
+        next[hour] = { ...(next[hour] || emptyHourRow()), [field]: distributed[hour] };
+      });
+      return next;
+    });
+  };
+
+  // Ручне введення тотала "План Сер. чек" перераховує потрібний тотал "План ТО" (за поточною
+  // кількістю Гостей) і розносить його по годинах пропорційно.
+  const handleTotalPlanAvgCheckChange = (value) => {
+    if (totals.planGosti <= 0) {
+      setStatus("Спочатку вкажіть План Гості, щоб розрахувати План Сер. чек.");
+      return;
+    }
+    const targetAvgCheck = toNumber(value);
+    const targetTotalPlanTo = targetAvgCheck * totals.planGosti;
+    handleTotalPlanChange("planTo", targetTotalPlanTo);
+  };
+
   const handleSave = async () => {
     if (!canEdit) return;
     if (!isCollectionsApiEnabled()) {
@@ -160,15 +225,54 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     }
   };
 
-  const isSettingsTab = /setting|налашт/.test(String(topTab || "").toLowerCase());
+  // Підтягує погодинний факт продажів безпосередньо з бази Servio за обрану дату.
+  const handleFetchFactFromServio = async () => {
+    if (!selectedRestaurantId) return;
+    const restCode = String(servioMapping[String(selectedRestaurantId)] ?? "").trim();
+    if (!restCode) {
+      setStatus("Заклад не зіставлено з рестораном Servio. Налаштуйте відповідність у «Налаштуваннях продажів».");
+      return;
+    }
+    setFetchingFact(true);
+    setStatus("Завантаження факту з Servio...");
+    try {
+      const rows = await fetchServioSales({
+        startDate: date,
+        endDate: `${date} 23:59:59`,
+        restCode,
+      });
+      const byHour = {};
+      for (const row of rows) {
+        // Рядок «hh:00» позначає годину, що завершується о hh — це HourTo із запиту.
+        const key = `${String(row.hourTo).padStart(2, "0")}:00:00`;
+        byHour[key] = {
+          factTo: row.totalSales ? String(Math.round(row.totalSales)) : "",
+          factGosti: row.guestCount ? String(row.guestCount) : "",
+        };
+      }
+      setHourlyData((prev) => {
+        const next = { ...prev };
+        for (const hour of Object.keys(next)) {
+          const fact = byHour[hour];
+          next[hour] = {
+            ...(next[hour] || emptyHourRow()),
+            factTo: fact ? fact.factTo : "",
+            factGosti: fact ? fact.factGosti : "",
+          };
+        }
+        return next;
+      });
+      const matched = Object.keys(byHour).length;
+      setStatus(matched ? `Факт завантажено (годин: ${matched}). Натисніть «Зберегти».` : "За цю дату Servio не повернув даних.");
+    } catch (error) {
+      setStatus(`Помилка завантаження факту: ${error?.message || error}`);
+    } finally {
+      setFetchingFact(false);
+    }
+  };
 
   if (isSettingsTab) {
-    return (
-      <div className="card p-5 bg-white border border-slate-200 text-slate-900 shadow-xl">
-        <h2 className="text-lg font-semibold">Налаштування продажів</h2>
-        <p className="mt-2 text-sm text-slate-600">Розділ у розробці. План і факт по годинах вводяться на вкладці «Планування».</p>
-      </div>
-    );
+    return <ServioSalesSettings restaurants={restaurantOptions} />;
   }
 
   return (
@@ -191,6 +295,17 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
             </select>
           )}
           <DatePickerPopover value={date} onChange={setDate} />
+          {canEdit && isServioApiEnabled() && (
+            <button
+              type="button"
+              onClick={handleFetchFactFromServio}
+              disabled={fetchingFact || loading}
+              title="Завантажити погодинний факт продажів безпосередньо з бази Servio"
+              className="inline-flex items-center gap-2 rounded-lg border border-indigo-300 px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {fetchingFact ? "Завантаження..." : "Підтягнути факт із Servio"}
+            </button>
+          )}
           {canEdit && (
             <button
               type="button"
@@ -237,11 +352,41 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
             <tbody>
               <tr className="border-t border-slate-200 bg-amber-50 font-semibold">
                 <td className="px-2 py-1.5">Тотал</td>
-                <td className="px-1.5 py-1.5 text-right">{formatNumber(totals.planTo)}</td>
+                <td className="px-1.5 py-1.5 text-right">
+                  <input
+                    type="number"
+                    value={totals.planTo || ""}
+                    onChange={(e) => handleTotalPlanChange("planTo", e.target.value)}
+                    onBlur={handleSave}
+                    disabled={!canEdit}
+                    title="Введіть загальний план — розподілиться по годинах автоматично"
+                    className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+                  />
+                </td>
                 <td className="px-1.5 py-1.5 text-right">{formatNumber(totals.factTo)}</td>
-                <td className="px-1.5 py-1.5 text-right">{formatNumber(totals.planGosti)}</td>
+                <td className="px-1.5 py-1.5 text-right">
+                  <input
+                    type="number"
+                    value={totals.planGosti || ""}
+                    onChange={(e) => handleTotalPlanChange("planGosti", e.target.value)}
+                    onBlur={handleSave}
+                    disabled={!canEdit}
+                    title="Введіть загальний план — розподілиться по годинах автоматично"
+                    className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+                  />
+                </td>
                 <td className="px-1.5 py-1.5 text-right">{formatNumber(totals.factGosti)}</td>
-                <td className="px-1.5 py-1.5 text-right">{formatNumber(averageCheck(totals.planTo, totals.planGosti))}</td>
+                <td className="px-1.5 py-1.5 text-right">
+                  <input
+                    type="number"
+                    value={averageCheck(totals.planTo, totals.planGosti) || ""}
+                    onChange={(e) => handleTotalPlanAvgCheckChange(e.target.value)}
+                    onBlur={handleSave}
+                    disabled={!canEdit}
+                    title="Введіть плановий сер. чек — план ТО перерахується та розподілиться по годинах"
+                    className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+                  />
+                </td>
                 <td className="px-1.5 py-1.5 text-right">{formatNumber(averageCheck(totals.factTo, totals.factGosti))}</td>
                 <td className="px-1.5 py-1.5"></td>
               </tr>
