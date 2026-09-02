@@ -81,6 +81,20 @@ const DateRangePickerPopover = ({ from, to, onChange, min, max, label = "Пер�
     return false;
   };
 
+  const todayQuickIso = dateToIso(new Date());
+  const yesterdayQuickIso = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return dateToIso(d);
+  })();
+  // Швидкий вибір одноденного періоду (Вчора/Сьогодні) — щоб повернутись до поточних показників.
+  const selectQuickDay = (iso) => {
+    if (isDisabled(isoToDate(iso))) return;
+    onChange?.({ from: iso, to: iso });
+    setPendingFrom(null);
+    setOpen(false);
+  };
+
   const goPrevMonth = () => {
     const m = viewMonth - 1;
     if (m < 0) { setViewMonth(11); setViewYear(viewYear - 1); }
@@ -179,7 +193,25 @@ const DateRangePickerPopover = ({ from, to, onChange, min, max, label = "Пер�
               );
             })}
           </div>
-          <div className="mt-2 flex items-center justify-end gap-2 text-xs">
+          <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                disabled={isDisabled(isoToDate(yesterdayQuickIso))}
+                onClick={() => selectQuickDay(yesterdayQuickIso)}
+                className="rounded px-2 py-1 font-semibold text-indigo-600 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"
+              >
+                Вчора
+              </button>
+              <button
+                type="button"
+                disabled={isDisabled(isoToDate(todayQuickIso))}
+                onClick={() => selectQuickDay(todayQuickIso)}
+                className="rounded px-2 py-1 font-semibold text-indigo-600 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"
+              >
+                Сьогодні
+              </button>
+            </div>
             <button
               type="button"
               onClick={() => { setPendingFrom(null); setOpen(false); }}

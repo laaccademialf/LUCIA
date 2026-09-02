@@ -41,7 +41,7 @@ import { UsersTable } from "./components/UsersTable";
 import UtilityMetersManager from "./components/UtilityMetersManager";
 import UtilitiesManagementModule from "./components/UtilitiesManagementModule";
 import ElectricityTab from "./components/ElectricityTab";
-import DatePickerPopover from "./components/DatePickerPopover";
+import DateRangePickerPopover from "./components/DateRangePickerPopover";
 import { MaterialResponsibilityManager } from "./components/MaterialResponsibilityManager";
 import AssetTransferWriteoffManager from "./components/AssetTransferWriteoffManager";
 import HaccpModule from "./components/HaccpModule";
@@ -77,6 +77,49 @@ import { isLegalUser, LEGAL_NAV_ID, getLegalUserIdentityKeys, normalizeLegalIden
 
 
 const loadExcelHelpers = () => import("./utils/excelHelpers");
+
+// Погодинні рядки з 08:00 до 23:00 — узгоджено з таблицею плану/факту продажів (SalesPlanningModule).
+const DASHBOARD_SALES_HOURS = Array.from({ length: 16 }, (_, i) => `${String(i + 8).padStart(2, "0")}:00:00`);
+const DASHBOARD_DAY_KEYS_BY_INDEX = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const getDashboardDayKey = (isoDate) => {
+  const parsed = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return DASHBOARD_DAY_KEYS_BY_INDEX[parsed.getDay()];
+};
+// Годинний діапазон дашборду обмежується графіком роботи закладу на обраний день (Налаштування → Ресторани → Графік роботи).
+const getDashboardScheduleHours = (schedule, isoDate) => {
+  const dayKey = getDashboardDayKey(isoDate);
+  const daySchedule = dayKey ? schedule?.[dayKey] : null;
+  const from = daySchedule?.from;
+  const to = daySchedule?.to;
+  if (!from || !to) return DASHBOARD_SALES_HOURS;
+  const [openHour] = from.split(":").map(Number);
+  const [closeHour, closeMinute] = to.split(":").map(Number);
+  if (!Number.isFinite(openHour) || !Number.isFinite(closeHour)) return DASHBOARD_SALES_HOURS;
+  if (closeHour <= openHour && !(closeMinute > 0)) return DASHBOARD_SALES_HOURS; // цілодобово або некоректний графік
+  return DASHBOARD_SALES_HOURS.filter((hour) => {
+    const hh = Number(hour.split(":")[0]);
+    return hh >= openHour && hh <= closeHour;
+  });
+};
+// Перелік ISO-дат від fromIso до toIso включно (для сум за обраний період на дашборді).
+const getDatesInRange = (fromIso, toIso) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(fromIso || "")) || !/^\d{4}-\d{2}-\d{2}$/.test(String(toIso || ""))) return [];
+  const dates = [];
+  const cursor = new Date(`${fromIso}T00:00:00`);
+  const end = new Date(`${toIso}T00:00:00`);
+  let guard = 0;
+  while (cursor <= end && guard < 3660) {
+    const y = cursor.getFullYear();
+    const m = String(cursor.getMonth() + 1).padStart(2, "0");
+    const d = String(cursor.getDate()).padStart(2, "0");
+    dates.push(`${y}-${m}-${d}`);
+    cursor.setDate(cursor.getDate() + 1);
+    guard += 1;
+  }
+  return dates;
+};
+
 
 // На мобільних мережах динамічний import() чанку інколи падає через тимчасовий
 // обрив зʼєднання — і тоді користувач бачив екран помилки / був змушений
@@ -737,8 +780,10 @@ function App() {
                       const [scheduleSaving, setScheduleSaving] = useState(false);
                       // Фільтр закладу для дашборду утиліт ("" = всі доступні заклади).
                       const [dashboardRestaurantFilter, setDashboardRestaurantFilter] = useState("");
-                      // Фільтр дати для дашборду утиліт ("" = вчора).
-                      const [dashboardDateFilter, setDashboardDateFilter] = useState("");
+                      // Фільтр періоду для дашборду утиліт (from/to порожні = вчора).
+                      const [dashboardDateFilter, setDashboardDateFilter] = useState({ from: "", to: "" });
+                      // Фільтр часу для плиток ТО/Гості/Сер.чек ("" = увесь робочий день за графіком).
+                      const [dashboardHourFilter, setDashboardHourFilter] = useState("");
                       // Модальне вікно «Загальна інформація» по всіх закладах.
                       const [showDashboardSummaryModal, setShowDashboardSummaryModal] = useState(false);
                       // Стан для вибраного ресторану (редагування)
@@ -808,6 +853,8 @@ function App() {
         const [restaurants, setRestaurants] = useState([]);
         // Показники електроенергії (для огляду системи на дашборді)
         const [electricityReadings, setElectricityReadings] = useState([]);
+        // План/факт продажів по годинах (для плиток ТО/Гості/Сер.чек на дашборді)
+        const [salesHourlyPlans, setSalesHourlyPlans] = useState([]);
       const initialNavigationRef = useRef(null);
       if (initialNavigationRef.current === null) {
         initialNavigationRef.current = getNavigationStateFromLocation();
@@ -1644,6 +1691,29 @@ function App() {
     return () => { cancelled = true; };
   }, [user?.uid, user?.id]);
 
+  // Завантаження плану/факту продажів по годинах для плиток ТО/Гості/Сер.чек на дашборді.
+  // Перезавантажуємо щоразу при відкритті дашборду, щоб підхопити свіжі дані,
+  // збережені на вкладці «Продажі» під час поточної сесії.
+  useEffect(() => {
+    if (!isCollectionsApiEnabled()) return;
+    const isDashboardView =
+      activeNav === "dashboard" ||
+      activeNav === "dashboard-ops" ||
+      String(activeNav || "").includes("dashboard") ||
+      topTab === "maindashboard" ||
+      topTab === "dashboard-ops";
+    if (!isDashboardView) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const plans = await listCollectionItemsApi("salesHourlyPlans");
+        if (cancelled) return;
+        setSalesHourlyPlans(Array.isArray(plans) ? plans : []);
+      } catch { /* колекція може бути порожньою */ }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.uid, user?.id, activeNav, topTab]);
+
   // Допоміжна функція для отримання вкладок для конкретного підрозділу з menuStructure
   const getTabsForSection = (navId) => {
     if (!navId || !Array.isArray(menuStructure)) return [];
@@ -1695,15 +1765,16 @@ function App() {
     return [];
   }, [activeNav, menuStructure, user, userPermissions]);
 
-  // Огляд спожитої електроенергії за обрану дату (типово вчора, A+) по доступних закладах.
+  // Огляд спожитої електроенергії за обраний період (типово вчора, A+) по доступних закладах.
   const electricityOverview = useMemo(() => {
     const y = new Date();
     y.setDate(y.getDate() - 1);
     const yesterdayIso = y.toISOString().slice(0, 10);
-    const pickedIso = /^\d{4}-\d{2}-\d{2}$/.test(String(dashboardDateFilter || "").trim())
-      ? String(dashboardDateFilter).trim()
-      : "";
-    const yIso = pickedIso || yesterdayIso;
+    const isValidIso = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "").trim());
+    const pickedFrom = isValidIso(dashboardDateFilter?.from) ? String(dashboardDateFilter.from).trim() : "";
+    const pickedTo = isValidIso(dashboardDateFilter?.to) ? String(dashboardDateFilter.to).trim() : "";
+    const fromIso = pickedFrom || pickedTo || yesterdayIso;
+    const toIso = pickedTo || pickedFrom || yesterdayIso;
     const isGen = (label) => /генератор/i.test(String(label || ""));
     const isAplus = (label) => /a\+/i.test(String(label || ""));
     // Генераторний лічильник реєструє виробіток у ЗВОРОТНОМУ напрямку (A-),
@@ -1726,7 +1797,8 @@ function App() {
       let hasData = false;
       for (const rec of electricityReadings) {
         if (String(rec?.restaurantId || "") !== String(restaurantId)) continue;
-        if (String(rec?.date || "").slice(0, 10) !== yIso) continue;
+        const recIso = String(rec?.date || "").slice(0, 10);
+        if (recIso < fromIso || recIso > toIso) continue;
         const meters = Array.isArray(rec?.meters) ? rec.meters : [];
         for (const m of meters) {
           const label = String(m?.meterNumber || m?.meterId || "");
@@ -1781,8 +1853,10 @@ function App() {
     const totalGen = perRestaurant.reduce((a, b) => a + b.gen, 0);
     const totalGenHours = perRestaurant.reduce((a, b) => a + (Number(b.genHours) || 0), 0);
     return {
-      yIso,
-      isYesterday: yIso === yesterdayIso,
+      fromIso,
+      toIso,
+      isSingleDay: fromIso === toIso,
+      isYesterday: fromIso === toIso && toIso === yesterdayIso,
       perRestaurantAll,
       perRestaurant,
       totalMains,
@@ -1798,6 +1872,66 @@ function App() {
     const exists = restaurants.some((r) => String(r?.id || "") === String(dashboardRestaurantFilter));
     if (!exists) setDashboardRestaurantFilter("");
   }, [restaurants, dashboardRestaurantFilter]);
+
+  // Часовий діапазон для плиток ТО/Гості/Сер.чек — за графіком роботи обраного закладу на останній день обраного періоду.
+  const dashboardScheduleHours = useMemo(() => {
+    const targetRestaurantId = String(dashboardRestaurantFilter || "").trim();
+    const scheduleRestaurant = targetRestaurantId
+      ? restaurants.find((r) => String(r?.id || "") === targetRestaurantId)
+      : null;
+    return getDashboardScheduleHours(scheduleRestaurant?.schedule, electricityOverview.toIso);
+  }, [restaurants, dashboardRestaurantFilter, electricityOverview.toIso]);
+
+  // Скидаємо фільтр часу, якщо обрана година більше не входить у графік роботи (зміна закладу/дати).
+  useEffect(() => {
+    if (!dashboardHourFilter) return;
+    if (!dashboardScheduleHours.includes(dashboardHourFilter)) setDashboardHourFilter("");
+  }, [dashboardScheduleHours, dashboardHourFilter]);
+
+  // Огляд плану/факту продажів (ТО, гості, середній чек) за обрані заклад/період/час — сума по всіх днях періоду.
+  const salesOverview = useMemo(() => {
+    const targetDates = getDatesInRange(electricityOverview.fromIso, electricityOverview.toIso);
+    const targetRestaurantId = String(dashboardRestaurantFilter || "").trim();
+    const cutoffHour = dashboardHourFilter
+      ? Number(String(dashboardHourFilter).split(":")[0])
+      : null;
+
+    const restaurantsToSum = targetRestaurantId
+      ? restaurants.filter((r) => String(r?.id || "") === targetRestaurantId)
+      : restaurants;
+
+    const totals = { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0 };
+    for (const r of restaurantsToSum) {
+      for (const targetIso of targetDates) {
+        const hoursForRestaurant = getDashboardScheduleHours(r?.schedule, targetIso)
+          .filter((hour) => cutoffHour === null || Number(hour.split(":")[0]) <= cutoffHour);
+        const rec = salesHourlyPlans.find(
+          (item) => String(item?.restaurantId || "") === String(r.id) && String(item?.date || "").slice(0, 10) === targetIso
+        );
+        const hours = rec?.hours && typeof rec.hours === "object" ? rec.hours : {};
+        for (const hour of hoursForRestaurant) {
+          const row = hours[hour] || {};
+          totals.planTo += Number(String(row.planTo ?? "").replace(",", ".")) || 0;
+          totals.factTo += Number(String(row.factTo ?? "").replace(",", ".")) || 0;
+          totals.planGosti += Number(String(row.planGosti ?? "").replace(",", ".")) || 0;
+          totals.factGosti += Number(String(row.factGosti ?? "").replace(",", ".")) || 0;
+        }
+      }
+    }
+
+    const planCheck = totals.planGosti > 0 ? totals.planTo / totals.planGosti : 0;
+    const factCheck = totals.factGosti > 0 ? totals.factTo / totals.factGosti : 0;
+    const pctVsPlan = (fact, plan) => (plan > 0 ? ((fact - plan) / plan) * 100 : null);
+
+    return {
+      ...totals,
+      planCheck,
+      factCheck,
+      pctTo: pctVsPlan(totals.factTo, totals.planTo),
+      pctGosti: pctVsPlan(totals.factGosti, totals.planGosti),
+      pctCheck: pctVsPlan(factCheck, planCheck),
+    };
+  }, [salesHourlyPlans, restaurants, dashboardRestaurantFilter, dashboardHourFilter, electricityOverview.fromIso, electricityOverview.toIso]);
 
   const menuStructureForPermissions = useMemo(() => {
     // Базова структура навігації
@@ -3381,12 +3515,47 @@ function App() {
             return `${hours} год ${minutes} хв`;
           };
           const ov = electricityOverview;
+          const sv = salesOverview;
+          const fmtGrn = (n) => `${Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 0 })} грн`;
+          const fmtPct = (pct) => {
+            if (!Number.isFinite(pct)) return "н/д";
+            const abs = Math.abs(pct);
+            return `${pct > 0 ? "+" : pct < 0 ? "-" : ""}${abs.toFixed(1)}%`;
+          };
+          const PlanFactBadge = ({ pct }) => {
+            const isUp = Number.isFinite(pct) && pct > 0;
+            const isDown = Number.isFinite(pct) && pct < 0;
+            const toneClass = isUp
+              ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+              : isDown
+                ? "text-rose-700 bg-rose-50 border-rose-200"
+                : "text-slate-500 bg-slate-50 border-slate-200";
+            return (
+              <span className={`inline-flex items-center gap-0.5 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold leading-none whitespace-nowrap ${toneClass}`}>
+                {isUp ? <TrendingUp size={11} /> : isDown ? <TrendingDown size={11} /> : null}
+                {fmtPct(pct)}
+              </span>
+            );
+          };
+          const PlanFactTile = ({ title, plan, fact, pct, formatter, borderClass, bgClass, textClass }) => (
+            <div className={`rounded-lg border ${borderClass} ${bgClass} p-2 shadow-sm sm:p-3`}>
+              <div className="flex items-center justify-between gap-2">
+                <p className={`text-[10px] leading-tight font-semibold sm:text-xs ${textClass}`}>{title}</p>
+                <PlanFactBadge pct={pct} />
+              </div>
+              <p className={`mt-0.5 text-base leading-none font-bold sm:text-2xl ${textClass}`}>{formatter(fact)}</p>
+              <p className="mt-1 text-[10px] leading-none text-slate-500 sm:text-xs">План: {formatter(plan)}</p>
+            </div>
+          );
           const dashboardRestaurantOptions = Array.isArray(restaurants) ? restaurants : [];
+
           const showDashboardRestaurantSelector = user?.role === "admin" || dashboardRestaurantOptions.length > 1;
           const fmtDateUk = (iso) => {
             const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
             return m ? `${m[3]}.${m[2]}.${m[1]}` : String(iso || "");
           };
+          const fmtDateRangeUk = (fromIso, toIso) =>
+            fromIso === toIso ? fmtDateUk(toIso) : `${fmtDateUk(fromIso)} – ${fmtDateUk(toIso)}`;
 
           const allTotalMains = (ov.perRestaurantAll || []).reduce((sum, row) => sum + Number(row?.mains || 0), 0);
           const allTotalGen = (ov.perRestaurantAll || []).reduce((sum, row) => sum + Number(row?.gen || 0), 0);
@@ -3433,26 +3602,33 @@ function App() {
             return byRestaurant;
           };
           const mainsByRestaurantDate = collectMainsByRestaurantAndDate();
-          const targetIso = ov.yIso;
-          const yesterdayIso = shiftIso(targetIso, -1);
-          const sameWeekdayLastIso = shiftIso(targetIso, -7);
-          const sameWeekday4Isos = [7, 14, 21, 28].map((d) => shiftIso(targetIso, -d));
+          const rangeDates = getDatesInRange(ov.fromIso, ov.toIso);
+          const numRangeDays = rangeDates.length || 1;
+          const shiftDates = (dates, days) => dates.map((iso) => shiftIso(iso, days));
+          const previousPeriodDates = shiftDates(rangeDates, -numRangeDays);
+          const sameWeekdayPeriodDates = shiftDates(rangeDates, -7);
+          const sameWeekday4PeriodsDates = [7, 14, 21, 28].map((d) => shiftDates(rangeDates, -d));
           const getRestaurantMainsForDate = (restaurantId, iso) => {
             const dateMap = mainsByRestaurantDate.get(String(restaurantId || ""));
             return Number(dateMap?.get(iso) || 0);
           };
-          const getAllMainsForDate = (iso) => {
+          const getRestaurantMainsForDates = (restaurantId, dates) =>
+            dates.reduce((sum, iso) => sum + getRestaurantMainsForDate(restaurantId, iso), 0);
+          const getAllMainsForDates = (dates) => {
             let total = 0;
             for (const r of dashboardRestaurantOptions) {
-              total += getRestaurantMainsForDate(r.id, iso);
+              total += getRestaurantMainsForDates(r.id, dates);
             }
             return total;
           };
           const avgSameWeekday4 = (getter) => {
-            const values = sameWeekday4Isos.map((iso) => Number(getter(iso) || 0)).filter((v) => Number.isFinite(v) && v > 0);
+            const values = sameWeekday4PeriodsDates.map((dates) => Number(getter(dates) || 0)).filter((v) => Number.isFinite(v) && v > 0);
             if (!values.length) return 0;
             return values.reduce((a, b) => a + b, 0) / values.length;
           };
+          const trendLabelPrev = ov.isSingleDay ? "До вчора" : "До попереднього періоду";
+          const trendLabelWeek = ov.isSingleDay ? "До цього ж дня тижня" : "До того ж періоду тиждень тому";
+          const trendLabelAvg4 = ov.isSingleDay ? "До середнього 4 останніх таких днів" : "До середнього 4 останніх таких періодів";
           const trendLabel = (pct) => {
             if (!Number.isFinite(pct)) return "н/д";
             const abs = Math.abs(pct);
@@ -3481,23 +3657,23 @@ function App() {
           const getTrendPackForRestaurant = (row) => {
             const current = Number(row?.mains || 0);
             const rid = row?.id;
-            const baselineYesterday = getRestaurantMainsForDate(rid, yesterdayIso);
-            const baselineSameDay = getRestaurantMainsForDate(rid, sameWeekdayLastIso);
-            const baseline4Avg = avgSameWeekday4((iso) => getRestaurantMainsForDate(rid, iso));
+            const baselinePrevious = getRestaurantMainsForDates(rid, previousPeriodDates);
+            const baselineSameWeekday = getRestaurantMainsForDates(rid, sameWeekdayPeriodDates);
+            const baseline4Avg = avgSameWeekday4((dates) => getRestaurantMainsForDates(rid, dates));
             return {
-              vsYesterday: pctDiff(current, baselineYesterday),
-              vsSameWeekday: pctDiff(current, baselineSameDay),
+              vsYesterday: pctDiff(current, baselinePrevious),
+              vsSameWeekday: pctDiff(current, baselineSameWeekday),
               vs4Avg: pctDiff(current, baseline4Avg),
             };
           };
           const totalTrendPack = (() => {
             const current = allTotalMains;
-            const baselineYesterday = getAllMainsForDate(yesterdayIso);
-            const baselineSameDay = getAllMainsForDate(sameWeekdayLastIso);
-            const baseline4Avg = avgSameWeekday4((iso) => getAllMainsForDate(iso));
+            const baselinePrevious = getAllMainsForDates(previousPeriodDates);
+            const baselineSameWeekday = getAllMainsForDates(sameWeekdayPeriodDates);
+            const baseline4Avg = avgSameWeekday4((dates) => getAllMainsForDates(dates));
             return {
-              vsYesterday: pctDiff(current, baselineYesterday),
-              vsSameWeekday: pctDiff(current, baselineSameDay),
+              vsYesterday: pctDiff(current, baselinePrevious),
+              vsSameWeekday: pctDiff(current, baselineSameWeekday),
               vs4Avg: pctDiff(current, baseline4Avg),
             };
           })();
@@ -3506,13 +3682,13 @@ function App() {
             <>
               <div className="space-y-4">
                 <div className="rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm sm:p-3">
-                  <div className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
-                    <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="w-full sm:w-56">
                       {showDashboardRestaurantSelector ? (
                         <select
                           value={dashboardRestaurantFilter}
                           onChange={(e) => setDashboardRestaurantFilter(e.target.value)}
-                          className="h-10 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none sm:min-w-[15rem]"
+                          className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                           aria-label="Обрати заклад"
                         >
                           <option value="">Всі доступні</option>
@@ -3526,24 +3702,44 @@ function App() {
                         </span>
                       )}
                     </div>
-                    <div className="min-w-0">
-                      <DatePickerPopover
+                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+                      <label className="text-xs font-semibold text-slate-600 whitespace-nowrap" htmlFor="dashboard-hour-filter">Час:</label>
+                      <select
+                        id="dashboard-hour-filter"
+                        value={dashboardHourFilter}
+                        onChange={(e) => setDashboardHourFilter(e.target.value)}
+                        className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm font-semibold text-slate-900 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                        aria-label="Фільтр часу за графіком роботи"
+                      >
+                        <option value="">Увесь робочий день</option>
+                        {dashboardScheduleHours.map((hour) => (
+                          <option key={hour} value={hour}>до {hour.slice(0, 5)}</option>
+                        ))}
+                      </select>
+                      <span className="text-[11px] text-slate-500 whitespace-nowrap">
+                        {dashboardScheduleHours.length
+                          ? `Графік: ${dashboardScheduleHours[0].slice(0, 5)}–${dashboardScheduleHours[dashboardScheduleHours.length - 1].slice(0, 5)}`
+                          : "Графік роботи не налаштовано"}
+                      </span>
+                    </div>
+                    <div className="shrink-0">
+                      <DateRangePickerPopover
                         label=""
-                        className="w-full"
-                        triggerClassName="h-10 px-3 py-2"
-                        value={dashboardDateFilter || ov.yIso}
+                        from={dashboardDateFilter.from || ov.fromIso}
+                        to={dashboardDateFilter.to || ov.toIso}
                         max={new Date().toISOString().slice(0, 10)}
-                        onChange={(nextIso) => {
+                        onChange={({ from, to }) => {
                           const fallback = (() => {
                             const d = new Date();
                             d.setDate(d.getDate() - 1);
                             return d.toISOString().slice(0, 10);
                           })();
-                          setDashboardDateFilter(String(nextIso || "") === fallback ? "" : String(nextIso || ""));
+                          const isDefault = from === fallback && to === fallback;
+                          setDashboardDateFilter(isDefault ? { from: "", to: "" } : { from, to });
                         }}
                       />
                     </div>
-                    <div className="w-auto justify-self-end">
+                    <div className="shrink-0">
                       <button
                         type="button"
                         onClick={() => setShowDashboardSummaryModal(true)}
@@ -3557,17 +3753,60 @@ function App() {
                   </div>
                 </div>
 
+                {/* Блок «План / Факт продажів» — виділений окремою карткою з заголовком */}
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50/30 p-3 shadow-sm">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-lg font-bold text-white">План / Факт продажів</p>
+                    <span className="text-[11px] text-indigo-100">
+                      {fmtDateRangeUk(ov.fromIso, ov.toIso)}{dashboardHourFilter ? ` · до ${dashboardHourFilter.slice(0, 5)}` : ""}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3">
+                    <PlanFactTile
+                      title="ТО"
+                      plan={sv.planTo}
+                      fact={sv.factTo}
+                      pct={sv.pctTo}
+                      formatter={fmtGrn}
+                      borderClass="border-indigo-200"
+                      bgClass="bg-white"
+                      textClass="text-indigo-900"
+                    />
+                    <PlanFactTile
+                      title="Гості"
+                      plan={sv.planGosti}
+                      fact={sv.factGosti}
+                      pct={sv.pctGosti}
+                      formatter={(n) => Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 0 })}
+                      borderClass="border-fuchsia-200"
+                      bgClass="bg-white"
+                      textClass="text-fuchsia-900"
+                    />
+                    <PlanFactTile
+                      title="Середній чек"
+                      plan={sv.planCheck}
+                      fact={sv.factCheck}
+                      pct={sv.pctCheck}
+                      formatter={fmtGrn}
+                      borderClass="border-teal-200"
+                      bgClass="bg-white"
+                      textClass="text-teal-900"
+                    />
+                  </div>
+                </div>
+
                 {/* Загальний підсумок: «Спожито», «З генератора», «Годин роботи генератора» */}
                 <div className="grid grid-cols-3 gap-2 sm:gap-3">
                   <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-2 shadow-sm sm:p-3">
-                    <p className="text-[10px] leading-tight font-semibold text-emerald-700 sm:text-xs">Спожито {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
+                    <p className="text-[10px] leading-tight font-semibold text-emerald-700 sm:text-xs">Спожито {ov.isYesterday ? "за вчора" : `за ${fmtDateRangeUk(ov.fromIso, ov.toIso)}`}</p>
                     <p className="mt-0.5 text-base leading-none font-bold text-emerald-900 sm:text-2xl">{fmtKwh(ov.total)}</p>
                   </div>
                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 shadow-sm sm:p-3">
-                    <p className="text-[10px] leading-tight font-semibold text-amber-700 sm:text-xs">З генератора {ov.isYesterday ? "за вчора" : `за ${fmtDateUk(ov.yIso)}`}</p>
+                    <p className="text-[10px] leading-tight font-semibold text-amber-700 sm:text-xs">З генератора {ov.isYesterday ? "за вчора" : `за ${fmtDateRangeUk(ov.fromIso, ov.toIso)}`}</p>
                     <p className="mt-0.5 text-base leading-none font-bold text-amber-900 sm:text-2xl">{fmtKwh(ov.totalGen)}</p>
                   </div>
                   <div className="rounded-lg border border-sky-200 bg-sky-50 p-2 shadow-sm sm:p-3">
+
                     <p className="text-[10px] leading-tight font-semibold text-sky-700 sm:text-xs">Годин роботи генератора (орієнтовно)</p>
                     <p className="mt-0.5 text-base leading-none font-bold text-sky-900 sm:text-2xl">{fmtHours(ov.totalGenHours)}</p>
                   </div>
@@ -3585,7 +3824,7 @@ function App() {
                     <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
                       <div>
                         <h3 className="text-lg font-bold text-slate-900">Загальна інформація по закладах</h3>
-                        <p className="text-sm text-slate-600">Дата: {fmtDateUk(ov.yIso)}</p>
+                        <p className="text-sm text-slate-600">Період: {fmtDateRangeUk(ov.fromIso, ov.toIso)}</p>
                       </div>
                       <button
                         type="button"
@@ -3616,9 +3855,9 @@ function App() {
                                   <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
                                     <span className="text-right tabular-nums">{fmtKwh(row.mains)}</span>
                                     <div className="flex flex-nowrap items-center justify-end gap-1 border-l border-slate-200 pl-2">
-                                      <TrendBadge pct={trend.vsYesterday} label="До вчора" />
-                                      <TrendBadge pct={trend.vsSameWeekday} label="До цього ж дня тижня" />
-                                      <TrendBadge pct={trend.vs4Avg} label="До середнього 4 останніх таких днів" />
+                                      <TrendBadge pct={trend.vsYesterday} label={trendLabelPrev} />
+                                      <TrendBadge pct={trend.vsSameWeekday} label={trendLabelWeek} />
+                                      <TrendBadge pct={trend.vs4Avg} label={trendLabelAvg4} />
                                     </div>
                                   </div>
                                 </td>
@@ -3633,9 +3872,9 @@ function App() {
                                 <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
                                   <span className="text-right tabular-nums">{fmtKwh(allTotalMains)}</span>
                                   <div className="flex flex-nowrap items-center justify-end gap-1 border-l border-indigo-200 pl-2">
-                                    <TrendBadge pct={totalTrendPack.vsYesterday} label="До вчора" />
-                                    <TrendBadge pct={totalTrendPack.vsSameWeekday} label="До цього ж дня тижня" />
-                                    <TrendBadge pct={totalTrendPack.vs4Avg} label="До середнього 4 останніх таких днів" />
+                                    <TrendBadge pct={totalTrendPack.vsYesterday} label={trendLabelPrev} />
+                                    <TrendBadge pct={totalTrendPack.vsSameWeekday} label={trendLabelWeek} />
+                                    <TrendBadge pct={totalTrendPack.vs4Avg} label={trendLabelAvg4} />
                                   </div>
                                 </div>
                               </td>
@@ -3660,9 +3899,9 @@ function App() {
                               <p className="flex items-center justify-between gap-3"><span className="text-slate-600">Спожито з генератора</span><span className="font-semibold text-slate-900">{fmtKwh(row.gen)}</span></p>
                               <p className="flex items-center justify-between gap-3"><span className="text-slate-600">Години роботи генератора</span><span className="font-semibold text-slate-900">{fmtHours(row.genHours)}</span></p>
                               <div className="mt-1 flex flex-wrap justify-end gap-1 border-t border-slate-100 pt-1">
-                                <TrendBadge pct={trend.vsYesterday} label="До вчора" />
-                                <TrendBadge pct={trend.vsSameWeekday} label="До цього ж дня тижня" />
-                                <TrendBadge pct={trend.vs4Avg} label="До середнього 4 останніх таких днів" />
+                                <TrendBadge pct={trend.vsYesterday} label={trendLabelPrev} />
+                                <TrendBadge pct={trend.vsSameWeekday} label={trendLabelWeek} />
+                                <TrendBadge pct={trend.vs4Avg} label={trendLabelAvg4} />
                               </div>
                             </div>
                           </div>
@@ -3678,9 +3917,9 @@ function App() {
                             <p className="flex items-center justify-between gap-3"><span className="text-indigo-700">Спожито з генератора</span><span className="font-semibold text-indigo-900">{fmtKwh(allTotalGen)}</span></p>
                             <p className="flex items-center justify-between gap-3"><span className="text-indigo-700">Години роботи генератора</span><span className="font-semibold text-indigo-900">{fmtHours(allTotalGenHours)}</span></p>
                             <div className="mt-1 flex flex-wrap justify-end gap-1 border-t border-indigo-100 pt-1">
-                              <TrendBadge pct={totalTrendPack.vsYesterday} label="До вчора" />
-                              <TrendBadge pct={totalTrendPack.vsSameWeekday} label="До цього ж дня тижня" />
-                              <TrendBadge pct={totalTrendPack.vs4Avg} label="До середнього 4 останніх таких днів" />
+                              <TrendBadge pct={totalTrendPack.vsYesterday} label={trendLabelPrev} />
+                              <TrendBadge pct={totalTrendPack.vsSameWeekday} label={trendLabelWeek} />
+                              <TrendBadge pct={totalTrendPack.vs4Avg} label={trendLabelAvg4} />
                             </div>
                           </div>
                         </div>
