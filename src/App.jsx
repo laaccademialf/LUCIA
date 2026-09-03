@@ -786,6 +786,8 @@ function App() {
                       const [dashboardHourFilter, setDashboardHourFilter] = useState("");
                       // Модальне вікно «Загальна інформація» по всіх закладах.
                       const [showDashboardSummaryModal, setShowDashboardSummaryModal] = useState(false);
+                      // Модальне вікно «Зведені дані» продажів (ТО/Гості/Середній чек) по всіх закладах.
+                      const [showSalesSummaryModal, setShowSalesSummaryModal] = useState(false);
                       // Стан для вибраного ресторану (редагування)
                       const [selectedRestaurant, setSelectedRestaurant] = useState(null);
                       // Стан для форми ресторану
@@ -1901,7 +1903,9 @@ function App() {
       : restaurants;
 
     const totals = { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0 };
+    const perRestaurant = [];
     for (const r of restaurantsToSum) {
+      const rTotals = { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0 };
       for (const targetIso of targetDates) {
         const hoursForRestaurant = getDashboardScheduleHours(r?.schedule, targetIso)
           .filter((hour) => cutoffHour === null || Number(hour.split(":")[0]) <= cutoffHour);
@@ -1911,12 +1915,23 @@ function App() {
         const hours = rec?.hours && typeof rec.hours === "object" ? rec.hours : {};
         for (const hour of hoursForRestaurant) {
           const row = hours[hour] || {};
-          totals.planTo += Number(String(row.planTo ?? "").replace(",", ".")) || 0;
-          totals.factTo += Number(String(row.factTo ?? "").replace(",", ".")) || 0;
-          totals.planGosti += Number(String(row.planGosti ?? "").replace(",", ".")) || 0;
-          totals.factGosti += Number(String(row.factGosti ?? "").replace(",", ".")) || 0;
+          rTotals.planTo += Number(String(row.planTo ?? "").replace(",", ".")) || 0;
+          rTotals.factTo += Number(String(row.factTo ?? "").replace(",", ".")) || 0;
+          rTotals.planGosti += Number(String(row.planGosti ?? "").replace(",", ".")) || 0;
+          rTotals.factGosti += Number(String(row.factGosti ?? "").replace(",", ".")) || 0;
         }
       }
+      totals.planTo += rTotals.planTo;
+      totals.factTo += rTotals.factTo;
+      totals.planGosti += rTotals.planGosti;
+      totals.factGosti += rTotals.factGosti;
+      perRestaurant.push({
+        id: r.id,
+        name: r.name || r.regNumber || "—",
+        ...rTotals,
+        planCheck: rTotals.planGosti > 0 ? rTotals.planTo / rTotals.planGosti : 0,
+        factCheck: rTotals.factGosti > 0 ? rTotals.factTo / rTotals.factGosti : 0,
+      });
     }
 
     const planCheck = totals.planGosti > 0 ? totals.planTo / totals.planGosti : 0;
@@ -1925,6 +1940,7 @@ function App() {
 
     return {
       ...totals,
+      perRestaurant,
       planCheck,
       factCheck,
       pctTo: pctVsPlan(totals.factTo, totals.planTo),
@@ -3517,6 +3533,16 @@ function App() {
           const ov = electricityOverview;
           const sv = salesOverview;
           const fmtGrn = (n) => `${Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 0 })} грн`;
+          const fmtInt = (n) => Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 0 });
+          const pctVsPlanUi = (fact, plan) => (Number(plan) > 0 ? ((Number(fact) - Number(plan)) / Number(plan)) * 100 : null);
+          // Заливка комірок зведеної таблиці за відхиленням факт/план.
+          const salesPctTone = (pct) => {
+            if (!Number.isFinite(pct)) return "";
+            if (pct >= 0) return "bg-emerald-100";
+            if (pct >= -5) return "bg-amber-100";
+            if (pct >= -10) return "bg-rose-100";
+            return "bg-rose-300";
+          };
           const fmtPct = (pct) => {
             if (!Number.isFinite(pct)) return "н/д";
             const abs = Math.abs(pct);
@@ -3531,22 +3557,46 @@ function App() {
                 ? "text-rose-700 bg-rose-50 border-rose-200"
                 : "text-slate-500 bg-slate-50 border-slate-200";
             return (
-              <span className={`inline-flex items-center gap-0.5 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold leading-none whitespace-nowrap ${toneClass}`}>
-                {isUp ? <TrendingUp size={11} /> : isDown ? <TrendingDown size={11} /> : null}
+              <span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-sm leading-none font-bold whitespace-nowrap sm:text-lg ${toneClass}`}>
+                {isUp ? <TrendingUp size={14} className="sm:size-5" /> : isDown ? <TrendingDown size={14} className="sm:size-5" /> : null}
                 {fmtPct(pct)}
               </span>
             );
           };
-          const PlanFactTile = ({ title, plan, fact, pct, formatter, borderClass, bgClass, textClass }) => (
-            <div className={`rounded-lg border ${borderClass} ${bgClass} p-2 shadow-sm sm:p-3`}>
-              <div className="flex items-center justify-between gap-2">
-                <p className={`text-[10px] leading-tight font-semibold sm:text-xs ${textClass}`}>{title}</p>
-                <PlanFactBadge pct={pct} />
+          const PlanFactTile = ({ title, plan, fact, pct, formatter, borderClass, bgClass, textClass }) => {
+            const f = Number(fact || 0);
+            const p = Number(plan || 0);
+            const diff = f - p;
+            const hasData = (fact != null || plan != null) && !(f === 0 && p === 0);
+            const diffFormatted = hasData
+              ? (diff > 0 ? `+${formatter(diff)}` : formatter(diff))
+              : null;
+            const diffColorClass = diff > 0
+              ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+              : diff < 0
+                ? "text-rose-700 bg-rose-50 border-rose-200"
+                : "text-slate-500 bg-slate-50 border-slate-200";
+
+            return (
+              <div className={`rounded-lg border ${borderClass} ${bgClass} p-2 shadow-sm sm:p-3`}>
+                <p className={`text-sm font-bold leading-tight sm:text-lg ${textClass}`}>{title}</p>
+                <div className="mt-1 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className={`text-base leading-none font-bold sm:text-2xl ${textClass}`}>{formatter(fact)}</p>
+                    <p className="mt-1.5 text-[10px] leading-none text-slate-500 sm:text-xs">План: {formatter(plan)}</p>
+                  </div>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <PlanFactBadge pct={pct} />
+                    {diffFormatted && (
+                      <span className={`inline-flex items-center rounded-lg border px-2 py-1 text-sm leading-none font-bold whitespace-nowrap sm:text-lg ${diffColorClass}`}>
+                        {diffFormatted}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-              <p className={`mt-0.5 text-base leading-none font-bold sm:text-2xl ${textClass}`}>{formatter(fact)}</p>
-              <p className="mt-1 text-[10px] leading-none text-slate-500 sm:text-xs">План: {formatter(plan)}</p>
-            </div>
-          );
+            );
+          };
           const dashboardRestaurantOptions = Array.isArray(restaurants) ? restaurants : [];
 
           const showDashboardRestaurantSelector = user?.role === "admin" || dashboardRestaurantOptions.length > 1;
@@ -3757,9 +3807,18 @@ function App() {
                 <div className="rounded-xl border border-indigo-200 bg-indigo-50/30 p-3 shadow-sm">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <p className="text-lg font-bold text-white">План / Факт продажів</p>
-                    <span className="text-[11px] text-indigo-100">
-                      {fmtDateRangeUk(ov.fromIso, ov.toIso)}{dashboardHourFilter ? ` · до ${dashboardHourFilter.slice(0, 5)}` : ""}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowSalesSummaryModal(true)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-300 bg-white/90 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-white"
+                        aria-label="Зведені дані"
+                        title="Зведені дані по всіх ресторанах"
+                      >
+                        <BarChart3 size={14} />
+                        Зведені дані
+                      </button>
+                    </div>
                   </div>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3">
                     <PlanFactTile
@@ -3921,6 +3980,142 @@ function App() {
                               <TrendBadge pct={totalTrendPack.vsSameWeekday} label={trendLabelWeek} />
                               <TrendBadge pct={totalTrendPack.vs4Avg} label={trendLabelAvg4} />
                             </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {showSalesSummaryModal && (
+                <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 p-2 sm:p-4">
+                  <button
+                    type="button"
+                    className="absolute inset-0"
+                    aria-label="Закрити"
+                    onClick={() => setShowSalesSummaryModal(false)}
+                  />
+                  <div className="relative z-10 mx-auto my-3 w-full max-w-5xl rounded-2xl border border-slate-200 bg-white shadow-2xl sm:my-6">
+                    <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                      <div>
+                        <h3 className="text-lg font-bold text-slate-900">Зведені дані продажів по закладах</h3>
+                        <p className="text-sm text-slate-600">
+                          Період: {fmtDateRangeUk(ov.fromIso, ov.toIso)}{dashboardHourFilter ? ` · до ${dashboardHourFilter.slice(0, 5)}` : ""}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowSalesSummaryModal(false)}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        Закрити
+                      </button>
+                    </div>
+                    <div className="px-3 py-3 sm:px-4">
+                      <div className="hidden overflow-x-auto sm:block">
+                        <table className="w-full border-collapse text-sm">
+                          <thead>
+                            <tr className="bg-slate-100 text-slate-700">
+                              <th className="border border-slate-200 px-3 py-2 text-left font-semibold">Ресторан</th>
+                              <th className="border border-slate-200 px-3 py-2 text-right font-semibold">ТО (факт / план)</th>
+                              <th className="border border-slate-200 px-3 py-2 text-right font-semibold">Гості (факт / план)</th>
+                              <th className="border border-slate-200 px-3 py-2 text-right font-semibold">Середній чек (факт / план)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(sv.perRestaurant || [])
+                              .filter((row) => Number(row?.factTo || 0) > 0 || Number(row?.planTo || 0) > 0)
+                              .map((row) => (
+                                <tr key={row.id} className="odd:bg-white even:bg-slate-50">
+                                  <td className="border border-slate-200 px-3 py-2 text-slate-900">{row.name}</td>
+                                  <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(pctVsPlanUi(row.factTo, row.planTo))}`}>
+                                    <div className="flex flex-col items-end gap-0.5">
+                                      <span className="font-semibold tabular-nums text-slate-900">{fmtGrn(row.factTo)}</span>
+                                      <span className="text-[11px] text-slate-500 tabular-nums">План: {fmtGrn(row.planTo)}</span>
+                                      <span className="text-[11px] font-semibold tabular-nums">{fmtPct(pctVsPlanUi(row.factTo, row.planTo))}</span>
+                                    </div>
+                                  </td>
+                                  <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(pctVsPlanUi(row.factGosti, row.planGosti))}`}>
+                                    <div className="flex flex-col items-end gap-0.5">
+                                      <span className="font-semibold tabular-nums text-slate-900">{fmtInt(row.factGosti)}</span>
+                                      <span className="text-[11px] text-slate-500 tabular-nums">План: {fmtInt(row.planGosti)}</span>
+                                      <span className="text-[11px] font-semibold tabular-nums">{fmtPct(pctVsPlanUi(row.factGosti, row.planGosti))}</span>
+                                    </div>
+                                  </td>
+                                  <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(pctVsPlanUi(row.factCheck, row.planCheck))}`}>
+                                    <div className="flex flex-col items-end gap-0.5">
+                                      <span className="font-semibold tabular-nums text-slate-900">{fmtGrn(row.factCheck)}</span>
+                                      <span className="text-[11px] text-slate-500 tabular-nums">План: {fmtGrn(row.planCheck)}</span>
+                                      <span className="text-[11px] font-semibold tabular-nums">{fmtPct(pctVsPlanUi(row.factCheck, row.planCheck))}</span>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            <tr className="bg-indigo-50 font-semibold text-indigo-900">
+                              <td className="border border-slate-200 px-3 py-2">Разом</td>
+                              <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(sv.pctTo)}`}>
+                                <div className="flex flex-col items-end gap-0.5">
+                                  <span className="tabular-nums">{fmtGrn(sv.factTo)}</span>
+                                  <span className="text-[11px] text-indigo-700 tabular-nums">План: {fmtGrn(sv.planTo)}</span>
+                                  <span className="text-[11px] tabular-nums">{fmtPct(sv.pctTo)}</span>
+                                </div>
+                              </td>
+                              <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(sv.pctGosti)}`}>
+                                <div className="flex flex-col items-end gap-0.5">
+                                  <span className="tabular-nums">{fmtInt(sv.factGosti)}</span>
+                                  <span className="text-[11px] text-indigo-700 tabular-nums">План: {fmtInt(sv.planGosti)}</span>
+                                  <span className="text-[11px] tabular-nums">{fmtPct(sv.pctGosti)}</span>
+                                </div>
+                              </td>
+                              <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(sv.pctCheck)}`}>
+                                <div className="flex flex-col items-end gap-0.5">
+                                  <span className="tabular-nums">{fmtGrn(sv.factCheck)}</span>
+                                  <span className="text-[11px] text-indigo-700 tabular-nums">План: {fmtGrn(sv.planCheck)}</span>
+                                  <span className="text-[11px] tabular-nums">{fmtPct(sv.pctCheck)}</span>
+                                </div>
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="space-y-2 sm:hidden">
+                        {(sv.perRestaurant || [])
+                          .filter((row) => Number(row?.factTo || 0) > 0 || Number(row?.planTo || 0) > 0)
+                          .map((row) => (
+                            <div key={`ms-${row.id}`} className="rounded-xl border border-slate-200 bg-white p-3">
+                              <p className="text-sm font-bold text-slate-900">{row.name}</p>
+                              <div className="mt-2 grid grid-cols-1 gap-1 text-xs">
+                                <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(pctVsPlanUi(row.factTo, row.planTo))}`}>
+                                  <span className="text-slate-600">ТО</span>
+                                  <span className="font-semibold text-slate-900">{fmtGrn(row.factTo)} <span className="text-slate-400">/ {fmtGrn(row.planTo)}</span> · {fmtPct(pctVsPlanUi(row.factTo, row.planTo))}</span>
+                                </p>
+                                <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(pctVsPlanUi(row.factGosti, row.planGosti))}`}>
+                                  <span className="text-slate-600">Гості</span>
+                                  <span className="font-semibold text-slate-900">{fmtInt(row.factGosti)} <span className="text-slate-400">/ {fmtInt(row.planGosti)}</span> · {fmtPct(pctVsPlanUi(row.factGosti, row.planGosti))}</span>
+                                </p>
+                                <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(pctVsPlanUi(row.factCheck, row.planCheck))}`}>
+                                  <span className="text-slate-600">Середній чек</span>
+                                  <span className="font-semibold text-slate-900">{fmtGrn(row.factCheck)} <span className="text-slate-400">/ {fmtGrn(row.planCheck)}</span> · {fmtPct(pctVsPlanUi(row.factCheck, row.planCheck))}</span>
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3">
+                          <p className="text-sm font-bold text-indigo-900">Разом</p>
+                          <div className="mt-2 grid grid-cols-1 gap-1 text-xs">
+                            <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(sv.pctTo)}`}>
+                              <span className="text-indigo-700">ТО</span>
+                              <span className="font-semibold text-indigo-900">{fmtGrn(sv.factTo)} <span className="text-indigo-400">/ {fmtGrn(sv.planTo)}</span> · {fmtPct(sv.pctTo)}</span>
+                            </p>
+                            <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(sv.pctGosti)}`}>
+                              <span className="text-indigo-700">Гості</span>
+                              <span className="font-semibold text-indigo-900">{fmtInt(sv.factGosti)} <span className="text-indigo-400">/ {fmtInt(sv.planGosti)}</span> · {fmtPct(sv.pctGosti)}</span>
+                            </p>
+                            <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(sv.pctCheck)}`}>
+                              <span className="text-indigo-700">Середній чек</span>
+                              <span className="font-semibold text-indigo-900">{fmtGrn(sv.factCheck)} <span className="text-indigo-400">/ {fmtGrn(sv.planCheck)}</span> · {fmtPct(sv.pctCheck)}</span>
+                            </p>
                           </div>
                         </div>
                       </div>

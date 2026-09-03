@@ -7,6 +7,7 @@ export const KNOWN_COLLECTIONS = [
   "menuStructure", "settings", "positions", "workRoles",
   "rolePermissions", "fieldPermissions", "platformAuditLogs",
     "notificationSettings", // new collection for encrypted SMTP settings
+  "viksoftSettings", // durable encrypted Vik-Soft API credentials (survive container/tmp/.env reset)
   "assetCategories", "assetSubcategories", "assetAccountingTypes",
   "assetBusinessUnits", "assetStatuses", "assetConditions", "assetDecisions",
   "assetPlacementZones", "assetResponsibilityCenters", "assetResponsiblePersons",

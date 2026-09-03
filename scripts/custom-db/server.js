@@ -859,6 +859,110 @@ const getStoredNotificationSettings = async (dbConfig) => {
   return decryptNotificationSettings(record.encrypted);
 };
 
+// ---- Vik-Soft credentials: durable encrypted storage in DB ----
+// Причина: раніше пароль зберігався лише у ./tmp (ефемерна) та .env, які
+// втрачаються при перестворенні контейнера/деплої (≈ раз на 2 тижні) — тоді
+// синхронізація падала з "401 Incorrect password", бо getConfig() відкочувався
+// на застарілий env. БД переживає перезапуски → «ввів пароль один раз = працює завжди».
+const VIKSOFT_SETTINGS_ID = "default";
+const getViksoftSettingsKey = () => {
+  if (!TOKEN) throw new Error("CUSTOM_MIGRATION_TOKEN is required to encrypt VikSoft settings");
+  return crypto.createHash("sha256").update(`lucia:viksoft-settings:${TOKEN}`).digest();
+};
+
+const encryptViksoftSettings = (settings) => {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", getViksoftSettingsKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(settings), "utf8"), cipher.final()]);
+  return {
+    algorithm: "aes-256-gcm",
+    iv: iv.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url"),
+    data: encrypted.toString("base64url"),
+  };
+};
+
+const decryptViksoftSettings = (record) => {
+  if (!record?.data || !record?.iv || !record?.tag) return null;
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    getViksoftSettingsKey(),
+    Buffer.from(String(record.iv), "base64url")
+  );
+  decipher.setAuthTag(Buffer.from(String(record.tag), "base64url"));
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(String(record.data), "base64url")),
+    decipher.final(),
+  ]);
+  return JSON.parse(decrypted.toString("utf8"));
+};
+
+const getStoredViksoftSettings = async (dbConfig) => {
+  const record = await getCollectionItemData("viksoftSettings", VIKSOFT_SETTINGS_ID, dbConfig);
+  if (!record?.encrypted) return null;
+  try {
+    return decryptViksoftSettings(record.encrypted);
+  } catch {
+    return null;
+  }
+};
+
+const persistViksoftSettingsToDb = async (settings, profileId, dbConfig) => {
+  const payload = {
+    id: VIKSOFT_SETTINGS_ID,
+    encrypted: encryptViksoftSettings(settings),
+    updatedAt: nowIso(),
+    updatedBy: String(profileId || "system"),
+  };
+  const existing = await getCollectionItemData("viksoftSettings", VIKSOFT_SETTINGS_ID, dbConfig);
+  if (existing) {
+    await updateCollectionItemData("viksoftSettings", VIKSOFT_SETTINGS_ID, payload, dbConfig);
+  } else {
+    await createCollectionItemData("viksoftSettings", payload, dbConfig);
+  }
+};
+
+// Гарантує, що рантайм-конфіг vikSoftApi завантажено з ДУРАБЛЬНОГО джерела (БД),
+// перш ніж виконати логін/синхронізацію. Джерела за пріоритетом:
+//   БД (переживає перестворення контейнера) → runtime-settings.json (tmp) → env.
+// Викликається на старті та перед кожним авто-синком, щоб пароль ніколи не «злітав».
+const ensureViksoftRuntimeConfigLoaded = async () => {
+  try {
+    const { getVikSoftPublicConfig, setVikSoftRuntimeConfig } = await import("../vikSoftApi.js");
+    const current = getVikSoftPublicConfig();
+    if (current?.source === "runtime" && current.user && current.hasPassword) return;
+
+    let dbStored = null;
+    try {
+      dbStored = await getStoredViksoftSettings(getAssetsRuntimeConfig());
+    } catch (e) {
+      console.warn(`[viksoft] load runtime config from db failed: ${e?.message || e}`);
+    }
+    if (dbStored && (dbStored.user || dbStored.password || dbStored.apiBase)) {
+      setVikSoftRuntimeConfig({
+        apiBase: dbStored.apiBase,
+        user: dbStored.user,
+        password: dbStored.password,
+      });
+      console.log("[viksoft] runtime config loaded from database (durable)");
+      return;
+    }
+
+    const settings = await readSettingsFile();
+    const saved = settings && settings.viksoft;
+    if (saved && (saved.user || saved.password || saved.apiBase)) {
+      setVikSoftRuntimeConfig({
+        apiBase: saved.apiBase,
+        user: saved.user,
+        password: saved.password,
+      });
+      console.log("[viksoft] runtime config loaded from settings file");
+    }
+  } catch (e) {
+    console.warn(`[viksoft] ensure runtime config failed: ${e?.message || e}`);
+  }
+};
+
 const getEffectiveNotificationSettings = async (dbConfig) => {
   const stored = await getStoredNotificationSettings(dbConfig);
   if (stored) return stored;
@@ -2072,6 +2176,9 @@ const runVikSoftAutoSync = async ({ date, force } = {}) => {
   }
   viksoftAutoSyncRunning = true;
   try {
+    // Гарантуємо, що credentials завантажено з БД (durable), навіть якщо на старті
+    // БД була ще не готова або контейнер щойно перестворено.
+    await ensureViksoftRuntimeConfigLoaded();
     const dbConfig = getAssetsRuntimeConfig();
     const restaurants = await getCollectionItemsData("restaurants", dbConfig);
     const reportDate = (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : getYesterdayIso();
@@ -5687,15 +5794,20 @@ const server = http.createServer(async (req, res) => {
       const saved = (settings && settings.viksoft) || {};
       const { getVikSoftPublicConfig } = await import("../vikSoftApi.js");
       const effective = getVikSoftPublicConfig();
+      // Дурабльне джерело (БД) — авторитетне; файл лишаємо як фолбек.
+      let dbStored = null;
+      try {
+        dbStored = await getStoredViksoftSettings(getAssetsRuntimeConfig());
+      } catch { /* ignore */ }
       // Адреса й логін віддаються ЛИШЕ адміну з валідною сесією (гейт вище),
       // інакше адмін не може відновити конфіг через UI. Пароль не повертаємо.
       return sendJson(res, 200, {
         ok: true,
         saved: {
-          configured: Boolean(saved.password || effective?.password),
-          apiBase: String(saved.apiBase || ""),
-          user: String(saved.user || ""),
-          hasPassword: Boolean(saved.password),
+          configured: Boolean(saved.password || dbStored?.password || effective?.password),
+          apiBase: String(saved.apiBase || dbStored?.apiBase || ""),
+          user: String(saved.user || dbStored?.user || ""),
+          hasPassword: Boolean(saved.password || dbStored?.password),
           updatedAt: saved.updatedAt || null,
         },
         effective: {
@@ -5771,6 +5883,24 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       console.warn(`[viksoft] persist to env failed: ${e?.message || e}`);
     }
+    // Найважливіше: персистимо у БД (переживає перестворення контейнера/деплой,
+    // на відміну від tmp/ та .env). Пароль шифрується (aes-256-gcm) ключем від
+    // CUSTOM_MIGRATION_TOKEN — так само, як налаштування пошти.
+    let persistedToDb = false;
+    try {
+      await persistViksoftSettingsToDb(
+        {
+          apiBase: nextViksoft.apiBase,
+          user: nextViksoft.user,
+          password: nextViksoft.password,
+        },
+        profile.id,
+        getAssetsRuntimeConfig()
+      );
+      persistedToDb = true;
+    } catch (e) {
+      console.warn(`[viksoft] persist to db failed: ${e?.message || e}`);
+    }
     // Застосовуємо рантайм-конфіг до vikSoftApi (інвалідовує токен і кеш).
     try {
       const { setVikSoftRuntimeConfig } = await import("../vikSoftApi.js");
@@ -5785,6 +5915,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, {
       ok: true,
       persistedToEnv,
+      persistedToDb,
       saved: { configured: Boolean(nextViksoft.password), updatedAt: nextViksoft.updatedAt },
     });
   }
@@ -5805,6 +5936,8 @@ const server = http.createServer(async (req, res) => {
       const override = (payload && (payload.user || payload.password || payload.apiBase))
         ? { apiBase: payload.apiBase, user: payload.user, password: payload.password }
         : undefined;
+      // Без override — гарантуємо, що збережені (durable) credentials завантажено.
+      if (!override) await ensureViksoftRuntimeConfigLoaded();
       const result = await testVikSoftLogin(override);
 
       // Якщо vviewtree не пройшов, пробуємо практичний сценарій з getsqlmaket
@@ -6127,6 +6260,7 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const { listVikSoftMeters } = await import("../vikSoftApi.js");
+      await ensureViksoftRuntimeConfigLoaded();
       const out = await listVikSoftMeters();
       const status = out?.ok ? 200 : 502;
       return sendJson(res, status, out);
@@ -6436,21 +6570,8 @@ server.listen(PORT, HOST, () => {
   // 1) Спершу підвантажуємо збережений конфіг з runtime-settings.json (UI),
   //    тоді — fallback на env (VIKSOFT_USER / VIKSOFT_PASSWORD).
   setImmediate(async () => {
-    try {
-      const settings = await readSettingsFile();
-      const saved = settings && settings.viksoft;
-      if (saved && (saved.user || saved.password || saved.apiBase)) {
-        const { setVikSoftRuntimeConfig } = await import("../vikSoftApi.js");
-        setVikSoftRuntimeConfig({
-          apiBase: saved.apiBase,
-          user: saved.user,
-          password: saved.password,
-        });
-        console.log("[viksoft] runtime config loaded from settings file");
-      }
-    } catch (e) {
-      console.warn(`[viksoft] load runtime config failed: ${e?.message || e}`);
-    }
+    // Дурабльне джерело (БД) → runtime-settings.json (tmp) → env.
+    await ensureViksoftRuntimeConfigLoaded();
     // Прогрів — пробуємо логін якщо є будь-які credentials (runtime або env).
     try {
       const { warmUpEnergoCenter, getVikSoftPublicConfig } = await import("../vikSoftApi.js");

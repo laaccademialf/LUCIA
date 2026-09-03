@@ -18,8 +18,6 @@ import { fetchKyivWeather, weatherLabel } from "../api/weatherApi";
 // Погодинні рядки з 08:00 до 23:00 включно, як у паперовому шаблоні планування.
 const HOURS = Array.from({ length: 16 }, (_, i) => `${String(i + 8).padStart(2, "0")}:00:00`);
 
-const FIELDS = ["planTo", "factTo", "planGosti", "factGosti"];
-
 const emptyHourRow = () => ({ planTo: "", factTo: "", planGosti: "", factGosti: "", weather: "" });
 const emptyHours = () => Object.fromEntries(HOURS.map((hour) => [hour, emptyHourRow()]));
 
@@ -103,6 +101,23 @@ const toNumber = (value) => {
 
 const formatNumber = (value) => (value ? new Intl.NumberFormat("uk-UA", { maximumFractionDigits: 0 }).format(value) : "");
 const averageCheck = (turnover, guests) => (guests > 0 ? Math.round(turnover / guests) : 0);
+
+// Відсоток відхилення факту від плану: (факт/план − 1) × 100. null — коли плану немає.
+const deviationPct = (fact, plan) => (plan > 0 ? (fact / plan - 1) * 100 : null);
+const formatPct = (pct) => {
+  if (pct === null || pct === undefined) return "—";
+  const rounded = Math.round(pct);
+  return `${rounded > 0 ? "+" : ""}${rounded}%`;
+};
+// 4 відтінки заливки за відхиленням: + зелене, до −5 жовте, −5…−10 рожеве, нижче −10 темно-рожеве.
+const deviationCellClass = (pct) => {
+  if (pct === null || pct === undefined) return "";
+  if (pct >= 0) return "bg-green-100 text-green-800";
+  if (pct >= -5) return "bg-amber-100 text-amber-800";
+  if (pct >= -10) return "bg-pink-100 text-pink-700";
+  return "bg-pink-300 text-pink-900";
+};
+
 const buildDocId = (restaurantId, date) => `${restaurantId}__${date}`;
 
 // Розподіляє введене вручну загальне значення порівну на кількість робочих годин
@@ -245,8 +260,9 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     return () => { cancelled = true; };
   }, [viewMode, selectedRestaurantId, periodDates]);
 
-  // Денні підсумки періоду (сума по робочих годинах кожного дня).
+  // Денні підсумки періоду (сума по робочих годинах кожного дня) з накопичувальним підсумком.
   const periodRows = useMemo(() => {
+    const cum = { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0 };
     return periodDates.map((iso) => {
       const hours = periodData[iso] || {};
       const dayHours = getVisibleHours(currentRestaurant?.schedule, iso);
@@ -259,8 +275,12 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         if (!a.weather && row.weather) a.weather = row.weather;
         return a;
       }, { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0, weather: "" });
+      cum.planTo += acc.planTo;
+      cum.factTo += acc.factTo;
+      cum.planGosti += acc.planGosti;
+      cum.factGosti += acc.factGosti;
       const dow = (new Date(`${iso}T00:00:00`).getDay() + 6) % 7;
-      return { iso, weekdayLabel: WEEKDAY_LABELS[dow], ...acc };
+      return { iso, weekdayLabel: WEEKDAY_LABELS[dow], ...acc, cum: { ...cum } };
     });
   }, [periodDates, periodData, currentRestaurant?.schedule]);
 
@@ -283,6 +303,21 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     acc.factGosti += toNumber(row.factGosti);
     return acc;
   }, { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0 }), [hourlyData, visibleHours]);
+
+  // Накопичувальний підсумок факту/плану по годинах у межах дня для колонок %.
+  const hourlyCumulative = useMemo(() => {
+    const cum = { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0 };
+    const map = {};
+    visibleHours.forEach((hour) => {
+      const row = hourlyData[hour] || emptyHourRow();
+      cum.planTo += toNumber(row.planTo);
+      cum.factTo += toNumber(row.factTo);
+      cum.planGosti += toNumber(row.planGosti);
+      cum.factGosti += toNumber(row.factGosti);
+      map[hour] = { ...cum };
+    });
+    return map;
+  }, [hourlyData, visibleHours]);
 
   const handleFieldChange = (hour, field, value) => {
     setHourlyData((prev) => ({
@@ -598,10 +633,13 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                 <th className="px-3 py-2 text-left">День</th>
                 <th className="px-2 py-2 text-right">План ТО</th>
                 <th className="px-2 py-2 text-right">Факт ТО</th>
+                <th className="px-2 py-2 text-right">% ТО</th>
                 <th className="px-2 py-2 text-right">План Гості</th>
                 <th className="px-2 py-2 text-right">Факт Гості</th>
+                <th className="px-2 py-2 text-right">% Гості</th>
                 <th className="px-2 py-2 text-right">План Сер. чек</th>
                 <th className="px-2 py-2 text-right">Факт Сер. чек</th>
+                <th className="px-2 py-2 text-right">% Сер. чек</th>
                 <th className="px-3 py-2 text-left">Погода</th>
               </tr>
             </thead>
@@ -610,10 +648,13 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                 <td className="px-3 py-2">Тотал</td>
                 <td className="px-2 py-2 text-right">{formatNumber(periodTotals.planTo)}</td>
                 <td className="px-2 py-2 text-right">{formatNumber(periodTotals.factTo)}</td>
+                <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(periodTotals.factTo, periodTotals.planTo))}`}>{formatPct(deviationPct(periodTotals.factTo, periodTotals.planTo))}</td>
                 <td className="px-2 py-2 text-right">{formatNumber(periodTotals.planGosti)}</td>
                 <td className="px-2 py-2 text-right">{formatNumber(periodTotals.factGosti)}</td>
+                <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(periodTotals.factGosti, periodTotals.planGosti))}`}>{formatPct(deviationPct(periodTotals.factGosti, periodTotals.planGosti))}</td>
                 <td className="px-2 py-2 text-right">{formatNumber(averageCheck(periodTotals.planTo, periodTotals.planGosti))}</td>
                 <td className="px-2 py-2 text-right">{formatNumber(averageCheck(periodTotals.factTo, periodTotals.factGosti))}</td>
+                <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(averageCheck(periodTotals.factTo, periodTotals.factGosti), averageCheck(periodTotals.planTo, periodTotals.planGosti)))}`}>{formatPct(deviationPct(averageCheck(periodTotals.factTo, periodTotals.factGosti), averageCheck(periodTotals.planTo, periodTotals.planGosti)))}</td>
                 <td className="px-3 py-2"></td>
               </tr>
               {periodRows.map((r) => (
@@ -624,14 +665,17 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                   className={`cursor-pointer border-t border-slate-200 hover:bg-indigo-50 ${r.iso === date ? "bg-indigo-50/50" : ""}`}
                 >
                   <td className="px-3 py-2 font-medium text-slate-700">
-                    {r.weekdayLabel} · {formatDayLabel(r.iso)}
+                    {formatDayLabel(r.iso)} · {r.weekdayLabel}
                   </td>
                   <td className="px-2 py-2 text-right">{formatNumber(r.planTo)}</td>
                   <td className="px-2 py-2 text-right">{formatNumber(r.factTo)}</td>
+                  <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(r.cum.factTo, r.cum.planTo))}`}>{formatPct(deviationPct(r.cum.factTo, r.cum.planTo))}</td>
                   <td className="px-2 py-2 text-right">{formatNumber(r.planGosti)}</td>
                   <td className="px-2 py-2 text-right">{formatNumber(r.factGosti)}</td>
+                  <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(r.cum.factGosti, r.cum.planGosti))}`}>{formatPct(deviationPct(r.cum.factGosti, r.cum.planGosti))}</td>
                   <td className="px-2 py-2 text-right text-slate-600">{formatNumber(averageCheck(r.planTo, r.planGosti))}</td>
                   <td className="px-2 py-2 text-right text-slate-600">{formatNumber(averageCheck(r.factTo, r.factGosti))}</td>
+                  <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(averageCheck(r.cum.factTo, r.cum.factGosti), averageCheck(r.cum.planTo, r.cum.planGosti)))}`}>{formatPct(deviationPct(averageCheck(r.cum.factTo, r.cum.factGosti), averageCheck(r.cum.planTo, r.cum.planGosti)))}</td>
                   <td className="px-3 py-2 text-slate-500">{r.weather || "—"}</td>
                 </tr>
               ))}
@@ -642,24 +686,30 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         <div className="overflow-x-auto rounded-lg border border-slate-200">
           <table className="w-full table-fixed text-xs">
             <colgroup>
-              <col className="w-16" />
+              <col className="w-12" />
+              <col className="w-[10%]" />
+              <col className="w-[10%]" />
+              <col className="w-[7%]" />
+              <col className="w-[10%]" />
+              <col className="w-[10%]" />
+              <col className="w-[7%]" />
               <col className="w-[11%]" />
               <col className="w-[11%]" />
-              <col className="w-[11%]" />
-              <col className="w-[11%]" />
-              <col className="w-[13%]" />
-              <col className="w-[13%]" />
-              <col className="w-16" />
+              <col className="w-[7%]" />
+              <col className="w-12" />
             </colgroup>
             <thead className="bg-slate-50 text-slate-700">
               <tr>
                 <th className="px-2 py-1.5 text-left"></th>
                 <th className="px-1.5 py-1.5 text-right whitespace-normal leading-tight">План ТО</th>
                 <th className="px-1.5 py-1.5 text-right whitespace-normal leading-tight">Факт ТО</th>
+                <th className="px-1.5 py-1.5 text-right whitespace-normal leading-tight">% ТО</th>
                 <th className="px-1.5 py-1.5 text-right whitespace-normal leading-tight">План Гості</th>
                 <th className="px-1.5 py-1.5 text-right whitespace-normal leading-tight">Факт Гості</th>
+                <th className="px-1.5 py-1.5 text-right whitespace-normal leading-tight">% Гості</th>
                 <th className="px-1.5 py-1.5 text-right whitespace-normal leading-tight">План Сер. чек</th>
                 <th className="px-1.5 py-1.5 text-right whitespace-normal leading-tight">Факт Сер. чек</th>
+                <th className="px-1.5 py-1.5 text-right whitespace-normal leading-tight">% Сер. чек</th>
                 <th className="px-1.5 py-1.5 text-center whitespace-normal leading-tight">Погода</th>
               </tr>
             </thead>
@@ -688,6 +738,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                     className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
                   />
                 </td>
+                <td className={`px-1.5 py-1.5 text-right ${deviationCellClass(deviationPct(totals.factTo, totals.planTo))}`}>{formatPct(deviationPct(totals.factTo, totals.planTo))}</td>
                 <td className="px-1.5 py-1.5 text-right">
                   <input
                     type="number"
@@ -710,6 +761,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                     className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
                   />
                 </td>
+                <td className={`px-1.5 py-1.5 text-right ${deviationCellClass(deviationPct(totals.factGosti, totals.planGosti))}`}>{formatPct(deviationPct(totals.factGosti, totals.planGosti))}</td>
                 <td className="px-1.5 py-1.5 text-right">
                   <input
                     type="number"
@@ -722,29 +774,41 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                   />
                 </td>
                 <td className="px-1.5 py-1.5 text-right">{formatNumber(averageCheck(totals.factTo, totals.factGosti))}</td>
+                <td className={`px-1.5 py-1.5 text-right ${deviationCellClass(deviationPct(averageCheck(totals.factTo, totals.factGosti), averageCheck(totals.planTo, totals.planGosti)))}`}>{formatPct(deviationPct(averageCheck(totals.factTo, totals.factGosti), averageCheck(totals.planTo, totals.planGosti)))}</td>
                 <td className="px-1.5 py-1.5"></td>
               </tr>
               {visibleHours.map((hour) => {
                 const row = hourlyData[hour] || emptyHourRow();
                 const planCheck = averageCheck(toNumber(row.planTo), toNumber(row.planGosti));
                 const factCheck = averageCheck(toNumber(row.factTo), toNumber(row.factGosti));
+                const cum = hourlyCumulative[hour] || { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0 };
+                const toPct = deviationPct(cum.factTo, cum.planTo);
+                const gostiPct = deviationPct(cum.factGosti, cum.planGosti);
+                const checkPct = deviationPct(averageCheck(cum.factTo, cum.factGosti), averageCheck(cum.planTo, cum.planGosti));
+                const cellInput = (field) => (
+                  <td key={field} className="px-1 py-1 text-right">
+                    <input
+                      type="number"
+                      value={row[field]}
+                      onChange={(e) => handleFieldChange(hour, field, e.target.value)}
+                      onBlur={handleSave}
+                      disabled={!canEdit}
+                      className="w-full min-w-0 rounded border border-slate-200 bg-white px-1.5 py-1 text-right text-xs text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+                    />
+                  </td>
+                );
                 return (
                   <tr key={hour} className="border-t border-slate-200">
                     <td className="px-2 py-1 font-medium text-slate-700">{hour}</td>
-                    {FIELDS.map((field) => (
-                      <td key={field} className="px-1 py-1 text-right">
-                        <input
-                          type="number"
-                          value={row[field]}
-                          onChange={(e) => handleFieldChange(hour, field, e.target.value)}
-                          onBlur={handleSave}
-                          disabled={!canEdit}
-                          className="w-full min-w-0 rounded border border-slate-200 bg-white px-1.5 py-1 text-right text-xs text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
-                        />
-                      </td>
-                    ))}
+                    {cellInput("planTo")}
+                    {cellInput("factTo")}
+                    <td className={`px-1 py-1 text-right ${deviationCellClass(toPct)}`}>{formatPct(toPct)}</td>
+                    {cellInput("planGosti")}
+                    {cellInput("factGosti")}
+                    <td className={`px-1 py-1 text-right ${deviationCellClass(gostiPct)}`}>{formatPct(gostiPct)}</td>
                     <td className="px-1.5 py-1 text-right text-slate-600">{formatNumber(planCheck)}</td>
                     <td className="px-1.5 py-1 text-right text-slate-600">{formatNumber(factCheck)}</td>
+                    <td className={`px-1 py-1 text-right ${deviationCellClass(checkPct)}`}>{formatPct(checkPct)}</td>
                     <td className="px-1 py-1 text-center">
                       {/* Поле для майбутньої синхронізації з погодним API */}
                       <input

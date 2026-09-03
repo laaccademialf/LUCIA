@@ -2,7 +2,7 @@
   "name": "lucia-backend",
   "private": true,
   "type": "module",
-  "version": "1.0.3+f66fe05e.dirty",
+  "version": "1.0.3+0dcfccc5.dirty",
   "dependencies": {
     "mssql": "^11.0.1"
   }
