@@ -155,6 +155,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   const [monthlyModalOpen, setMonthlyModalOpen] = useState(false);
   const [monthlyGenerating, setMonthlyGenerating] = useState(false);
   const [monthlyStatus, setMonthlyStatus] = useState("");
+  const [monthlyHistory, setMonthlyHistory] = useState([]);
   const [viewMode, setViewMode] = useState("day"); // "day" | "week" | "month"
   const [periodData, setPeriodData] = useState({}); // { iso: hoursObject }
   const [periodLoading, setPeriodLoading] = useState(false);
@@ -259,6 +260,21 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     void load();
     return () => { cancelled = true; };
   }, [viewMode, selectedRestaurantId, periodDates]);
+
+  // Історія плану/факту закладу для передзаповнення й прогнозу у вікні «План на місяць».
+  useEffect(() => {
+    if (!monthlyModalOpen || !selectedRestaurantId || !isCollectionsApiEnabled()) return;
+    let cancelled = false;
+    (async () => {
+      const all = await listCollectionItemsApi("salesHourlyPlans").catch(() => []);
+      if (cancelled) return;
+      const hist = (Array.isArray(all) ? all : []).filter(
+        (rec) => String(rec?.restaurantId || "") === String(selectedRestaurantId)
+      );
+      setMonthlyHistory(hist);
+    })();
+    return () => { cancelled = true; };
+  }, [monthlyModalOpen, selectedRestaurantId]);
 
   // Денні підсумки періоду (сума по робочих годинах кожного дня) з накопичувальним підсумком.
   const periodRows = useMemo(() => {
@@ -838,6 +854,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
           onGenerate={handleGenerateMonthlyPlan}
           generating={monthlyGenerating}
           status={monthlyStatus}
+          history={monthlyHistory}
         />
       )}
     </div>

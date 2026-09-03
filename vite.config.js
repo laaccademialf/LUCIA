@@ -8,7 +8,7 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
-    allowedHosts: 'all',
+    allowedHosts: true,
     cors: true,
     // Same-origin режим: фронт завжди ходить на власний origin,
     // а в dev ці шляхи проксуються на custom-db сервер (MIGRATION_PORT).
