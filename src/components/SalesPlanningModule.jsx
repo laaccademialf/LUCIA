@@ -13,9 +13,8 @@ import {
   getServioSettings,
   isServioApiEnabled,
 } from "../api/servioSettingsApi";
-import { buildMonthlyPlan } from "../utils/salesPlanDistribution";
+import { buildMonthlyPlan, largestRemainderDistribute } from "../utils/salesPlanDistribution";
 import { fetchKyivWeather, weatherLabel } from "../api/weatherApi";
-
 // Погодинні рядки з 08:00 до 23:00 включно, як у паперовому шаблоні планування.
 const HOURS = Array.from({ length: 16 }, (_, i) => `${String(i + 8).padStart(2, "0")}:00:00`);
 
@@ -80,6 +79,23 @@ const formatDayLabel = (iso) => {
   return `${d}.${m}`;
 };
 
+// Усі дати місяця, що містить задану дату.
+const getMonthDates = (isoDate) => {
+  const [y, m] = isoDate.split("-").map(Number);
+  if (!y || !m) return [];
+  const total = new Date(y, m, 0).getDate();
+  return Array.from({ length: total }, (_, i) => `${y}-${String(m).padStart(2, "0")}-${String(i + 1).padStart(2, "0")}`);
+};
+
+const MONTHS_UK_GEN = [
+  "січня", "лютого", "березня", "квітня", "травня", "червня",
+  "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
+];
+const formatMonthLabel = (isoDate) => {
+  const [y, m] = isoDate.split("-").map(Number);
+  return `${MONTHS_UK_GEN[(m || 1) - 1]} ${y}`;
+};
+
 const toNumber = (value) => {
   const n = Number(String(value ?? "").trim().replace(",", "."));
   return Number.isFinite(n) ? n : 0;
@@ -124,9 +140,9 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   const [monthlyModalOpen, setMonthlyModalOpen] = useState(false);
   const [monthlyGenerating, setMonthlyGenerating] = useState(false);
   const [monthlyStatus, setMonthlyStatus] = useState("");
-  const [viewMode, setViewMode] = useState("day"); // "day" | "week"
-  const [weekData, setWeekData] = useState({}); // { iso: hoursObject }
-  const [weekLoading, setWeekLoading] = useState(false);
+  const [viewMode, setViewMode] = useState("day"); // "day" | "week" | "month"
+  const [periodData, setPeriodData] = useState({}); // { iso: hoursObject }
+  const [periodLoading, setPeriodLoading] = useState(false);
 
   const isSettingsTab = /setting|налашт/.test(String(topTab || "").toLowerCase());
 
@@ -192,42 +208,47 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     return () => { cancelled = true; };
   }, [selectedRestaurantId, date]);
 
-  // Тижневий режим: вантажимо 7 днів (Пн–Нд) обраного тижня.
-  const weekDates = useMemo(() => getWeekDates(date), [date]);
+  // Огляд періоду (тиждень/місяць): вантажимо всі дні періоду.
+  const periodDates = useMemo(() => {
+    if (viewMode === "week") return getWeekDates(date);
+    if (viewMode === "month") return getMonthDates(date);
+    return [];
+  }, [viewMode, date]);
+
   useEffect(() => {
-    if (viewMode !== "week" || !selectedRestaurantId) return;
+    if (viewMode === "day" || !selectedRestaurantId || periodDates.length === 0) return;
     let cancelled = false;
     const load = async () => {
-      setWeekLoading(true);
+      setPeriodLoading(true);
       try {
         if (!isCollectionsApiEnabled()) {
-          if (!cancelled) setWeekData({});
+          if (!cancelled) setPeriodData({});
           return;
         }
         const docs = await Promise.all(
-          weekDates.map((iso) =>
+          periodDates.map((iso) =>
             getCollectionItemApi("salesHourlyPlans", buildDocId(selectedRestaurantId, iso)).catch(() => null)
           )
         );
         if (cancelled) return;
         const next = {};
-        weekDates.forEach((iso, i) => {
+        periodDates.forEach((iso, i) => {
           const saved = docs[i];
           next[iso] = saved?.hours && typeof saved.hours === "object" ? saved.hours : {};
         });
-        setWeekData(next);
+        setPeriodData(next);
       } finally {
-        if (!cancelled) setWeekLoading(false);
+        if (!cancelled) setPeriodLoading(false);
       }
     };
     void load();
     return () => { cancelled = true; };
-  }, [viewMode, selectedRestaurantId, weekDates]);
+  }, [viewMode, selectedRestaurantId, periodDates]);
 
-  // Денні підсумки тижня (сума по робочих годинах кожного дня).
-  const weekRows = useMemo(() => {
-    return weekDates.map((iso) => {
-      const hours = weekData[iso] || {};
+  // Денні підсумки періоду (сума по робочих годинах кожного дня).
+  const periodRows = useMemo(() => {
+    return periodDates.map((iso) => {
+      const hours = periodData[iso] || {};
       const dayHours = getVisibleHours(currentRestaurant?.schedule, iso);
       const acc = dayHours.reduce((a, hour) => {
         const row = hours[hour] || {};
@@ -241,17 +262,17 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
       const dow = (new Date(`${iso}T00:00:00`).getDay() + 6) % 7;
       return { iso, weekdayLabel: WEEKDAY_LABELS[dow], ...acc };
     });
-  }, [weekDates, weekData, currentRestaurant?.schedule]);
+  }, [periodDates, periodData, currentRestaurant?.schedule]);
 
-  const weekTotals = useMemo(
-    () => weekRows.reduce(
+  const periodTotals = useMemo(
+    () => periodRows.reduce(
       (a, r) => {
         a.planTo += r.planTo; a.factTo += r.factTo; a.planGosti += r.planGosti; a.factGosti += r.factGosti;
         return a;
       },
       { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0 }
     ),
-    [weekRows]
+    [periodRows]
   );
 
   const totals = useMemo(() => visibleHours.reduce((acc, hour) => {
@@ -293,6 +314,22 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     const targetAvgCheck = toNumber(value);
     const targetTotalPlanTo = targetAvgCheck * totals.planGosti;
     handleTotalPlanChange("planTo", targetTotalPlanTo);
+  };
+
+  // Ручне введення тотала "Факт ТО" / "Факт Гості" розносить значення по годинах
+  // пропорційно до відповідного плану (План ТО / План Гості); без плану — рівномірно.
+  const handleTotalFactChange = (field, value) => {
+    const planField = field === "factTo" ? "planTo" : "planGosti";
+    const targetTotal = toNumber(value);
+    setHourlyData((prev) => {
+      const weights = visibleHours.map((hour) => toNumber((prev[hour] || {})[planField]));
+      const distributed = largestRemainderDistribute(weights, targetTotal);
+      const next = { ...prev };
+      visibleHours.forEach((hour, i) => {
+        next[hour] = { ...(next[hour] || emptyHourRow()), [field]: distributed[i] ? String(distributed[i]) : "" };
+      });
+      return next;
+    });
   };
 
   const handleSave = async () => {
@@ -482,9 +519,16 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
             <button
               type="button"
               onClick={() => setViewMode("week")}
-              className={`px-3 py-2 text-sm font-semibold transition ${viewMode === "week" ? "bg-indigo-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
+              className={`border-l border-slate-300 px-3 py-2 text-sm font-semibold transition ${viewMode === "week" ? "bg-indigo-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
             >
               Тиждень
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("month")}
+              className={`border-l border-slate-300 px-3 py-2 text-sm font-semibold transition ${viewMode === "month" ? "bg-indigo-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
+            >
+              Місяць
             </button>
           </div>
           {restaurantOptions.length > 1 && (
@@ -538,13 +582,15 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
 
       {restaurantOptions.length === 0 ? (
         <p className="text-sm text-slate-500">Немає закладів, доступних для перегляду.</p>
-      ) : viewMode === "week" ? (
+      ) : viewMode !== "day" ? (
         <div className="overflow-x-auto rounded-lg border border-slate-200">
           <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2 text-sm">
             <span className="font-semibold text-slate-700">
-              Тиждень: {formatDayLabel(weekDates[0] || date)}–{formatDayLabel(weekDates[6] || date)}
+              {viewMode === "week"
+                ? `Тиждень: ${formatDayLabel(periodDates[0] || date)}–${formatDayLabel(periodDates[periodDates.length - 1] || date)}`
+                : formatMonthLabel(date)}
             </span>
-            {weekLoading && <span className="text-slate-500">Завантаження…</span>}
+            {periodLoading && <span className="text-slate-500">Завантаження…</span>}
           </div>
           <table className="w-full text-xs">
             <thead className="bg-slate-50 text-slate-700">
@@ -562,15 +608,15 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
             <tbody>
               <tr className="border-t border-slate-200 bg-amber-50 font-semibold">
                 <td className="px-3 py-2">Тотал</td>
-                <td className="px-2 py-2 text-right">{formatNumber(weekTotals.planTo)}</td>
-                <td className="px-2 py-2 text-right">{formatNumber(weekTotals.factTo)}</td>
-                <td className="px-2 py-2 text-right">{formatNumber(weekTotals.planGosti)}</td>
-                <td className="px-2 py-2 text-right">{formatNumber(weekTotals.factGosti)}</td>
-                <td className="px-2 py-2 text-right">{formatNumber(averageCheck(weekTotals.planTo, weekTotals.planGosti))}</td>
-                <td className="px-2 py-2 text-right">{formatNumber(averageCheck(weekTotals.factTo, weekTotals.factGosti))}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(periodTotals.planTo)}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(periodTotals.factTo)}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(periodTotals.planGosti)}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(periodTotals.factGosti)}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(averageCheck(periodTotals.planTo, periodTotals.planGosti))}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(averageCheck(periodTotals.factTo, periodTotals.factGosti))}</td>
                 <td className="px-3 py-2"></td>
               </tr>
-              {weekRows.map((r) => (
+              {periodRows.map((r) => (
                 <tr
                   key={r.iso}
                   onClick={() => { setDate(r.iso); setViewMode("day"); }}
@@ -631,7 +677,17 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                     className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
                   />
                 </td>
-                <td className="px-1.5 py-1.5 text-right">{formatNumber(totals.factTo)}</td>
+                <td className="px-1.5 py-1.5 text-right">
+                  <input
+                    type="number"
+                    value={totals.factTo || ""}
+                    onChange={(e) => handleTotalFactChange("factTo", e.target.value)}
+                    onBlur={handleSave}
+                    disabled={!canEdit}
+                    title="Введіть загальний факт — розподілиться по годинах (пропорційно плану)"
+                    className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+                  />
+                </td>
                 <td className="px-1.5 py-1.5 text-right">
                   <input
                     type="number"
@@ -643,7 +699,17 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                     className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
                   />
                 </td>
-                <td className="px-1.5 py-1.5 text-right">{formatNumber(totals.factGosti)}</td>
+                <td className="px-1.5 py-1.5 text-right">
+                  <input
+                    type="number"
+                    value={totals.factGosti || ""}
+                    onChange={(e) => handleTotalFactChange("factGosti", e.target.value)}
+                    onBlur={handleSave}
+                    disabled={!canEdit}
+                    title="Введіть загальний факт — розподілиться по годинах (пропорційно плану)"
+                    className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
+                  />
+                </td>
                 <td className="px-1.5 py-1.5 text-right">
                   <input
                     type="number"
