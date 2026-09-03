@@ -79,7 +79,7 @@ const loadDriver = async () => {
     return mssqlModule;
   } catch (e) {
     throw new Error(
-      `Драйвер MS SQL не встановлено. Виконайте \`npm install mssql\` у scripts/custom-db (${e?.message || e}).`
+      `Драйвер MS SQL не встановлено. Додайте пакет у КОРЕНЕВІ залежності та перевстановіть: у корені проєкту виконайте \`npm install\` (mssql уже в package.json). УВАГА: бекенд бере модулі з /app/node_modules — встановлення у scripts/custom-db НЕ допоможе (${e?.message || e}).`
     );
   }
 };
