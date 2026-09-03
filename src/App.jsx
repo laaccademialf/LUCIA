@@ -788,6 +788,8 @@ function App() {
                       const [showDashboardSummaryModal, setShowDashboardSummaryModal] = useState(false);
                       // Модальне вікно «Зведені дані» продажів (ТО/Гості/Середній чек) по всіх закладах.
                       const [showSalesSummaryModal, setShowSalesSummaryModal] = useState(false);
+                      // Обрана метрика прогнозного звіту: "to" | "gosti" | "check".
+                      const [salesSummaryMetric, setSalesSummaryMetric] = useState("to");
                       // Стан для вибраного ресторану (редагування)
                       const [selectedRestaurant, setSelectedRestaurant] = useState(null);
                       // Стан для форми ресторану
@@ -1948,6 +1950,114 @@ function App() {
       pctCheck: pctVsPlan(factCheck, planCheck),
     };
   }, [salesHourlyPlans, restaurants, dashboardRestaurantFilter, dashboardHourFilter, electricityOverview.fromIso, electricityOverview.toIso]);
+
+  // Прогнозний звіт продажів за обраний період: факт минулого року (той самий місяць),
+  // факт попереднього місяця, опер. план, прогноз і факт до поточної дати — по кожному закладу.
+  const salesForecast = useMemo(() => {
+    const fromIso = electricityOverview.fromIso;
+    const toIso = electricityOverview.toIso;
+    const targetRestaurantId = String(dashboardRestaurantFilter || "").trim();
+    const list = targetRestaurantId
+      ? restaurants.filter((r) => String(r?.id || "") === targetRestaurantId)
+      : restaurants;
+    const num = (v) => Number(String(v ?? "").replace(",", ".")) || 0;
+
+    // Зсув ISO-дати на роки/місяці (для порівняльних періодів).
+    const shift = (iso, { years = 0, months = 0 }) => {
+      const d = new Date(`${iso}T00:00:00`);
+      if (years) d.setFullYear(d.getFullYear() + years);
+      if (months) d.setMonth(d.getMonth() + months);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const da = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${da}`;
+    };
+
+    const curDates = getDatesInRange(fromIso, toIso);
+    const pyDates = getDatesInRange(shift(fromIso, { years: -1 }), shift(toIso, { years: -1 }));
+    const pmDates = getDatesInRange(shift(fromIso, { months: -1 }), shift(toIso, { months: -1 }));
+
+    const recFor = (rid, iso) =>
+      salesHourlyPlans.find(
+        (x) => String(x?.restaurantId || "") === String(rid) && String(x?.date || "").slice(0, 10) === iso
+      );
+
+    // Сума метрики (план або факт) по днях діапазону для закладу.
+    const sumMetric = (rid, dates, kind) => {
+      let to = 0;
+      let gosti = 0;
+      for (const iso of dates) {
+        const rec = recFor(rid, iso);
+        if (!rec?.hours || typeof rec.hours !== "object") continue;
+        for (const h of Object.keys(rec.hours)) {
+          const row = rec.hours[h] || {};
+          if (kind === "plan") {
+            to += num(row.planTo);
+            gosti += num(row.planGosti);
+          } else {
+            to += num(row.factTo);
+            gosti += num(row.factGosti);
+          }
+        }
+      }
+      return { to, gosti };
+    };
+
+    // Дні з фактом (для «факт до дати» та визначення залишкових днів для прогнозу).
+    const factByDay = (rid, dates) => {
+      const out = [];
+      for (const iso of dates) {
+        const rec = recFor(rid, iso);
+        if (!rec?.hours || typeof rec.hours !== "object") continue;
+        let to = 0;
+        let gosti = 0;
+        for (const h of Object.keys(rec.hours)) {
+          const row = rec.hours[h] || {};
+          to += num(row.factTo);
+          gosti += num(row.factGosti);
+        }
+        if (to > 0 || gosti > 0) out.push({ iso, to, gosti });
+      }
+      return out;
+    };
+
+    const perRestaurant = list.map((r) => {
+      const rid = r.id;
+      const opPlan = sumMetric(rid, curDates, "plan");
+      const py = sumMetric(rid, pyDates, "fact");
+      const pm = sumMetric(rid, pmDates, "fact");
+      const factDays = factByDay(rid, curDates);
+      const factToDate = factDays.reduce(
+        (a, b) => ({ to: a.to + b.to, gosti: a.gosti + b.gosti }),
+        { to: 0, gosti: 0 }
+      );
+      const lastFactIso = factDays.length ? factDays[factDays.length - 1].iso : null;
+      // Прогноз = факт до останнього дня з даними + план на дні, що залишилися.
+      const remainingDates = curDates.filter((iso) => (lastFactIso ? iso > lastFactIso : true));
+      const remPlan = sumMetric(rid, remainingDates, "plan");
+      const forecast = { to: factToDate.to + remPlan.to, gosti: factToDate.gosti + remPlan.gosti };
+      return { id: rid, name: r.name || r.regNumber || "—", opPlan, py, pm, factToDate, forecast, lastFactIso };
+    });
+
+    const acc = (sel) =>
+      perRestaurant.reduce(
+        (a, r) => ({ to: a.to + sel(r).to, gosti: a.gosti + sel(r).gosti }),
+        { to: 0, gosti: 0 }
+      );
+    const total = {
+      opPlan: acc((r) => r.opPlan),
+      py: acc((r) => r.py),
+      pm: acc((r) => r.pm),
+      factToDate: acc((r) => r.factToDate),
+      forecast: acc((r) => r.forecast),
+    };
+    const lastFactIso = perRestaurant.reduce(
+      (mx, r) => (r.lastFactIso && (!mx || r.lastFactIso > mx) ? r.lastFactIso : mx),
+      null
+    );
+
+    return { fromIso, toIso, perRestaurant, total, lastFactIso };
+  }, [salesHourlyPlans, restaurants, dashboardRestaurantFilter, electricityOverview.fromIso, electricityOverview.toIso]);
 
   const menuStructureForPermissions = useMemo(() => {
     // Базова структура навігації
@@ -3534,7 +3644,6 @@ function App() {
           const sv = salesOverview;
           const fmtGrn = (n) => `${Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 0 })} грн`;
           const fmtInt = (n) => Number(n || 0).toLocaleString("uk-UA", { maximumFractionDigits: 0 });
-          const pctVsPlanUi = (fact, plan) => (Number(plan) > 0 ? ((Number(fact) - Number(plan)) / Number(plan)) * 100 : null);
           // Заливка комірок зведеної таблиці за відхиленням факт/план.
           const salesPctTone = (pct) => {
             if (!Number.isFinite(pct)) return "";
@@ -3548,6 +3657,31 @@ function App() {
             const abs = Math.abs(pct);
             return `${pct > 0 ? "+" : pct < 0 ? "-" : ""}${abs.toFixed(1)}%`;
           };
+          // Прогнозний звіт продажів.
+          const sf = salesForecast;
+          const ukMonthsGen = ["січень", "лютий", "березень", "квітень", "травень", "червень", "липень", "серпень", "вересень", "жовтень", "листопад", "грудень"];
+          const monthLabel = (iso, deltaYears = 0, deltaMonths = 0) => {
+            const d = new Date(`${String(iso)}T00:00:00`);
+            if (deltaYears) d.setFullYear(d.getFullYear() + deltaYears);
+            if (deltaMonths) d.setMonth(d.getMonth() + deltaMonths);
+            const name = ukMonthsGen[d.getMonth()] || "";
+            return `${name.charAt(0).toUpperCase()}${name.slice(1)} ${d.getFullYear()}`;
+          };
+          // Значення метрики з пари { to, gosti } для обраного показника.
+          const metricVal = (obj, metric) => {
+            if (!obj) return 0;
+            if (metric === "gosti") return obj.gosti;
+            if (metric === "check") return obj.gosti > 0 ? obj.to / obj.gosti : 0;
+            return obj.to;
+          };
+          const fmtMetric = (val, metric) => (metric === "gosti" ? fmtInt(val) : fmtGrn(val));
+          const devPct = (forecastVal, refVal) => (Number(refVal) > 0 ? ((Number(forecastVal) - Number(refVal)) / Number(refVal)) * 100 : null);
+          const metricLabels = { to: "Оборот, грн", gosti: "Гості", check: "Середній чек" };
+          const salesMetricTabs = [
+            { id: "to", label: "Оборот" },
+            { id: "gosti", label: "Гості" },
+            { id: "check", label: "Середній чек" },
+          ];
           const PlanFactBadge = ({ pct }) => {
             const isUp = Number.isFinite(pct) && pct > 0;
             const isDown = Number.isFinite(pct) && pct < 0;
@@ -3995,12 +4129,12 @@ function App() {
                     aria-label="Закрити"
                     onClick={() => setShowSalesSummaryModal(false)}
                   />
-                  <div className="relative z-10 mx-auto my-3 w-full max-w-5xl rounded-2xl border border-slate-200 bg-white shadow-2xl sm:my-6">
+                  <div className="relative z-10 mx-auto my-3 w-full max-w-6xl rounded-2xl border border-slate-200 bg-white shadow-2xl sm:my-6">
                     <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
                       <div>
-                        <h3 className="text-lg font-bold text-slate-900">Зведені дані продажів по закладах</h3>
+                        <h3 className="text-lg font-bold text-slate-900">Прогноз продажів по закладах</h3>
                         <p className="text-sm text-slate-600">
-                          Період: {fmtDateRangeUk(ov.fromIso, ov.toIso)}{dashboardHourFilter ? ` · до ${dashboardHourFilter.slice(0, 5)}` : ""}
+                          {metricLabels[salesSummaryMetric]} · Період: {fmtDateRangeUk(ov.fromIso, ov.toIso)}
                         </p>
                       </div>
                       <button
@@ -4011,114 +4145,146 @@ function App() {
                         Закрити
                       </button>
                     </div>
+                    <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-200 px-4 py-2">
+                      {salesMetricTabs.map((tab) => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setSalesSummaryMetric(tab.id)}
+                          className={`rounded-lg border px-3 py-1.5 text-sm font-semibold transition ${
+                            salesSummaryMetric === tab.id
+                              ? "border-indigo-500 bg-indigo-600 text-white"
+                              : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
                     <div className="px-3 py-3 sm:px-4">
-                      <div className="hidden overflow-x-auto sm:block">
-                        <table className="w-full border-collapse text-sm">
-                          <thead>
-                            <tr className="bg-slate-100 text-slate-700">
-                              <th className="border border-slate-200 px-3 py-2 text-left font-semibold">Ресторан</th>
-                              <th className="border border-slate-200 px-3 py-2 text-right font-semibold">ТО (факт / план)</th>
-                              <th className="border border-slate-200 px-3 py-2 text-right font-semibold">Гості (факт / план)</th>
-                              <th className="border border-slate-200 px-3 py-2 text-right font-semibold">Середній чек (факт / план)</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(sv.perRestaurant || [])
-                              .filter((row) => Number(row?.factTo || 0) > 0 || Number(row?.planTo || 0) > 0)
-                              .map((row) => (
-                                <tr key={row.id} className="odd:bg-white even:bg-slate-50">
-                                  <td className="border border-slate-200 px-3 py-2 text-slate-900">{row.name}</td>
-                                  <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(pctVsPlanUi(row.factTo, row.planTo))}`}>
-                                    <div className="flex flex-col items-end gap-0.5">
-                                      <span className="font-semibold tabular-nums text-slate-900">{fmtGrn(row.factTo)}</span>
-                                      <span className="text-[11px] text-slate-500 tabular-nums">План: {fmtGrn(row.planTo)}</span>
-                                      <span className="text-[11px] font-semibold tabular-nums">{fmtPct(pctVsPlanUi(row.factTo, row.planTo))}</span>
-                                    </div>
-                                  </td>
-                                  <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(pctVsPlanUi(row.factGosti, row.planGosti))}`}>
-                                    <div className="flex flex-col items-end gap-0.5">
-                                      <span className="font-semibold tabular-nums text-slate-900">{fmtInt(row.factGosti)}</span>
-                                      <span className="text-[11px] text-slate-500 tabular-nums">План: {fmtInt(row.planGosti)}</span>
-                                      <span className="text-[11px] font-semibold tabular-nums">{fmtPct(pctVsPlanUi(row.factGosti, row.planGosti))}</span>
-                                    </div>
-                                  </td>
-                                  <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(pctVsPlanUi(row.factCheck, row.planCheck))}`}>
-                                    <div className="flex flex-col items-end gap-0.5">
-                                      <span className="font-semibold tabular-nums text-slate-900">{fmtGrn(row.factCheck)}</span>
-                                      <span className="text-[11px] text-slate-500 tabular-nums">План: {fmtGrn(row.planCheck)}</span>
-                                      <span className="text-[11px] font-semibold tabular-nums">{fmtPct(pctVsPlanUi(row.factCheck, row.planCheck))}</span>
-                                    </div>
-                                  </td>
-                                </tr>
-                              ))}
-                            <tr className="bg-indigo-50 font-semibold text-indigo-900">
-                              <td className="border border-slate-200 px-3 py-2">Разом</td>
-                              <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(sv.pctTo)}`}>
-                                <div className="flex flex-col items-end gap-0.5">
-                                  <span className="tabular-nums">{fmtGrn(sv.factTo)}</span>
-                                  <span className="text-[11px] text-indigo-700 tabular-nums">План: {fmtGrn(sv.planTo)}</span>
-                                  <span className="text-[11px] tabular-nums">{fmtPct(sv.pctTo)}</span>
-                                </div>
-                              </td>
-                              <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(sv.pctGosti)}`}>
-                                <div className="flex flex-col items-end gap-0.5">
-                                  <span className="tabular-nums">{fmtInt(sv.factGosti)}</span>
-                                  <span className="text-[11px] text-indigo-700 tabular-nums">План: {fmtInt(sv.planGosti)}</span>
-                                  <span className="text-[11px] tabular-nums">{fmtPct(sv.pctGosti)}</span>
-                                </div>
-                              </td>
-                              <td className={`border border-slate-200 px-3 py-2 text-right ${salesPctTone(sv.pctCheck)}`}>
-                                <div className="flex flex-col items-end gap-0.5">
-                                  <span className="tabular-nums">{fmtGrn(sv.factCheck)}</span>
-                                  <span className="text-[11px] text-indigo-700 tabular-nums">План: {fmtGrn(sv.planCheck)}</span>
-                                  <span className="text-[11px] tabular-nums">{fmtPct(sv.pctCheck)}</span>
-                                </div>
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-
-                      <div className="space-y-2 sm:hidden">
-                        {(sv.perRestaurant || [])
-                          .filter((row) => Number(row?.factTo || 0) > 0 || Number(row?.planTo || 0) > 0)
-                          .map((row) => (
-                            <div key={`ms-${row.id}`} className="rounded-xl border border-slate-200 bg-white p-3">
-                              <p className="text-sm font-bold text-slate-900">{row.name}</p>
-                              <div className="mt-2 grid grid-cols-1 gap-1 text-xs">
-                                <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(pctVsPlanUi(row.factTo, row.planTo))}`}>
-                                  <span className="text-slate-600">ТО</span>
-                                  <span className="font-semibold text-slate-900">{fmtGrn(row.factTo)} <span className="text-slate-400">/ {fmtGrn(row.planTo)}</span> · {fmtPct(pctVsPlanUi(row.factTo, row.planTo))}</span>
-                                </p>
-                                <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(pctVsPlanUi(row.factGosti, row.planGosti))}`}>
-                                  <span className="text-slate-600">Гості</span>
-                                  <span className="font-semibold text-slate-900">{fmtInt(row.factGosti)} <span className="text-slate-400">/ {fmtInt(row.planGosti)}</span> · {fmtPct(pctVsPlanUi(row.factGosti, row.planGosti))}</span>
-                                </p>
-                                <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(pctVsPlanUi(row.factCheck, row.planCheck))}`}>
-                                  <span className="text-slate-600">Середній чек</span>
-                                  <span className="font-semibold text-slate-900">{fmtGrn(row.factCheck)} <span className="text-slate-400">/ {fmtGrn(row.planCheck)}</span> · {fmtPct(pctVsPlanUi(row.factCheck, row.planCheck))}</span>
-                                </p>
-                              </div>
+                      {(() => {
+                        const metric = salesSummaryMetric;
+                        const lblPy = monthLabel(ov.toIso, -1);
+                        const lblPm = monthLabel(ov.toIso, 0, -1);
+                        const lblCur = monthLabel(ov.toIso);
+                        const factToLabel = sf.lastFactIso ? `Факт по ${fmtDateUk(sf.lastFactIso)} включно` : "Факт (поточний)";
+                        const rows = (sf.perRestaurant || []).filter((r) =>
+                          [r.py, r.pm, r.opPlan, r.forecast, r.factToDate].some((o) => metricVal(o, metric) > 0)
+                        );
+                        const t = sf.total;
+                        const cell = (val) => fmtMetric(val, metric);
+                        const devCell = (fc, ref) => {
+                          const p = devPct(fc, ref);
+                          return { text: fmtPct(p), tone: salesPctTone(p) };
+                        };
+                        return (
+                          <>
+                            <div className="hidden overflow-x-auto lg:block">
+                              <table className="w-full border-collapse text-sm">
+                                <thead>
+                                  <tr className="bg-slate-100 text-slate-700">
+                                    <th className="border border-slate-200 px-3 py-2 text-left font-semibold">Ресторан</th>
+                                    <th className="border border-slate-200 px-2 py-2 text-right font-semibold">Факт<br />{lblPy}</th>
+                                    <th className="border border-slate-200 px-2 py-2 text-right font-semibold">Факт<br />{lblPm}</th>
+                                    <th className="border border-slate-200 px-2 py-2 text-right font-semibold">Опер. план<br />{lblCur}</th>
+                                    <th className="border border-slate-200 bg-indigo-100 px-2 py-2 text-right font-semibold text-indigo-900">Прогноз<br />{lblCur}</th>
+                                    <th className="border border-slate-200 px-2 py-2 text-right font-semibold">% від<br />{lblPy}</th>
+                                    <th className="border border-slate-200 px-2 py-2 text-right font-semibold">% від<br />{lblPm}</th>
+                                    <th className="border border-slate-200 px-2 py-2 text-right font-semibold">% від<br />опер. плану</th>
+                                    <th className="border border-slate-200 px-2 py-2 text-right font-semibold">{factToLabel}</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {rows.map((r) => {
+                                    const py = metricVal(r.py, metric);
+                                    const pm = metricVal(r.pm, metric);
+                                    const op = metricVal(r.opPlan, metric);
+                                    const fc = metricVal(r.forecast, metric);
+                                    const ftd = metricVal(r.factToDate, metric);
+                                    const dPy = devCell(fc, py);
+                                    const dPm = devCell(fc, pm);
+                                    const dOp = devCell(fc, op);
+                                    return (
+                                      <tr key={r.id} className="odd:bg-white even:bg-slate-50">
+                                        <td className="border border-slate-200 px-3 py-2 text-slate-900">{r.name}</td>
+                                        <td className="border border-slate-200 px-2 py-2 text-right tabular-nums text-slate-800">{cell(py)}</td>
+                                        <td className="border border-slate-200 px-2 py-2 text-right tabular-nums text-slate-800">{cell(pm)}</td>
+                                        <td className="border border-slate-200 px-2 py-2 text-right tabular-nums text-slate-800">{cell(op)}</td>
+                                        <td className="border border-slate-200 bg-indigo-50 px-2 py-2 text-right font-semibold tabular-nums text-indigo-900">{cell(fc)}</td>
+                                        <td className={`border border-slate-200 px-2 py-2 text-right tabular-nums ${dPy.tone}`}>{dPy.text}</td>
+                                        <td className={`border border-slate-200 px-2 py-2 text-right tabular-nums ${dPm.tone}`}>{dPm.text}</td>
+                                        <td className={`border border-slate-200 px-2 py-2 text-right tabular-nums ${dOp.tone}`}>{dOp.text}</td>
+                                        <td className="border border-slate-200 px-2 py-2 text-right tabular-nums text-slate-800">{cell(ftd)}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                  {(() => {
+                                    const py = metricVal(t.py, metric);
+                                    const pm = metricVal(t.pm, metric);
+                                    const op = metricVal(t.opPlan, metric);
+                                    const fc = metricVal(t.forecast, metric);
+                                    const ftd = metricVal(t.factToDate, metric);
+                                    const dPy = devCell(fc, py);
+                                    const dPm = devCell(fc, pm);
+                                    const dOp = devCell(fc, op);
+                                    return (
+                                      <tr className="bg-indigo-100 font-bold text-indigo-900">
+                                        <td className="border border-slate-200 px-3 py-2">Разом</td>
+                                        <td className="border border-slate-200 px-2 py-2 text-right tabular-nums">{cell(py)}</td>
+                                        <td className="border border-slate-200 px-2 py-2 text-right tabular-nums">{cell(pm)}</td>
+                                        <td className="border border-slate-200 px-2 py-2 text-right tabular-nums">{cell(op)}</td>
+                                        <td className="border border-slate-200 bg-indigo-200 px-2 py-2 text-right tabular-nums">{cell(fc)}</td>
+                                        <td className={`border border-slate-200 px-2 py-2 text-right tabular-nums ${dPy.tone}`}>{dPy.text}</td>
+                                        <td className={`border border-slate-200 px-2 py-2 text-right tabular-nums ${dPm.tone}`}>{dPm.text}</td>
+                                        <td className={`border border-slate-200 px-2 py-2 text-right tabular-nums ${dOp.tone}`}>{dOp.text}</td>
+                                        <td className="border border-slate-200 px-2 py-2 text-right tabular-nums">{cell(ftd)}</td>
+                                      </tr>
+                                    );
+                                  })()}
+                                </tbody>
+                              </table>
+                              <p className="mt-2 text-[11px] text-slate-500">
+                                Прогноз = факт за дні з даними + опер. план на дні, що залишилися до кінця періоду.
+                              </p>
                             </div>
-                          ))}
-                        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3">
-                          <p className="text-sm font-bold text-indigo-900">Разом</p>
-                          <div className="mt-2 grid grid-cols-1 gap-1 text-xs">
-                            <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(sv.pctTo)}`}>
-                              <span className="text-indigo-700">ТО</span>
-                              <span className="font-semibold text-indigo-900">{fmtGrn(sv.factTo)} <span className="text-indigo-400">/ {fmtGrn(sv.planTo)}</span> · {fmtPct(sv.pctTo)}</span>
-                            </p>
-                            <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(sv.pctGosti)}`}>
-                              <span className="text-indigo-700">Гості</span>
-                              <span className="font-semibold text-indigo-900">{fmtInt(sv.factGosti)} <span className="text-indigo-400">/ {fmtInt(sv.planGosti)}</span> · {fmtPct(sv.pctGosti)}</span>
-                            </p>
-                            <p className={`flex items-center justify-between gap-3 rounded px-1 py-0.5 ${salesPctTone(sv.pctCheck)}`}>
-                              <span className="text-indigo-700">Середній чек</span>
-                              <span className="font-semibold text-indigo-900">{fmtGrn(sv.factCheck)} <span className="text-indigo-400">/ {fmtGrn(sv.planCheck)}</span> · {fmtPct(sv.pctCheck)}</span>
-                            </p>
-                          </div>
-                        </div>
-                      </div>
+
+                            <div className="space-y-2 lg:hidden">
+                              {[...rows, { id: "__total__", name: "Разом", ...t, isTotal: true }].map((r) => {
+                                const py = metricVal(r.py, metric);
+                                const pm = metricVal(r.pm, metric);
+                                const op = metricVal(r.opPlan, metric);
+                                const fc = metricVal(r.forecast, metric);
+                                const ftd = metricVal(r.factToDate, metric);
+                                return (
+                                  <div key={`sf-${r.id}`} className={`rounded-xl border p-3 ${r.isTotal ? "border-indigo-200 bg-indigo-50" : "border-slate-200 bg-white"}`}>
+                                    <p className={`text-sm font-bold ${r.isTotal ? "text-indigo-900" : "text-slate-900"}`}>{r.name}</p>
+                                    <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                                      <span className="text-slate-500">Факт {lblPy}</span>
+                                      <span className="text-right font-semibold tabular-nums text-slate-900">{cell(py)}</span>
+                                      <span className="text-slate-500">Факт {lblPm}</span>
+                                      <span className="text-right font-semibold tabular-nums text-slate-900">{cell(pm)}</span>
+                                      <span className="text-slate-500">Опер. план</span>
+                                      <span className="text-right font-semibold tabular-nums text-slate-900">{cell(op)}</span>
+                                      <span className="text-indigo-700">Прогноз {lblCur}</span>
+                                      <span className="text-right font-bold tabular-nums text-indigo-900">{cell(fc)}</span>
+                                      <span className="text-slate-500">{factToLabel}</span>
+                                      <span className="text-right font-semibold tabular-nums text-slate-900">{cell(ftd)}</span>
+                                    </div>
+                                    <div className="mt-2 flex flex-wrap gap-1 border-t border-slate-100 pt-2 text-[11px]">
+                                      <span className={`rounded px-1.5 py-0.5 font-semibold ${salesPctTone(devPct(fc, py))}`}>{lblPy}: {fmtPct(devPct(fc, py))}</span>
+                                      <span className={`rounded px-1.5 py-0.5 font-semibold ${salesPctTone(devPct(fc, pm))}`}>{lblPm}: {fmtPct(devPct(fc, pm))}</span>
+                                      <span className={`rounded px-1.5 py-0.5 font-semibold ${salesPctTone(devPct(fc, op))}`}>план: {fmtPct(devPct(fc, op))}</span>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                              <p className="text-[11px] text-slate-500">
+                                Прогноз = факт за дні з даними + опер. план на дні, що залишилися.
+                              </p>
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
