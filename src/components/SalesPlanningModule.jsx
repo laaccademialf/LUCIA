@@ -76,6 +76,12 @@ const formatDayLabel = (iso) => {
   const [, m, d] = iso.split("-");
   return `${d}.${m}`;
 };
+const formatHourRange = (hourKey) => {
+  const endHour = Number(String(hourKey).split(":")[0]);
+  if (!Number.isFinite(endHour)) return hourKey;
+  const startHour = String((endHour + 23) % 24).padStart(2, "0");
+  return `${startHour}:00 - ${startHour}:59`;
+};
 
 // Усі дати місяця, що містить задану дату.
 const getMonthDates = (isoDate) => {
@@ -430,20 +436,30 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
           factGosti: row.guestCount ? String(row.guestCount) : "",
         };
       }
-      setHourlyData((prev) => {
-        const next = { ...prev };
-        for (const hour of Object.keys(next)) {
-          const fact = byHour[hour];
-          next[hour] = {
-            ...(next[hour] || emptyHourRow()),
-            factTo: fact ? fact.factTo : "",
-            factGosti: fact ? fact.factGosti : "",
-          };
-        }
-        return next;
-      });
+      const nextHourlyData = { ...hourlyData };
+      for (const hour of Object.keys(nextHourlyData)) {
+        const fact = byHour[hour];
+        nextHourlyData[hour] = {
+          ...(nextHourlyData[hour] || emptyHourRow()),
+          factTo: fact ? fact.factTo : "",
+          factGosti: fact ? fact.factGosti : "",
+        };
+      }
+      setHourlyData(nextHourlyData);
       const matched = Object.keys(byHour).length;
-      setStatus(matched ? `Факт завантажено (годин: ${matched}). Натисніть «Зберегти».` : "За цю дату Servio не повернув даних.");
+      if (!matched) {
+        setStatus("За цю дату Servio не повернув даних.");
+        return;
+      }
+      await createCollectionItemApi("salesHourlyPlans", {
+        id: buildDocId(selectedRestaurantId, date),
+        restaurantId: selectedRestaurantId,
+        date,
+        hours: nextHourlyData,
+        updatedAt: new Date().toISOString(),
+        updatedBy: user?.displayName || user?.email || "",
+      });
+      setStatus(`Факт завантажено та автоматично збережено (годин: ${matched}).`);
     } catch (error) {
       setStatus(`Помилка завантаження факту: ${error?.message || error}`);
     } finally {
@@ -466,6 +482,16 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
       const history = (Array.isArray(all) ? all : []).filter(
         (rec) => String(rec?.restaurantId || "") === String(selectedRestaurantId)
       );
+      const prevMonth = month === 1 ? 12 : month - 1;
+      const prevMonthYear = month === 1 ? year - 1 : year;
+      const profilePrefixes = [
+        `${prevMonthYear}-${String(prevMonth).padStart(2, "0")}`,
+        `${year - 1}-${String(month).padStart(2, "0")}`,
+        `${prevMonthYear - 1}-${String(prevMonth).padStart(2, "0")}`,
+      ];
+      const forecastHistory = history.filter((rec) => profilePrefixes.some(
+        (prefix) => String(rec?.date || "").slice(0, 7) === prefix
+      ));
       const existingByDate = new Map(
         history.map((rec) => [String(rec?.date || "").slice(0, 10), rec])
       );
@@ -492,7 +518,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         month,
         monthlyTo,
         monthlyGuests,
-        history,
+        history: forecastHistory,
         getHoursForDate: (iso) => getVisibleHours(currentRestaurant?.schedule, iso),
         weatherByDate,
       });
@@ -815,7 +841,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                 );
                 return (
                   <tr key={hour} className="border-t border-slate-200">
-                    <td className="px-2 py-1 font-medium text-slate-700">{hour}</td>
+                    <td className="px-2 py-1 font-medium text-slate-700">{formatHourRange(hour)}</td>
                     {cellInput("planTo")}
                     {cellInput("factTo")}
                     <td className={`px-1 py-1 text-right ${deviationCellClass(toPct)}`}>{formatPct(toPct)}</td>

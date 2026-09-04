@@ -52,7 +52,6 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
   const [avgCheckInput, setAvgCheckInput] = useState("");   // Середній чек (грн)
   const [guestsPerDay, setGuestsPerDay] = useState("");     // Гості на день
   const [useWeather, setUseWeather] = useState(true);
-  const [useFactForForecast, setUseFactForForecast] = useState(false); // за замовч. прогноз від планових показників
   const [forecastBase, setForecastBase] = useState(null); // { avgCheck, guestsPerDay } — базовий прогноз до коригування
   const [adjustPct, setAdjustPct] = useState(0);
 
@@ -75,16 +74,15 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
 
   const yearOptions = useMemo(() => [initial.year - 1, initial.year, initial.year + 1], [initial.year]);
 
-  // Прогноз середнього чека та гостей на день: цей місяць торік × торішній тренд минулого місяця
-  // (минулий місяць цей рік / минулий місяць торік). За замовчуванням від планових показників, опційно — від фактичних.
+  // Прогноз середнього чека та гостей на день будується лише за фактичними показниками.
   const handleForecast = () => {
     const prevMonth = month === 1 ? 12 : month - 1;
     const prevMonthYear = month === 1 ? year - 1 : year;
     const A = sumMonth(history, prevMonthYear, prevMonth);       // минулий місяць (цей рік)
     const B = sumMonth(history, year - 1, month);                // цей місяць торік
     const C = sumMonth(history, prevMonthYear - 1, prevMonth);   // минулий місяць торік
-    const toOf = useFactForForecast ? (v) => v.factTo : (v) => v.planTo;
-    const guOf = useFactForForecast ? (v) => v.factGosti : (v) => v.planGosti;
+    const toOf = (v) => v.factTo;
+    const guOf = (v) => v.factGosti;
     // Похідні по місяцю: середній чек = ТО / гості; гості на день = гості / дні того місяця.
     const avgOf = (v) => (guOf(v) > 0 ? toOf(v) / guOf(v) : 0);
     const gpdOf = (v, y, m) => guOf(v) / new Date(y, m, 0).getDate();
@@ -106,12 +104,12 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
     setGuestsPerDay(gpd ? String(gpd) : "");
   };
 
-  // Коригування ±% масштабує кількість гостей на день (середній чек лишається прогнозним).
+  // Коригування ±% однаково масштабує середній чек і кількість гостей на день.
   const handleAdjust = (pct) => {
     setAdjustPct(pct);
     if (!forecastBase) return;
     const factor = 1 + pct / 100;
-    setAvgCheckInput(forecastBase.avgCheck ? String(forecastBase.avgCheck) : "");
+    setAvgCheckInput(forecastBase.avgCheck ? String(Math.round(forecastBase.avgCheck * factor)) : "");
     setGuestsPerDay(forecastBase.guestsPerDay ? String(Math.round(forecastBase.guestsPerDay * factor)) : "");
   };
 
@@ -133,8 +131,7 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
         </div>
 
         <p className="mb-4 text-sm text-slate-600">
-          Введіть цілі на місяць — план розкладеться по днях і годинах за історичними частками
-          (той самий день тижня, сезонність рік тому).
+          Введіть цілі на місяць.
         </p>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -201,26 +198,11 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
           <p className="mt-2 text-xs text-slate-500">
             Прогноз за історією: цей місяць торік × тренд минулого місяця (цей рік ÷ торік) по середньому чеку та гостях.
           </p>
-          <label className="mt-2 flex items-start gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={useFactForForecast}
-              onChange={(e) => setUseFactForForecast(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-400"
-            />
-            <span>
-              Рахувати від фактичних показників
-              <span className="block text-xs text-slate-500">
-                За замовчуванням прогноз будується на планових показниках. Увімкніть, щоб узяти фактичні.
-              </span>
-            </span>
-          </label>
-
           {forecastBase && (
             <div className="mt-3">
               {forecastBase.avgCheck === 0 && forecastBase.guestsPerDay === 0 ? (
                 <p className="text-xs text-amber-600">
-                  Недостатньо історичних даних для прогнозу — заповніть {useFactForForecast ? "факт" : "план"} за попередні місяці.
+                  Недостатньо фактичних історичних даних для прогнозу — заповніть факт за попередні місяці.
                 </p>
               ) : (
                 <>

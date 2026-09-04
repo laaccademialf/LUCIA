@@ -186,7 +186,19 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
         SUM(BI.Total) AS Total,
         MAX(BI.EnterpriseID) AS EnterpriseID
     FROM tbBillItem_ BI WITH (NOLOCK INDEX(PK_tbBillItem_))
+    INNER JOIN tbBill_ B WITH (NOLOCK)
+      ON B.BaseExternalID = BI.BaseExternalID
+      AND B.ID = BI.BillID
     WHERE BI.ItemState <> 2
+      AND B.Closed BETWEEN @StartDate AND @EndDate
+      AND
+      (
+        NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
+        OR
+        ',' + REPLACE(@RestCode, ' ', '') + ','
+          LIKE
+        '%,' + CAST(BI.BaseExternalID AS nvarchar(50)) + ',%'
+      )
     GROUP BY BI.BaseExternalID, BI.BillID
 ),
 Bills AS
