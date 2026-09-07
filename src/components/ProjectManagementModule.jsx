@@ -23,6 +23,7 @@ import { getUsers } from "../firebase/users";
 import { getPositions, getWorkRoles } from "../firebase/rolesPositions";
 import { useLegalTasks } from "../hooks/useLegalTasks";
 import LegalRequestModal from "./LegalRequestModal";
+import TaskHierarchyManager from "./TaskHierarchyManager";
 import DatePickerPopover from "./DatePickerPopover";
 import { addLegalNotificationApi, isLegalApiEnabled } from "../api/legalTasksApi";
 import {
@@ -348,11 +349,11 @@ function AssigneeCombobox({ people, value, valueName, onSelect }) {
   );
 }
 
-function TaskComposer({ users, user, onClose, onCreate, onLegalSelect, workRoles = [], positions = [], usersLoadError = false }) {
+function TaskComposer({ users, user, onClose, onCreate, onLegalSelect, workRoles = [], positions = [], taskHierarchyRules = [], usersLoadError = false }) {
   const [form, setForm] = useState(initialForm);
   const [saving, setSaving] = useState(false);
   const [attachError, setAttachError] = useState("");
-  const people = getAssignableUsers(users, user, workRoles, positions);
+  const people = getAssignableUsers(users, user, workRoles, positions, taskHierarchyRules);
   const set = (key, value) => {
     setForm((current) => ({ ...current, [key]: value }));
     if (key === "department" && value === "Юридичний відділ") onLegalSelect?.();
@@ -1078,9 +1079,9 @@ function SubtaskForm({ task, people, onCreateSubtask, onDone, usersLoadError = f
   );
 }
 
-function TaskDetailsDialog({ task, onClose, updateStatus, onCreateSubtask, users = [], user, workRoles = [], positions = [], usersLoadError = false }) {
+function TaskDetailsDialog({ task, onClose, updateStatus, onCreateSubtask, users = [], user, workRoles = [], positions = [], taskHierarchyRules = [], usersLoadError = false }) {
   const [showSubtaskForm, setShowSubtaskForm] = useState(false);
-  const people = getAssignableUsers(users, user, workRoles, positions).filter(Boolean);
+  const people = getAssignableUsers(users, user, workRoles, positions, taskHierarchyRules).filter(Boolean);
 
   if (!task) return null;
   const comments = Array.isArray(task.comments)
@@ -1195,7 +1196,7 @@ function TaskDetailsDialog({ task, onClose, updateStatus, onCreateSubtask, users
   );
 }
 
-function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCreateSubtask, users = [], user, workRoles = [], positions = [], usersLoadError = false }) {
+function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCreateSubtask, users = [], user, workRoles = [], positions = [], taskHierarchyRules = [], usersLoadError = false }) {
   const [selectedTask, setSelectedTask] = useState(null);
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [deadlineFilter, setDeadlineFilter] = useState("all");
@@ -1282,13 +1283,14 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCre
         </div>
       )}
       </div>
-      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} updateStatus={handleStatusChange} onCreateSubtask={onCreateSubtask} users={users} user={user} workRoles={workRoles} positions={positions} usersLoadError={usersLoadError} />
+      <TaskDetailsDialog task={selectedTask} onClose={() => setSelectedTask(null)} updateStatus={handleStatusChange} onCreateSubtask={onCreateSubtask} users={users} user={user} workRoles={workRoles} positions={positions} taskHierarchyRules={taskHierarchyRules} usersLoadError={usersLoadError} />
     </>
   );
 }
 
 export default function ProjectManagementModule({
   topTab = "newtask",
+  topTabLabel = "",
   user,
   restaurants = [],
 }) {
@@ -1297,6 +1299,7 @@ export default function ProjectManagementModule({
   const [usersLoadError, setUsersLoadError] = useState(false);
   const [workRoles, setWorkRoles] = useState([]);
   const [positions, setPositions] = useState([]);
+  const [taskHierarchyRules, setTaskHierarchyRules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showComposer, setShowComposer] = useState(false);
   const [showLegalRequest, setShowLegalRequest] = useState(false);
@@ -1307,6 +1310,9 @@ export default function ProjectManagementModule({
   const legal = useLegalTasks(user);
   const isReports = String(topTab).toLowerCase().includes("report");
   const isMyTasks = /my.?task/i.test(String(topTab));
+  const isTaskSettings =
+    /tasksettings|setting|sitting|hierarchy|ierarh/i.test(String(topTab)) ||
+    /налашт/i.test(String(topTabLabel));
   const isNewTask = !isReports && !isMyTasks;
   const filterKey = isReports ? "report" : isMyTasks ? "mytask" : "newtask";
   const filter = filters[filterKey];
@@ -1316,7 +1322,15 @@ export default function ProjectManagementModule({
     setLoading(true);
     setUsersLoadError(false);
     try {
-      const [remote, people, roles, rolePositions] = await Promise.all([
+      const readHierarchyRules = () => {
+        try {
+          const value = JSON.parse(localStorage.getItem("lucia_task_hierarchy_rules") || "[]");
+          return Array.isArray(value) ? value : [];
+        } catch {
+          return [];
+        }
+      };
+      const [remote, people, roles, rolePositions, hierarchyRules] = await Promise.all([
         isCollectionsApiEnabled()
           ? listCollectionItemsApi(COLLECTION)
           : Promise.resolve(readLocalTasks()),
@@ -1327,6 +1341,9 @@ export default function ProjectManagementModule({
         }),
         getWorkRoles().catch(() => []),
         getPositions().catch(() => []),
+        isCollectionsApiEnabled()
+          ? listCollectionItemsApi("taskHierarchyRules").catch(() => [])
+          : Promise.resolve(readHierarchyRules()),
       ]);
       setTasks(
         (Array.isArray(remote) ? remote : []).sort((a, b) =>
@@ -1336,6 +1353,7 @@ export default function ProjectManagementModule({
       setUsers(Array.isArray(people) ? people : []);
       setWorkRoles(Array.isArray(roles) ? roles : []);
       setPositions(Array.isArray(rolePositions) ? rolePositions : []);
+      setTaskHierarchyRules(Array.isArray(hierarchyRules) ? hierarchyRules : []);
     } catch {
       setTasks(readLocalTasks());
     } finally {
@@ -1572,6 +1590,8 @@ export default function ProjectManagementModule({
   }).slice(0, 5), [reportTasks]);
   const longestAssigneeCompletionTime = Math.max(1, ...byAssignee.map((row) => row.averageHours || 0));
 
+  if (isTaskSettings) return <TaskHierarchyManager />;
+
   return (
     <section className="min-h-[680px] rounded-2xl bg-[#f5f7fb] p-4 text-slate-900 sm:p-6">
       <div className="mb-4 flex flex-wrap items-center gap-4">
@@ -1749,6 +1769,7 @@ export default function ProjectManagementModule({
                   user={user}
                   workRoles={workRoles}
                   positions={positions}
+                  taskHierarchyRules={taskHierarchyRules}
                   usersLoadError={usersLoadError}
                 />
               </div>
@@ -1762,6 +1783,7 @@ export default function ProjectManagementModule({
           user={user}
           workRoles={workRoles}
           positions={positions}
+          taskHierarchyRules={taskHierarchyRules}
           usersLoadError={usersLoadError}
           onClose={() => setShowComposer(false)}
           onCreate={createTask}
@@ -1778,7 +1800,7 @@ export default function ProjectManagementModule({
         />
       )}
       <ReportTaskDialog tasks={drillDownTasks} onClose={() => setDrillDownTasks(null)} />
-      <TaskDetailsDialog task={selectedGanttTask} onClose={() => setSelectedGanttTask(null)} updateStatus={updateStatus} onCreateSubtask={createSubtask} />
+      <TaskDetailsDialog task={selectedGanttTask} onClose={() => setSelectedGanttTask(null)} updateStatus={updateStatus} onCreateSubtask={createSubtask} users={users} user={user} workRoles={workRoles} positions={positions} taskHierarchyRules={taskHierarchyRules} usersLoadError={usersLoadError} />
     </section>
   );
 }

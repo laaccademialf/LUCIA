@@ -114,7 +114,7 @@ export const isManagerLikeUser = (user) => {
   );
 };
 
-export const getAssignableUsers = (users = [], currentUser, workRoles = [], positions = []) => {
+export const getAssignableUsers = (users = [], currentUser, workRoles = [], positions = [], taskHierarchyRules = []) => {
   const currentUserId = idOf(currentUser);
 
   if (!currentUser || !users.length) return [];
@@ -133,6 +133,19 @@ export const getAssignableUsers = (users = [], currentUser, workRoles = [], posi
     const targetRoleNode = findHierarchyNode(workRoles, row?.workRole || row?.role || "");
     const targetPositionNode = findHierarchyNode(positions, row?.position || "");
     const isTargetManager = isManagerLikeUser(row);
+
+    const sourceKeys = [
+      currentRoleNode && `role:${currentRoleNode.id}`,
+      currentPositionNode && `position:${currentPositionNode.id}`,
+    ].filter(Boolean);
+    const targetKeys = [
+      targetRoleNode && `role:${targetRoleNode.id}`,
+      targetPositionNode && `position:${targetPositionNode.id}`,
+    ].filter(Boolean);
+    const matchingSourceRules = taskHierarchyRules.filter((rule) => sourceKeys.includes(`${rule.sourceType}:${rule.sourceId}`));
+    if (matchingSourceRules.length > 0) {
+      return matchingSourceRules.some((rule) => targetKeys.includes(`${rule.targetType}:${rule.targetId}`));
+    }
 
     if (currentRoleNode && targetRoleNode) {
       return isWithinHierarchy(targetRoleNode.id, currentRoleNode.id, workRoles) || targetRoleNode.id === currentRoleNode.id || isTargetManager;

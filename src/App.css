@@ -1,46 +1,3 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
-}
-
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
-}
-
-.card {
-  padding: 2em;
-}
-
-.read-the-docs {
-  color: #888;
-}
-
 /* Дерево для RolesPositionsManager */
 .tree-list {
   list-style: none;
@@ -78,6 +35,79 @@
   color: #94a3b8;
   margin-right: 0.25rem;
 }
+
+/* Ієрархічне дерево постановки задач (пірамідальна org-chart схема) */
+.org-tree, .org-tree ul {
+  padding-top: 28px;
+  position: relative;
+  transition: all 0.2s;
+}
+.org-tree ul {
+  display: table;
+  margin: 0 auto;
+  white-space: nowrap;
+}
+.org-tree > ul {
+  padding-top: 0;
+}
+.org-tree li {
+  display: table-cell;
+  text-align: center;
+  list-style-type: none;
+  position: relative;
+  padding: 28px 14px 0 14px;
+  vertical-align: top;
+  transition: all 0.2s;
+}
+.org-tree li::before,
+.org-tree li::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 50%;
+  border-top: 1.5px solid var(--org-line-color, #cbd5e1);
+  width: 50%;
+  height: 28px;
+}
+.org-tree li::after {
+  right: auto;
+  left: 50%;
+  border-left: 1.5px solid var(--org-line-color, #cbd5e1);
+}
+.org-tree li:only-child::before,
+.org-tree li:only-child::after {
+  display: none;
+}
+.org-tree li:only-child {
+  padding-top: 0;
+}
+.org-tree li:first-child::before,
+.org-tree li:last-child::after {
+  border: 0 none;
+}
+.org-tree li:last-child::before {
+  border-right: 1.5px solid var(--org-line-color, #cbd5e1);
+  border-radius: 0 6px 0 0;
+}
+.org-tree li:first-child::after {
+  border-radius: 6px 0 0 0;
+}
+.org-tree ul ul::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  border-left: 1.5px solid #cbd5e1;
+  width: 0;
+  height: 28px;
+}
+.org-tree .org-node-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
 
 .gantt-scrollbar {
   scrollbar-color: rgba(148, 163, 184, 0.65) transparent;

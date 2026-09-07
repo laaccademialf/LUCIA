@@ -13,11 +13,12 @@ export const DEFAULT_MENU_STRUCTURE = [
       {
         id: "projectmanagment",
         label: "Задачі команди",
-        tabs: ["newtask", "taskreport", "mytask"],
+        tabs: ["newtask", "taskreport", "mytask", "tasksettings"],
         tabLabels: [
           { id: "newtask", label: "Нова задача" },
           { id: "taskreport", label: "Звіт із задач" },
           { id: "mytask", label: "Мої задачі" },
+          { id: "tasksettings", label: "Налаштування" },
         ],
       },
     ],

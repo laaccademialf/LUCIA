@@ -28,6 +28,7 @@ export const KNOWN_COLLECTIONS = [
   "checklistTemplates", "checklistExecutions",
   // service / legal
   "serviceRequests", "legalTasks", "legalNotifications", "legalModuleSettings", "projectTasks",
+  "taskHierarchyRules",
   // haccp
   "haccpTemplates", "haccpAudits", "haccpActionPlans",
   // payments

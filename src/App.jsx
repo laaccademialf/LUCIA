@@ -1,4 +1,5 @@
 import { Component, useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from "react";
+import "./App.css";
 import DeployInfo from "./components/DeployInfo";
 import { ClockBadgeTime } from "./components/ClockBadge";
 import {
@@ -5143,9 +5144,10 @@ function App() {
 
     const projectManagementNavKey = String(activeNav || "").toLowerCase();
     if (projectManagementNavKey.includes("projectmanagment") || projectManagementNavKey.includes("projectmanagement")) {
+      const currentTopTabLabel = String(topTabs.find((tab) => tab?.id === topTab)?.label || "").trim();
       return (
         <div className="grid grid-cols-1">
-          <ProjectManagementModule topTab={topTab} user={user} restaurants={restaurants} />
+          <ProjectManagementModule topTab={topTab} topTabLabel={currentTopTabLabel} user={user} restaurants={restaurants} />
         </div>
       );
     }
