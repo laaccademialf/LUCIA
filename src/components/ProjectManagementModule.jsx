@@ -134,6 +134,17 @@ const ganttTaskColor = (task) => {
   if (isDueWithin48Hours(task)) return "bg-amber-400";
   return task.status === "done" ? "bg-emerald-400" : "bg-blue-500";
 };
+const GANTT_ARROW_COLORS = {
+  purple: "#a855f7",
+  rose: "#f43f5e",
+  amber: "#fbbf24",
+  emerald: "#34d399",
+  blue: "#3b82f6",
+};
+const ganttTaskColorKey = (task) => {
+  const colorClass = ganttTaskColor(task);
+  return Object.keys(GANTT_ARROW_COLORS).find((key) => colorClass.includes(key)) || "blue";
+};
 const formatDuration = (hours) =>
   hours < 24
     ? `${Math.max(1, Math.round(hours))} год`
@@ -207,6 +218,7 @@ const downloadTaskPdf = ({ filters, stats, byAssignee, criticalTasks, averageCom
 const initialForm = {
   title: "",
   description: "",
+  isPersonal: false,
   targetType: "person",
   assigneeId: "",
   assigneeName: "",
@@ -286,13 +298,9 @@ function ReportTaskDialog({ tasks, onClose }) {
 }
 
 function AssigneeCombobox({ people, value, valueName, onSelect }) {
-  const [query, setQuery] = useState(valueName || "");
+  const [query, setQuery] = useState(() => valueName || "");
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
-
-  useEffect(() => {
-    setQuery(valueName || "");
-  }, [valueName]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -395,7 +403,7 @@ function TaskComposer({ users, user, onClose, onCreate, onLegalSelect, workRoles
     if (
       !form.title.trim() ||
       !form.dueDate ||
-      (form.targetType === "person" ? !form.assigneeId : !form.department)
+      (!form.isPersonal && (form.targetType === "person" ? !form.assigneeId : !form.department))
     )
       return;
     setSaving(true);
@@ -496,7 +504,22 @@ function TaskComposer({ users, user, onClose, onCreate, onLegalSelect, workRoles
             <p className="mb-2 text-sm font-semibold text-slate-700">
               Кому поставити?
             </p>
-            <div className="flex rounded-xl bg-slate-100 p-1">
+            <label className="mb-2 flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-700">
+              <input
+                type="checkbox"
+                checked={form.isPersonal}
+                onChange={(event) => setForm((current) => ({
+                  ...current,
+                  isPersonal: event.target.checked,
+                  ...(event.target.checked
+                    ? { targetType: "person", assigneeId: idOf(user), assigneeName: displayName(user), department: "" }
+                    : { assigneeId: "", assigneeName: "" }),
+                }))}
+                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              Особиста задача
+            </label>
+            {!form.isPersonal && <div className="flex rounded-xl bg-slate-100 p-1">
               <button
                 type="button"
                 onClick={() => set("targetType", "person")}
@@ -511,10 +534,16 @@ function TaskComposer({ users, user, onClose, onCreate, onLegalSelect, workRoles
               >
                 Департаменту
               </button>
-            </div>
+            </div>}
           </div>
           <div>
-            {form.targetType === "person" ? (
+            {form.isPersonal ? (
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2.5 text-sm text-indigo-700">
+                Виконавець: <span className="font-bold">{displayName(user)}</span>
+              </div>
+            ) : (
+              <>
+              {form.targetType === "person" ? (
               <label className="text-sm font-semibold text-slate-700">
                 Виконавець
                 <AssigneeCombobox
@@ -546,13 +575,15 @@ function TaskComposer({ users, user, onClose, onCreate, onLegalSelect, workRoles
                   ))}
                 </select>
               </label>
-            )}
-            {form.targetType === "person" && people.length === 0 && (
+              )}
+              {form.targetType === "person" && people.length === 0 && (
               <p className="mt-1.5 text-xs font-semibold text-rose-600">
                 {usersLoadError
                   ? "Не вдалося завантажити список користувачів. Натисніть «Оновити» вгорі сторінки і спробуйте ще раз."
                   : "Немає доступних людей для призначення за поточною ієрархією посад."}
               </p>
+              )}
+              </>
             )}
           </div>
         </div>
@@ -842,7 +873,7 @@ function Gantt({ tasks, onTaskClick, focusFilter }) {
             className="pointer-events-none absolute inset-y-0 left-[182px] right-0 z-0 grid overflow-hidden rounded-lg border border-slate-200"
             style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}
           >
-            {timelineDays.map((date, index) => (
+            {timelineDays.map((date) => (
               <div
                 key={toDateKey(date)}
                 className={`border-r border-slate-200 last:border-r-0 ${date.getDay() === 0 || date.getDay() === 6 ? "bg-slate-100/70" : "bg-white"}`}
@@ -871,26 +902,33 @@ function Gantt({ tasks, onTaskClick, focusFilter }) {
               aria-hidden="true"
             >
               <defs>
-                <marker id="gantt-subtask-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M0,0 L10,5 L0,10 z" fill="#a5b4fc" />
-                </marker>
+                {Object.entries(GANTT_ARROW_COLORS).map(([colorKey, hex]) => (
+                  <marker key={colorKey} id={`gantt-subtask-arrow-${colorKey}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M0,0 L10,5 L0,10 z" fill={hex} />
+                  </marker>
+                ))}
               </defs>
               {visible.map(({ task, level }, index) => {
                 if (!level) return null;
                 const parentIndex = visible.findIndex((row) => String(row.task.id) === String(task.parentTaskId || ""));
                 if (parentIndex === -1) return null;
-                const originX = (level - 1) * 14 + 12;
-                const targetX = level * 14 + 12;
-                const originY = parentIndex * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT / 2;
+
+                const parentX = 18 + (level - 1) * 24 + 4;
+                const childX = 14 + level * 24 - 8;
+                const parentBottomY = parentIndex * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT;
                 const targetY = index * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT / 2;
+                const colorKey = ganttTaskColorKey(visible[parentIndex].task);
+
                 return (
                   <path
                     key={`arrow-${task.id}`}
-                    d={`M ${originX} ${originY} V ${targetY} H ${targetX}`}
+                    d={`M ${parentX} ${parentBottomY} V ${targetY} H ${childX}`}
                     fill="none"
-                    stroke="#a5b4fc"
+                    stroke={GANTT_ARROW_COLORS[colorKey]}
                     strokeWidth="1.5"
-                    markerEnd="url(#gantt-subtask-arrow)"
+                    strokeLinecap="butt"
+                    strokeLinejoin="miter"
+                    markerEnd={`url(#gantt-subtask-arrow-${colorKey})`}
                   />
                 );
               })}
@@ -924,7 +962,7 @@ function Gantt({ tasks, onTaskClick, focusFilter }) {
                   <div
                     className="truncate pl-3 text-xs font-semibold text-slate-700"
                     title={task.title}
-                    style={{ paddingLeft: `${14 + level * 14}px` }}
+                    style={{ paddingLeft: `${14 + level * 24}px` }}
                   >
                     {task.title}
                   </div>
@@ -1388,6 +1426,7 @@ export default function ProjectManagementModule({
   const createTask = async (form) => {
     const task = {
       ...form,
+      isPersonal: Boolean(form.isPersonal),
       id: `task_${Date.now()}`,
       status: "todo",
       createdAt: new Date().toISOString(),
@@ -1504,7 +1543,7 @@ export default function ProjectManagementModule({
   const visibleTaskIds = useMemo(() => getUserTaskScope(tasks, user), [tasks, user]);
   const assignedTasks = isMyTasks
     ? tasks.filter((task) => visibleTaskIds.has(String(task.id)))
-    : tasks;
+    : tasks.filter((task) => !task.isPersonal);
   const reportDepartments = useMemo(() => Array.from(new Set(tasks.map((task) => task.department).filter(Boolean))).sort(), [tasks]);
   const reportLocations = useMemo(() => Array.from(new Set(tasks.map((task) => task.restaurant || task.branch || task.location).filter(Boolean))).sort(), [tasks]);
   const reportTasks = useMemo(() => {
@@ -1513,6 +1552,7 @@ export default function ProjectManagementModule({
     const periodStart = reportFilters.period === "today" ? start : reportFilters.period === "week" ? new Date(start.getTime() - ((start.getDay() + 6) % 7) * 86400000) : reportFilters.period === "month" ? new Date(now.getFullYear(), now.getMonth(), 1, 12) : reportFilters.period === "quarter" ? new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1, 12) : null;
     const periodEnd = reportFilters.period === "today" ? start : reportFilters.period === "week" ? new Date(periodStart.getTime() + 6 * 86400000) : reportFilters.period === "month" ? new Date(now.getFullYear(), now.getMonth() + 1, 0, 12) : reportFilters.period === "quarter" ? new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3 + 3, 0, 12) : null;
     return tasks.filter((task) => {
+      if (task.isPersonal) return false;
       const taskDate = task.dueDate ? fromDateKey(task.dueDate) : null;
       const location = task.restaurant || task.branch || task.location || "";
       return (!periodStart || (taskDate && taskDate >= periodStart && taskDate <= periodEnd)) &&
