@@ -713,6 +713,8 @@ const GANTT_PERIODS = [
   { id: "year", label: "Рік" },
 ];
 const GANTT_ROW_HEIGHT = 40;
+const GANTT_LABEL_WIDTH = 170;
+const GANTT_TASK_INDENT = 24;
 const startOfGanttPeriod = (date, period) => {
   if (period === "week") return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12);
   if (period === "quarter") return new Date(date.getFullYear(), Math.floor(date.getMonth() / 3) * 3, 1, 12);
@@ -897,7 +899,7 @@ function Gantt({ tasks, onTaskClick, focusFilter }) {
             <>
             <svg
               className="pointer-events-none absolute left-0 top-0 z-20 overflow-visible"
-              width="170"
+              width={GANTT_LABEL_WIDTH}
               height={visible.length * GANTT_ROW_HEIGHT}
               aria-hidden="true"
             >
@@ -913,9 +915,11 @@ function Gantt({ tasks, onTaskClick, focusFilter }) {
                 const parentIndex = visible.findIndex((row) => String(row.task.id) === String(task.parentTaskId || ""));
                 if (parentIndex === -1) return null;
 
-                const parentX = 18 + (level - 1) * 24 + 4;
-                const childX = 14 + level * 24 - 8;
-                const parentBottomY = parentIndex * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT;
+                const parentLevel = Math.max(0, level - 1);
+                const parentX = 14 + parentLevel * GANTT_TASK_INDENT;
+                const childLabelX = 14 + level * GANTT_TASK_INDENT;
+                const childX = childLabelX - 4;
+                const parentBottomY = parentIndex * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT - 5;
                 const targetY = index * GANTT_ROW_HEIGHT + GANTT_ROW_HEIGHT / 2;
                 const colorKey = ganttTaskColorKey(visible[parentIndex].task);
 
@@ -925,8 +929,8 @@ function Gantt({ tasks, onTaskClick, focusFilter }) {
                     d={`M ${parentX} ${parentBottomY} V ${targetY} H ${childX}`}
                     fill="none"
                     stroke={GANTT_ARROW_COLORS[colorKey]}
-                    strokeWidth="1.5"
-                    strokeLinecap="butt"
+                    strokeWidth="2"
+                    strokeLinecap="square"
                     strokeLinejoin="miter"
                     markerEnd={`url(#gantt-subtask-arrow-${colorKey})`}
                   />
@@ -962,7 +966,7 @@ function Gantt({ tasks, onTaskClick, focusFilter }) {
                   <div
                     className="truncate pl-3 text-xs font-semibold text-slate-700"
                     title={task.title}
-                    style={{ paddingLeft: `${14 + level * 24}px` }}
+                    style={{ paddingLeft: `${14 + level * GANTT_TASK_INDENT}px` }}
                   >
                     {task.title}
                   </div>
