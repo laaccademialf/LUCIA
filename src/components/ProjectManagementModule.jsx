@@ -30,8 +30,10 @@ import {
   PAGINATION_OPTIONS,
   displayName,
   getAssignableUsers,
+  getTaskResponsibleOptions,
   getUserTaskScope,
   idOf,
+  matchesTaskFilters,
   paginateItems,
   shiftDateByDays,
 } from "./projectManagementUtils";
@@ -1242,16 +1244,15 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCre
   const [selectedTask, setSelectedTask] = useState(null);
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [deadlineFilter, setDeadlineFilter] = useState("all");
+  const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [pageSize, setPageSize] = useState(PAGINATION_OPTIONS[0]);
   const [currentPage, setCurrentPage] = useState(1);
   const handleStatusChange = async (task, status) => {
     setSelectedTask((current) => current?.id === task.id ? { ...current, status } : current);
     await updateStatus(task, status);
   };
-  const filteredTasks = activeTasks.filter((task) =>
-    (priorityFilter === "all" || task.priority === priorityFilter) &&
-    (deadlineFilter === "all" || (deadlineFilter === "late" && isLate(task)) || (deadlineFilter === "soon" && isDueWithin48Hours(task))),
-  );
+  const assigneeOptions = useMemo(() => getTaskResponsibleOptions(activeTasks), [activeTasks]);
+  const filteredTasks = activeTasks.filter((task) => matchesTaskFilters(task, { priorityFilter, deadlineFilter, assigneeFilter }));
   const hierarchicalTasks = flattenTaskHierarchy(filteredTasks);
   const { items: paginatedTasks, totalPages, currentPage: safePage } = paginateItems(hierarchicalTasks, currentPage, pageSize);
   return (
@@ -1271,7 +1272,7 @@ function TaskList({ loading, activeTasks, filter, setFilter, updateStatus, onCre
         <>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left text-sm">
-              <thead className="border-b-2 border-slate-300 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-3 py-2">Задача</th><th className="px-3 py-2">Відповідальний</th><th className="px-3 py-2"><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр пріоритету"><option value="all">Усі пріоритети</option>{PRIORITY.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></th><th className="px-3 py-2"><select value={deadlineFilter} onChange={(event) => setDeadlineFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр дедлайну"><option value="all">Усі дедлайни</option><option value="late">Прострочені</option><option value="soon">До 48 годин</option></select></th><th className="px-3 py-2"><select value={filter} onChange={(event) => setFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр статусу"><option value="all">Усі статуси</option><option value="open">В роботі</option>{STATUS.map((status) => <option key={status.id} value={status.id}>{status.label}</option>)}<option value="late">Прострочені</option></select></th></tr></thead>
+              <thead className="border-b-2 border-slate-300 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-3 py-2">Задача</th><th className="px-3 py-2"><select value={assigneeFilter} onChange={(event) => setAssigneeFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр відповідального"><option value="all">Усі відповідальні</option>{assigneeOptions.map((name) => <option key={name} value={name}>{name}</option>)}</select></th><th className="px-3 py-2"><select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр пріоритету"><option value="all">Усі пріоритети</option>{PRIORITY.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></th><th className="px-3 py-2"><select value={deadlineFilter} onChange={(event) => setDeadlineFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр дедлайну"><option value="all">Усі дедлайни</option><option value="late">Прострочені</option><option value="soon">До 48 годин</option></select></th><th className="px-3 py-2"><select value={filter} onChange={(event) => setFilter(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold normal-case tracking-normal text-slate-700" aria-label="Фільтр статусу"><option value="all">Усі статуси</option><option value="open">В роботі</option>{STATUS.map((status) => <option key={status.id} value={status.id}>{status.label}</option>)}<option value="late">Прострочені</option></select></th></tr></thead>
               <tbody>{paginatedTasks.map(({ task, level }) => <tr
                 key={task.id}
                 role="button"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getAssignableUsers, getUserTaskScope } from "./projectManagementUtils";
+import { getAssignableUsers, getUserTaskScope, getTaskResponsibleOptions, matchesTaskFilters } from "./projectManagementUtils";
 
 describe("getAssignableUsers", () => {
   it("адмін бачить весь список відповідальних навіть для ролі Адміністратор", () => {
@@ -45,5 +45,19 @@ describe("getUserTaskScope", () => {
     const visibleIds = [...getUserTaskScope(tasks, { id: "u2", displayName: "Bob" })].sort();
 
     expect(visibleIds).toEqual(["branch-a", "delegated", "root"].sort());
+  });
+});
+
+describe("task filters", () => {
+  it("збирає список відповідальних з існуючих задач і фільтрує за ним", () => {
+    const tasks = [
+      { id: "t1", title: "Перша задача", priority: "high", dueDate: "2026-09-08", target: "Вадим" },
+      { id: "t2", title: "Друга задача", priority: "normal", dueDate: "2026-09-10", target: "Марія" },
+      { id: "t3", title: "Третя задача", priority: "low", dueDate: "2026-09-15", assigneeName: "Вадим" },
+    ];
+
+    expect(getTaskResponsibleOptions(tasks)).toEqual(["Вадим", "Марія"]);
+    expect(matchesTaskFilters(tasks[0], { priorityFilter: "all", deadlineFilter: "all", assigneeFilter: "Вадим" })).toBe(true);
+    expect(matchesTaskFilters(tasks[1], { priorityFilter: "all", deadlineFilter: "all", assigneeFilter: "Вадим" })).toBe(false);
   });
 });

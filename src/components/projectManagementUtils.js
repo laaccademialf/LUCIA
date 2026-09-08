@@ -14,6 +14,38 @@ export const displayName = (user) =>
 export const idOf = (user) =>
   String(user?.id || user?.uid || user?.userId || user?.email || "").trim();
 
+export const normalizeTaskPersonName = (value) => String(value || "").trim().replace(/\s+/g, " ");
+
+export const getTaskResponsibleOptions = (tasks = []) => {
+  const names = new Set();
+  tasks.forEach((task) => {
+    const candidates = [task?.target, task?.assigneeName, task?.assignee?.displayName, task?.assignee?.name].filter(Boolean);
+    candidates.forEach((candidate) => {
+      const cleaned = normalizeTaskPersonName(candidate);
+      if (cleaned) names.add(cleaned);
+    });
+  });
+  return Array.from(names).sort((left, right) => left.localeCompare(right, "uk"));
+};
+
+export const matchesTaskFilters = (task, filters = {}) => {
+  const {
+    priorityFilter = "all",
+    deadlineFilter = "all",
+    assigneeFilter = "all",
+  } = filters;
+
+  const matchesPriority = priorityFilter === "all" || task?.priority === priorityFilter;
+  const matchesDeadline = deadlineFilter === "all"
+    || (deadlineFilter === "late" && isLate(task))
+    || (deadlineFilter === "soon" && isDueWithin48Hours(task));
+
+  const assigneeName = normalizeTaskPersonName(task?.target || task?.assigneeName || "");
+  const matchesAssignee = assigneeFilter === "all" || assigneeName === assigneeFilter;
+
+  return matchesPriority && matchesDeadline && matchesAssignee;
+};
+
 export const getUserTaskScope = (tasks = [], user) => {
   const visibleIds = new Set();
   const userId = idOf(user);
@@ -178,4 +210,23 @@ export const paginateItems = (items, page, pageSize) => {
     totalPages: total,
     items: items.slice(startIndex, startIndex + size),
   };
+};
+
+const isLate = (task) => {
+  if (!task || !task.dueDate) return false;
+  const dueDate = new Date(`${task.dueDate}T23:59:59`);
+  if (Number.isNaN(dueDate.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return task.status !== "done" && dueDate < today;
+};
+
+const isDueWithin48Hours = (task) => {
+  if (!task || !task.dueDate) return false;
+  const dueDate = new Date(`${task.dueDate}T23:59:59`);
+  if (Number.isNaN(dueDate.getTime())) return false;
+  const now = new Date();
+  const diffMs = dueDate.getTime() - now.getTime();
+  const diffHours = diffMs / 3600000;
+  return diffHours >= 0 && diffHours <= 48;
 };
