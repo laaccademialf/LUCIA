@@ -9,6 +9,7 @@ import {
   subscribeToActiveProductInventorySession,
 } from "../firebase/firestore";
 import { getUsers } from "../firebase/users";
+import { createUserByAdmin } from "../firebase/auth";
 import {
   deriveOrderStatus,
   getSupplierResponseStatus,
@@ -835,9 +836,12 @@ function ProductAdminTab({
 
         if (existingItem) {
           const { id: existingId, ...existingPayload } = existingItem;
+          const productPayload = product.supplier
+            ? product
+            : { ...product, supplier: String(existingItem.supplier || "").trim() };
           const result = await updateProduct(existingId, {
             ...existingPayload,
-            ...product,
+            ...productPayload,
           }, { skipReload: true });
           if (result.success) updatedDelta += 1;
           else failDelta += 1;
@@ -3790,14 +3794,22 @@ function InventoryJournalTab({ inventories, restaurants, user, deleteInventory }
   );
 }
 
-function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSupplier, updateSupplier, removeSupplier }) {
+function SuppliersAdminTab({ suppliers, products = [], restaurants = [], user, canManage, createSupplier, updateSupplier, updateProduct, removeSupplier }) {
   const [newSupplierName, setNewSupplierName] = useState("");
   const [legalEntityDrafts, setLegalEntityDrafts] = useState({});
   const [portalEmailDrafts, setPortalEmailDrafts] = useState({});
+  const [portalPasswordDrafts, setPortalPasswordDrafts] = useState({});
+  const [creatingPortalSupplierId, setCreatingPortalSupplierId] = useState("");
   const [contractDrafts, setContractDrafts] = useState({});
   const [savingContractSupplierId, setSavingContractSupplierId] = useState("");
   const [expandedSupplierContracts, setExpandedSupplierContracts] = useState({});
   const [expandedContractRows, setExpandedContractRows] = useState({});
+  const [productAssignmentSearch, setProductAssignmentSearch] = useState("");
+  const [productAssignmentCategory, setProductAssignmentCategory] = useState("");
+  const [productAssignmentSupplier, setProductAssignmentSupplier] = useState("");
+  const [showAssignedProducts, setShowAssignedProducts] = useState(false);
+  const [selectedAssignmentProductIds, setSelectedAssignmentProductIds] = useState([]);
+  const [savingProductAssignments, setSavingProductAssignments] = useState(false);
   const importInputRef = useRef(null);
 
   const suppliersById = useMemo(() => {
@@ -4184,6 +4196,45 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
     await updateSupplierPortalEmails(supplier, next);
   };
 
+  const createSupplierPortalAccess = async (supplier) => {
+    const email = String(portalEmailDrafts[supplier.id] || getPortalEmails(supplier)[0] || "").trim().toLowerCase();
+    const password = String(portalPasswordDrafts[supplier.id] || "");
+    if (!email || !email.includes("@")) {
+      alert("Вкажіть коректний email доступу до порталу.");
+      return;
+    }
+    if (password.length < 6) {
+      alert("Пароль має містити щонайменше 6 символів.");
+      return;
+    }
+    const currentPassword = window.prompt("Введіть ваш пароль адміністратора для підтвердження:");
+    if (currentPassword === null || !currentPassword) return;
+
+    setCreatingPortalSupplierId(String(supplier.id || ""));
+    try {
+      await createUserByAdmin(
+        email,
+        password,
+        supplier.name,
+        user,
+        currentPassword,
+        "",
+        "Постачальник",
+        "supplier",
+        "supplier",
+        []
+      );
+      const emails = getPortalEmails(supplier);
+      if (!emails.includes(email)) await updateSupplierPortalEmails(supplier, [...emails, email]);
+      setPortalPasswordDrafts((prev) => ({ ...prev, [supplier.id]: "" }));
+      alert("Доступ до порталу постачальника створено.");
+    } catch (error) {
+      alert(`Не вдалося створити доступ: ${getErrorMessage(error, "невідома помилка")}`);
+    } finally {
+      setCreatingPortalSupplierId("");
+    }
+  };
+
   useEffect(() => {
     setContractDrafts((prev) => {
       const next = { ...prev };
@@ -4204,12 +4255,136 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
     }
   };
 
+  const productAssignmentCategories = useMemo(() => Array.from(new Set(
+    products.map((item) => String(item?.market || item?.category || "").trim()).filter(Boolean)
+  )).sort((left, right) => left.localeCompare(right, "uk")), [products]);
+
+  const assignableProducts = useMemo(() => {
+    const query = productAssignmentSearch.trim().toLowerCase();
+    return products
+      .filter((item) => showAssignedProducts === Boolean(String(item?.supplier || "").trim()))
+      .filter((item) => !productAssignmentCategory || String(item?.market || item?.category || "").trim() === productAssignmentCategory)
+      .filter((item) => {
+        if (!query) return true;
+        return [item?.name, item?.code1C, item?.market, item?.segment, item?.family, item?.productCategory, item?.category, item?.subcategory]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      })
+      .sort((left, right) => String(left?.name || "").localeCompare(String(right?.name || ""), "uk"));
+  }, [products, productAssignmentSearch, productAssignmentCategory, showAssignedProducts]);
+
+  const toggleAssignmentProducts = (ids) => {
+    const normalizedIds = ids.map((id) => String(id || "")).filter(Boolean);
+    setSelectedAssignmentProductIds((previous) => {
+      const next = new Set(previous.map((id) => String(id)));
+      const allSelected = normalizedIds.length > 0 && normalizedIds.every((id) => next.has(id));
+      normalizedIds.forEach((id) => (allSelected ? next.delete(id) : next.add(id)));
+      return Array.from(next);
+    });
+  };
+
+  const saveProductAssignments = async (assignmentSupplier = productAssignmentSupplier) => {
+    const supplier = suppliers.find((item) => String(item?.id || "") === String(assignmentSupplier || ""));
+    const unassign = assignmentSupplier === "__none__";
+    const selected = products.filter((item) => selectedAssignmentProductIds.includes(String(item?.id || "")));
+    if ((!supplier && !unassign) || selected.length === 0) {
+      alert("Оберіть постачальника та хоча б один продукт.");
+      return;
+    }
+
+    setSavingProductAssignments(true);
+    let success = 0;
+    let failed = 0;
+    try {
+      for (const product of selected) {
+        const { id, ...payload } = product;
+        const result = await updateProduct(id, {
+          ...payload,
+          supplier: unassign ? "" : String(supplier.name || "").trim(),
+        });
+        if (result?.success) success += 1;
+        else failed += 1;
+      }
+      setSelectedAssignmentProductIds([]);
+      alert(`Постачальника призначено. Оновлено: ${success}. Помилок: ${failed}.`);
+    } finally {
+      setSavingProductAssignments(false);
+    }
+  };
+
   return (
     <div className={cardClass}>
       <div className="flex items-center gap-2 mb-4">
         <Package size={18} className="text-indigo-600" />
         <h2 className="text-lg font-semibold">Постачальники</h2>
       </div>
+
+      {canManage && (
+        <div className="mb-5 rounded-xl border border-indigo-200 bg-indigo-50/50 p-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">Призначення продуктів постачальникам</h3>
+              <p className="text-xs text-slate-600">Оберіть позиції з каталогу та призначте їх одним постачальником.</p>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-slate-700">
+              <input
+                type="checkbox"
+                checked={showAssignedProducts}
+                onChange={(event) => {
+                  setShowAssignedProducts(event.target.checked);
+                  setSelectedAssignmentProductIds([]);
+                  setProductAssignmentSupplier("");
+                }}
+              />
+              Показати лише призначені
+            </label>
+          </div>
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-[minmax(0,2fr)_minmax(180px,1fr)_minmax(220px,1fr)_auto]">
+            <input className={inputClass} value={productAssignmentSearch} onChange={(event) => setProductAssignmentSearch(event.target.value)} placeholder="Пошук: продукт, код, ринок, сім'я, категорія" />
+            <select className={inputClass} value={productAssignmentCategory} onChange={(event) => setProductAssignmentCategory(event.target.value)}>
+              <option value="">Усі ринки</option>
+              {productAssignmentCategories.map((category) => <option key={category} value={category}>{category}</option>)}
+            </select>
+            <select className={inputClass} value={productAssignmentSupplier} onChange={(event) => setProductAssignmentSupplier(event.target.value)}>
+              <option value="">Оберіть постачальника</option>
+              {showAssignedProducts && <option value="__none__">Зняти призначення</option>}
+              {suppliers.filter((item) => item.isActive !== false).map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}
+            </select>
+            <div className="flex gap-2">
+              <button type="button" disabled={savingProductAssignments} onClick={() => { void saveProductAssignments(); }} className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50">
+                {savingProductAssignments ? "Збереження..." : `Призначити (${selectedAssignmentProductIds.length})`}
+              </button>
+              {showAssignedProducts && (
+                <button type="button" disabled={savingProductAssignments} onClick={() => { void saveProductAssignments("__none__"); }} className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">
+                  Зняти призначення
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="mt-2 flex items-center justify-between text-xs text-slate-600">
+            <span>Знайдено: {assignableProducts.length}</span>
+            <button type="button" className="font-semibold text-indigo-700 hover:text-indigo-900" onClick={() => toggleAssignmentProducts(assignableProducts.map((item) => item.id))}>
+              {assignableProducts.length > 0 && assignableProducts.every((item) => selectedAssignmentProductIds.includes(String(item.id))) ? "Зняти всі" : "Вибрати всі знайдені"}
+            </button>
+          </div>
+          <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-indigo-100 bg-white">
+            {assignableProducts.map((item) => {
+              const productId = String(item.id || "");
+              return (
+                <label key={productId} className="flex cursor-pointer items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs last:border-b-0 hover:bg-indigo-50">
+                  <input type="checkbox" checked={selectedAssignmentProductIds.includes(productId)} onChange={() => toggleAssignmentProducts([productId])} />
+                  <span className="min-w-0 flex-1 truncate font-medium text-slate-800">{item.name}</span>
+                  <span className="hidden shrink-0 text-slate-500 sm:inline">{item.code1C || "Без коду"}</span>
+                  <span className="hidden shrink-0 text-slate-400 md:inline">{[item.market, item.segment, item.family, item.productCategory].filter(Boolean).join(" / ")}</span>
+                </label>
+              );
+            })}
+            {assignableProducts.length === 0 && <div className="px-3 py-5 text-center text-xs text-slate-500">Продукти за поточними фільтрами не знайдено.</div>}
+          </div>
+        </div>
+      )}
 
       {canManage && (
         <div className="mb-4 flex flex-col gap-2 md:flex-row">
@@ -4375,6 +4550,23 @@ function SuppliersAdminTab({ suppliers, restaurants = [], canManage, createSuppl
                                     )) : (
                                       <span className="text-[11px] text-slate-500">Email доступу до порталу ще не додано.</span>
                                     )}
+                                  </div>
+                                  <div className="flex flex-col gap-1.5 sm:flex-row">
+                                    <input
+                                      type="password"
+                                      className="flex-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                                      value={portalPasswordDrafts[item.id] || ""}
+                                      onChange={(e) => setPortalPasswordDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                                      placeholder="Пароль для входу в портал (мін. 6 символів)"
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={creatingPortalSupplierId === String(item.id || "")}
+                                      className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                                      onClick={() => { void createSupplierPortalAccess(item); }}
+                                    >
+                                      {creatingPortalSupplierId === String(item.id || "") ? "Створення..." : "Створити доступ"}
+                                    </button>
                                   </div>
                                 </div>
                               )}
@@ -4872,6 +5064,8 @@ function TypicalFieldsTab({ fields, categories = [], accounts = [], canManage, c
 
 function OrderAplTab({ products, restaurants, typicalFields, user, canManage, createTypicalField, updateTypicalField }) {
   const [selectedRestaurantIds, setSelectedRestaurantIds] = useState([]);
+  const [isRestaurantFilterOpen, setIsRestaurantFilterOpen] = useState(false);
+  const [restaurantSearch, setRestaurantSearch] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [supplierFilter, setSupplierFilter] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
@@ -5064,6 +5258,18 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
     });
   };
 
+  const filteredRestaurants = useMemo(() => {
+    const query = restaurantSearch.trim().toLowerCase();
+    if (!query) return restaurants;
+    return restaurants.filter((restaurant) => String(restaurant?.name || "").toLowerCase().includes(query));
+  }, [restaurants, restaurantSearch]);
+
+  const restaurantFilterLabel = selectedRestaurantIds.length === allRestaurantIds.length
+    ? "Всі заклади"
+    : selectedRestaurantIds.length > 0
+      ? `Обрано: ${selectedRestaurantIds.length}`
+      : "Заклади не обрані";
+
   const isAplGroupExpanded = (groupName) => Boolean(
     Object.prototype.hasOwnProperty.call(expandedAplGroups, groupName)
       ? expandedAplGroups[groupName]
@@ -5208,37 +5414,48 @@ function OrderAplTab({ products, restaurants, typicalFields, user, canManage, cr
         </div>
       </div>
 
-      <div className="mb-4">
-        <p className="mb-2 text-sm font-semibold text-slate-800">Фільтр закладів</p>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-            onClick={() => setSelectedRestaurantIds(allRestaurantIds)}
-          >
-            Всі
-          </button>
-          <button
-            type="button"
-            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-            onClick={() => setSelectedRestaurantIds([])}
-          >
-            Очистити
-          </button>
-          {restaurants.map((restaurant) => {
-            const active = activeRestaurantIds.includes(String(restaurant.id || ""));
-            return (
-              <button
-                key={`apl_restaurant_filter_${restaurant.id}`}
-                type="button"
-                onClick={() => toggleRestaurantFilter(restaurant.id)}
-                className={`rounded border px-2 py-1 text-xs font-semibold ${active ? "border-indigo-400 bg-indigo-100 text-indigo-800" : "border-slate-300 bg-white text-slate-700"}`}
-              >
-                {restaurant.name}
+      <div className="relative z-40 mb-4 max-w-md">
+        <label className="mb-1 block text-sm font-semibold text-slate-800">Фільтр закладів</label>
+        <button
+          type="button"
+          className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-2 text-left text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          onClick={() => setIsRestaurantFilterOpen((previous) => !previous)}
+          aria-expanded={isRestaurantFilterOpen}
+        >
+          <span>{restaurantFilterLabel}</span>
+          <span className="ml-3 text-xs text-slate-400">{isRestaurantFilterOpen ? "▲" : "▼"}</span>
+        </button>
+        {isRestaurantFilterOpen && (
+          <div className="absolute z-50 mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+            <div className="mb-2 flex gap-2">
+              <button type="button" className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100" onClick={() => setSelectedRestaurantIds(allRestaurantIds)}>
+                Всі
               </button>
-            );
-          })}
-        </div>
+              <button type="button" className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100" onClick={() => setSelectedRestaurantIds([])}>
+                Очистити
+              </button>
+            </div>
+            <input
+              className={inputClass}
+              value={restaurantSearch}
+              onChange={(event) => setRestaurantSearch(event.target.value)}
+              placeholder="Пошук закладу"
+            />
+            <div className="mt-2 max-h-56 overflow-y-auto">
+              {filteredRestaurants.map((restaurant) => {
+                const restaurantId = String(restaurant.id || "");
+                const active = activeRestaurantIds.includes(restaurantId);
+                return (
+                  <label key={`apl_restaurant_filter_${restaurant.id}`} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+                    <input type="checkbox" checked={active} onChange={() => toggleRestaurantFilter(restaurant.id)} />
+                    <span className="truncate">{restaurant.name}</span>
+                  </label>
+                );
+              })}
+              {filteredRestaurants.length === 0 && <p className="px-2 py-3 text-center text-xs text-slate-500">Заклади не знайдені.</p>}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="overflow-y-auto overflow-x-hidden rounded-lg border border-slate-200 shadow-inner max-h-[68vh] xl:max-h-[72vh]">
@@ -11375,10 +11592,12 @@ export default function ProductBookingModule({ topTab, topTabLabel = "", restaur
     return (
       <SuppliersAdminTab
         suppliers={suppliers}
+        products={normalizedProducts}
         restaurants={effectiveRestaurants}
         canManage={canManageProducts}
         createSupplier={createSupplier}
         updateSupplier={updateSupplier}
+        updateProduct={updateProduct}
         removeSupplier={removeSupplier}
       />
     );

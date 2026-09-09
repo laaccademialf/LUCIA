@@ -144,11 +144,62 @@ export const importProductsFromExcel = (file, defaultRestaurant = null) => {
           return;
         }
 
-        const worksheet = workbook.Sheets[firstSheet];
-        const rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+        const nonEmptySheetName = workbook.SheetNames.find((sheetName) => {
+          const sheet = workbook.Sheets[sheetName];
+          const range = XLSX.utils.decode_range(sheet?.["!ref"] || "A1:A1");
+          return range.e.r > range.s.r || range.e.c > range.s.c || String(sheet?.A1?.v || "").trim();
+        }) || firstSheet;
+        const activeSheet = workbook.Sheets[nonEmptySheetName];
+        const rawRows = XLSX.utils.sheet_to_json(activeSheet, { header: 1, defval: "" });
         const headerRowIndex = findHeaderRowIndex(rawRows);
-        const rows = XLSX.utils.sheet_to_json(worksheet, { defval: "", range: headerRowIndex });
-        const rowsByIndex = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "", range: headerRowIndex + 1 });
+        const headerRow = (rawRows[headerRowIndex] || []).map((cell) => String(cell || "").trim());
+        const isNewCatalog = headerRow.some((cell) => normalize(cell) === "ринок") &&
+          headerRow.some((cell) => normalize(cell) === "сегмент") &&
+          headerRow.some((cell) => normalize(cell) === "сім'я") &&
+          headerRow.some((cell) => normalize(cell).includes("код справочника товаров"));
+        const rows = XLSX.utils.sheet_to_json(activeSheet, { defval: "", range: headerRowIndex });
+        const rowsByIndex = XLSX.utils.sheet_to_json(activeSheet, { header: 1, defval: "", range: headerRowIndex + 1 });
+
+        if (isNewCatalog) {
+          const columnIndex = new Map(headerRow.map((header, index) => [normalize(header), index]));
+          const valueAt = (row, header) => String(row[columnIndex.get(normalize(header))] || "").trim();
+          const catalogProducts = rowsByIndex
+            .map((row) => {
+              const market = valueAt(row, "Ринок");
+              const segment = valueAt(row, "Сегмент");
+              const family = valueAt(row, "Сім'я");
+              const category = valueAt(row, "Категорія");
+              const name = valueAt(row, "Товар ЦБ");
+              const code1C = valueAt(row, "Код справочника товаров ЦБ");
+              const productGroup = valueAt(row, "Группа товаров");
+              const restaurant = resolveRestaurant({});
+
+              return {
+                name,
+                whiteCardName: name,
+                greenCardName: category || family,
+                market,
+                segment,
+                family,
+                productCategory: category,
+                category: market || "Імпортований каталог",
+                subcategory: segment || family || category || "Без підкатегорії",
+                unit: "шт",
+                supplier: "",
+                productGroup,
+                code1C,
+                unitPrice: 0,
+                restaurantId: String(restaurant?.id || "").trim(),
+                restaurantName: String(restaurant?.name || "").trim(),
+                restaurantRegNumber: String(restaurant?.regNumber || "").trim(),
+                isActive: true,
+              };
+            })
+            .filter((item) => item.name && item.code1C && item.restaurantId);
+
+          resolve(catalogProducts);
+          return;
+        }
 
         const parseTemplateRowByIndex = (rowByIndex = []) => {
           const organization = String(rowByIndex[0] || "").trim();
@@ -214,6 +265,11 @@ export const importProductsFromExcel = (file, defaultRestaurant = null) => {
               subcategory: String(byIndex.greenCard || row["Товарна група"] || row["Тов.группа"] || row["Підкатегорія"] || "").trim(),
               unit,
               supplier,
+              market: "",
+              segment: "",
+              family: "",
+              productCategory: "",
+              productGroup,
               code1C,
               unitPrice,
               restaurantId: String(restaurant?.id || "").trim(),

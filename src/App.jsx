@@ -75,6 +75,7 @@ import { isCollectionsApiEnabled, getCollectionItemApi, listCollectionItemsApi }
 import { batchImportAssetsApi, isAssetsApiEnabled } from "./api/assetsApi";
 import { getLegalNotificationsApi, isLegalApiEnabled } from "./api/legalTasksApi";
 import { isLegalUser, LEGAL_NAV_ID, getLegalUserIdentityKeys, normalizeLegalIdentity } from "./data/legalConstants";
+import { hasSupplierPortalAccess } from "./utils/booking/access";
 
 
 const loadExcelHelpers = () => import("./utils/excelHelpers");
@@ -1741,6 +1742,10 @@ function App() {
 
   // Вкладки для поточного activeNav — з menuStructure, але фільтруються згідно з userPermissions
   const topTabs = useMemo(() => {
+    if (hasSupplierPortalAccess(user)) {
+      return [{ id: "ordersupplier", label: "Замовлення (постачальник)" }];
+    }
+
     const tabsFromMenu = getTabsForSection(activeNav);
     const allTabs = tabsFromMenu.map((tab) => {
       const normalizedTabId = String(tab?.id || "").toLowerCase();
@@ -2090,6 +2095,18 @@ function App() {
   }, [user, userPermissions]);
 
   useEffect(() => {
+    if (hasSupplierPortalAccess(user)) {
+      if (activeNav !== "productbooking") {
+        setActiveNav("productbooking");
+        localStorage.setItem("lucia_activeNav", "productbooking");
+      }
+      if (topTab !== "ordersupplier") {
+        setTopTab("ordersupplier");
+        localStorage.setItem("lucia_topTab", "ordersupplier");
+      }
+      return;
+    }
+
     if (topTabs.length === 0) {
       const activeNavKey = String(activeNav || "").toLowerCase();
       const isHaccpDeepLink = activeNavKey === "haccpreport" || activeNavKey === "haccp-report";
@@ -5963,6 +5980,7 @@ function App() {
   // якщо активна вкладка недоступна, переключаємо на першу дозволену
   useEffect(() => {
     if (!user) return;
+    if (hasSupplierPortalAccess(user)) return;
     const requestedNavKey = String(activeNav || "").toLowerCase();
     const isDirectHaccpReportRoute = requestedNavKey === "haccpreport" || requestedNavKey === "haccp-report";
     const allowedIds = navItems.flatMap((group) => group.children.map((child) => normalizeNavigationId(child.id)));
