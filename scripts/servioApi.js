@@ -178,7 +178,15 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
     request.input("EndDate", sql.DateTime, end);
     request.input("RestCode", sql.NVarChar(sql.MAX), rest);
     const r = await request.query(`
-;WITH FilteredBills AS
+;WITH EligibleRestaurants AS
+(
+  -- Один рядок на ресторан: фільтр NotPayer не дублює чеки й не виконується
+  -- окремо для кожного чека.
+  SELECT DISTINCT PM.BaseExternalID
+  FROM report.tbCommonPaymentType PM WITH (NOLOCK)
+  WHERE PM.NotPayer = 0
+),
+FilteredBills AS
 (
     -- Відбір виконується першим за параметризованими датами й BaseExternalID.
     -- Завдяки цьому наступний CTE не сканує всі позиції чеків у Loyalty.
@@ -191,18 +199,13 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
         B.GuestCount,
         B.ChildCount
     FROM tbBill_ B WITH (NOLOCK)
+    INNER JOIN EligibleRestaurants ER
+      ON ER.BaseExternalID = B.BaseExternalID
     WHERE B.Opened BETWEEN @StartDate AND @EndDate
       AND
       (
         NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
         OR ',' + REPLACE(@RestCode, ' ', '') + ',' LIKE '%,' + CAST(B.BaseExternalID AS nvarchar(50)) + ',%'
-      )
-      AND EXISTS
-      (
-        SELECT 1
-        FROM report.tbCommonPaymentType PM WITH (NOLOCK)
-        WHERE PM.BaseExternalID = B.BaseExternalID
-          AND PM.NotPayer = 0
       )
 ),
 BillItems AS

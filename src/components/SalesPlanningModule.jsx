@@ -233,6 +233,14 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   }, [mappedFactRestaurantIdsKey, selectedRestaurantId]);
 
   useEffect(() => {
+    if (factRestaurantIds.length !== 1) return;
+    const [restaurantId] = factRestaurantIds;
+    if (String(selectedRestaurantId) !== String(restaurantId)) {
+      setSelectedRestaurantId(String(restaurantId));
+    }
+  }, [factRestaurantIds, selectedRestaurantId]);
+
+  useEffect(() => {
     if (!factRestaurantPickerOpen) return undefined;
     const closeOnOutsideClick = (event) => {
       if (!factRestaurantPickerRef.current?.contains(event.target)) setFactRestaurantPickerOpen(false);
