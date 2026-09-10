@@ -188,7 +188,7 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
 ),
 FilteredBills AS
 (
-    -- Відбір виконується першим за параметризованими датами й BaseExternalID.
+    -- У дохід потрапляють тільки закриті чеки за датою їх закриття.
     -- Завдяки цьому наступний CTE не сканує всі позиції чеків у Loyalty.
     SELECT
         B.BaseExternalID,
@@ -201,7 +201,7 @@ FilteredBills AS
     FROM tbBill_ B WITH (NOLOCK)
     INNER JOIN EligibleRestaurants ER
       ON ER.BaseExternalID = B.BaseExternalID
-    WHERE B.Opened BETWEEN @StartDate AND @EndDate
+    WHERE B.Closed BETWEEN @StartDate AND @EndDate
       AND
       (
         NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
@@ -225,13 +225,14 @@ BillItems AS
 ),
 Bills AS
 (
-    -- Година береться за B.Opened (час відкриття), а не за час закриття.
+    -- День доходу береться за B.Closed, а година — за B.Opened.
     SELECT
         B.BaseExternalID,
         CBE.BaseExternalName,
         B.ID AS BillID,
         B.Number AS BillNumber,
         B.Closed AS BillClosed,
+        CONVERT(date, B.Closed) AS BillClosedDate,
         CONVERT(date, B.Opened) AS BillOpenedDate,
         DATEPART(HOUR, B.Opened) AS OpenedHour,
         BI.Total,
@@ -245,6 +246,7 @@ Bills AS
         ON CBE.BaseExternalID = B.BaseExternalID
 )
 SELECT
+    BillClosedDate,
     BillOpenedDate,
     BaseExternalID,
     BaseExternalName,
@@ -256,14 +258,17 @@ SELECT
     SUM(ChildCount) AS ChildCount,
     SUM(Total) / NULLIF(COUNT(*), 0) AS AverageBill
 FROM Bills
-GROUP BY BillOpenedDate, BaseExternalID, BaseExternalName, OpenedHour
-ORDER BY BillOpenedDate, BaseExternalID, OpenedHour;
+GROUP BY BillClosedDate, BillOpenedDate, BaseExternalID, BaseExternalName, OpenedHour
+ORDER BY BillClosedDate, BaseExternalID, OpenedHour;
     `);
     return r?.recordset || [];
   });
 
   return rows.map((row) => ({
-    date: row.BillOpenedDate instanceof Date
+    date: row.BillClosedDate instanceof Date
+      ? row.BillClosedDate.toISOString().slice(0, 10)
+      : String(row.BillClosedDate || "").slice(0, 10),
+    openedDate: row.BillOpenedDate instanceof Date
       ? row.BillOpenedDate.toISOString().slice(0, 10)
       : String(row.BillOpenedDate || "").slice(0, 10),
     baseExternalId: row.BaseExternalID,
