@@ -608,10 +608,9 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         const restaurantId = pairs.find((pair) => String(pair.restCode) === String(row.baseExternalId))?.restaurantId;
         if (!dateKey || !restaurantId) continue;
         const restaurant = restaurantOptions.find((item) => String(item.id) === String(restaurantId));
-        const openedDate = String(row.openedDate || "").slice(0, 10);
-        const key = openedDate && openedDate !== dateKey
-          ? getFirstFactHour(restaurant?.schedule, dateKey)
-          : `${String(row.hourFrom).padStart(2, "0")}:00:00`;
+        const key = row.openedOnClosedDate
+          ? `${String(row.hourFrom).padStart(2, "0")}:00:00`
+          : getFirstFactHour(restaurant?.schedule, dateKey);
         const groupKey = `${restaurantId}__${dateKey}`;
         if (!byRestaurantDateHour[groupKey]) byRestaurantDateHour[groupKey] = {};
         const previous = byRestaurantDateHour[groupKey][key] || { factTo: 0, factGosti: 0 };

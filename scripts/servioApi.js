@@ -233,7 +233,7 @@ Bills AS
         B.Number AS BillNumber,
         B.Closed AS BillClosed,
         CONVERT(date, B.Closed) AS BillClosedDate,
-        CONVERT(date, B.Opened) AS BillOpenedDate,
+        CASE WHEN CONVERT(date, B.Opened) = CONVERT(date, B.Closed) THEN 1 ELSE 0 END AS OpenedOnClosedDate,
         DATEPART(HOUR, B.Opened) AS OpenedHour,
         BI.Total,
         CASE WHEN B.GuestCount IS NULL OR B.GuestCount = 0 THEN 1 ELSE B.GuestCount END AS GuestCount,
@@ -247,7 +247,7 @@ Bills AS
 )
 SELECT
     BillClosedDate,
-    BillOpenedDate,
+  OpenedOnClosedDate,
     BaseExternalID,
     BaseExternalName,
     OpenedHour AS HourFrom,
@@ -258,7 +258,7 @@ SELECT
     SUM(ChildCount) AS ChildCount,
     SUM(Total) / NULLIF(COUNT(*), 0) AS AverageBill
 FROM Bills
-GROUP BY BillClosedDate, BillOpenedDate, BaseExternalID, BaseExternalName, OpenedHour
+GROUP BY BillClosedDate, OpenedOnClosedDate, BaseExternalID, BaseExternalName, OpenedHour
 ORDER BY BillClosedDate, BaseExternalID, OpenedHour;
     `);
     return r?.recordset || [];
@@ -268,9 +268,7 @@ ORDER BY BillClosedDate, BaseExternalID, OpenedHour;
     date: row.BillClosedDate instanceof Date
       ? row.BillClosedDate.toISOString().slice(0, 10)
       : String(row.BillClosedDate || "").slice(0, 10),
-    openedDate: row.BillOpenedDate instanceof Date
-      ? row.BillOpenedDate.toISOString().slice(0, 10)
-      : String(row.BillOpenedDate || "").slice(0, 10),
+    openedOnClosedDate: Number(row.OpenedOnClosedDate) === 1,
     baseExternalId: row.BaseExternalID,
     baseExternalName: String(row.BaseExternalName || "").trim(),
     hourFrom: Number(row.HourFrom),
