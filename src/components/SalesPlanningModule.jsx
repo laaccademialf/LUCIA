@@ -354,13 +354,22 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
           next[buildDocId(restaurantId, iso)] = saved?.hours && typeof saved.hours === "object" ? saved.hours : {};
         });
         setFactRangeData(next);
+        if (
+          factRestaurantIds.length === 1
+          && factRangeDates.length === 1
+          && String(factRestaurantIds[0]) === String(selectedRestaurantId)
+          && factRangeDates[0] === date
+        ) {
+          const hours = next[buildDocId(selectedRestaurantId, date)] || {};
+          setHourlyData({ ...emptyHours(), ...hours });
+        }
       } finally {
         if (!cancelled) setFactRangeLoading(false);
       }
     };
     void load();
     return () => { cancelled = true; };
-  }, [factRestaurantIds, factRangeDates, factRangeReload]);
+  }, [factRestaurantIds, factRangeDates, factRangeReload, selectedRestaurantId, date]);
 
   // Історія плану/факту закладу для передзаповнення й прогнозу у вікні «План на місяць».
   useEffect(() => {
