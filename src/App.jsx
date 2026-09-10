@@ -1979,9 +1979,20 @@ function App() {
       return `${y}-${m}-${da}`;
     };
 
-    const curDates = getDatesInRange(fromIso, toIso);
-    const pyDates = getDatesInRange(shift(fromIso, { years: -1 }), shift(toIso, { years: -1 }));
-    const pmDates = getDatesInRange(shift(fromIso, { months: -1 }), shift(toIso, { months: -1 }));
+    const getMonthDates = (iso) => {
+      const [year, month] = String(iso || "").slice(0, 7).split("-").map(Number);
+      if (!year || !month) return [];
+      const lastDay = new Date(year, month, 0).getDate();
+      const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
+      const monthEnd = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+      return getDatesInRange(monthStart, monthEnd);
+    };
+
+    // Прогноз завжди охоплює весь місяць обраної дати, не лише поточний
+    // dashboard-діапазон. Так факт до сьогодні доповнюється планом до кінця місяця.
+    const curDates = getMonthDates(toIso);
+    const pyDates = getMonthDates(shift(toIso, { years: -1 }));
+    const pmDates = getMonthDates(shift(toIso, { months: -1 }));
 
     const recFor = (rid, iso) =>
       salesHourlyPlans.find(
