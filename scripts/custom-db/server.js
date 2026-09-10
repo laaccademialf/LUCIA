@@ -334,6 +334,21 @@ const VIKSOFT_DAILY_SYNC_MINUTE = (() => {
   return Number.isFinite(m) && m >= 0 && m <= 59 ? m : 0;
 })();
 
+// Щоденний імпорт факту продажів з Servio (за замовчуванням о 01:00 Europe/Kyiv).
+// Тягне погодинний факт по ВСІХ ресторанах із налаштованим мапінгом за попередній день.
+const SERVIO_DAILY_SYNC_ENABLED =
+  String(process.env.LUCIA_SERVIO_DAILY_SYNC_ENABLED || "true").trim().toLowerCase() !== "false";
+const SERVIO_DAILY_SYNC_HOUR = (() => {
+  const h = Number.parseInt(String(process.env.LUCIA_SERVIO_DAILY_SYNC_HOUR ?? "1"), 10);
+  return Number.isFinite(h) && h >= 0 && h <= 23 ? h : 1;
+})();
+const SERVIO_DAILY_SYNC_MINUTE = (() => {
+  const m = Number.parseInt(String(process.env.LUCIA_SERVIO_DAILY_SYNC_MINUTE ?? "0"), 10);
+  return Number.isFinite(m) && m >= 0 && m <= 59 ? m : 0;
+})();
+const SERVIO_DAILY_SYNC_FORCE =
+  String(process.env.LUCIA_SERVIO_DAILY_SYNC_FORCE || "false").trim().toLowerCase() === "true";
+
 // Чи дозволяти dev-origins (localhost / 127.0.0.1 / *.app.github.dev / *.github.dev),
 // які не входять у фіксований CORS-allowlist. За замовчуванням увімкнено.
 const ALLOW_DEV_ORIGINS =
@@ -960,6 +975,111 @@ const ensureViksoftRuntimeConfigLoaded = async () => {
     }
   } catch (e) {
     console.warn(`[viksoft] ensure runtime config failed: ${e?.message || e}`);
+  }
+};
+
+// ---- Servio (MS SQL) credentials + mapping: durable encrypted storage in DB ----
+// Та сама причина, що й для Vik-Soft: ./tmp та .env втрачаються при деплої/
+// перестворенні контейнера, через що «злітали» логін/пароль і зіставлення
+// закладів. БД переживає перезапуски → ввів один раз = працює завжди.
+const SERVIO_SETTINGS_ID = "default";
+const getServioSettingsKey = () => {
+  if (!TOKEN) throw new Error("CUSTOM_MIGRATION_TOKEN is required to encrypt Servio settings");
+  return crypto.createHash("sha256").update(`lucia:servio-settings:${TOKEN}`).digest();
+};
+
+const encryptServioSettings = (settings) => {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", getServioSettingsKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(settings), "utf8"), cipher.final()]);
+  return {
+    algorithm: "aes-256-gcm",
+    iv: iv.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url"),
+    data: encrypted.toString("base64url"),
+  };
+};
+
+const decryptServioSettings = (record) => {
+  if (!record?.data || !record?.iv || !record?.tag) return null;
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    getServioSettingsKey(),
+    Buffer.from(String(record.iv), "base64url")
+  );
+  decipher.setAuthTag(Buffer.from(String(record.tag), "base64url"));
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(String(record.data), "base64url")),
+    decipher.final(),
+  ]);
+  return JSON.parse(decrypted.toString("utf8"));
+};
+
+const getStoredServioSettings = async (dbConfig) => {
+  const record = await getCollectionItemData("servioSettings", SERVIO_SETTINGS_ID, dbConfig);
+  if (!record?.encrypted) return null;
+  try {
+    return decryptServioSettings(record.encrypted);
+  } catch {
+    return null;
+  }
+};
+
+const persistServioSettingsToDb = async (settings, profileId, dbConfig) => {
+  const payload = {
+    id: SERVIO_SETTINGS_ID,
+    encrypted: encryptServioSettings(settings),
+    updatedAt: nowIso(),
+    updatedBy: String(profileId || "system"),
+  };
+  const existing = await getCollectionItemData("servioSettings", SERVIO_SETTINGS_ID, dbConfig);
+  if (existing) {
+    await updateCollectionItemData("servioSettings", SERVIO_SETTINGS_ID, payload, dbConfig);
+  } else {
+    await createCollectionItemData("servioSettings", payload, dbConfig);
+  }
+};
+
+// Завантажує runtime-конфіг servioApi з дурабльного джерела (БД → tmp → env),
+// щоб факт-запити та нічний крон працювали навіть після втрати ./tmp/.env.
+const ensureServioRuntimeConfigLoaded = async () => {
+  try {
+    const { getServioPublicConfig, setServioRuntimeConfig } = await import("../servioApi.js");
+    const current = getServioPublicConfig();
+    if (current?.source === "runtime" && current.user && current.hasPassword) return;
+
+    let dbStored = null;
+    try {
+      dbStored = await getStoredServioSettings(getAssetsRuntimeConfig());
+    } catch (e) {
+      console.warn(`[servio] load runtime config from db failed: ${e?.message || e}`);
+    }
+    if (dbStored && (dbStored.user || dbStored.password || dbStored.host)) {
+      setServioRuntimeConfig({
+        host: dbStored.host,
+        port: dbStored.port,
+        database: dbStored.database,
+        user: dbStored.user,
+        password: dbStored.password,
+      });
+      console.log("[servio] runtime config loaded from database (durable)");
+      return;
+    }
+
+    const settings = await readSettingsFile();
+    const saved = settings && settings.servio;
+    if (saved && (saved.user || saved.password || saved.host)) {
+      setServioRuntimeConfig({
+        host: saved.host,
+        port: saved.port,
+        database: saved.database,
+        user: saved.user,
+        password: saved.password,
+      });
+      console.log("[servio] runtime config loaded from settings file");
+    }
+  } catch (e) {
+    console.warn(`[servio] ensure runtime config failed: ${e?.message || e}`);
   }
 };
 
@@ -2325,6 +2445,140 @@ const scheduleViksoftDailySync = () => {
     }
   }, ms);
   if (typeof viksoftDailyTimer.unref === "function") viksoftDailyTimer.unref();
+};
+
+// ---- Servio: щоденний імпорт факту продажів по всіх ресторанах ----
+// Погодинні ключі шаблону планування (08:00..23:00), як у SalesPlanningModule.
+const SERVIO_SALES_HOURS = Array.from({ length: 16 }, (_, i) => `${String(i + 8).padStart(2, "0")}:00:00`);
+
+let servioDailySyncRunning = false;
+const runServioDailySync = async ({ date, force } = {}) => {
+  if (servioDailySyncRunning) {
+    console.log("[servio:daily] skipped: previous run still in progress");
+    return { ok: false, error: "already running" };
+  }
+  servioDailySyncRunning = true;
+  try {
+    await ensureServioRuntimeConfigLoaded();
+    const dbConfig = getAssetsRuntimeConfig();
+    const reportDate = (typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)) ? date : getYesterdayIso();
+
+    // Мапінг «заклад LUCIA → BaseExternalID Servio» з дурабльного джерела (БД → файл).
+    let mapping = {};
+    try {
+      const dbStored = await getStoredServioSettings(dbConfig);
+      const settings = await readSettingsFile();
+      mapping = {
+        ...((dbStored?.mapping && typeof dbStored.mapping === "object") ? dbStored.mapping : {}),
+        ...((settings?.servio?.mapping && typeof settings.servio.mapping === "object") ? settings.servio.mapping : {}),
+      };
+    } catch (e) {
+      console.warn(`[servio:daily] load mapping failed: ${e?.message || e}`);
+    }
+
+    const pairs = Object.entries(mapping)
+      .map(([restaurantId, code]) => ({ restaurantId: String(restaurantId), restCode: String(code ?? "").trim() }))
+      .filter((p) => p.restaurantId && p.restCode);
+
+    if (!pairs.length) {
+      console.log("[servio:daily] no restaurant mapping configured — skip");
+      return { ok: true, reportDate, okCount: 0, total: 0 };
+    }
+
+    const restCodeCsv = [...new Set(pairs.map((p) => p.restCode))].join(",");
+    const { fetchServioHourlySales } = await import("../servioApi.js");
+    let rows = [];
+    try {
+      rows = await fetchServioHourlySales(
+        { startDate: reportDate, endDate: `${reportDate} 23:59:59`, restCode: restCodeCsv }
+      );
+    } catch (e) {
+      console.warn(`[servio:daily] fetch failed for ${reportDate}: ${e?.message || e}`);
+      return { ok: false, error: e?.message || String(e) };
+    }
+
+    // Групуємо факт по BaseExternalID → година → {factTo, factGosti}.
+    const byCode = new Map();
+    for (const row of rows) {
+      const code = String(row.baseExternalId);
+      const key = `${String(row.hourTo).padStart(2, "0")}:00:00`;
+      if (!byCode.has(code)) byCode.set(code, {});
+      byCode.get(code)[key] = {
+        factTo: row.totalSales ? String(Math.round(row.totalSales)) : "",
+        factGosti: row.guestCount ? String(row.guestCount) : "",
+      };
+    }
+
+    const emptyRow = () => ({ planTo: "", factTo: "", planGosti: "", factGosti: "", weather: "" });
+    let okCount = 0;
+    let errCount = 0;
+    for (const { restaurantId, restCode } of pairs) {
+      try {
+        const byHour = byCode.get(String(restCode)) || {};
+        const docId = `${restaurantId}__${reportDate}`;
+        const existing = await getCollectionItemData("salesHourlyPlans", docId, dbConfig).catch(() => null);
+        const existingHours = (existing?.hours && typeof existing.hours === "object") ? existing.hours : {};
+
+        // Оновлюємо ЛИШЕ факт, зберігаючи наявний план по кожній годині.
+        const mergedHours = { ...existingHours };
+        const hourKeys = new Set([...SERVIO_SALES_HOURS, ...Object.keys(existingHours)]);
+        for (const hourKey of hourKeys) {
+          const fact = byHour[hourKey];
+          mergedHours[hourKey] = {
+            ...(existingHours[hourKey] || emptyRow()),
+            factTo: fact ? fact.factTo : "",
+            factGosti: fact ? fact.factGosti : "",
+          };
+        }
+
+        const payload = {
+          id: docId,
+          restaurantId: String(restaurantId),
+          date: reportDate,
+          hours: mergedHours,
+          updatedAt: new Date().toISOString(),
+          updatedBy: "servio-daily-sync",
+        };
+        if (existing) {
+          await updateCollectionItemData("salesHourlyPlans", docId, payload, dbConfig);
+        } else {
+          await createCollectionItemData("salesHourlyPlans", payload, dbConfig);
+        }
+        okCount += 1;
+      } catch (e) {
+        errCount += 1;
+        console.warn(`[servio:daily] restaurant ${restaurantId}: ${e?.message || e}`);
+      }
+    }
+
+    console.log(`[servio:daily] done for ${reportDate}: ok=${okCount}, errors=${errCount}, total=${pairs.length}`);
+    return { ok: true, reportDate, okCount, errCount, total: pairs.length };
+  } catch (e) {
+    console.warn(`[servio:daily] fatal: ${e?.message || e}`);
+    return { ok: false, error: e?.message || String(e) };
+  } finally {
+    servioDailySyncRunning = false;
+  }
+};
+
+let servioDailyTimer = null;
+const scheduleServioDailySync = () => {
+  const ms = msUntilNextKyivTime(SERVIO_DAILY_SYNC_HOUR, SERVIO_DAILY_SYNC_MINUTE);
+  const hh = String(SERVIO_DAILY_SYNC_HOUR).padStart(2, "0");
+  const mm = String(SERVIO_DAILY_SYNC_MINUTE).padStart(2, "0");
+  console.log(`[servio:daily] next run in ~${Math.round(ms / 60000)}m (target ${hh}:${mm} Europe/Kyiv)`);
+  if (servioDailyTimer) clearTimeout(servioDailyTimer);
+  servioDailyTimer = setTimeout(async () => {
+    try {
+      console.log("[servio:daily] scheduled run started");
+      await runServioDailySync({ force: SERVIO_DAILY_SYNC_FORCE });
+    } catch (e) {
+      console.warn(`[servio:daily] run error: ${e?.message || e}`);
+    } finally {
+      scheduleServioDailySync();
+    }
+  }, ms);
+  if (typeof servioDailyTimer.unref === "function") servioDailyTimer.unref();
 };
 
 const mysqlPoolCache = new Map();
@@ -6011,18 +6265,30 @@ const server = http.createServer(async (req, res) => {
       const saved = (settings && settings.servio) || {};
       const { getServioPublicConfig } = await import("../servioApi.js");
       const effective = getServioPublicConfig();
+      // Дурабльне джерело (БД) — авторитетне для логіна/пароля/мапінгу; файл — фолбек.
+      let dbStored = null;
+      try {
+        dbStored = await getStoredServioSettings(getAssetsRuntimeConfig());
+      } catch { /* ignore */ }
+      const mergedMapping = {
+        ...((dbStored?.mapping && typeof dbStored.mapping === "object") ? dbStored.mapping : {}),
+        ...((saved.mapping && typeof saved.mapping === "object") ? saved.mapping : {}),
+      };
+      const mergedRestaurants = Array.isArray(saved.restaurants) && saved.restaurants.length
+        ? saved.restaurants
+        : (Array.isArray(dbStored?.restaurants) ? dbStored.restaurants : []);
       return sendJson(res, 200, {
         ok: true,
         saved: {
-          configured: Boolean(saved.password),
-          host: String(saved.host || ""),
-          port: Number(saved.port || 1433),
-          database: String(saved.database || "Loyalty"),
-          user: String(saved.user || ""),
-          hasPassword: Boolean(saved.password),
-          mapping: (saved.mapping && typeof saved.mapping === "object") ? saved.mapping : {},
-          restaurants: Array.isArray(saved.restaurants) ? saved.restaurants : [],
-          updatedAt: saved.updatedAt || null,
+          configured: Boolean(saved.password || dbStored?.password),
+          host: String(saved.host || dbStored?.host || ""),
+          port: Number(saved.port || dbStored?.port || 1433),
+          database: String(saved.database || dbStored?.database || "Loyalty"),
+          user: String(saved.user || dbStored?.user || ""),
+          hasPassword: Boolean(saved.password || dbStored?.password),
+          mapping: mergedMapping,
+          restaurants: mergedRestaurants,
+          updatedAt: saved.updatedAt || dbStored?.updatedAt || null,
         },
         effective,
       });
@@ -6052,15 +6318,40 @@ const server = http.createServer(async (req, res) => {
     if (!user) return sendJson(res, 400, { ok: false, error: "user (login) обовʼязковий" });
 
     const settings = await readSettingsFile();
-    const prev = (settings && settings.servio) || {};
+    const fileprev = (settings && settings.servio) || {};
+    // Дурабльний прев (БД) — щоб після деплою (порожній ./tmp) не втратити пароль/мапінг.
+    let dbprev = null;
+    try {
+      dbprev = await getStoredServioSettings(getAssetsRuntimeConfig());
+    } catch { /* ignore */ }
+    const prev = {
+      password: fileprev.password || dbprev?.password || "",
+      mapping: {
+        ...((dbprev?.mapping && typeof dbprev.mapping === "object") ? dbprev.mapping : {}),
+        ...((fileprev.mapping && typeof fileprev.mapping === "object") ? fileprev.mapping : {}),
+      },
+      restaurants: Array.isArray(fileprev.restaurants) && fileprev.restaurants.length
+        ? fileprev.restaurants
+        : (Array.isArray(dbprev?.restaurants) ? dbprev.restaurants : []),
+    };
+
+    // Мапінг закладів «рідко міняється»: зливаємо новий поверх наявного і НЕ
+    // затираємо вже зіставлені заклади порожнім значенням (лише додаємо/оновлюємо).
+    const incomingMapping = (payload?.mapping && typeof payload.mapping === "object") ? payload.mapping : {};
+    const mergedMapping = { ...prev.mapping };
+    for (const [k, v] of Object.entries(incomingMapping)) {
+      const val = String(v ?? "").trim();
+      if (val) mergedMapping[String(k)] = val;
+    }
+
     const nextServio = {
       host,
       port,
       database,
       user,
       password: newPassword !== null ? newPassword : (prev.password || ""),
-      mapping: (payload?.mapping && typeof payload.mapping === "object") ? payload.mapping : (prev.mapping || {}),
-      restaurants: Array.isArray(payload?.restaurants) ? payload.restaurants : (prev.restaurants || []),
+      mapping: mergedMapping,
+      restaurants: Array.isArray(payload?.restaurants) ? payload.restaurants : prev.restaurants,
       updatedAt: new Date().toISOString(),
     };
     await writeSettingsFile({
@@ -6098,9 +6389,31 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       console.warn(`[servio] runtime apply failed: ${e?.message || e}`);
     }
+    // Найважливіше: персистимо у БД (переживає деплой/перестворення контейнера).
+    // Пароль + мапінг шифруються aes-256-gcm ключем від CUSTOM_MIGRATION_TOKEN.
+    let persistedToDb = false;
+    try {
+      await persistServioSettingsToDb(
+        {
+          host: nextServio.host,
+          port: nextServio.port,
+          database: nextServio.database,
+          user: nextServio.user,
+          password: nextServio.password,
+          mapping: nextServio.mapping,
+          restaurants: nextServio.restaurants,
+        },
+        profile.id,
+        getAssetsRuntimeConfig()
+      );
+      persistedToDb = true;
+    } catch (e) {
+      console.warn(`[servio] persist to db failed: ${e?.message || e}`);
+    }
     return sendJson(res, 200, {
       ok: true,
       persistedToEnv,
+      persistedToDb,
       saved: { configured: Boolean(nextServio.password), updatedAt: nextServio.updatedAt },
     });
   }
@@ -6139,6 +6452,17 @@ const server = http.createServer(async (req, res) => {
           servio: { ...(settings?.servio || {}), restaurants, updatedAt: new Date().toISOString() },
           updatedAt: new Date().toISOString(),
         });
+        // Дублюємо у дурабльне сховище (БД), щоб довідник пережив деплой.
+        try {
+          const dbprev = await getStoredServioSettings(getAssetsRuntimeConfig());
+          await persistServioSettingsToDb(
+            { ...(dbprev || {}), restaurants },
+            profile.id,
+            getAssetsRuntimeConfig()
+          );
+        } catch (e) {
+          console.warn(`[servio] cache restaurants to db failed: ${e?.message || e}`);
+        }
       } catch (e) {
         console.warn(`[servio] cache restaurants failed: ${e?.message || e}`);
       }
@@ -6164,6 +6488,24 @@ const server = http.createServer(async (req, res) => {
       const { fetchServioHourlySales } = await import("../servioApi.js");
       const rows = await fetchServioHourlySales({ startDate, endDate, restCode });
       return sendJson(res, 200, { ok: true, rows });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
+    }
+  }
+
+  // Ручний запуск щоденного імпорту факту продажів з Servio (адмін).
+  // Тіло (необовʼязково): { date: "YYYY-MM-DD", force: true }. Без date — вчора.
+  if (pathname === "/api/servio/daily-sync" && method === "POST") {
+    const profile = await resolveAuthProfileWithFallback(req, getAssetsRuntimeConfig());
+    if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
+    if (!hasAdminRole(profile)) return sendJson(res, 403, { ok: false, error: "Only admin can run Servio daily sync" });
+    let payload = {};
+    try { payload = await parseJsonBody(req); } catch { payload = {}; }
+    const dt = String(payload?.date || "").trim();
+    const force = payload?.force === true || String(payload?.force || "").toLowerCase() === "true";
+    try {
+      const result = await runServioDailySync({ date: /^\d{4}-\d{2}-\d{2}$/.test(dt) ? dt : undefined, force });
+      return sendJson(res, result?.ok ? 200 : 500, result);
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
     }
@@ -6613,6 +6955,18 @@ server.listen(PORT, HOST, () => {
     scheduleViksoftDailySync();
   } else {
     console.log("[viksoft:daily] disabled (set LUCIA_VIKSOFT_DAILY_SYNC_ENABLED=true to enable)");
+  }
+
+  // Щоденний імпорт факту продажів з Servio (типово о 01:00 Europe/Kyiv).
+  // Тягне погодинний факт по ВСІХ ресторанах із мапінгом за попередній день.
+  setImmediate(() => { void ensureServioRuntimeConfigLoaded(); });
+  if (SERVIO_DAILY_SYNC_ENABLED) {
+    const sh = String(SERVIO_DAILY_SYNC_HOUR).padStart(2, "0");
+    const sm = String(SERVIO_DAILY_SYNC_MINUTE).padStart(2, "0");
+    console.log(`[servio:daily] enabled (target ${sh}:${sm} Europe/Kyiv, force=${SERVIO_DAILY_SYNC_FORCE})`);
+    scheduleServioDailySync();
+  } else {
+    console.log("[servio:daily] disabled (set LUCIA_SERVIO_DAILY_SYNC_ENABLED=true to enable)");
   }
 
   if (PUBLIC_REGISTER_ENABLED) {

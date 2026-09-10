@@ -8,6 +8,7 @@ export const KNOWN_COLLECTIONS = [
   "rolePermissions", "fieldPermissions", "platformAuditLogs",
     "notificationSettings", // new collection for encrypted SMTP settings
   "viksoftSettings", // durable encrypted Vik-Soft API credentials (survive container/tmp/.env reset)
+  "servioSettings", // durable encrypted Servio (MS SQL) credentials + restaurant mapping
   "assetCategories", "assetSubcategories", "assetAccountingTypes",
   "assetBusinessUnits", "assetStatuses", "assetConditions", "assetDecisions",
   "assetPlacementZones", "assetResponsibilityCenters", "assetResponsiblePersons",

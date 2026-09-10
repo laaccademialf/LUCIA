@@ -180,37 +180,30 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
     const r = await request.query(`
 ;WITH BillItems AS
 (
+    -- Один рядок = один чек: сумуємо всі позиції чека (без фільтра по періоду —
+    -- період застосовуємо нижче за часом ВІДКРИТТЯ чека, а не закриття).
     SELECT
         BI.BaseExternalID,
         BI.BillID,
         SUM(BI.Total) AS Total,
         MAX(BI.EnterpriseID) AS EnterpriseID
     FROM tbBillItem_ BI WITH (NOLOCK INDEX(PK_tbBillItem_))
-    INNER JOIN tbBill_ B WITH (NOLOCK)
-      ON B.BaseExternalID = BI.BaseExternalID
-      AND B.ID = BI.BillID
     WHERE BI.ItemState <> 2
-      AND B.Closed BETWEEN @StartDate AND @EndDate
-      AND
-      (
-        NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
-        OR
-        ',' + REPLACE(@RestCode, ' ', '') + ','
-          LIKE
-        '%,' + CAST(BI.BaseExternalID AS nvarchar(50)) + ',%'
-      )
     GROUP BY BI.BaseExternalID, BI.BillID
 ),
 Bills AS
 (
+    -- Період і година беруться за B.Opened (час відкриття). Це дає точніший
+    -- погодинний прогноз, бо час закриття міг зсуватись на кілька годин пізніше.
+    -- PM.NotPayer = 0 відсікає неплатні чеки (службові/персонал тощо).
     SELECT
         B.BaseExternalID,
         CBE.BaseExternalName,
         B.ID AS BillID,
         B.Number AS BillNumber,
         B.Closed AS BillClosed,
-        CONVERT(date, B.Closed) AS BillClosedDate,
-        DATEPART(HOUR, B.Closed) AS ClosedHour,
+        CONVERT(date, B.Opened) AS BillOpenedDate,
+        DATEPART(HOUR, B.Opened) AS OpenedHour,
         BI.Total,
         CASE WHEN B.GuestCount IS NULL OR B.GuestCount = 0 THEN 1 ELSE B.GuestCount END AS GuestCount,
         ISNULL(B.ChildCount, 0) AS ChildCount
@@ -220,8 +213,10 @@ Bills AS
         AND BI.BillID = B.ID
     INNER JOIN report.fnGetReportUserBaseExternal(1000) CBE
         ON CBE.BaseExternalID = B.BaseExternalID
+    LEFT JOIN report.tbCommonPaymentType PM WITH (NOLOCK)
+        ON PM.BaseExternalID = B.BaseExternalID
     WHERE
-        B.Closed BETWEEN @StartDate AND @EndDate
+        B.Opened BETWEEN @StartDate AND @EndDate
         AND
         (
             NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
@@ -230,31 +225,30 @@ Bills AS
                 LIKE
             '%,' + CAST(B.BaseExternalID AS nvarchar(50)) + ',%'
         )
+        AND PM.NotPayer = 0
 )
 SELECT
-    BillClosedDate,
+    BillOpenedDate,
     BaseExternalID,
     BaseExternalName,
-    ClosedHour AS HourFrom,
-    ClosedHour + 1 AS HourTo,
+    OpenedHour AS HourFrom,
+    OpenedHour + 1 AS HourTo,
     COUNT(*) AS BillCount,
     SUM(Total) AS TotalSales,
     SUM(GuestCount) AS GuestCount,
     SUM(ChildCount) AS ChildCount,
-    SUM(Total) / NULLIF(COUNT(*), 0) AS AverageBill,
-    SUM(Total) / NULLIF(SUM(GuestCount), 0) AS AveragePerGuest
+    SUM(Total) / NULLIF(COUNT(*), 0) AS AverageBill
 FROM Bills
-WHERE ClosedHour BETWEEN 0 AND 22
-GROUP BY BillClosedDate, BaseExternalID, BaseExternalName, ClosedHour
-ORDER BY BillClosedDate, BaseExternalID, ClosedHour;
+GROUP BY BillOpenedDate, BaseExternalID, BaseExternalName, OpenedHour
+ORDER BY BillOpenedDate, BaseExternalID, OpenedHour;
     `);
     return r?.recordset || [];
   });
 
   return rows.map((row) => ({
-    date: row.BillClosedDate instanceof Date
-      ? row.BillClosedDate.toISOString().slice(0, 10)
-      : String(row.BillClosedDate || "").slice(0, 10),
+    date: row.BillOpenedDate instanceof Date
+      ? row.BillOpenedDate.toISOString().slice(0, 10)
+      : String(row.BillOpenedDate || "").slice(0, 10),
     baseExternalId: row.BaseExternalID,
     baseExternalName: String(row.BaseExternalName || "").trim(),
     hourFrom: Number(row.HourFrom),
@@ -264,6 +258,5 @@ ORDER BY BillClosedDate, BaseExternalID, ClosedHour;
     guestCount: Number(row.GuestCount) || 0,
     childCount: Number(row.ChildCount) || 0,
     averageBill: Number(row.AverageBill) || 0,
-    averagePerGuest: Number(row.AveragePerGuest) || 0,
   }));
 };
