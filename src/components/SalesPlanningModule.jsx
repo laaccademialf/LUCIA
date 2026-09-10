@@ -566,7 +566,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         const dateKey = String(row.date || "").slice(0, 10);
         const restaurantId = pairs.find((pair) => String(pair.restCode) === String(row.baseExternalId))?.restaurantId;
         if (!dateKey || !restaurantId) continue;
-        const key = `${String(row.hourTo).padStart(2, "0")}:00:00`;
+        const key = `${String(row.hourFrom).padStart(2, "0")}:00:00`;
         const groupKey = `${restaurantId}__${dateKey}`;
         if (!byRestaurantDateHour[groupKey]) byRestaurantDateHour[groupKey] = {};
         const previous = byRestaurantDateHour[groupKey][key] || { factTo: 0, factGosti: 0 };
