@@ -198,12 +198,16 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
         NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
         OR ',' + REPLACE(@RestCode, ' ', '') + ',' LIKE '%,' + CAST(B.BaseExternalID AS nvarchar(50)) + ',%'
       )
-      AND EXISTS
+      AND NOT EXISTS
       (
         SELECT 1
-        FROM report.tbCommonPaymentType PM WITH (NOLOCK)
-        WHERE PM.BaseExternalID = B.BaseExternalID
-          AND PM.NotPayer = 0
+        FROM tbBillPayment_ BP WITH (NOLOCK)
+        INNER JOIN report.tbCommonPaymentType PM WITH (NOLOCK)
+          ON PM.BaseExternalID = BP.BaseExternalID
+          AND PM.ID = BP.PaymentTypeID
+        WHERE BP.BaseExternalID = B.BaseExternalID
+          AND BP.BillID = B.ID
+          AND PM.NotPayer = 1
       )
 ),
 BillItems AS
