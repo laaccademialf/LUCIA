@@ -180,7 +180,7 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
     const r = await request.query(`
 ;WITH FilteredBills AS
 (
-    -- Відбір виконується ПЕРШИМ за параметризованими датами й BaseExternalID.
+    -- Відбір виконується першим за параметризованими датами й BaseExternalID.
     -- Завдяки цьому наступний CTE не сканує всі позиції чеків у Loyalty.
     SELECT
         B.BaseExternalID,
@@ -191,19 +191,11 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
         B.GuestCount,
         B.ChildCount
     FROM tbBill_ B WITH (NOLOCK)
-    WHERE B.Opened >= @StartDate
-      AND B.Opened < DATEADD(DAY, 1, CONVERT(date, @EndDate))
+    WHERE B.Opened BETWEEN @StartDate AND @EndDate
       AND
       (
         NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
         OR ',' + REPLACE(@RestCode, ' ', '') + ',' LIKE '%,' + CAST(B.BaseExternalID AS nvarchar(50)) + ',%'
-      )
-      AND EXISTS
-      (
-        SELECT 1
-        FROM report.tbCommonPaymentType PM WITH (NOLOCK)
-        WHERE PM.BaseExternalID = B.BaseExternalID
-          AND PM.NotPayer = 0
       )
 ),
 BillItems AS
@@ -241,6 +233,9 @@ Bills AS
         AND BI.BillID = B.ID
     INNER JOIN report.fnGetReportUserBaseExternal(1000) CBE
         ON CBE.BaseExternalID = B.BaseExternalID
+    LEFT JOIN report.tbCommonPaymentType PM WITH (NOLOCK)
+      ON PM.BaseExternalID = B.BaseExternalID
+    WHERE PM.NotPayer = 0
 )
 SELECT
     BillOpenedDate,
