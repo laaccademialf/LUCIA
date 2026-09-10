@@ -197,6 +197,13 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
         NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
         OR ',' + REPLACE(@RestCode, ' ', '') + ',' LIKE '%,' + CAST(B.BaseExternalID AS nvarchar(50)) + ',%'
       )
+      AND EXISTS
+      (
+        SELECT 1
+        FROM report.tbCommonPaymentType PM WITH (NOLOCK)
+        WHERE PM.BaseExternalID = B.BaseExternalID
+          AND PM.NotPayer = 0
+      )
 ),
 BillItems AS
 (
@@ -233,9 +240,6 @@ Bills AS
         AND BI.BillID = B.ID
     INNER JOIN report.fnGetReportUserBaseExternal(1000) CBE
         ON CBE.BaseExternalID = B.BaseExternalID
-    LEFT JOIN report.tbCommonPaymentType PM WITH (NOLOCK)
-      ON PM.BaseExternalID = B.BaseExternalID
-    WHERE PM.NotPayer = 0
 )
 SELECT
     BillOpenedDate,
