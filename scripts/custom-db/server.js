@@ -5659,6 +5659,7 @@ const SESSION_AUTH_PATHS = new Set([
   "/api/settings/servio/test",
   "/api/servio/restaurants",
   "/api/servio/sales",
+  "/api/servio/daily-sync",
 ]);
 
 // Session-based авторизація для глобального gate: якщо запит несе валідний

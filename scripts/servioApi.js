@@ -178,24 +178,52 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
     request.input("EndDate", sql.DateTime, end);
     request.input("RestCode", sql.NVarChar(sql.MAX), rest);
     const r = await request.query(`
-;WITH BillItems AS
+;WITH FilteredBills AS
 (
-    -- Один рядок = один чек: сумуємо всі позиції чека (без фільтра по періоду —
-    -- період застосовуємо нижче за часом ВІДКРИТТЯ чека, а не закриття).
+    -- Відбір виконується ПЕРШИМ за параметризованими датами й BaseExternalID.
+    -- Завдяки цьому наступний CTE не сканує всі позиції чеків у Loyalty.
+    SELECT
+        B.BaseExternalID,
+        B.ID,
+        B.Number,
+        B.Opened,
+        B.Closed,
+        B.GuestCount,
+        B.ChildCount
+    FROM tbBill_ B WITH (NOLOCK)
+    WHERE B.Opened >= @StartDate
+      AND B.Opened < DATEADD(DAY, 1, CONVERT(date, @EndDate))
+      AND
+      (
+        NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
+        OR ',' + REPLACE(@RestCode, ' ', '') + ',' LIKE '%,' + CAST(B.BaseExternalID AS nvarchar(50)) + ',%'
+      )
+      AND EXISTS
+      (
+        SELECT 1
+        FROM report.tbCommonPaymentType PM WITH (NOLOCK)
+        WHERE PM.BaseExternalID = B.BaseExternalID
+          AND PM.NotPayer = 0
+      )
+),
+BillItems AS
+(
+    -- Агрегуємо позиції тільки для вже відібраних чеків за період.
     SELECT
         BI.BaseExternalID,
         BI.BillID,
         SUM(BI.Total) AS Total,
         MAX(BI.EnterpriseID) AS EnterpriseID
     FROM tbBillItem_ BI WITH (NOLOCK INDEX(PK_tbBillItem_))
+    INNER JOIN FilteredBills B
+      ON B.BaseExternalID = BI.BaseExternalID
+      AND B.ID = BI.BillID
     WHERE BI.ItemState <> 2
     GROUP BY BI.BaseExternalID, BI.BillID
 ),
 Bills AS
 (
-    -- Період і година беруться за B.Opened (час відкриття). Це дає точніший
-    -- погодинний прогноз, бо час закриття міг зсуватись на кілька годин пізніше.
-    -- PM.NotPayer = 0 відсікає неплатні чеки (службові/персонал тощо).
+    -- Година береться за B.Opened (час відкриття), а не за час закриття.
     SELECT
         B.BaseExternalID,
         CBE.BaseExternalName,
@@ -207,25 +235,12 @@ Bills AS
         BI.Total,
         CASE WHEN B.GuestCount IS NULL OR B.GuestCount = 0 THEN 1 ELSE B.GuestCount END AS GuestCount,
         ISNULL(B.ChildCount, 0) AS ChildCount
-    FROM tbBill_ B
+    FROM FilteredBills B
     INNER JOIN BillItems BI
         ON BI.BaseExternalID = B.BaseExternalID
         AND BI.BillID = B.ID
     INNER JOIN report.fnGetReportUserBaseExternal(1000) CBE
         ON CBE.BaseExternalID = B.BaseExternalID
-    LEFT JOIN report.tbCommonPaymentType PM WITH (NOLOCK)
-        ON PM.BaseExternalID = B.BaseExternalID
-    WHERE
-        B.Opened BETWEEN @StartDate AND @EndDate
-        AND
-        (
-            NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
-            OR
-            ',' + REPLACE(@RestCode, ' ', '') + ','
-                LIKE
-            '%,' + CAST(B.BaseExternalID AS nvarchar(50)) + ',%'
-        )
-        AND PM.NotPayer = 0
 )
 SELECT
     BillOpenedDate,

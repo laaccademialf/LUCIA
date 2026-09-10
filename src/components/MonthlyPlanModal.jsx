@@ -53,7 +53,10 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
   const [guestsPerDay, setGuestsPerDay] = useState("");     // Гості на день
   const [useWeather, setUseWeather] = useState(true);
   const [forecastBase, setForecastBase] = useState(null); // { avgCheck, guestsPerDay } — базовий прогноз до коригування
-  const [adjustPct, setAdjustPct] = useState(0);
+  const [avgCheckAdjustPct, setAvgCheckAdjustPct] = useState(0);
+  const [guestAdjustPct, setGuestAdjustPct] = useState(0);
+  const [adjustField, setAdjustField] = useState("guests");
+  const adjustPct = adjustField === "guests" ? guestAdjustPct : avgCheckAdjustPct;
 
   const daysInMonth = useMemo(() => new Date(year, month, 0).getDate(), [year, month]);
 
@@ -63,13 +66,16 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
 
   // Передзаповнюємо поля раніше введеним планом обраного місяця (та скидаємо прогноз при зміні місяця).
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
     const agg = sumMonth(history, year, month);
     const avg = agg.planGosti > 0 ? Math.round(agg.planTo / agg.planGosti) : 0;
     const gpd = daysInMonth > 0 ? Math.round(agg.planGosti / daysInMonth) : 0;
     setAvgCheckInput(avg ? String(avg) : "");
     setGuestsPerDay(gpd ? String(gpd) : "");
     setForecastBase(null);
-    setAdjustPct(0);
+    setAvgCheckAdjustPct(0);
+    setGuestAdjustPct(0);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [year, month, history, daysInMonth]);
 
   const yearOptions = useMemo(() => [initial.year - 1, initial.year, initial.year + 1], [initial.year]);
@@ -99,18 +105,33 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
       gpdOf(C, prevMonthYear - 1, prevMonth),
     ));
     setForecastBase({ avgCheck: avg, guestsPerDay: gpd });
-    setAdjustPct(0);
+    setAvgCheckAdjustPct(0);
+    setGuestAdjustPct(0);
     setAvgCheckInput(avg ? String(avg) : "");
     setGuestsPerDay(gpd ? String(gpd) : "");
   };
 
-  // Коригування ±% однаково масштабує середній чек і кількість гостей на день.
-  const handleAdjust = (pct) => {
-    setAdjustPct(pct);
+  const sliderTrackStyle = (pct) => {
+    const value = Math.max(-50, Math.min(50, Number(pct) || 0));
+    const center = 50;
+    const left = value < 0 ? center + value : center;
+    const right = value >= 0 ? center + value : center;
+    return {
+      background: `linear-gradient(90deg, #e2e8f0 ${left}%, ${value < -30 ? "#dc2626" : value < -15 ? "#f97316" : value < 0 ? "#eab308" : value > 25 ? "#16a34a" : "#84cc16"} ${left}%, ${value < -30 ? "#dc2626" : value < -15 ? "#f97316" : value < 0 ? "#eab308" : value > 25 ? "#16a34a" : "#84cc16"} ${right}%, #e2e8f0 ${right}%)`,
+    };
+  };
+
+  // Коригування ±% застосовується незалежно до гостей та до середнього чека.
+  const handleAdjust = (field, pct) => {
     if (!forecastBase) return;
     const factor = 1 + pct / 100;
+    if (field === "guests") {
+      setGuestAdjustPct(pct);
+      setGuestsPerDay(forecastBase.guestsPerDay ? String(Math.round(forecastBase.guestsPerDay * factor)) : "");
+      return;
+    }
+    setAvgCheckAdjustPct(pct);
     setAvgCheckInput(forecastBase.avgCheck ? String(Math.round(forecastBase.avgCheck * factor)) : "");
-    setGuestsPerDay(forecastBase.guestsPerDay ? String(Math.round(forecastBase.guestsPerDay * factor)) : "");
   };
 
   if (!open) return null;
@@ -124,7 +145,7 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-lg bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-lg font-semibold text-slate-900">План на місяць</h3>
           <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button>
@@ -153,11 +174,11 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-semibold text-slate-600">Середній чек</span>
-            <input type="number" inputMode="numeric" className={inputClass} value={avgCheckInput} onChange={(e) => setAvgCheckInput(e.target.value)} placeholder="0" />
+            <input type="number" inputMode="numeric" className={inputClass} value={avgCheckInput} onFocus={() => setAdjustField("avgCheck")} onChange={(e) => setAvgCheckInput(e.target.value)} placeholder="0" />
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-semibold text-slate-600">Гості на день</span>
-            <input type="number" inputMode="numeric" className={inputClass} value={guestsPerDay} onChange={(e) => setGuestsPerDay(e.target.value)} placeholder="0" />
+            <input type="number" inputMode="numeric" className={inputClass} value={guestsPerDay} onFocus={() => setAdjustField("guests")} onChange={(e) => setGuestsPerDay(e.target.value)} placeholder="0" />
           </label>
         </div>
 
@@ -206,26 +227,21 @@ export default function MonthlyPlanModal({ open, onClose, defaultMonth, onGenera
                 </p>
               ) : (
                 <>
-                  <div className="mb-1 flex items-center justify-between text-xs font-semibold text-slate-600">
-                    <span>Коригування плану</span>
-                    <span className={adjustPct > 0 ? "text-emerald-600" : adjustPct < 0 ? "text-rose-600" : "text-slate-600"}>
-                      {adjustPct > 0 ? "+" : ""}{adjustPct}%
-                    </span>
+                  <div className="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label="Показник прогнозу">
+                    {[ ["guests", "Гості на день"], ["avgCheck", "Середній чек"] ].map(([field, label]) => (
+                      <button key={field} type="button" aria-pressed={adjustField === field} onClick={() => setAdjustField(field)}
+                        className={`rounded border px-3 py-2 text-sm ${adjustField === field ? "border-indigo-600 bg-indigo-50 text-indigo-700" : "border-slate-300 text-slate-600"}`}>
+                        {label}
+                      </button>
+                    ))}
+                    <output className="ml-auto text-sm font-semibold">{adjustPct > 0 ? "+" : ""}{adjustPct}%</output>
                   </div>
-                  <input
-                    type="range"
-                    min={-50}
-                    max={50}
-                    step={1}
-                    value={adjustPct}
-                    onChange={(e) => handleAdjust(Number(e.target.value))}
-                    className="w-full accent-indigo-600"
-                  />
-                  <div className="flex justify-between text-[10px] text-slate-400">
-                    <span>−50%</span>
-                    <span>0</span>
-                    <span>+50%</span>
-                  </div>
+                  <input type="range" min={-50} max={50} step={1} value={adjustPct}
+                    aria-label={adjustField === "guests" ? "Коригування гостей" : "Коригування середнього чека"}
+                    onChange={(event) => handleAdjust(adjustField, Number(event.target.value))}
+                    style={sliderTrackStyle(adjustPct)}
+                    className="h-2 w-full cursor-pointer appearance-none rounded-full [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-slate-600 [&::-webkit-slider-thumb]:bg-white [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-slate-600 [&::-moz-range-thumb]:bg-white" />
+                  <div className="mt-2 flex justify-between text-xs text-slate-500"><span>−50%</span><span>0</span><span>+50%</span></div>
                 </>
               )}
             </div>
