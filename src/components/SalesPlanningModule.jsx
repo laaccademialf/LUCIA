@@ -419,6 +419,10 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   );
 
   const isAggregateView = factRangeDates.length > 1 || factRestaurantIds.length !== 1;
+  const isSelectedSingleDayFactView = factRangeDates.length === 1
+    && factRestaurantIds.length === 1
+    && String(factRestaurantIds[0]) === String(selectedRestaurantId)
+    && factRangeDates[0] === date;
   const factRangeHours = useMemo(() => {
     const hours = new Set();
     selectedRestaurants.forEach((restaurant) => {
@@ -448,8 +452,8 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     return aggregated;
   }, [factRestaurantIds, factRangeDates, factRangeData, factRangeHours]);
 
-  const tableHours = isAggregateView ? factRangeHours : visibleHours;
-  const tableHourlyData = isAggregateView ? factRangeHourlyData : hourlyData;
+  const tableHours = isAggregateView || isSelectedSingleDayFactView ? factRangeHours : visibleHours;
+  const tableHourlyData = isAggregateView || isSelectedSingleDayFactView ? factRangeHourlyData : hourlyData;
   const totals = useMemo(() => tableHours.reduce((acc, hour) => {
     const row = tableHourlyData[hour] || emptyHourRow();
     acc.planTo += toNumber(row.planTo);
@@ -464,6 +468,16 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
       ...prev,
       [hour]: { ...(prev[hour] || emptyHourRow()), [field]: value },
     }));
+    if (isSelectedSingleDayFactView) {
+      const docId = buildDocId(selectedRestaurantId, date);
+      setFactRangeData((prev) => ({
+        ...prev,
+        [docId]: {
+          ...(prev[docId] || {}),
+          [hour]: { ...(prev[docId]?.[hour] || emptyHourRow()), [field]: value },
+        },
+      }));
+    }
   };
 
   const toggleFactRestaurant = (restaurantId) => {
