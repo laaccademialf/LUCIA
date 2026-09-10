@@ -190,6 +190,12 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   const [factRestaurantPickerOpen, setFactRestaurantPickerOpen] = useState(false);
   const factRestaurantPickerRef = useRef(null);
 
+  const mappedFactRestaurantOptions = useMemo(
+    () => restaurantOptions.filter((restaurant) => Boolean(String(servioMapping[String(restaurant.id)] ?? "").trim())),
+    [restaurantOptions, servioMapping]
+  );
+  const mappedFactRestaurantIdsKey = mappedFactRestaurantOptions.map((restaurant) => String(restaurant.id)).join(",");
+
   const isSettingsTab = /setting|налашт/.test(String(topTab || "").toLowerCase());
 
   // Мапінг «заклад LUCIA → BaseExternalID Servio» для підстановки в @RestCode.
@@ -215,14 +221,16 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
 
   useEffect(() => {
     setFactRestaurantIds((prev) => {
-      const available = restaurantOptions.map((restaurant) => String(restaurant.id));
+      const available = mappedFactRestaurantIdsKey ? mappedFactRestaurantIdsKey.split(",") : [];
       const retained = prev.filter((id) => available.includes(id));
-      if (retained.length > 0) return retained;
-      return selectedRestaurantId && available.includes(selectedRestaurantId)
+      const next = retained.length > 0
+        ? retained
+        : selectedRestaurantId && available.includes(selectedRestaurantId)
         ? [selectedRestaurantId]
         : available.slice(0, 1);
+      return next.length === prev.length && next.every((id, index) => id === prev[index]) ? prev : next;
     });
-  }, [restaurantOptions.map((restaurant) => restaurant.id).join(",")]);
+  }, [mappedFactRestaurantIdsKey, selectedRestaurantId]);
 
   useEffect(() => {
     if (!factRestaurantPickerOpen) return undefined;
@@ -243,7 +251,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   const currentRestaurant = restaurantOptions.find((r) => String(r.id) === selectedRestaurantId);
   const selectedRestaurants = restaurantOptions.filter((restaurant) => factRestaurantIds.includes(String(restaurant.id)));
   const canEdit = factRestaurantIds.length === 1 && Boolean(selectedRestaurantId) && (isAdmin || userRestaurantIds.includes(selectedRestaurantId));
-  const canImportFact = isServioApiEnabled() && restaurantOptions.length > 0;
+  const canImportFact = isServioApiEnabled() && mappedFactRestaurantOptions.length > 0;
   const factRangeDates = useMemo(() => getDatesInRange(factFrom, factTo), [factFrom, factTo]);
 
   const visibleHours = useMemo(
@@ -460,7 +468,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   };
 
   const selectAllFactRestaurants = () => {
-    const ids = restaurantOptions.map((restaurant) => String(restaurant.id));
+    const ids = mappedFactRestaurantOptions.map((restaurant) => String(restaurant.id));
     setFactRestaurantIds(ids);
     if (!selectedRestaurantId && ids[0]) setSelectedRestaurantId(ids[0]);
   };
@@ -771,7 +779,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
             <details ref={factRestaurantPickerRef} open={factRestaurantPickerOpen} onToggle={(event) => setFactRestaurantPickerOpen(event.currentTarget.open)} className="relative w-56">
               <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:border-indigo-400">
                 <span>Заклади для факту</span>
-                <span className="text-xs font-medium text-indigo-700">{factRestaurantIds.length}/{restaurantOptions.length}</span>
+                <span className="text-xs font-medium text-indigo-700">{factRestaurantIds.length}/{mappedFactRestaurantOptions.length}</span>
               </summary>
               <div className="absolute right-0 z-40 mt-1 max-h-64 w-80 overflow-y-auto rounded-lg border border-slate-300 bg-white p-3 shadow-lg">
                 <div className="mb-2 flex justify-end gap-3 text-xs font-semibold">
@@ -779,15 +787,13 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                   <button type="button" onClick={clearFactRestaurants} className="text-slate-600 hover:underline">Жоден</button>
                 </div>
                 <div className="space-y-1.5">
-                  {restaurantOptions.map((restaurant) => {
+                  {mappedFactRestaurantOptions.map((restaurant) => {
                     const id = String(restaurant.id);
                     const checked = factRestaurantIds.includes(id);
-                    const mapped = Boolean(String(servioMapping[id] ?? "").trim());
                     return (
-                      <label key={id} className={`flex cursor-pointer items-center gap-2 text-sm ${mapped ? "text-slate-700" : "text-slate-400"}`}>
+                      <label key={id} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
                         <input type="checkbox" checked={checked} onChange={() => toggleFactRestaurant(id)} className="h-4 w-4 accent-indigo-600" />
                         <span>{restaurant.name}</span>
-                        {!mapped && <span className="ml-auto text-xs">не зіставлено</span>}
                       </label>
                     );
                   })}
