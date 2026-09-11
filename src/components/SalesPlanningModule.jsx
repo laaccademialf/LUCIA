@@ -622,11 +622,14 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
           const factByHour = byRestaurantDateHour[groupKey] || {};
           const existing = await getCollectionItemApi("salesHourlyPlans", buildDocId(restaurantId, iso)).catch(() => null);
           const existingHours = existing?.hours && typeof existing.hours === "object" ? existing.hours : {};
-          const nextHours = { ...emptyHours(), ...existingHours };
+          const nextHours = emptyHours();
           for (const hour of HOURS) {
             const fact = factByHour[hour];
+            const existingRow = existingHours[hour] || {};
             nextHours[hour] = {
-              ...(nextHours[hour] || emptyHourRow()),
+              planTo: existingRow.planTo ?? "",
+              planGosti: existingRow.planGosti ?? "",
+              weather: existingRow.weather ?? "",
               factTo: fact ? String(Math.round(fact.factTo)) : "",
               factGosti: fact ? String(Math.round(fact.factGosti)) : "",
             };
