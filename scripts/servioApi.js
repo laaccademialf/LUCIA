@@ -233,6 +233,7 @@ Bills AS
         B.Number AS BillNumber,
         B.Closed AS BillClosed,
         CONVERT(date, B.Closed) AS BillClosedDate,
+        CONVERT(date, B.Opened) AS BillOpenedDate,
         CASE
           WHEN CONVERT(date, B.Opened) <> CONVERT(date, B.Closed)
             THEN DATEPART(HOUR, B.Closed)
@@ -250,6 +251,7 @@ Bills AS
 )
 SELECT
     BillClosedDate,
+  BillOpenedDate,
     BaseExternalID,
     BaseExternalName,
   EffectiveHour AS HourFrom,
@@ -270,6 +272,9 @@ ORDER BY BillClosedDate, BaseExternalID, EffectiveHour;
     date: row.BillClosedDate instanceof Date
       ? row.BillClosedDate.toISOString().slice(0, 10)
       : String(row.BillClosedDate || "").slice(0, 10),
+    openedDate: row.BillOpenedDate instanceof Date
+      ? row.BillOpenedDate.toISOString().slice(0, 10)
+      : String(row.BillOpenedDate || "").slice(0, 10),
     baseExternalId: row.BaseExternalID,
     baseExternalName: String(row.BaseExternalName || "").trim(),
     hourFrom: Number(row.HourFrom),

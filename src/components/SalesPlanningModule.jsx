@@ -593,10 +593,17 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         restCode: [...new Set(pairs.map((pair) => pair.restCode))].join(","),
       });
       const byRestaurantDateHour = {};
+      const datesToRefresh = new Set(
+        getDatesInRange(from, to)
+      );
       for (const row of rows) {
         const dateKey = String(row.date || "").slice(0, 10);
         const restaurantId = pairs.find((pair) => String(pair.restCode) === String(row.baseExternalId))?.restaurantId;
         if (!dateKey || !restaurantId) continue;
+        const openedDate = String(row.openedDate || "").slice(0, 10);
+        if (openedDate && openedDate !== dateKey) {
+          datesToRefresh.add(openedDate);
+        }
         const key = `${String(row.hourFrom).padStart(2, "0")}:00:00`;
         const groupKey = `${restaurantId}__${dateKey}`;
         if (!byRestaurantDateHour[groupKey]) byRestaurantDateHour[groupKey] = {};
@@ -606,13 +613,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
           factGosti: previous.factGosti + toNumber(row.guestCount),
         };
       }
-      const dates = [];
-      const cursor = new Date(`${from}T00:00:00`);
-      const last = new Date(`${to}T00:00:00`);
-      while (cursor <= last) {
-        dates.push(toIsoDate(cursor));
-        cursor.setDate(cursor.getDate() + 1);
-      }
+      const dates = [...datesToRefresh].sort();
       let savedCount = 0;
       let matchedHours = 0;
       for (const { restaurantId } of pairs) {
