@@ -15,7 +15,7 @@ const DEFAULT_PORT = 1433;
 const DEFAULT_DATABASE = "Loyalty";
 const REQUEST_TIMEOUT_MS = Math.max(
   5000,
-  Number.parseInt(String(process.env.SERVIO_REQUEST_TIMEOUT_MS || "30000"), 10) || 30000
+  Number.parseInt(String(process.env.SERVIO_REQUEST_TIMEOUT_MS || "600000"), 10) || 600000
 );
 
 // Runtime-override з UI має пріоритет над env.
