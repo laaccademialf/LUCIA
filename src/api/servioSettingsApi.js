@@ -94,12 +94,26 @@ export const syncServioRestaurants = async () => {
 // restCode — CSV з BaseExternalID (порожній рядок = всі ресторани).
 export const fetchServioSales = async ({ startDate, endDate, restCode } = {}) => {
   const base = requireBase();
-  const r = await fetch(`${base}/api/servio/sales`, {
-    method: "POST",
-    headers: buildHeaders(),
-    body: JSON.stringify({ startDate, endDate, restCode: restCode ?? "" }),
-  });
-  const json = await r.json().catch(() => null);
-  if (!r.ok || !json?.ok) throw new Error(json?.error || `HTTP ${r.status}`);
-  return Array.isArray(json.rows) ? json.rows : [];
+  const post = async (body) => {
+    const r = await fetch(`${base}/api/servio/sales`, {
+      method: "POST",
+      headers: buildHeaders(),
+      body: JSON.stringify(body),
+    });
+    const json = await r.json().catch(() => null);
+    if (!r.ok || !json?.ok) throw new Error(json?.error || `HTTP ${r.status}`);
+    return json;
+  };
+  let result = await post({ startDate, endDate, restCode: restCode ?? "", async: true });
+  const deadline = Date.now() + 25 * 60_000;
+  while (result.status === "pending") {
+    if (Date.now() >= deadline) throw new Error("Перевищено час очікування факту Servio. Спробуйте менший період.");
+    if (!result.jobId) throw new Error("Servio не повернув номер завдання");
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    result = await post({ jobId: result.jobId });
+  }
+  if (result.status === "failed") throw new Error(result.error || "Помилка запиту Servio");
+  // Невалідна відповідь не повинна очищати збережений факт як порожній звіт.
+  if (!Array.isArray(result.rows)) throw new Error("Servio повернув некоректний результат");
+  return result.rows;
 };

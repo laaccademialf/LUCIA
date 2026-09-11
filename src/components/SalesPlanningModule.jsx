@@ -15,8 +15,8 @@ import {
 } from "../api/servioSettingsApi";
 import { buildMonthlyPlan, largestRemainderDistribute } from "../utils/salesPlanDistribution";
 import { fetchKyivWeather, weatherLabel } from "../api/weatherApi";
-// Погодинні рядки з 08:00 до 23:00 включно, як у паперовому шаблоні планування.
-const HOURS = Array.from({ length: 16 }, (_, i) => `${String(i + 8).padStart(2, "0")}:00:00`);
+import { SALES_HOURS, DEFAULT_SALES_HOURS, groupServioSales, mergeServioFactHours, hoursWithSales, sumSalesRows, factAverageCheck } from "../utils/salesFacts.js";
+const HOURS = SALES_HOURS;
 
 const emptyHourRow = () => ({ planTo: "", factTo: "", planGosti: "", factGosti: "", weather: "" });
 const emptyHours = () => Object.fromEntries(HOURS.map((hour) => [hour, emptyHourRow()]));
@@ -34,19 +34,17 @@ const getVisibleHours = (schedule, isoDate) => {
   const daySchedule = dayKey ? schedule?.[dayKey] : null;
   const from = daySchedule?.from;
   const to = daySchedule?.to;
-  if (!from || !to) return HOURS;
+  if (!from || !to) return DEFAULT_SALES_HOURS;
 
-  const [openHour] = from.split(":").map(Number);
-  const [closeHour, closeMinute] = to.split(":").map(Number);
-  if (!Number.isFinite(openHour) || !Number.isFinite(closeHour)) return HOURS;
-  if (closeHour <= openHour && !(closeMinute > 0)) return HOURS; // цілодобово або некоректний графік — показуємо всі години
-
-  // Рядок з міткою "hh:00" відображає годину роботи, що завершується о цій годині,
-  // тож перший рядок — це openHour+1 (перша повна робоча година), а останній — closeHour.
-  const lastHour = closeHour;
+  const [openHour, openMinute = 0] = from.split(":").map(Number);
+  const [closeHour, closeMinute = 0] = to.split(":").map(Number);
+  const open = openHour * 60 + openMinute;
+  let close = closeHour * 60 + closeMinute;
+  if (!Number.isFinite(open) || !Number.isFinite(close)) return DEFAULT_SALES_HOURS;
+  if (close <= open) close += 24 * 60;
   return HOURS.filter((hour) => {
-    const hh = Number(hour.split(":")[0]);
-    return hh > openHour && hh <= lastHour;
+    const end = Number(hour.split(":")[0]) * 60;
+    return [0, 24 * 60].some((offset) => end + offset > open && end - 60 + offset < close);
   });
 };
 
@@ -120,11 +118,11 @@ const toNumber = (value) => {
   return Number.isFinite(n) ? n : 0;
 };
 
-const formatNumber = (value) => (value ? new Intl.NumberFormat("uk-UA", { maximumFractionDigits: 0 }).format(value) : "");
+const formatNumber = (value) => (value !== null && value !== undefined && value !== "" ? new Intl.NumberFormat("uk-UA", { maximumFractionDigits: 2 }).format(value) : "");
 const averageCheck = (turnover, guests) => (guests > 0 ? Math.round(turnover / guests) : 0);
 
 // Відсоток відхилення факту від плану: (факт/план − 1) × 100. null — коли плану немає.
-const deviationPct = (fact, plan) => (plan > 0 ? (fact / plan - 1) * 100 : null);
+const deviationPct = (fact, plan) => (fact !== null && fact !== "" && plan > 0 ? (fact / plan - 1) * 100 : null);
 const formatPct = (pct) => {
   if (pct === null || pct === undefined) return "—";
   const rounded = Math.round(pct);
@@ -170,6 +168,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   const [date, setDate] = useState(() => toIsoDate(new Date()));
   const [hourlyData, setHourlyData] = useState(emptyHours);
   const [loading, setLoading] = useState(false);
+  const [dataLoadError, setDataLoadError] = useState(false);
   const [status, setStatus] = useState("");
   const [servioMapping, setServioMapping] = useState({});
   const [fetchingFact, setFetchingFact] = useState(false);
@@ -263,8 +262,8 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   const factRangeDates = useMemo(() => getDatesInRange(factFrom, factTo), [factFrom, factTo]);
 
   const visibleHours = useMemo(
-    () => getVisibleHours(currentRestaurant?.schedule, date),
-    [currentRestaurant?.schedule, date]
+    () => hoursWithSales(getVisibleHours(currentRestaurant?.schedule, date), hourlyData),
+    [currentRestaurant?.schedule, date, hourlyData]
   );
   const dayKey = getDayKeyFromDate(date);
   const daySchedule = dayKey ? currentRestaurant?.schedule?.[dayKey] : null;
@@ -281,11 +280,11 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         return;
       }
       setLoading(true);
-      setStatus("");
+      setDataLoadError(false);
       setHourlyData(emptyHours());
       try {
         if (isCollectionsApiEnabled()) {
-          const saved = await getCollectionItemApi("salesHourlyPlans", buildDocId(selectedRestaurantId, date)).catch(() => null);
+          const saved = await getCollectionItemApi("salesHourlyPlans", buildDocId(selectedRestaurantId, date));
           if (!cancelled) {
             const savedHours = saved?.hours && typeof saved.hours === "object" ? saved.hours : {};
             setHourlyData({ ...emptyHours(), ...savedHours });
@@ -294,7 +293,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
           setHourlyData(emptyHours());
         }
       } catch (error) {
-        if (!cancelled) setStatus(`Не вдалося завантажити дані: ${error?.message || error}`);
+        if (!cancelled) { setDataLoadError(true); setStatus(`Не вдалося завантажити дані: ${error?.message || error}`); }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -302,7 +301,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
 
     void load();
     return () => { cancelled = true; };
-  }, [selectedRestaurantId, date]);
+  }, [selectedRestaurantId, date, factRangeReload]);
 
   // Огляд періоду (тиждень/місяць): вантажимо всі дні періоду.
   const periodDates = useMemo(() => {
@@ -312,7 +311,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   }, [viewMode, date]);
 
   useEffect(() => {
-    if (viewMode === "day" || !selectedRestaurantId || periodDates.length === 0) return;
+    if (viewMode === "day" || periodDates.length === 0) return;
     let cancelled = false;
     const load = async () => {
       setPeriodLoading(true);
@@ -321,25 +320,25 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
           if (!cancelled) setPeriodData({});
           return;
         }
-        const docs = await Promise.all(
-          periodDates.map((iso) =>
-            getCollectionItemApi("salesHourlyPlans", buildDocId(selectedRestaurantId, iso)).catch(() => null)
-          )
-        );
+        const requests = factRestaurantIds.flatMap((restaurantId) => periodDates.map((iso) => ({ restaurantId, iso })));
+        const docs = await Promise.all(requests.map(({ restaurantId, iso }) =>
+          getCollectionItemApi("salesHourlyPlans", buildDocId(restaurantId, iso))
+        ));
         if (cancelled) return;
         const next = {};
-        periodDates.forEach((iso, i) => {
-          const saved = docs[i];
-          next[iso] = saved?.hours && typeof saved.hours === "object" ? saved.hours : {};
+        requests.forEach(({ restaurantId, iso }, i) => {
+          next[buildDocId(restaurantId, iso)] = docs[i]?.hours || {};
         });
         setPeriodData(next);
+      } catch (error) {
+        if (!cancelled) { setPeriodData({}); setStatus(`Помилка завантаження періоду: ${error?.message || error}`); }
       } finally {
         if (!cancelled) setPeriodLoading(false);
       }
     };
     void load();
     return () => { cancelled = true; };
-  }, [viewMode, selectedRestaurantId, periodDates]);
+  }, [viewMode, factRestaurantIds, periodDates, factRangeReload]);
 
   // Дані вибраних закладів за верхній діапазон для погодинної агрегації.
   useEffect(() => {
@@ -353,7 +352,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
       try {
         const requests = factRestaurantIds.flatMap((restaurantId) => factRangeDates.map((iso) => ({ restaurantId, iso })));
         const docs = await Promise.all(requests.map(({ restaurantId, iso }) =>
-          getCollectionItemApi("salesHourlyPlans", buildDocId(restaurantId, iso)).catch(() => null)
+          getCollectionItemApi("salesHourlyPlans", buildDocId(restaurantId, iso))
         ));
         if (cancelled) return;
         const next = {};
@@ -362,15 +361,8 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
           next[buildDocId(restaurantId, iso)] = saved?.hours && typeof saved.hours === "object" ? saved.hours : {};
         });
         setFactRangeData(next);
-        if (
-          factRestaurantIds.length === 1
-          && factRangeDates.length === 1
-          && String(factRestaurantIds[0]) === String(selectedRestaurantId)
-          && factRangeDates[0] === date
-        ) {
-          const hours = next[buildDocId(selectedRestaurantId, date)] || {};
-          setHourlyData({ ...emptyHours(), ...hours });
-        }
+      } catch (error) {
+        if (!cancelled) { setFactRangeData({}); setStatus(`Помилка завантаження факту: ${error?.message || error}`); }
       } finally {
         if (!cancelled) setFactRangeLoading(false);
       }
@@ -399,32 +391,14 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   // інакше день, де факт > плану, міг показувати «мінус» через відставання попередніх днів.
   const periodRows = useMemo(() => {
     return periodDates.map((iso) => {
-      const hours = periodData[iso] || {};
-      const dayHours = getVisibleHours(currentRestaurant?.schedule, iso);
-      const acc = dayHours.reduce((a, hour) => {
-        const row = hours[hour] || {};
-        a.planTo += toNumber(row.planTo);
-        a.factTo += toNumber(row.factTo);
-        a.planGosti += toNumber(row.planGosti);
-        a.factGosti += toNumber(row.factGosti);
-        if (!a.weather && row.weather) a.weather = row.weather;
-        return a;
-      }, { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0, weather: "" });
+      const rows = factRestaurantIds.flatMap((restaurantId) => Object.values(periodData[buildDocId(restaurantId, iso)] || {}));
+      const acc = sumSalesRows(rows);
       const dow = (new Date(`${iso}T00:00:00`).getDay() + 6) % 7;
       return { iso, weekdayLabel: WEEKDAY_LABELS[dow], ...acc };
     });
-  }, [periodDates, periodData, currentRestaurant?.schedule]);
+  }, [periodDates, periodData, factRestaurantIds]);
 
-  const periodTotals = useMemo(
-    () => periodRows.reduce(
-      (a, r) => {
-        a.planTo += r.planTo; a.factTo += r.factTo; a.planGosti += r.planGosti; a.factGosti += r.factGosti;
-        return a;
-      },
-      { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0 }
-    ),
-    [periodRows]
-  );
+  const periodTotals = useMemo(() => sumSalesRows(periodRows), [periodRows]);
 
   const isAggregateView = factRangeDates.length > 1 || factRestaurantIds.length !== 1;
   const isSelectedSingleDayFactView = factRangeDates.length === 1
@@ -434,47 +408,26 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
   const factRangeHours = useMemo(() => {
     const hours = new Set();
     selectedRestaurants.forEach((restaurant) => {
-      factRangeDates.forEach((iso) => getVisibleHours(restaurant.schedule, iso).forEach((hour) => hours.add(hour)));
+      factRangeDates.forEach((iso) => hoursWithSales(getVisibleHours(restaurant.schedule, iso), factRangeData[buildDocId(restaurant.id, iso)]).forEach((hour) => hours.add(hour)));
     });
     return HOURS.filter((hour) => hours.has(hour));
-  }, [factRangeDates, selectedRestaurants]);
+  }, [factRangeDates, selectedRestaurants, factRangeData]);
 
   const factRangeHourlyData = useMemo(() => {
-    const aggregated = emptyHours();
-    for (const restaurantId of factRestaurantIds) {
-      for (const iso of factRangeDates) {
-        const hours = factRangeData[buildDocId(restaurantId, iso)] || {};
-        for (const hour of factRangeHours) {
-          const current = aggregated[hour];
-          const row = hours[hour] || {};
-          aggregated[hour] = {
-            ...current,
-            planTo: String(toNumber(current.planTo) + toNumber(row.planTo)),
-            factTo: String(toNumber(current.factTo) + toNumber(row.factTo)),
-            planGosti: String(toNumber(current.planGosti) + toNumber(row.planGosti)),
-            factGosti: String(toNumber(current.factGosti) + toNumber(row.factGosti)),
-          };
-        }
-      }
-    }
-    return aggregated;
+    return Object.fromEntries(factRangeHours.map((hour) => [hour, sumSalesRows(
+      factRestaurantIds.flatMap((restaurantId) => factRangeDates.map((iso) => factRangeData[buildDocId(restaurantId, iso)]?.[hour] || {}))
+    )]));
   }, [factRestaurantIds, factRangeDates, factRangeData, factRangeHours]);
 
-  const tableHours = isAggregateView || isSelectedSingleDayFactView ? factRangeHours : visibleHours;
-  const tableHourlyData = isAggregateView || isSelectedSingleDayFactView ? factRangeHourlyData : hourlyData;
-  const totals = useMemo(() => tableHours.reduce((acc, hour) => {
-    const row = tableHourlyData[hour] || emptyHourRow();
-    acc.planTo += toNumber(row.planTo);
-    acc.factTo += toNumber(row.factTo);
-    acc.planGosti += toNumber(row.planGosti);
-    acc.factGosti += toNumber(row.factGosti);
-    return acc;
-  }, { planTo: 0, factTo: 0, planGosti: 0, factGosti: 0 }), [tableHourlyData, tableHours]);
+  const tableHours = isAggregateView ? factRangeHours : visibleHours;
+  // Редагування й таблиця одного дня мають єдине джерело даних.
+  const tableHourlyData = isAggregateView ? factRangeHourlyData : hourlyData;
+  const totals = useMemo(() => sumSalesRows(tableHours.map((hour) => tableHourlyData[hour] || {})), [tableHourlyData, tableHours]);
 
   const handleFieldChange = (hour, field, value) => {
     setHourlyData((prev) => ({
       ...prev,
-      [hour]: { ...(prev[hour] || emptyHourRow()), [field]: value },
+      [hour]: { ...(prev[hour] || emptyHourRow()), [field]: value, ...(field === "factTo" ? { factBillCount: "" } : {}) },
     }));
     if (isSelectedSingleDayFactView) {
       const docId = buildDocId(selectedRestaurantId, date);
@@ -482,7 +435,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         ...prev,
         [docId]: {
           ...(prev[docId] || {}),
-          [hour]: { ...(prev[docId]?.[hour] || emptyHourRow()), [field]: value },
+          [hour]: { ...(prev[docId]?.[hour] || emptyHourRow()), [field]: value, ...(field === "factTo" ? { factBillCount: "" } : {}) },
         },
       }));
     }
@@ -541,17 +494,18 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     const targetTotal = toNumber(value);
     setHourlyData((prev) => {
       const weights = visibleHours.map((hour) => toNumber((prev[hour] || {})[planField]));
-      const distributed = largestRemainderDistribute(weights, targetTotal);
+      const scale = field === "factTo" ? 100 : 1;
+      const distributed = largestRemainderDistribute(weights, targetTotal * scale);
       const next = { ...prev };
       visibleHours.forEach((hour, i) => {
-        next[hour] = { ...(next[hour] || emptyHourRow()), [field]: distributed[i] ? String(distributed[i]) : "" };
+        next[hour] = { ...(next[hour] || emptyHourRow()), [field]: String(distributed[i] / scale), ...(field === "factTo" ? { factBillCount: "" } : {}) };
       });
       return next;
     });
   };
 
   const handleSave = async () => {
-    if (!canEdit) return;
+    if (!canEdit || isAggregateView || loading || dataLoadError || fetchingFact) return;
     if (!isCollectionsApiEnabled()) {
       setStatus("Збереження недоступне: не налаштований API даних.");
       return;
@@ -566,6 +520,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         updatedAt: new Date().toISOString(),
         updatedBy: user?.displayName || user?.email || "",
       });
+      setFactRangeData((prev) => ({ ...prev, [buildDocId(selectedRestaurantId, date)]: hourlyData }));
       setStatus("Збережено");
     } catch (error) {
       setStatus(`Помилка збереження: ${error?.message || error}`);
@@ -592,49 +547,17 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         endDate: `${to} 23:59:59`,
         restCode: [...new Set(pairs.map((pair) => pair.restCode))].join(","),
       });
-      const byRestaurantDateHour = {};
-      const datesToRefresh = new Set(
-        getDatesInRange(from, to)
-      );
-      for (const row of rows) {
-        const dateKey = String(row.date || "").slice(0, 10);
-        const restaurantId = pairs.find((pair) => String(pair.restCode) === String(row.baseExternalId))?.restaurantId;
-        if (!dateKey || !restaurantId) continue;
-        const openedDate = String(row.openedDate || "").slice(0, 10);
-        if (openedDate && openedDate !== dateKey) {
-          datesToRefresh.add(openedDate);
-        }
-        const key = `${String(row.hourFrom).padStart(2, "0")}:00:00`;
-        const groupKey = `${restaurantId}__${dateKey}`;
-        if (!byRestaurantDateHour[groupKey]) byRestaurantDateHour[groupKey] = {};
-        const previous = byRestaurantDateHour[groupKey][key] || { factTo: 0, factGosti: 0 };
-        byRestaurantDateHour[groupKey][key] = {
-          factTo: previous.factTo + toNumber(row.totalSales),
-          factGosti: previous.factGosti + toNumber(row.guestCount),
-        };
-      }
-      const dates = [...datesToRefresh].sort();
+      const groupedFacts = groupServioSales(rows);
+      const dates = getDatesInRange(from, to);
       let savedCount = 0;
       let matchedHours = 0;
       for (const { restaurantId } of pairs) {
         for (const iso of dates) {
-          const groupKey = `${restaurantId}__${iso}`;
-          const factByHour = byRestaurantDateHour[groupKey] || {};
-          const existing = await getCollectionItemApi("salesHourlyPlans", buildDocId(restaurantId, iso)).catch(() => null);
-          const existingHours = existing?.hours && typeof existing.hours === "object" ? existing.hours : {};
-          const nextHours = emptyHours();
-          for (const hour of HOURS) {
-            const fact = factByHour[hour];
-            const existingRow = existingHours[hour] || {};
-            nextHours[hour] = {
-              planTo: existingRow.planTo ?? "",
-              planGosti: existingRow.planGosti ?? "",
-              weather: existingRow.weather ?? "",
-              factTo: fact ? String(Math.round(fact.factTo)) : "",
-              factGosti: fact ? String(Math.round(fact.factGosti)) : "",
-            };
-            if (fact) matchedHours += 1;
-          }
+          const restCode = String(servioMapping[String(restaurantId)]).trim();
+          const factByHour = groupedFacts.get(`${restCode}__${iso}`) || {};
+          const existing = await getCollectionItemApi("salesHourlyPlans", buildDocId(restaurantId, iso));
+          const nextHours = mergeServioFactHours(existing?.hours || {}, factByHour);
+          matchedHours += Object.keys(factByHour).length;
           await createCollectionItemApi("salesHourlyPlans", {
             id: buildDocId(restaurantId, iso),
             restaurantId,
@@ -644,14 +567,13 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
             updatedBy: user?.displayName || user?.email || "",
           });
           savedCount += 1;
-          if (restaurantId === selectedRestaurantId && iso === date) setHourlyData(nextHours);
         }
       }
-      setFactRangeReload((value) => value + 1);
       setStatus(matchedHours ? `Факт завантажено: ${matchedHours} годин, збережено ${savedCount} днів.` : "Servio не повернув даних за вибраний період.");
     } catch (error) {
       setStatus(`Помилка завантаження факту: ${error?.message || error}`);
     } finally {
+      setFactRangeReload((value) => value + 1);
       setFetchingFact(false);
     }
   };
@@ -667,7 +589,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
     setMonthlyGenerating(true);
     setMonthlyStatus("Аналіз історії та розрахунок...");
     try {
-      const all = await listCollectionItemsApi("salesHourlyPlans").catch(() => []);
+      const all = await listCollectionItemsApi("salesHourlyPlans");
       const history = (Array.isArray(all) ? all : []).filter(
         (rec) => String(rec?.restaurantId || "") === String(selectedRestaurantId)
       );
@@ -749,10 +671,11 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
       // Оновлюємо поточну відкриту дату, якщо вона в цьому місяці.
       const [curY, curM] = date.split("-").map(Number);
       if (curY === year && curM === month) {
-        const currentDoc = await getCollectionItemApi("salesHourlyPlans", buildDocId(selectedRestaurantId, date)).catch(() => null);
+        const currentDoc = await getCollectionItemApi("salesHourlyPlans", buildDocId(selectedRestaurantId, date));
         const savedHours = currentDoc?.hours && typeof currentDoc.hours === "object" ? currentDoc.hours : {};
         setHourlyData({ ...emptyHours(), ...savedHours });
       }
+      setFactRangeReload((value) => value + 1);
       setMonthlyModalOpen(false);
       setStatus("Місячний план збережено.");
     } catch (error) {
@@ -861,7 +784,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
             <button
               type="button"
               onClick={handleSave}
-              disabled={loading}
+              disabled={loading || dataLoadError || fetchingFact || isAggregateView}
               className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-400"
             >
               Зберегти
@@ -911,14 +834,14 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                 <td className="px-2 py-2 text-right">{formatNumber(periodTotals.factGosti)}</td>
                 <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(periodTotals.factGosti, periodTotals.planGosti))}`}>{formatPct(deviationPct(periodTotals.factGosti, periodTotals.planGosti))}</td>
                 <td className="px-2 py-2 text-right">{formatNumber(averageCheck(periodTotals.planTo, periodTotals.planGosti))}</td>
-                <td className="px-2 py-2 text-right">{formatNumber(averageCheck(periodTotals.factTo, periodTotals.factGosti))}</td>
-                <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(averageCheck(periodTotals.factTo, periodTotals.factGosti), averageCheck(periodTotals.planTo, periodTotals.planGosti)))}`}>{formatPct(deviationPct(averageCheck(periodTotals.factTo, periodTotals.factGosti), averageCheck(periodTotals.planTo, periodTotals.planGosti)))}</td>
+                <td className="px-2 py-2 text-right">{formatNumber(factAverageCheck(periodTotals))}</td>
+                <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(factAverageCheck(periodTotals), averageCheck(periodTotals.planTo, periodTotals.planGosti)))}`}>{formatPct(deviationPct(factAverageCheck(periodTotals), averageCheck(periodTotals.planTo, periodTotals.planGosti)))}</td>
                 <td className="px-3 py-2"></td>
               </tr>
               {periodRows.map((r) => (
                 <tr
                   key={r.iso}
-                  onClick={() => { setDate(r.iso); setViewMode("day"); }}
+                  onClick={() => { setDate(r.iso); setFactFrom(r.iso); setFactTo(r.iso); setViewMode("day"); }}
                   title="Відкрити день"
                   className={`cursor-pointer border-t border-slate-200 hover:bg-indigo-50 ${r.iso === date ? "bg-indigo-50/50" : ""}`}
                 >
@@ -932,8 +855,8 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                   <td className="px-2 py-2 text-right">{formatNumber(r.factGosti)}</td>
                   <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(r.factGosti, r.planGosti))}`}>{formatPct(deviationPct(r.factGosti, r.planGosti))}</td>
                   <td className="px-2 py-2 text-right text-slate-600">{formatNumber(averageCheck(r.planTo, r.planGosti))}</td>
-                  <td className="px-2 py-2 text-right text-slate-600">{formatNumber(averageCheck(r.factTo, r.factGosti))}</td>
-                  <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(averageCheck(r.factTo, r.factGosti), averageCheck(r.planTo, r.planGosti)))}`}>{formatPct(deviationPct(averageCheck(r.factTo, r.factGosti), averageCheck(r.planTo, r.planGosti)))}</td>
+                  <td className="px-2 py-2 text-right text-slate-600">{formatNumber(factAverageCheck(r))}</td>
+                  <td className={`px-2 py-2 text-right ${deviationCellClass(deviationPct(factAverageCheck(r), averageCheck(r.planTo, r.planGosti)))}`}>{formatPct(deviationPct(factAverageCheck(r), averageCheck(r.planTo, r.planGosti)))}</td>
                   <td className="px-3 py-2 text-slate-500">{r.weather || "—"}</td>
                 </tr>
               ))}
@@ -980,7 +903,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                     value={totals.planTo || ""}
                     onChange={(e) => handleTotalPlanChange("planTo", e.target.value)}
                     onBlur={handleSave}
-                    disabled={!canEdit || isAggregateView}
+                    disabled={!canEdit || isAggregateView || loading || dataLoadError || fetchingFact}
                     title="Введіть загальний план — розподілиться по годинах автоматично"
                     className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
                   />
@@ -988,10 +911,10 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                 <td className="px-1.5 py-1.5 text-right">
                   <input
                     type="number"
-                    value={totals.factTo || ""}
+                    value={totals.factTo ?? ""}
                     onChange={(e) => handleTotalFactChange("factTo", e.target.value)}
                     onBlur={handleSave}
-                    disabled={!canEdit || isAggregateView}
+                    disabled={!canEdit || isAggregateView || loading || dataLoadError || fetchingFact}
                     title="Введіть загальний факт — розподілиться по годинах (пропорційно плану)"
                     className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
                   />
@@ -1003,7 +926,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                     value={totals.planGosti || ""}
                     onChange={(e) => handleTotalPlanChange("planGosti", e.target.value)}
                     onBlur={handleSave}
-                    disabled={!canEdit || isAggregateView}
+                    disabled={!canEdit || isAggregateView || loading || dataLoadError || fetchingFact}
                     title="Введіть загальний план — розподілиться по годинах автоматично"
                     className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
                   />
@@ -1011,10 +934,10 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                 <td className="px-1.5 py-1.5 text-right">
                   <input
                     type="number"
-                    value={totals.factGosti || ""}
+                    value={totals.factGosti ?? ""}
                     onChange={(e) => handleTotalFactChange("factGosti", e.target.value)}
                     onBlur={handleSave}
-                    disabled={!canEdit || isAggregateView}
+                    disabled={!canEdit || isAggregateView || loading || dataLoadError || fetchingFact}
                     title="Введіть загальний факт — розподілиться по годинах (пропорційно плану)"
                     className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
                   />
@@ -1026,13 +949,13 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                     value={averageCheck(totals.planTo, totals.planGosti) || ""}
                     onChange={(e) => handleTotalPlanAvgCheckChange(e.target.value)}
                     onBlur={handleSave}
-                    disabled={!canEdit || isAggregateView}
+                    disabled={!canEdit || isAggregateView || loading || dataLoadError || fetchingFact}
                     title="Введіть плановий сер. чек — план ТО перерахується та розподілиться по годинах"
                     className="w-full min-w-0 rounded border border-amber-300 bg-white px-1.5 py-1 text-right text-xs font-semibold text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
                   />
                 </td>
-                <td className="px-1.5 py-1.5 text-right">{formatNumber(averageCheck(totals.factTo, totals.factGosti))}</td>
-                <td className={`px-1.5 py-1.5 text-right ${deviationCellClass(deviationPct(averageCheck(totals.factTo, totals.factGosti), averageCheck(totals.planTo, totals.planGosti)))}`}>{formatPct(deviationPct(averageCheck(totals.factTo, totals.factGosti), averageCheck(totals.planTo, totals.planGosti)))}</td>
+                <td className="px-1.5 py-1.5 text-right">{formatNumber(factAverageCheck(totals))}</td>
+                <td className={`px-1.5 py-1.5 text-right ${deviationCellClass(deviationPct(factAverageCheck(totals), averageCheck(totals.planTo, totals.planGosti)))}`}>{formatPct(deviationPct(factAverageCheck(totals), averageCheck(totals.planTo, totals.planGosti)))}</td>
                 <td className="px-1.5 py-1.5"></td>
               </tr>
               {tableHours.map((hour) => {
@@ -1042,19 +965,19 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                 const planGosti = toNumber(row.planGosti);
                 const factGosti = toNumber(row.factGosti);
                 const planCheck = averageCheck(planTo, planGosti);
-                const factCheck = averageCheck(factTo, factGosti);
+                const factCheck = factAverageCheck(row);
                 // % рахуємо по цій самій годині (факт/план цієї години), без накопичення.
-                const toPct = deviationPct(factTo, planTo);
-                const gostiPct = deviationPct(factGosti, planGosti);
+                const toPct = deviationPct(row.factTo == null || row.factTo === "" ? null : factTo, planTo);
+                const gostiPct = deviationPct(row.factGosti == null || row.factGosti === "" ? null : factGosti, planGosti);
                 const checkPct = deviationPct(factCheck, planCheck);
                 const cellInput = (field) => (
                   <td key={field} className="px-1 py-1 text-right">
                     <input
                       type="number"
-                      value={row[field]}
+                      value={row[field] ?? ""}
                       onChange={(e) => handleFieldChange(hour, field, e.target.value)}
                       onBlur={handleSave}
-                      disabled={!canEdit || isAggregateView}
+                      disabled={!canEdit || isAggregateView || loading || dataLoadError || fetchingFact}
                       className="w-full min-w-0 rounded border border-slate-200 bg-white px-1.5 py-1 text-right text-xs text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
                     />
                   </td>
@@ -1078,7 +1001,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
                         value={row.weather}
                         onChange={(e) => handleFieldChange(hour, "weather", e.target.value)}
                         onBlur={handleSave}
-                        disabled={!canEdit || isAggregateView}
+                        disabled={!canEdit || isAggregateView || loading || dataLoadError || fetchingFact}
                         placeholder="—"
                         className="w-full min-w-0 rounded border border-slate-200 bg-white px-1.5 py-1 text-center text-xs text-slate-900 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-slate-50"
                       />

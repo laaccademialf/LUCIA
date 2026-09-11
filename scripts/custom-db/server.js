@@ -1,4 +1,6 @@
 import http from "node:http";
+import { groupServioSales, mergeServioFactHours } from "../../src/utils/salesFacts.js";
+import { createServioSalesJobs } from "../servioSalesJobs.js";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -2448,8 +2450,13 @@ const scheduleViksoftDailySync = () => {
 };
 
 // ---- Servio: щоденний імпорт факту продажів по всіх ресторанах ----
-// Погодинні ключі шаблону планування (08:00..23:00), як у SalesPlanningModule.
-const SERVIO_SALES_HOURS = Array.from({ length: 16 }, (_, i) => `${String(i + 8).padStart(2, "0")}:00:00`);
+const servioSalesJobs = createServioSalesJobs({
+  run: async (params) => {
+    await ensureServioRuntimeConfigLoaded();
+    const { fetchServioHourlySales } = await import("../servioApi.js");
+    return fetchServioHourlySales(params);
+  },
+});
 
 let servioDailySyncRunning = false;
 const runServioDailySync = async ({ date, force } = {}) => {
@@ -2497,39 +2504,17 @@ const runServioDailySync = async ({ date, force } = {}) => {
       return { ok: false, error: e?.message || String(e) };
     }
 
-    // Групуємо факт по BaseExternalID → година → {factTo, factGosti}.
-    const byCode = new Map();
-    for (const row of rows) {
-      const code = String(row.baseExternalId);
-      const key = `${String(row.hourTo).padStart(2, "0")}:00:00`;
-      if (!byCode.has(code)) byCode.set(code, {});
-      byCode.get(code)[key] = {
-        factTo: row.totalSales ? String(Math.round(row.totalSales)) : "",
-        factGosti: row.guestCount ? String(row.guestCount) : "",
-      };
-    }
-
-    const emptyRow = () => ({ planTo: "", factTo: "", planGosti: "", factGosti: "", weather: "" });
+    const groupedFacts = groupServioSales(rows);
     let okCount = 0;
     let errCount = 0;
     for (const { restaurantId, restCode } of pairs) {
       try {
-        const byHour = byCode.get(String(restCode)) || {};
+        const byHour = groupedFacts.get(`${restCode}__${reportDate}`) || {};
         const docId = `${restaurantId}__${reportDate}`;
-        const existing = await getCollectionItemData("salesHourlyPlans", docId, dbConfig).catch(() => null);
+        const existing = await getCollectionItemData("salesHourlyPlans", docId, dbConfig);
         const existingHours = (existing?.hours && typeof existing.hours === "object") ? existing.hours : {};
 
-        // Оновлюємо ЛИШЕ факт, зберігаючи наявний план по кожній годині.
-        const mergedHours = { ...existingHours };
-        const hourKeys = new Set([...SERVIO_SALES_HOURS, ...Object.keys(existingHours)]);
-        for (const hourKey of hourKeys) {
-          const fact = byHour[hourKey];
-          mergedHours[hourKey] = {
-            ...(existingHours[hourKey] || emptyRow()),
-            factTo: fact ? fact.factTo : "",
-            factGosti: fact ? fact.factGosti : "",
-          };
-        }
+        const mergedHours = mergeServioFactHours(existingHours, byHour);
 
         const payload = {
           id: docId,
@@ -6479,6 +6464,11 @@ const server = http.createServer(async (req, res) => {
     if (!profile?.id) return sendJson(res, 401, { ok: false, error: "Authentication required" });
     let payload = {};
     try { payload = await parseJsonBody(req); } catch { payload = {}; }
+    if (payload?.jobId) {
+      const job = servioSalesJobs.get(profile.id, String(payload.jobId));
+      if (!job) return sendJson(res, 404, { ok: false, error: "Завдання Servio не знайдено або термін зберігання минув. Запустіть завантаження повторно." });
+      return sendJson(res, 200, { ok: true, ...job });
+    }
     const startDate = String(payload?.startDate || "").trim();
     const endDate = String(payload?.endDate || "").trim();
     const restCode = String(payload?.restCode ?? "").trim();
@@ -6486,6 +6476,11 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 400, { ok: false, error: "startDate та endDate обовʼязкові" });
     }
     try {
+      if (payload?.async === true) {
+        const job = servioSalesJobs.start(profile.id, { startDate, endDate, restCode });
+        return sendJson(res, 202, { ok: true, ...job });
+      }
+      await ensureServioRuntimeConfigLoaded();
       const { fetchServioHourlySales } = await import("../servioApi.js");
       const rows = await fetchServioHourlySales({ startDate, endDate, restCode });
       return sendJson(res, 200, { ok: true, rows });

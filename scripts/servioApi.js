@@ -11,6 +11,8 @@
 // Драйвер `mssql` (tedious) підвантажується ліниво — якщо пакет не встановлено,
 // повертаємо зрозумілу помилку з інструкцією.
 
+import process from "node:process";
+
 const DEFAULT_PORT = 1433;
 const DEFAULT_DATABASE = "Loyalty";
 const REQUEST_TIMEOUT_MS = Math.max(
@@ -96,6 +98,7 @@ const buildConnectionConfig = (cfg) => ({
     encrypt: String(process.env.SERVIO_ENCRYPT || "false").trim().toLowerCase() === "true",
     trustServerCertificate: String(process.env.SERVIO_TRUST_CERT || "true").trim().toLowerCase() !== "false",
     enableArithAbort: true,
+    useUTC: true,
   },
   pool: { max: 4, min: 0, idleTimeoutMillis: 30000 },
 });
@@ -160,7 +163,9 @@ const toDate = (value, endOfDay) => {
   if (!/\d{2}:\d{2}/.test(iso)) {
     iso = `${iso} ${endOfDay ? "23:59:59" : "00:00:00"}`;
   }
-  const d = new Date(iso.replace(" ", "T"));
+  // SQL datetime не містить часового поясу. Передаємо ті самі календарні
+  // компоненти через UTC, незалежно від TZ сервера застосунку.
+  const d = new Date(`${iso.replace(" ", "T")}Z`);
   if (Number.isNaN(d.getTime())) throw new Error(`Некоректна дата: ${value}`);
   return d;
 };
@@ -170,6 +175,7 @@ const toDate = (value, endOfDay) => {
 export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = {}, override) => {
   const start = toDate(startDate, false);
   const end = toDate(endDate, true);
+  if (start > end) throw new Error("Дата початку пізніша за дату завершення");
   const rest = String(restCode ?? "").trim();
 
   const rows = await withConnection(override, async (pool, sql) => {
@@ -178,23 +184,7 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
     request.input("EndDate", sql.DateTime, end);
     request.input("RestCode", sql.NVarChar(sql.MAX), rest);
     const r = await request.query(`
-;WITH BillItems AS
-(
-    -- Ознака NotPayer визначається через оплату позицій конкретного чека.
-    SELECT
-        BI.BaseExternalID,
-        BI.BillID,
-        PM.NotPayer
-    FROM tbBillItem_ BI WITH (NOLOCK INDEX(PK_tbBillItem_))
-    LEFT JOIN dbo.tbBillItemPayment_ BP
-        ON BP.ItemID = BI.ID
-        AND BP.BaseExternalID = BI.BaseExternalID
-    LEFT JOIN report.tbCommonPaymentType PM WITH (NOLOCK)
-        ON PM.PaymentTypeID = BP.PaymentID
-        AND PM.BaseExternalID = BP.BaseExternalID
-    GROUP BY BI.BaseExternalID, BI.BillID, PM.NotPayer
-),
-Bills AS
+;WITH Bills AS
 (
     -- Повторює погодинний розподіл із погодженого аналітичного звіту.
     SELECT
@@ -204,7 +194,6 @@ Bills AS
         B.Number AS BillNumber,
         B.Closed AS BillClosed,
         CONVERT(date, B.Closed) AS BillClosedDate,
-        CONVERT(date, B.Opened) AS BillOpenedDate,
         CASE
           WHEN CONVERT(date, B.Opened) > CONVERT(date, B.Closed)
             THEN CONVERT(date, B.Opened)
@@ -217,12 +206,8 @@ Bills AS
         END AS ReportHour,
         B.Total,
         CASE WHEN B.GuestCount IS NULL OR B.GuestCount = 0 THEN 1 ELSE B.GuestCount END AS GuestCount,
-        ISNULL(B.ChildCount, 0) AS ChildCount,
-        BI.NotPayer
-      FROM tbBill_ B WITH (NOLOCK)
-    INNER JOIN BillItems BI
-        ON BI.BaseExternalID = B.BaseExternalID
-        AND BI.BillID = B.ID
+        ISNULL(B.ChildCount, 0) AS ChildCount
+      FROM tbBill_ B
     INNER JOIN report.fnGetReportUserBaseExternal(1000) CBE
         ON CBE.BaseExternalID = B.BaseExternalID
     WHERE B.Opened BETWEEN @StartDate AND @EndDate
@@ -231,11 +216,24 @@ Bills AS
         NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
         OR ',' + REPLACE(@RestCode, ' ', '') + ',' LIKE '%,' + CAST(B.BaseExternalID AS nvarchar(50)) + ',%'
       )
-      AND BI.NotPayer = 0
+      -- Еквівалент GROUP BY (BaseExternalID, BillID, NotPayer) + NotPayer=0:
+      -- перевіряємо наявність платної позиції, не множачи суму чека на позиції.
+      -- Пошук обмежений чеками вибраного періоду й ресторану.
+      AND EXISTS (
+        SELECT 1
+        FROM tbBillItem_ BI WITH (NOLOCK)
+        INNER JOIN dbo.tbBillItemPayment_ BP
+          ON BP.ItemID = BI.ID AND BP.BaseExternalID = BI.BaseExternalID
+        INNER JOIN report.tbCommonPaymentType PM WITH (NOLOCK)
+          ON PM.PaymentTypeID = BP.PaymentID AND PM.BaseExternalID = BP.BaseExternalID
+        WHERE BI.BaseExternalID = B.BaseExternalID
+          AND BI.BillID = B.ID
+          AND PM.NotPayer = 0
+      )
 )
 SELECT
     CONVERT(char(10), ReportDate, 23) AS ReportDate,
-    CONVERT(char(10), BillOpenedDate, 23) AS BillOpenedDate,
+    CONVERT(char(10), BillClosedDate, 23) AS BillClosedDate,
     BaseExternalID,
     BaseExternalName,
     ReportHour AS HourFrom,
@@ -247,15 +245,16 @@ SELECT
     SUM(Total) / NULLIF(COUNT(*), 0) AS AverageBill
 FROM Bills
 WHERE ReportDate < CAST(DATEADD(day, 1, @EndDate) AS date)
-GROUP BY ReportDate, BillOpenedDate, BaseExternalID, BaseExternalName, ReportHour
-ORDER BY ReportDate, BaseExternalID, ReportHour;
+GROUP BY ReportDate, BillClosedDate, BaseExternalID, BaseExternalName, ReportHour
+ORDER BY ReportDate, BaseExternalID, ReportHour
+OPTION (RECOMPILE);
     `);
     return r?.recordset || [];
   });
 
   return rows.map((row) => ({
     date: String(row.ReportDate || "").slice(0, 10),
-    openedDate: String(row.BillOpenedDate || "").slice(0, 10),
+    closedDate: String(row.BillClosedDate || "").slice(0, 10),
     baseExternalId: row.BaseExternalID,
     baseExternalName: String(row.BaseExternalName || "").trim(),
     hourFrom: Number(row.HourFrom),
