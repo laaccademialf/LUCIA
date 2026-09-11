@@ -35,16 +35,34 @@ describe("імпорт факту Servio", () => {
 });
 
 describe("підсумки план/факт", () => {
-  it("рахує середній чек за кількістю чеків, зважено по всіх годинах та закладах", () => {
-    const total = sumSalesRows([{ factTo: "100", factGosti: "10", factBillCount: "2" }, { factTo: "900", factGosti: "20", factBillCount: "3" }]);
+  it("ділить оборот на гостей, зважено по всіх годинах, днях та закладах", () => {
+    const rows = [{ factTo: "100", factGosti: "10", factBillCount: "2" }, { factTo: "900", factGosti: "20", factBillCount: "3" }];
+    const total = sumSalesRows(rows);
     expect(total.factGosti).toBe(30);
-    expect(factAverageCheck(total)).toBe(200);
+    expect(factAverageCheck(rows[0])).toBe(10);
+    expect(factAverageCheck(total)).toBeCloseTo(1000 / 30);
+    expect(factAverageCheck(sumSalesRows(rows.map((r) => sumSalesRows([r]))))).toBeCloseTo(1000 / 30);
   });
 
-  it("не видає старі дані без кількості чеків за достовірний середній чек", () => {
-    const total = sumSalesRows([{ factTo: "100", factGosti: "5" }, { factTo: "900", factBillCount: "3" }]);
-    expect(factAverageCheck(total)).toBeNull();
-    expect(factAverageCheck(sumSalesRows([total]))).toBeNull();
+  it("рахує старі та вручну введені дані без кількості чеків", () => {
+    const total = sumSalesRows([{ factTo: "100", factGosti: "5" }, { factTo: "900", factGosti: "15", factBillCount: "3" }]);
+    expect(factAverageCheck(total)).toBe(50);
+    expect(factAverageCheck(sumSalesRows([total]))).toBe(50);
+  });
+
+  it("виправляє місячний підсумок зі звіту: 6 083 350 / 3 715", () => {
+    const average = factAverageCheck({ factTo: "6083350", factGosti: "3715", factBillCount: "2388" });
+    expect(average).toBeCloseTo(1637.510094);
+    expect(Math.round(average)).toBe(1638);
+    expect(factAverageCheck({ factTo: "100,25", factGosti: "2" })).toBe(50.125);
+  });
+
+  it("показує відсутнє значення без гостей або обороту, але зберігає підтверджений нуль", () => {
+    for (const factGosti of [0, "", null, undefined]) {
+      expect(factAverageCheck({ factTo: "100", factGosti, factBillCount: "2" })).toBeNull();
+    }
+    expect(factAverageCheck({ factTo: "", factGosti: "2" })).toBeNull();
+    expect(factAverageCheck({ factTo: "0", factGosti: "2" })).toBe(0);
   });
 
   it("розрізняє відсутній факт і підтверджений нуль", () => {

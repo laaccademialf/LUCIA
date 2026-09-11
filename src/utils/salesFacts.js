@@ -26,9 +26,10 @@ export const sumSalesRows = (rows) => {
   return total;
 };
 
-// Середній чек Servio = SUM(Total) / COUNT(*), а не продажі / гості.
-export const factAverageCheck = (row) => salesNumber(row?.factBillCount) > 0
-  ? salesNumber(row.factTo) / salesNumber(row.factBillCount)
+// У план/факті середній чек = оборот / гості. Для підсумків передаємо
+// суми обороту й гостей, щоб години, дні та заклади мали правильну вагу.
+export const factAverageCheck = (row) => hasValue(row?.factTo) && salesNumber(row?.factGosti) > 0
+  ? salesNumber(row.factTo) / salesNumber(row.factGosti)
   : null;
 
 export const groupServioSales = (rows) => {
