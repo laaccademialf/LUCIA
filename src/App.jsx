@@ -1898,6 +1898,16 @@ function App() {
     if (!dashboardScheduleHours.includes(dashboardHourFilter)) setDashboardHourFilter("");
   }, [dashboardScheduleHours, dashboardHourFilter]);
 
+  // Індекс замість повного проходу історії для кожної дати й закладу.
+  const salesPlansByRestaurantDate = useMemo(() => {
+    const index = new Map();
+    for (const plan of salesHourlyPlans) {
+      const key = `${String(plan?.restaurantId || "")}__${String(plan?.date || "").slice(0, 10)}`;
+      if (!index.has(key)) index.set(key, plan);
+    }
+    return index;
+  }, [salesHourlyPlans]);
+
   // Огляд плану/факту продажів (ТО, гості, середній чек) за обрані заклад/період/час — сума по всіх днях періоду.
   const salesOverview = useMemo(() => {
     const targetDates = getDatesInRange(electricityOverview.fromIso, electricityOverview.toIso);
@@ -1917,9 +1927,7 @@ function App() {
       for (const targetIso of targetDates) {
         const hoursForRestaurant = getDashboardScheduleHours(r?.schedule, targetIso)
           .filter((hour) => cutoffHour === null || Number(hour.split(":")[0]) <= cutoffHour);
-        const rec = salesHourlyPlans.find(
-          (item) => String(item?.restaurantId || "") === String(r.id) && String(item?.date || "").slice(0, 10) === targetIso
-        );
+        const rec = salesPlansByRestaurantDate.get(`${r.id}__${targetIso}`);
         const hours = rec?.hours && typeof rec.hours === "object" ? rec.hours : {};
         for (const hour of hoursForRestaurant) {
           const row = hours[hour] || {};
@@ -1955,7 +1963,7 @@ function App() {
       pctGosti: pctVsPlan(totals.factGosti, totals.planGosti),
       pctCheck: pctVsPlan(factCheck, planCheck),
     };
-  }, [salesHourlyPlans, restaurants, dashboardRestaurantFilter, dashboardHourFilter, electricityOverview.fromIso, electricityOverview.toIso]);
+  }, [salesPlansByRestaurantDate, restaurants, dashboardRestaurantFilter, dashboardHourFilter, electricityOverview.fromIso, electricityOverview.toIso]);
 
   // Прогнозний звіт продажів за обраний період: факт минулого року (той самий місяць),
   // факт попереднього місяця, опер. план, прогноз і факт до поточної дати — по кожному закладу.
@@ -1994,10 +2002,7 @@ function App() {
     const pyDates = getMonthDates(shift(toIso, { years: -1 }));
     const pmDates = getMonthDates(shift(toIso, { months: -1 }));
 
-    const recFor = (rid, iso) =>
-      salesHourlyPlans.find(
-        (x) => String(x?.restaurantId || "") === String(rid) && String(x?.date || "").slice(0, 10) === iso
-      );
+    const recFor = (rid, iso) => salesPlansByRestaurantDate.get(`${rid}__${iso}`);
 
     // Сума метрики (план або факт) по днях діапазону для закладу.
     const sumMetric = (rid, dates, kind) => {
@@ -2074,7 +2079,7 @@ function App() {
     );
 
     return { fromIso, toIso, perRestaurant, total, lastFactIso };
-  }, [salesHourlyPlans, restaurants, dashboardRestaurantFilter, electricityOverview.fromIso, electricityOverview.toIso]);
+  }, [salesPlansByRestaurantDate, restaurants, dashboardRestaurantFilter, electricityOverview.fromIso, electricityOverview.toIso]);
 
   const menuStructureForPermissions = useMemo(() => {
     // Базова структура навігації
