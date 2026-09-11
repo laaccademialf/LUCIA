@@ -178,54 +178,25 @@ export const fetchServioHourlySales = async ({ startDate, endDate, restCode } = 
     request.input("EndDate", sql.DateTime, end);
     request.input("RestCode", sql.NVarChar(sql.MAX), rest);
     const r = await request.query(`
-;WITH EligibleRestaurants AS
+;WITH BillItems AS
 (
-  -- Один рядок на ресторан: фільтр NotPayer не дублює чеки й не виконується
-  -- окремо для кожного чека.
-  SELECT DISTINCT PM.BaseExternalID
-  FROM report.tbCommonPaymentType PM WITH (NOLOCK)
-  WHERE PM.NotPayer = 0
-),
-FilteredBills AS
-(
-    -- У дохід потрапляють тільки закриті чеки за датою їх закриття.
-    -- Завдяки цьому наступний CTE не сканує всі позиції чеків у Loyalty.
-    SELECT
-        B.BaseExternalID,
-        B.ID,
-        B.Number,
-        B.Opened,
-        B.Closed,
-        B.GuestCount,
-        B.ChildCount
-    FROM tbBill_ B WITH (NOLOCK)
-    INNER JOIN EligibleRestaurants ER
-      ON ER.BaseExternalID = B.BaseExternalID
-    WHERE B.Closed BETWEEN @StartDate AND @EndDate
-      AND
-      (
-        NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
-        OR ',' + REPLACE(@RestCode, ' ', '') + ',' LIKE '%,' + CAST(B.BaseExternalID AS nvarchar(50)) + ',%'
-      )
-),
-BillItems AS
-(
-    -- Агрегуємо позиції тільки для вже відібраних чеків за період.
+    -- Ознака NotPayer визначається через оплату позицій конкретного чека.
     SELECT
         BI.BaseExternalID,
         BI.BillID,
-        SUM(BI.Total) AS Total,
-        MAX(BI.EnterpriseID) AS EnterpriseID
+        PM.NotPayer
     FROM tbBillItem_ BI WITH (NOLOCK INDEX(PK_tbBillItem_))
-    INNER JOIN FilteredBills B
-      ON B.BaseExternalID = BI.BaseExternalID
-      AND B.ID = BI.BillID
-    WHERE BI.ItemState <> 2
-    GROUP BY BI.BaseExternalID, BI.BillID
+    LEFT JOIN dbo.tbBillItemPayment_ BP
+        ON BP.ItemID = BI.ID
+        AND BP.BaseExternalID = BI.BaseExternalID
+    LEFT JOIN report.tbCommonPaymentType PM WITH (NOLOCK)
+        ON PM.PaymentTypeID = BP.PaymentID
+        AND PM.BaseExternalID = BP.BaseExternalID
+    GROUP BY BI.BaseExternalID, BI.BillID, PM.NotPayer
 ),
 Bills AS
 (
-    -- Якщо Opened і Closed відрізняються, дата та година беруться з Closed.
+    -- Повторює погодинний розподіл із погодженого аналітичного звіту.
     SELECT
         B.BaseExternalID,
         CBE.BaseExternalName,
@@ -235,41 +206,55 @@ Bills AS
         CONVERT(date, B.Closed) AS BillClosedDate,
         CONVERT(date, B.Opened) AS BillOpenedDate,
         CASE
-          WHEN B.Opened <> B.Closed
+          WHEN CONVERT(date, B.Opened) > CONVERT(date, B.Closed)
+            THEN CONVERT(date, B.Opened)
+          ELSE CONVERT(date, B.Closed)
+        END AS ReportDate,
+        CASE
+          WHEN CONVERT(date, B.Opened) > CONVERT(date, B.Closed)
             THEN DATEPART(HOUR, B.Closed)
           ELSE DATEPART(HOUR, B.Opened)
-        END AS EffectiveHour,
-        BI.Total,
+        END AS ReportHour,
+        B.Total,
         CASE WHEN B.GuestCount IS NULL OR B.GuestCount = 0 THEN 1 ELSE B.GuestCount END AS GuestCount,
-        ISNULL(B.ChildCount, 0) AS ChildCount
-    FROM FilteredBills B
+        ISNULL(B.ChildCount, 0) AS ChildCount,
+        BI.NotPayer
+      FROM tbBill_ B WITH (NOLOCK)
     INNER JOIN BillItems BI
         ON BI.BaseExternalID = B.BaseExternalID
         AND BI.BillID = B.ID
     INNER JOIN report.fnGetReportUserBaseExternal(1000) CBE
         ON CBE.BaseExternalID = B.BaseExternalID
+    WHERE B.Opened BETWEEN @StartDate AND @EndDate
+      AND
+      (
+        NULLIF(LTRIM(RTRIM(@RestCode)), '') IS NULL
+        OR ',' + REPLACE(@RestCode, ' ', '') + ',' LIKE '%,' + CAST(B.BaseExternalID AS nvarchar(50)) + ',%'
+      )
+      AND BI.NotPayer = 0
 )
 SELECT
-  CONVERT(char(10), BillClosedDate, 23) AS BillClosedDate,
-  CONVERT(char(10), BillOpenedDate, 23) AS BillOpenedDate,
+    CONVERT(char(10), ReportDate, 23) AS ReportDate,
+    CONVERT(char(10), BillOpenedDate, 23) AS BillOpenedDate,
     BaseExternalID,
     BaseExternalName,
-  EffectiveHour AS HourFrom,
-  EffectiveHour + 1 AS HourTo,
+    ReportHour AS HourFrom,
+    ReportHour + 1 AS HourTo,
     COUNT(*) AS BillCount,
     SUM(Total) AS TotalSales,
     SUM(GuestCount) AS GuestCount,
     SUM(ChildCount) AS ChildCount,
     SUM(Total) / NULLIF(COUNT(*), 0) AS AverageBill
 FROM Bills
-GROUP BY BillClosedDate, BillOpenedDate, BaseExternalID, BaseExternalName, EffectiveHour
-ORDER BY BillClosedDate, BaseExternalID, EffectiveHour;
+WHERE ReportDate < CAST(DATEADD(day, 1, @EndDate) AS date)
+GROUP BY ReportDate, BillOpenedDate, BaseExternalID, BaseExternalName, ReportHour
+ORDER BY ReportDate, BaseExternalID, ReportHour;
     `);
     return r?.recordset || [];
   });
 
   return rows.map((row) => ({
-    date: String(row.BillClosedDate || "").slice(0, 10),
+    date: String(row.ReportDate || "").slice(0, 10),
     openedDate: String(row.BillOpenedDate || "").slice(0, 10),
     baseExternalId: row.BaseExternalID,
     baseExternalName: String(row.BaseExternalName || "").trim(),
