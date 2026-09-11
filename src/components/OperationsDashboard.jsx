@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { BarChart3, TrendingDown, TrendingUp } from "lucide-react";
 import DashboardGroupLabel from "./DashboardGroupLabel";
-import { groupDashboardRows, visibleDashboardRows, indexDashboardSales, indexDashboardEnergy } from "../utils/dashboardData.js";
+import { groupDashboardRows, visibleDashboardRows, indexDashboardSales, indexDashboardEnergy, buildDashboardSalesForecast } from "../utils/dashboardData.js";
 import DateRangePickerPopover from "./DateRangePickerPopover";
 import { isCollectionsApiEnabled, listCollectionItemsApi } from "../api/collectionsApi.js";
 
@@ -77,6 +77,7 @@ const fmtPct = (pct) => {
 const ukMonthsGen = ["січень", "лютий", "березень", "квітень", "травень", "червень", "липень", "серпень", "вересень", "жовтень", "листопад", "грудень"];
 const monthLabel = (iso, deltaYears = 0, deltaMonths = 0) => {
   const d = new Date(`${String(iso)}T00:00:00`);
+  d.setDate(1);
   if (deltaYears) d.setFullYear(d.getFullYear() + deltaYears);
   if (deltaMonths) d.setMonth(d.getMonth() + deltaMonths);
   const name = ukMonthsGen[d.getMonth()] || "";
@@ -413,7 +414,7 @@ function OperationsDashboard({ restaurants, isAdmin, userId }) {
   }, [salesPlansByRestaurantDate, restaurants, dashboardRestaurantFilter, dashboardHourFilter, electricityOverview.fromIso, electricityOverview.toIso]);
 
   // Прогнозний звіт продажів за обраний період: факт минулого року (той самий місяць),
-  // факт попереднього місяця, опер. план, прогноз і факт до поточної дати — по кожному закладу.
+  // факт попереднього місяця, опер. план, прогноз і факт за обрані дати — по кожному закладу.
   const salesForecast = useMemo(() => {
     if (!showSalesSummaryModal) return null;
     const fromIso = electricityOverview.fromIso;
@@ -423,93 +424,7 @@ function OperationsDashboard({ restaurants, isAdmin, userId }) {
       ? restaurants.filter((r) => String(r?.id || "") === targetRestaurantId)
       : restaurants;
 
-    // Зсув ISO-дати на роки/місяці (для порівняльних періодів).
-    const shift = (iso, { years = 0, months = 0 }) => {
-      const d = new Date(`${iso}T00:00:00`);
-      if (years) d.setFullYear(d.getFullYear() + years);
-      if (months) d.setMonth(d.getMonth() + months);
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const da = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${da}`;
-    };
-
-    const getMonthDates = (iso) => {
-      const [year, month] = String(iso || "").slice(0, 7).split("-").map(Number);
-      if (!year || !month) return [];
-      const lastDay = new Date(year, month, 0).getDate();
-      const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
-      const monthEnd = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
-      return getDatesInRange(monthStart, monthEnd);
-    };
-
-    // Прогноз завжди охоплює весь місяць обраної дати, не лише поточний
-    // dashboard-діапазон. Так факт до сьогодні доповнюється планом до кінця місяця.
-    const curDates = getMonthDates(toIso);
-    const pyDates = getMonthDates(shift(toIso, { years: -1 }));
-    const pmDates = getMonthDates(shift(toIso, { months: -1 }));
-
-    const recFor = (rid, iso) => salesPlansByRestaurantDate.get(`${rid}__${iso}`);
-
-    // Сума метрики (план або факт) по днях діапазону для закладу.
-    const sumMetric = (rid, dates, kind) => {
-      let to = 0;
-      let gosti = 0;
-      for (const iso of dates) {
-        const rec = recFor(rid, iso);
-        to += rec?.totals[kind].to || 0;
-        gosti += rec?.totals[kind].gosti || 0;
-      }
-      return { to, gosti };
-    };
-
-    // Дні з фактом (для «факт до дати» та визначення залишкових днів для прогнозу).
-    const factByDay = (rid, dates) => {
-      const out = [];
-      for (const iso of dates) {
-        const rec = recFor(rid, iso);
-        const { to = 0, gosti = 0 } = rec?.totals.fact || {};
-        if (to > 0 || gosti > 0) out.push({ iso, to, gosti });
-      }
-      return out;
-    };
-
-    const perRestaurant = list.map((r) => {
-      const rid = r.id;
-      const opPlan = sumMetric(rid, curDates, "plan");
-      const py = sumMetric(rid, pyDates, "fact");
-      const pm = sumMetric(rid, pmDates, "fact");
-      const factDays = factByDay(rid, curDates);
-      const factToDate = factDays.reduce(
-        (a, b) => ({ to: a.to + b.to, gosti: a.gosti + b.gosti }),
-        { to: 0, gosti: 0 }
-      );
-      const lastFactIso = factDays.length ? factDays[factDays.length - 1].iso : null;
-      // Прогноз = факт до останнього дня з даними + план на дні, що залишилися.
-      const remainingDates = curDates.filter((iso) => (lastFactIso ? iso > lastFactIso : true));
-      const remPlan = sumMetric(rid, remainingDates, "plan");
-      const forecast = { to: factToDate.to + remPlan.to, gosti: factToDate.gosti + remPlan.gosti };
-      return { id: rid, name: r.name || r.regNumber || "—", opPlan, py, pm, factToDate, forecast, lastFactIso };
-    });
-
-    const acc = (sel) =>
-      perRestaurant.reduce(
-        (a, r) => ({ to: a.to + sel(r).to, gosti: a.gosti + sel(r).gosti }),
-        { to: 0, gosti: 0 }
-      );
-    const total = {
-      opPlan: acc((r) => r.opPlan),
-      py: acc((r) => r.py),
-      pm: acc((r) => r.pm),
-      factToDate: acc((r) => r.factToDate),
-      forecast: acc((r) => r.forecast),
-    };
-    const lastFactIso = perRestaurant.reduce(
-      (mx, r) => (r.lastFactIso && (!mx || r.lastFactIso > mx) ? r.lastFactIso : mx),
-      null
-    );
-
-    return { fromIso, toIso, perRestaurant, total, lastFactIso };
+    return buildDashboardSalesForecast(salesPlansByRestaurantDate, list, fromIso, toIso);
   }, [salesPlansByRestaurantDate, restaurants, dashboardRestaurantFilter, electricityOverview.fromIso, electricityOverview.toIso, showSalesSummaryModal]);
 
   const salesGroups = useMemo(() => groupDashboardRows(
@@ -905,7 +820,7 @@ function OperationsDashboard({ restaurants, isAdmin, userId }) {
                 const lblPy = monthLabel(ov.toIso, -1);
                 const lblPm = monthLabel(ov.toIso, 0, -1);
                 const lblCur = monthLabel(ov.toIso);
-                const factToLabel = sf.lastFactIso ? `Факт по ${fmtDateUk(sf.lastFactIso)} включно` : "Факт (поточний)";
+                const factToLabel = `Факт за ${fmtDateRangeUk(sf.fromIso, sf.toIso)} включно`;
                 const rows = salesRows;
                 const t = sf.total;
                 const cell = (val) => fmtMetric(val, metric);
@@ -980,7 +895,7 @@ function OperationsDashboard({ restaurants, isAdmin, userId }) {
                         </tbody>
                       </table>
                       <p className="mt-2 text-[11px] text-slate-500">
-                        Прогноз = факт за дні з даними + опер. план на дні, що залишилися до кінця періоду.
+                        Прогноз на місяць = факт від початку місяця до обраної кінцевої дати + план після останнього дня з фактом до кінця місяця.
                       </p>
                     </div>
 
@@ -1015,7 +930,7 @@ function OperationsDashboard({ restaurants, isAdmin, userId }) {
                         );
                       })}
                       <p className="text-[11px] text-slate-500">
-                        Прогноз = факт за дні з даними + опер. план на дні, що залишилися.
+                        Прогноз на місяць = факт до обраної кінцевої дати + план після останнього дня з фактом до кінця місяця.
                       </p>
                     </div>
                   </>

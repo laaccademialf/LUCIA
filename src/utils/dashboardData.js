@@ -39,6 +39,63 @@ export const indexDashboardSales = (plans) => {
   return index;
 };
 
+const monthDates = (iso, offset = 0) => {
+  const [year, month] = iso.split("-").map(Number);
+  // Зсуваємо перший день місяця: 31 березня має порівнюватись із лютим.
+  const start = new Date(Date.UTC(year, month - 1 + offset, 1));
+  const lastDay = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0)).getUTCDate();
+  const prefix = start.toISOString().slice(0, 7);
+  return Array.from({ length: lastDay }, (_, day) => `${prefix}-${String(day + 1).padStart(2, "0")}`);
+};
+
+export const buildDashboardSalesForecast = (index, restaurants, fromIso, toIso) => {
+  const curDates = monthDates(toIso);
+  const pyDates = monthDates(toIso, -12);
+  const pmDates = monthDates(toIso, -1);
+  const selectedDates = [];
+  const cursor = new Date(`${fromIso}T00:00:00Z`);
+  const end = new Date(`${toIso}T00:00:00Z`);
+  while (cursor <= end && selectedDates.length < 3660) {
+    selectedDates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  // Прогноз залишається місячним, але не використовує факт після дати фільтра.
+  const monthFactDates = curDates.filter((iso) => iso <= toIso);
+  const sumMetric = (rid, dates, kind) => dates.reduce((total, iso) => {
+    const pair = index.get(`${rid}__${iso}`)?.totals[kind];
+    total.to += pair?.to || 0;
+    total.gosti += pair?.gosti || 0;
+    return total;
+  }, { to: 0, gosti: 0 });
+
+  const perRestaurant = restaurants.map((r) => {
+    const factDates = monthFactDates.filter((iso) => {
+      const pair = index.get(`${r.id}__${iso}`)?.totals.fact;
+      return pair && (pair.to !== 0 || pair.gosti !== 0);
+    });
+    const lastFactIso = factDates.at(-1) || null;
+    const monthFact = sumMetric(r.id, monthFactDates, "fact");
+    const remainingDates = curDates.filter((iso) => !lastFactIso || iso > lastFactIso);
+    const remainingPlan = sumMetric(r.id, remainingDates, "plan");
+    return {
+      id: r.id,
+      name: r.name || r.regNumber || "—",
+      opPlan: sumMetric(r.id, curDates, "plan"),
+      py: sumMetric(r.id, pyDates, "fact"),
+      pm: sumMetric(r.id, pmDates, "fact"),
+      // Остання колонка відповідає ОБОМ межам періоду, включно з кінцевим днем.
+      factToDate: sumMetric(r.id, selectedDates, "fact"),
+      forecast: { to: monthFact.to + remainingPlan.to, gosti: monthFact.gosti + remainingPlan.gosti },
+      lastFactIso,
+    };
+  });
+  const total = Object.fromEntries(FORECAST_FIELDS.map((field) => [field, perRestaurant.reduce(
+    (sum, row) => ({ to: sum.to + row[field].to, gosti: sum.gosti + row[field].gosti }),
+    { to: 0, gosti: 0 }
+  )]));
+  return { fromIso, toIso, perRestaurant, total };
+};
+
 // Групуємо лише вже дозволені/відфільтровані рядки. Довідник визначає назву
 // напряму, а підсумки рахуються із сум; відсотки та середній чек не додаються.
 export const groupDashboardRows = (rows, restaurants, kind) => {

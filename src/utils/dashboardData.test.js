@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupDashboardRows, indexDashboardEnergy, indexDashboardSales, visibleDashboardRows } from "./dashboardData.js";
+import { buildDashboardSalesForecast, groupDashboardRows, indexDashboardEnergy, indexDashboardSales, visibleDashboardRows } from "./dashboardData.js";
 
 const restaurants = [
   { id: "a", businessUnit: "Ресторан" },
@@ -10,6 +10,61 @@ const restaurants = [
 const salesRow = (id, to, gosti) => ({
   id, name: id,
   ...Object.fromEntries(["py", "pm", "opPlan", "forecast", "factToDate"].map((key) => [key, { to, gosti }])),
+});
+
+describe("dashboard forecast date boundaries", () => {
+  const doc = (date, factTo, planTo = 0, restaurantId = "a") => ({
+    restaurantId, date,
+    hours: { "12:00:00": { factTo, factGosti: factTo / 10, planTo, planGosti: planTo / 10 } },
+  });
+  const history = [
+    doc("2026-09-01", 100), doc("2026-09-09", 200), doc("2026-09-10", 300),
+    doc("2026-09-11", 9999, 50), doc("2026-09-30", 8888, 70),
+    doc("2026-08-31", 400), doc("2025-09-30", 500), doc("2026-09-10", 99999, 0, "outside"),
+  ];
+
+  it("includes the selected final day and excludes later facts from the column and forecast", () => {
+    const result = buildDashboardSalesForecast(indexDashboardSales(history), [restaurants[0]], "2026-09-01", "2026-09-10");
+    expect(result.total.factToDate).toEqual({ to: 600, gosti: 60 });
+    expect(result.total.forecast).toEqual({ to: 720, gosti: 72 });
+    expect(result.perRestaurant[0].lastFactIso).toBe("2026-09-10");
+    expect(result.total.pm.to).toBe(400);
+    expect(result.total.py.to).toBe(500);
+    expect(result.total.opPlan.to).toBe(120);
+  });
+
+  it("respects the start date while retaining the monthly forecast", () => {
+    const index = indexDashboardSales(history);
+    const result = buildDashboardSalesForecast(index, [restaurants[0]], "2026-09-09", "2026-09-10");
+    expect(result.total.factToDate.to).toBe(500);
+    expect(result.total.forecast.to).toBe(720);
+    expect(buildDashboardSalesForecast(index, [restaurants[0]], "2026-09-10", "2026-09-10").total.factToDate.to).toBe(300);
+  });
+
+  it("handles cross-month ranges and correct comparison months on the 31st", () => {
+    const result = buildDashboardSalesForecast(indexDashboardSales([
+      doc("2026-03-31", 100), doc("2026-02-28", 200), doc("2025-03-31", 300),
+    ]), [restaurants[0]], "2026-02-28", "2026-03-31");
+    expect(result.total.factToDate.to).toBe(300);
+    expect(result.total.pm.to).toBe(200);
+    expect(result.total.py.to).toBe(300);
+  });
+
+  it("does not use future data when selected days have no facts", () => {
+    const result = buildDashboardSalesForecast(indexDashboardSales([doc("2026-09-11", 999, 100)]), [restaurants[0]], "2026-09-01", "2026-09-10");
+    expect(result.total.factToDate).toEqual({ to: 0, gosti: 0 });
+    expect(result.total.forecast.to).toBe(100);
+    expect(result.perRestaurant[0].lastFactIso).toBeNull();
+  });
+
+  it("carries the same cutoff through business direction and overall totals", () => {
+    const result = buildDashboardSalesForecast(indexDashboardSales([
+      ...history, doc("2026-09-10", 70, 0, "b"), doc("2026-09-11", 555, 0, "b"),
+    ]), restaurants.slice(0, 2), "2026-09-01", "2026-09-10");
+    const [group] = groupDashboardRows(result.perRestaurant, restaurants, "sales");
+    expect(group.factToDate).toEqual({ to: 670, gosti: 67 });
+    expect(group.factToDate).toEqual(result.total.factToDate);
+  });
 });
 
 describe("dashboard business directions", () => {
