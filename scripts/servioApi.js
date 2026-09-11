@@ -250,8 +250,8 @@ Bills AS
         ON CBE.BaseExternalID = B.BaseExternalID
 )
 SELECT
-    BillClosedDate,
-  BillOpenedDate,
+  CONVERT(char(10), BillClosedDate, 23) AS BillClosedDate,
+  CONVERT(char(10), BillOpenedDate, 23) AS BillOpenedDate,
     BaseExternalID,
     BaseExternalName,
   EffectiveHour AS HourFrom,
@@ -269,12 +269,8 @@ ORDER BY BillClosedDate, BaseExternalID, EffectiveHour;
   });
 
   return rows.map((row) => ({
-    date: row.BillClosedDate instanceof Date
-      ? row.BillClosedDate.toISOString().slice(0, 10)
-      : String(row.BillClosedDate || "").slice(0, 10),
-    openedDate: row.BillOpenedDate instanceof Date
-      ? row.BillOpenedDate.toISOString().slice(0, 10)
-      : String(row.BillOpenedDate || "").slice(0, 10),
+    date: String(row.BillClosedDate || "").slice(0, 10),
+    openedDate: String(row.BillOpenedDate || "").slice(0, 10),
     baseExternalId: row.BaseExternalID,
     baseExternalName: String(row.BaseExternalName || "").trim(),
     hourFrom: Number(row.HourFrom),
