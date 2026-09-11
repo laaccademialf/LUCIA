@@ -225,7 +225,7 @@ BillItems AS
 ),
 Bills AS
 (
-    -- День доходу береться за B.Closed, а година — за B.Opened.
+    -- Якщо Opened і Closed відрізняються, дата та година беруться з Closed.
     SELECT
         B.BaseExternalID,
         CBE.BaseExternalName,
@@ -235,7 +235,7 @@ Bills AS
         CONVERT(date, B.Closed) AS BillClosedDate,
         CONVERT(date, B.Opened) AS BillOpenedDate,
         CASE
-          WHEN CONVERT(date, B.Opened) <> CONVERT(date, B.Closed)
+          WHEN B.Opened <> B.Closed
             THEN DATEPART(HOUR, B.Closed)
           ELSE DATEPART(HOUR, B.Opened)
         END AS EffectiveHour,
