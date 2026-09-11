@@ -262,7 +262,7 @@ SELECT
     SUM(ChildCount) AS ChildCount,
     SUM(Total) / NULLIF(COUNT(*), 0) AS AverageBill
 FROM Bills
-GROUP BY BillClosedDate, BaseExternalID, BaseExternalName, EffectiveHour
+GROUP BY BillClosedDate, BillOpenedDate, BaseExternalID, BaseExternalName, EffectiveHour
 ORDER BY BillClosedDate, BaseExternalID, EffectiveHour;
     `);
     return r?.recordset || [];
