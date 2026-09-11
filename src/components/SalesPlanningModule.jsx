@@ -50,16 +50,6 @@ const getVisibleHours = (schedule, isoDate) => {
   });
 };
 
-const getFirstFactHour = (schedule, isoDate) => {
-  const dayKey = getDayKeyFromDate(isoDate);
-  const [openHour] = String(dayKey ? schedule?.[dayKey]?.from || "" : "").split(":").map(Number);
-  if (Number.isInteger(openHour)) {
-    const hour = `${String(openHour).padStart(2, "0")}:00:00`;
-    if (HOURS.includes(hour)) return hour;
-  }
-  return getVisibleHours(schedule, isoDate)[0] || HOURS[0];
-};
-
 const toIsoDate = (d) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -607,10 +597,7 @@ export default function SalesPlanningModule({ user, restaurants = [], topTab }) 
         const dateKey = String(row.date || "").slice(0, 10);
         const restaurantId = pairs.find((pair) => String(pair.restCode) === String(row.baseExternalId))?.restaurantId;
         if (!dateKey || !restaurantId) continue;
-        const restaurant = restaurantOptions.find((item) => String(item.id) === String(restaurantId));
-        const key = row.openedOnClosedDate
-          ? `${String(row.hourFrom).padStart(2, "0")}:00:00`
-          : getFirstFactHour(restaurant?.schedule, dateKey);
+        const key = `${String(row.hourFrom).padStart(2, "0")}:00:00`;
         const groupKey = `${restaurantId}__${dateKey}`;
         if (!byRestaurantDateHour[groupKey]) byRestaurantDateHour[groupKey] = {};
         const previous = byRestaurantDateHour[groupKey][key] || { factTo: 0, factGosti: 0 };
