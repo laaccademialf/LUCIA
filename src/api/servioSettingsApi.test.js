@@ -17,7 +17,7 @@ describe("клієнт фонового завантаження факту", ()
     const fetch = setup([{ status: "pending", jobId: "j1" }, { status: "pending", jobId: "j1" }, { status: "complete", rows: [{ totalSales: 100.25 }] }]);
     const result = fetchServioSales({ startDate: "2026-08-29", endDate: "2026-08-29", restCode: "106" });
     await vi.runAllTimersAsync();
-    expect(await result).toEqual([{ totalSales: 100.25 }]);
+    expect(await result).toEqual({ rows: [{ totalSales: 100.25 }], pairs: [] });
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({ async: true, restCode: "106" });
     expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ jobId: "j1" });
   });
@@ -30,6 +30,6 @@ describe("клієнт фонового завантаження факту", ()
 
   it("підтримує попередній синхронний сервер і справжній порожній результат", async () => {
     setup([{ rows: [] }]);
-    expect(await fetchServioSales()).toEqual([]);
+    expect(await fetchServioSales()).toEqual({ rows: [], pairs: [] });
   });
 });

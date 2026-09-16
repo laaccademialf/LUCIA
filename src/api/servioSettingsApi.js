@@ -92,7 +92,9 @@ export const syncServioRestaurants = async () => {
 
 // startDate/endDate — рядки. Приклади: "2026-08-01", "20260801 23:59:59".
 // restCode — CSV з BaseExternalID (порожній рядок = всі ресторани).
-export const fetchServioSales = async ({ startDate, endDate, restCode } = {}) => {
+// restaurantIds / restaurants — заклади LUCIA; сервер сам зіставляє їх із
+// BaseExternalID за довідником адміна і повертає pairs (restaurantId → restCode).
+export const fetchServioSales = async ({ startDate, endDate, restCode, restaurantIds, restaurants } = {}) => {
   const base = requireBase();
   const post = async (body) => {
     const r = await fetch(`${base}/api/servio/sales`, {
@@ -104,7 +106,12 @@ export const fetchServioSales = async ({ startDate, endDate, restCode } = {}) =>
     if (!r.ok || !json?.ok) throw new Error(json?.error || `HTTP ${r.status}`);
     return json;
   };
-  let result = await post({ startDate, endDate, restCode: restCode ?? "", async: true });
+  const initialBody = { startDate, endDate, restCode: restCode ?? "", async: true };
+  if (restaurantIds !== undefined) initialBody.restaurantIds = restaurantIds;
+  if (restaurants !== undefined) initialBody.restaurants = restaurants;
+  let result = await post(initialBody);
+  // pairs (заклад → restCode) сервер зіставляє одразу й повертає в першій відповіді.
+  const pairs = Array.isArray(result.pairs) ? result.pairs : [];
   const deadline = Date.now() + 25 * 60_000;
   while (result.status === "pending") {
     if (Date.now() >= deadline) throw new Error("Перевищено час очікування факту Servio. Спробуйте менший період.");
@@ -115,5 +122,5 @@ export const fetchServioSales = async ({ startDate, endDate, restCode } = {}) =>
   if (result.status === "failed") throw new Error(result.error || "Помилка запиту Servio");
   // Невалідна відповідь не повинна очищати збережений факт як порожній звіт.
   if (!Array.isArray(result.rows)) throw new Error("Servio повернув некоректний результат");
-  return result.rows;
+  return { rows: result.rows, pairs };
 };

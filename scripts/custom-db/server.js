@@ -6471,19 +6471,97 @@ const server = http.createServer(async (req, res) => {
     }
     const startDate = String(payload?.startDate || "").trim();
     const endDate = String(payload?.endDate || "").trim();
-    const restCode = String(payload?.restCode ?? "").trim();
+    let restCode = String(payload?.restCode ?? "").trim();
     if (!startDate || !endDate) {
       return sendJson(res, 400, { ok: false, error: "startDate та endDate обовʼязкові" });
+    }
+    // Зіставлення «заклад LUCIA → BaseExternalID Servio» виконується на сервері
+    // за довідником, який налаштовує адмін. Тож керуючому не потрібен доступ до
+    // мапінгу: він шле id (та за потреби назву/regNumber) своїх закладів, а сервер
+    // сам добирає restCode — навіть якщо ключ мапінгу відрізняється від id закладу.
+    const requestedRestaurants = Array.isArray(payload?.restaurants)
+      ? payload.restaurants
+        .map((restaurant) => ({
+          id: String(restaurant?.id ?? "").trim(),
+          name: String(restaurant?.name ?? "").trim(),
+          regNumber: String(restaurant?.regNumber ?? restaurant?.reg_number ?? "").trim(),
+        }))
+        .filter((restaurant) => restaurant.id || restaurant.name || restaurant.regNumber)
+      : (Array.isArray(payload?.restaurantIds)
+        ? payload.restaurantIds
+        : String(payload?.restaurantIds || "").split(","))
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+        .map((id) => ({ id, name: "", regNumber: "" }));
+    let pairs = [];
+    if (requestedRestaurants.length) {
+      let mapping = {};
+      let dictionary = [];
+      try {
+        await ensureServioRuntimeConfigLoaded();
+        const dbConfig = getAssetsRuntimeConfig();
+        const dbStored = await getStoredServioSettings(dbConfig);
+        const settings = await readSettingsFile();
+        mapping = {
+          ...((dbStored?.mapping && typeof dbStored.mapping === "object") ? dbStored.mapping : {}),
+          ...((settings?.servio?.mapping && typeof settings.servio.mapping === "object") ? settings.servio.mapping : {}),
+        };
+        dictionary = await getCollectionItemsData("restaurants", dbConfig).catch(() => []);
+      } catch (e) {
+        console.warn(`[servio] load mapping failed: ${e?.message || e}`);
+      }
+      const normalizeKey = (value) => String(value || "").trim().toLowerCase();
+      const restCodeForKeys = (keys) => {
+        for (const key of keys) {
+          if (!key) continue;
+          const code = String(mapping[String(key)] ?? "").trim();
+          if (code) return code;
+        }
+        return "";
+      };
+      const resolveRestCode = (descriptor) => {
+        const direct = restCodeForKeys([descriptor.id, descriptor.name, descriptor.regNumber]);
+        if (direct) return direct;
+        // Ключ мапінгу може відрізнятись від переданого id — містком слугує довідник:
+        // знаходимо заклад за будь-яким збігом і пробуємо його id/назву/regNumber.
+        const wantedKeys = new Set(
+          [descriptor.id, descriptor.name, descriptor.regNumber].map(normalizeKey).filter(Boolean)
+        );
+        const match = (Array.isArray(dictionary) ? dictionary : []).find((rest) => {
+          const candidateKeys = [rest?.id, rest?.name, rest?.regNumber, rest?.reg_number]
+            .map(normalizeKey)
+            .filter(Boolean);
+          return candidateKeys.some((key) => wantedKeys.has(key));
+        });
+        if (!match) return "";
+        return restCodeForKeys([match.id, match.name, match.regNumber, match.reg_number]);
+      };
+      pairs = requestedRestaurants
+        .map((descriptor) => ({
+          restaurantId: descriptor.id || descriptor.name || descriptor.regNumber,
+          restCode: resolveRestCode(descriptor),
+        }))
+        .filter((pair) => pair.restCode);
+      const resolvedCodes = [...new Set(pairs.map((pair) => pair.restCode))];
+      if (!restCode && resolvedCodes.length) restCode = resolvedCodes.join(",");
+      if (!pairs.length) {
+        return sendJson(res, 200, {
+          ok: true,
+          rows: [],
+          pairs: [],
+          unmapped: requestedRestaurants.map((restaurant) => restaurant.id || restaurant.name || restaurant.regNumber),
+        });
+      }
     }
     try {
       if (payload?.async === true) {
         const job = servioSalesJobs.start(profile.id, { startDate, endDate, restCode });
-        return sendJson(res, 202, { ok: true, ...job });
+        return sendJson(res, 202, { ok: true, ...job, pairs });
       }
       await ensureServioRuntimeConfigLoaded();
       const { fetchServioHourlySales } = await import("../servioApi.js");
       const rows = await fetchServioHourlySales({ startDate, endDate, restCode });
-      return sendJson(res, 200, { ok: true, rows });
+      return sendJson(res, 200, { ok: true, rows, pairs });
     } catch (error) {
       return sendJson(res, 500, { ok: false, error: error?.message || String(error) });
     }

@@ -579,7 +579,7 @@ function App() {
           const response = await fetch(probeUrl, {
             method: "GET",
             cache: "no-store",
-            credentials: "omit",
+            credentials: "same-origin",
             headers: { Accept: "application/json" },
             signal: controller.signal,
           });

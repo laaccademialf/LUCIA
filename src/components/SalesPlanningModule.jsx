@@ -8,16 +8,16 @@ import {
   createCollectionItemApi,
   getCollectionItemApi,
   listCollectionItemsApi,
+  updateCollectionItemApi,
   isCollectionsApiEnabled,
 } from "../api/collectionsApi";
 import {
   fetchServioSales,
-  getServioSettings,
   isServioApiEnabled,
 } from "../api/servioSettingsApi";
 import { buildMonthlyPlan, largestRemainderDistribute } from "../utils/salesPlanDistribution";
 import { fetchKyivWeather, weatherLabel } from "../api/weatherApi";
-import { SALES_HOURS, DEFAULT_SALES_HOURS, groupServioSales, mergeServioFactHours, hoursWithSales, sumSalesRows, factAverageCheck } from "../utils/salesFacts.js";
+import { SALES_HOURS, DEFAULT_SALES_HOURS, hoursWithSales, sumSalesRows, factAverageCheck } from "../utils/salesFacts.js";
 const HOURS = SALES_HOURS;
 const EMPTY_RESTAURANTS = [];
 const numberFormatter = new Intl.NumberFormat("uk-UA", { maximumFractionDigits: 0 });
@@ -159,12 +159,31 @@ const distributeTotalAcrossHours = (hours, targetTotal) => {
 
 function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) {
   const isAdmin = user?.role === "admin";
-  const userRestaurantIds = useMemo(() => (Array.isArray(user?.restaurants) && user.restaurants.length
-    ? user.restaurants : (user?.restaurant ? [user.restaurant] : [])
-  ).map(String), [user?.restaurants, user?.restaurant]);
-  const restaurantOptions = useMemo(() => isAdmin
-    ? restaurants : restaurants.filter((r) => userRestaurantIds.includes(String(r.id))),
-  [isAdmin, restaurants, userRestaurantIds]);
+  const userRestaurantKeys = useMemo(() => [
+    ...(Array.isArray(user?.restaurants) ? user.restaurants : []),
+    ...(typeof user?.restaurants === "string" ? user.restaurants.split(",") : []),
+    ...(Array.isArray(user?.restaurant_ids) ? user.restaurant_ids : []),
+    ...(Array.isArray(user?.restaurantIds) ? user.restaurantIds : []),
+    user?.restaurant,
+    user?.restaurantId,
+    user?.restaurant_id,
+    user?.restaurantName,
+    user?.restaurant_name,
+  ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean),
+  [user?.restaurants, user?.restaurant_ids, user?.restaurantIds, user?.restaurant, user?.restaurantId, user?.restaurant_id, user?.restaurantName, user?.restaurant_name]);
+
+  const restaurantOptions = useMemo(() => (isAdmin
+    ? restaurants
+    : restaurants.filter((restaurant) => {
+      const restaurantKeys = [
+        restaurant?.id,
+        restaurant?.name,
+        restaurant?.regNumber,
+        restaurant?.reg_number,
+      ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+      return restaurantKeys.some((key) => userRestaurantKeys.includes(key));
+    })), [isAdmin, restaurants, userRestaurantKeys]);
+  const userRestaurantIds = useMemo(() => restaurantOptions.map((restaurant) => String(restaurant.id)), [restaurantOptions]);
 
   const [selectedRestaurantId, setSelectedRestaurantId] = useState("");
   const [date, setDate] = useState(() => toIsoDate(new Date()));
@@ -172,7 +191,6 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
   const [loading, setLoading] = useState(false);
   const [dataLoadError, setDataLoadError] = useState(false);
   const [status, setStatus] = useState("");
-  const [servioMapping, setServioMapping] = useState({});
   const [fetchingFact, setFetchingFact] = useState(false);
   const [monthlyModalOpen, setMonthlyModalOpen] = useState(false);
   const [monthlyGenerating, setMonthlyGenerating] = useState(false);
@@ -189,30 +207,13 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
   const [factRangeLoading, setFactRangeLoading] = useState(false);
   const [factRangeReload, setFactRangeReload] = useState(0);
   const [factRestaurantPickerOpen, setFactRestaurantPickerOpen] = useState(false);
+  // Порожньо → підсумок за весь період; iso-день → перегляд одного дня з періоду.
+  const [rangeDayView, setRangeDayView] = useState("");
   const factRestaurantPickerRef = useRef(null);
 
-  const mappedFactRestaurantOptions = useMemo(
-    () => restaurantOptions.filter((restaurant) => Boolean(String(servioMapping[String(restaurant.id)] ?? "").trim())),
-    [restaurantOptions, servioMapping]
-  );
-  const mappedFactRestaurantIdsKey = mappedFactRestaurantOptions.map((restaurant) => String(restaurant.id)).join(",");
+  const availableFactRestaurantIdsKey = restaurantOptions.map((restaurant) => String(restaurant.id)).join(",");
 
   const isSettingsTab = /setting|налашт/.test(String(topTab || "").toLowerCase());
-
-  // Мапінг «заклад LUCIA → BaseExternalID Servio» для підстановки в @RestCode.
-  useEffect(() => {
-    if (isSettingsTab || !isServioApiEnabled()) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await getServioSettings();
-        if (!cancelled) setServioMapping(res?.saved?.mapping && typeof res.saved.mapping === "object" ? res.saved.mapping : {});
-      } catch {
-        // ignore — факт із Servio просто буде недоступний
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [isSettingsTab]);
 
   useEffect(() => {
     if (selectedRestaurantId && restaurantOptions.some((r) => String(r.id) === selectedRestaurantId)) return;
@@ -220,9 +221,12 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restaurantOptions.map((r) => r.id).join(",")]);
 
+  // Ініціалізуємо вибір закладів для дня/плану по ВСІХ доступних закладах (не лише
+  // зіставлених із Servio), інакше редагування дня/«План на місяць» ламається для
+  // закладу, який ще не підключено до Servio (типово для керуючого одним закладом).
   useEffect(() => {
+    const available = availableFactRestaurantIdsKey ? availableFactRestaurantIdsKey.split(",") : [];
     setFactRestaurantIds((prev) => {
-      const available = mappedFactRestaurantIdsKey ? mappedFactRestaurantIdsKey.split(",") : [];
       const retained = prev.filter((id) => available.includes(id));
       const next = retained.length > 0
         ? retained
@@ -231,7 +235,7 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
         : available.slice(0, 1);
       return next.length === prev.length && next.every((id, index) => id === prev[index]) ? prev : next;
     });
-  }, [mappedFactRestaurantIdsKey, selectedRestaurantId]);
+  }, [availableFactRestaurantIdsKey, selectedRestaurantId]);
 
   useEffect(() => {
     if (factRestaurantIds.length !== 1) return;
@@ -260,10 +264,14 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
   const currentRestaurant = restaurantOptions.find((r) => String(r.id) === selectedRestaurantId);
   const selectedRestaurants = useMemo(() => restaurantOptions.filter((restaurant) => factRestaurantIds.includes(String(restaurant.id))), [restaurantOptions, factRestaurantIds]);
   const canEdit = factRestaurantIds.length === 1 && Boolean(selectedRestaurantId) && (isAdmin || userRestaurantIds.includes(selectedRestaurantId));
-  const canImportFact = isServioApiEnabled() && mappedFactRestaurantOptions.length > 0;
+  // Кнопка показується для будь-якого доступного закладу — зіставлення з Servio
+  // перевіряється вже під час самого запиту факту (див. handleFetchFactFromServio).
+  const canImportFact = isServioApiEnabled() && restaurantOptions.length > 0;
   const factRangeDates = useMemo(() => getDatesInRange(factFrom, factTo), [factFrom, factTo]);
 
-  const isAggregateView = factRangeDates.length > 1 || factRestaurantIds.length !== 1;
+  // Один заклад + вибраний конкретний день періоду → показуємо саме той день (не підсумок).
+  const isSingleDayDrilldown = factRestaurantIds.length === 1 && Boolean(rangeDayView);
+  const isAggregateView = !isSingleDayDrilldown && (factRangeDates.length > 1 || factRestaurantIds.length !== 1);
 
   const visibleHours = useMemo(
     () => hoursWithSales(getVisibleHours(currentRestaurant?.schedule, date), hourlyData),
@@ -432,7 +440,7 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
   };
 
   const selectAllFactRestaurants = () => {
-    const ids = mappedFactRestaurantOptions.map((restaurant) => String(restaurant.id));
+    const ids = restaurantOptions.map((restaurant) => String(restaurant.id));
     setFactRestaurantIds(ids);
     if (!selectedRestaurantId && ids[0]) setSelectedRestaurantId(ids[0]);
   };
@@ -506,48 +514,131 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
   };
 
   // Підтягує факт Servio за діапазон дат і всі вибрані заклади, не змінюючи план.
+  // Зіставлення «заклад → BaseExternalID Servio» виконує сервер за довідником адміна.
   const handleFetchFactFromServio = async () => {
     const from = factFrom > factTo ? factTo : factFrom;
     const to = factFrom > factTo ? factFrom : factTo;
-    const selectedIds = factRestaurantIds.length ? factRestaurantIds : [selectedRestaurantId].filter(Boolean);
-    const pairs = selectedIds
-      .map((restaurantId) => ({ restaurantId, restCode: String(servioMapping[String(restaurantId)] ?? "").trim() }))
-      .filter((pair) => pair.restCode);
-    if (!from || !to || !pairs.length) {
-      setStatus("Виберіть період і хоча б один зіставлений заклад Servio.");
+    const selectedIds = (factRestaurantIds.length ? factRestaurantIds : [selectedRestaurantId].filter(Boolean))
+      .map((id) => String(id))
+      .filter((id) => restaurantOptions.some((restaurant) => String(restaurant.id) === id));
+    if (!from || !to || !selectedIds.length) {
+      setStatus("Виберіть період і хоча б один заклад.");
       return;
     }
+
+    const dates = [];
+    const cursor = new Date(`${from}T00:00:00`);
+    const last = new Date(`${to}T00:00:00`);
+    while (cursor <= last) {
+      dates.push(toIsoDate(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    const existingRecords = await listCollectionItemsApi("salesHourlyPlans").catch(() => []);
+    const existingByRestaurantDate = new Map();
+    for (const record of Array.isArray(existingRecords) ? existingRecords : []) {
+      const restaurantId = String(record?.restaurantId || "");
+      const iso = String(record?.date || "").slice(0, 10);
+      if (!restaurantId || !iso) continue;
+      const hours = record?.hours && typeof record.hours === "object" ? Object.values(record.hours) : [];
+      const hasFact = hours.some((hour) => hour && (String(hour.factTo ?? "").trim() !== "" || String(hour.factGosti ?? "").trim() !== ""));
+      if (hasFact) existingByRestaurantDate.set(`${restaurantId}__${iso}`, true);
+    }
+
     setFetchingFact(true);
     setStatus(`Завантаження факту з Servio: ${from} — ${to}...`);
     try {
-      const rows = await fetchServioSales({
-        startDate: from,
-        endDate: `${to} 23:59:59`,
-        restCode: [...new Set(pairs.map((pair) => pair.restCode))].join(","),
-      });
-      const groupedFacts = groupServioSales(rows);
-      const dates = getDatesInRange(from, to);
       let savedCount = 0;
       let matchedHours = 0;
-      for (const { restaurantId } of pairs) {
-        for (const iso of dates) {
-          const restCode = String(servioMapping[String(restaurantId)]).trim();
-          const factByHour = groupedFacts.get(`${restCode}__${iso}`) || {};
-          const existing = await getCollectionItemApi("salesHourlyPlans", buildDocId(restaurantId, iso));
-          const nextHours = mergeServioFactHours(existing?.hours || {}, factByHour);
-          matchedHours += Object.keys(factByHour).length;
-          await createCollectionItemApi("salesHourlyPlans", {
+      let unmappedCount = 0;
+      const pendingByDate = new Map();
+      for (const iso of dates) {
+        const pending = selectedIds.filter((restaurantId) => !existingByRestaurantDate.has(`${restaurantId}__${iso}`));
+        if (pending.length) pendingByDate.set(iso, pending);
+      }
+      const pendingDates = [...pendingByDate.keys()];
+      if (!pendingDates.length) {
+        setStatus("За вибраний період факт для всіх вибраних закладів уже є. Запит до Servio не потрібен.");
+        return;
+      }
+
+      for (const iso of pendingDates) {
+        const pendingIds = pendingByDate.get(iso) || [];
+        const pendingDescriptors = pendingIds.map((id) => {
+          const restaurant = restaurantOptions.find((option) => String(option.id) === String(id)) || {};
+          return {
+            id: String(id),
+            name: String(restaurant.name || ""),
+            regNumber: String(restaurant.regNumber || restaurant.reg_number || ""),
+          };
+        });
+        const { rows, pairs } = await fetchServioSales({
+          startDate: iso,
+          endDate: `${iso} 23:59:59`,
+          restaurantIds: pendingIds,
+          restaurants: pendingDescriptors,
+        });
+        const restCodeByRestaurant = new Map(pairs.map((pair) => [String(pair.restaurantId), String(pair.restCode)]));
+        // Один день на запит → факт групуємо лише за BaseExternalID (restCode) і годиною,
+        // щоб уникнути розбіжності формату/таймзони дати між рядком і ключем збереження.
+        const factByCode = {};
+        for (const row of rows) {
+          const code = String(row.baseExternalId);
+          const key = `${String(row.hourTo).padStart(2, "0")}:00:00`;
+          if (!factByCode[code]) factByCode[code] = {};
+          const previous = factByCode[code][key] || { factTo: 0, factGosti: 0 };
+          factByCode[code][key] = {
+            factTo: previous.factTo + toNumber(row.totalSales),
+            factGosti: previous.factGosti + toNumber(row.guestCount),
+          };
+        }
+
+        for (const restaurantId of pendingIds) {
+          if (existingByRestaurantDate.has(`${restaurantId}__${iso}`)) continue;
+          const restCode = restCodeByRestaurant.get(String(restaurantId));
+          if (!restCode) { unmappedCount += 1; continue; }
+          const factByHour = factByCode[String(restCode)] || {};
+          const existing = await getCollectionItemApi("salesHourlyPlans", buildDocId(restaurantId, iso)).catch(() => null);
+          const existingHours = existing?.hours && typeof existing.hours === "object" ? existing.hours : {};
+          const nextHours = { ...emptyHours(), ...existingHours };
+          let dayMatched = 0;
+          for (const hour of HOURS) {
+            const fact = factByHour[hour];
+            nextHours[hour] = {
+              ...(nextHours[hour] || emptyHourRow()),
+              factTo: fact ? String(Math.round(fact.factTo)) : "",
+              factGosti: fact ? String(Math.round(fact.factGosti)) : "",
+            };
+            if (fact) dayMatched += 1;
+          }
+          matchedHours += dayMatched;
+          const payload = {
             id: buildDocId(restaurantId, iso),
             restaurantId,
             date: iso,
             hours: nextHours,
             updatedAt: new Date().toISOString(),
             updatedBy: user?.displayName || user?.email || "",
-          });
+          };
+          if (existing) {
+            await updateCollectionItemApi("salesHourlyPlans", payload.id, payload);
+          } else {
+            await createCollectionItemApi("salesHourlyPlans", payload);
+          }
+          // Позначаємо оброблене лише коли є факт, щоб порожні дні можна було довантажити згодом.
+          if (dayMatched > 0) existingByRestaurantDate.set(`${restaurantId}__${iso}`, true);
           savedCount += 1;
+          if (String(restaurantId) === String(selectedRestaurantId) && iso === date) setHourlyData(nextHours);
         }
       }
-      setStatus(matchedHours ? `Факт завантажено: ${matchedHours} годин, збережено ${savedCount} днів.` : "Servio не повернув даних за вибраний період.");
+      setFactRangeReload((value) => value + 1);
+      if (matchedHours) {
+        setStatus(`Факт завантажено: ${matchedHours} годин, збережено ${savedCount} днів.`);
+      } else if (unmappedCount > 0 && savedCount === 0) {
+        setStatus("Заклад не зіставлено з Servio. Зверніться до адміністратора для налаштування.");
+      } else {
+        setStatus("Servio не повернув даних за вибраний період.");
+      }
     } catch (error) {
       setStatus(`Помилка завантаження факту: ${error?.message || error}`);
     } finally {
@@ -708,14 +799,16 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
             <DateRangePickerPopover
               from={factFrom}
               to={factTo}
-              onChange={({ from, to }) => { setFactFrom(from); setFactTo(to); setDate(from); }}
+              onChange={({ from, to }) => { setFactFrom(from); setFactTo(to); setDate(from); setRangeDayView(""); }}
             />
           </div>
           {canImportFact && (
             <details ref={factRestaurantPickerRef} open={factRestaurantPickerOpen} onToggle={(event) => setFactRestaurantPickerOpen(event.currentTarget.open)} className="relative w-56">
               <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:border-indigo-400">
                 <span>Заклади для факту</span>
-                <span className="text-xs font-medium text-indigo-700">{factRestaurantIds.length}/{mappedFactRestaurantOptions.length}</span>
+                <span className="text-xs font-medium text-indigo-700">
+                  {factRestaurantIds.filter((id) => restaurantOptions.some((restaurant) => String(restaurant.id) === id)).length}/{restaurantOptions.length}
+                </span>
               </summary>
               <div className="absolute right-0 z-40 mt-1 max-h-64 w-80 overflow-y-auto rounded-lg border border-slate-300 bg-white p-3 shadow-lg">
                 <div className="mb-2 flex justify-end gap-3 text-xs font-semibold">
@@ -723,16 +816,20 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
                   <button type="button" onClick={clearFactRestaurants} className="text-slate-600 hover:underline">Жоден</button>
                 </div>
                 <div className="space-y-1.5">
-                  {mappedFactRestaurantOptions.map((restaurant) => {
-                    const id = String(restaurant.id);
-                    const checked = factRestaurantIds.includes(id);
-                    return (
-                      <label key={id} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
-                        <input type="checkbox" checked={checked} onChange={() => toggleFactRestaurant(id)} className="h-4 w-4 accent-indigo-600" />
-                        <span>{restaurant.name}</span>
-                      </label>
-                    );
-                  })}
+                  {restaurantOptions.length === 0 ? (
+                    <p className="text-sm text-slate-500">Немає доступних закладів.</p>
+                  ) : (
+                    restaurantOptions.map((restaurant) => {
+                      const id = String(restaurant.id);
+                      const checked = factRestaurantIds.includes(id);
+                      return (
+                        <label key={id} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                          <input type="checkbox" checked={checked} onChange={() => toggleFactRestaurant(id)} className="h-4 w-4 accent-indigo-600" />
+                          <span>{restaurant.name}</span>
+                        </label>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             </details>
@@ -772,7 +869,32 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
       </div>
 
       {status && <p className="mb-3 text-sm text-slate-600">{status}</p>}
-      {viewMode === "day" && selectedRestaurants.length > 0 && <p className="mb-3 min-h-5 truncate text-sm text-slate-500">{isAggregateView ? (factRangeLoading ? "Завантаження погодинного підсумку за вибраним фільтром..." : `Погодинний підсумок: ${factRangeDates.length} дн., закладів: ${selectedRestaurants.length}. Редагування доступне для одного дня й одного закладу.`) : scheduleHint}</p>}
+
+      {viewMode === "day" && factRestaurantIds.length === 1 && factRangeDates.length > 1 && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-slate-600">Перегляд:</span>
+          <button
+            type="button"
+            onClick={() => setRangeDayView("")}
+            className={`rounded-lg border px-3 py-1.5 text-sm font-semibold transition ${!rangeDayView ? "border-indigo-600 bg-indigo-50 text-indigo-700" : "border-slate-300 text-slate-600 hover:bg-slate-50"}`}
+          >
+            Підсумок за період
+          </button>
+          <select
+            value={rangeDayView}
+            onChange={(e) => { const day = e.target.value; setRangeDayView(day); if (day) { setDate(day); if (factRestaurantIds[0]) setSelectedRestaurantId(factRestaurantIds[0]); } }}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900"
+          >
+            <option value="">Обрати день…</option>
+            {factRangeDates.map((iso) => {
+              const dow = (new Date(`${iso}T00:00:00`).getDay() + 6) % 7;
+              return <option key={iso} value={iso}>{formatDayLabel(iso)} · {WEEKDAY_LABELS[dow]}</option>;
+            })}
+          </select>
+        </div>
+      )}
+
+      {viewMode === "day" && selectedRestaurants.length > 0 && <p className="mb-3 min-h-5 truncate text-sm text-slate-500">{isAggregateView ? (factRangeLoading ? "Завантаження погодинного підсумку за вибраним фільтром..." : `Погодинний підсумок: ${factRangeDates.length} дн., закладів: ${selectedRestaurants.length}. Оберіть день вище, щоб побачити окремий день.`) : (isSingleDayDrilldown ? `День ${formatDayLabel(date)} (${selectedRestaurants[0]?.name || ""})` : scheduleHint)}</p>}
 
       {restaurantOptions.length === 0 ? (
         <p className="text-sm text-slate-500">Немає закладів, доступних для перегляду.</p>
