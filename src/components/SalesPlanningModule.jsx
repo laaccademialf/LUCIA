@@ -534,37 +534,18 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
       cursor.setDate(cursor.getDate() + 1);
     }
 
-    const existingRecords = await listCollectionItemsApi("salesHourlyPlans").catch(() => []);
-    const existingByRestaurantDate = new Map();
-    for (const record of Array.isArray(existingRecords) ? existingRecords : []) {
-      const restaurantId = String(record?.restaurantId || "");
-      const iso = String(record?.date || "").slice(0, 10);
-      if (!restaurantId || !iso) continue;
-      const hours = record?.hours && typeof record.hours === "object" ? Object.values(record.hours) : [];
-      const hasFact = hours.some((hour) => hour && (String(hour.factTo ?? "").trim() !== "" || String(hour.factGosti ?? "").trim() !== ""));
-      if (hasFact) existingByRestaurantDate.set(`${restaurantId}__${iso}`, true);
-    }
-
     setFetchingFact(true);
     setStatus(`Завантаження факту з Servio: ${from} — ${to}...`);
     try {
       let savedCount = 0;
       let matchedHours = 0;
       let unmappedCount = 0;
-      const pendingByDate = new Map();
-      for (const iso of dates) {
-        const pending = selectedIds.filter((restaurantId) => !existingByRestaurantDate.has(`${restaurantId}__${iso}`));
-        if (pending.length) pendingByDate.set(iso, pending);
-      }
-      const pendingDates = [...pendingByDate.keys()];
-      if (!pendingDates.length) {
-        setStatus("За вибраний період факт для всіх вибраних закладів уже є. Запит до Servio не потрібен.");
-        return;
-      }
 
-      for (const iso of pendingDates) {
-        const pendingIds = pendingByDate.get(iso) || [];
-        const pendingDescriptors = pendingIds.map((id) => {
+      // Запит до Servio виконується щоразу при натисканні кнопки, навіть якщо
+      // факт за день уже частково завантажено — це потрібно для оновлення
+      // показників у реальному часі протягом робочого дня.
+      for (const iso of dates) {
+        const pendingDescriptors = selectedIds.map((id) => {
           const restaurant = restaurantOptions.find((option) => String(option.id) === String(id)) || {};
           return {
             id: String(id),
@@ -575,7 +556,7 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
         const { rows, pairs } = await fetchServioSales({
           startDate: iso,
           endDate: `${iso} 23:59:59`,
-          restaurantIds: pendingIds,
+          restaurantIds: selectedIds,
           restaurants: pendingDescriptors,
         });
         const restCodeByRestaurant = new Map(pairs.map((pair) => [String(pair.restaurantId), String(pair.restCode)]));
@@ -593,8 +574,7 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
           };
         }
 
-        for (const restaurantId of pendingIds) {
-          if (existingByRestaurantDate.has(`${restaurantId}__${iso}`)) continue;
+        for (const restaurantId of selectedIds) {
           const restCode = restCodeByRestaurant.get(String(restaurantId));
           if (!restCode) { unmappedCount += 1; continue; }
           const factByHour = factByCode[String(restCode)] || {};
@@ -625,8 +605,6 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
           } else {
             await createCollectionItemApi("salesHourlyPlans", payload);
           }
-          // Позначаємо оброблене лише коли є факт, щоб порожні дні можна було довантажити згодом.
-          if (dayMatched > 0) existingByRestaurantDate.set(`${restaurantId}__${iso}`, true);
           savedCount += 1;
           if (String(restaurantId) === String(selectedRestaurantId) && iso === date) setHourlyData(nextHours);
         }
