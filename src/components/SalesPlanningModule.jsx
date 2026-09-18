@@ -685,7 +685,12 @@ function SalesPlanningModule({ user, restaurants = EMPTY_RESTAURANTS, topTab }) 
       for (const day of plan.days) {
         const existing = existingByDate.get(day.date);
         const existingHours = existing?.hours && typeof existing.hours === "object" ? existing.hours : {};
-        const mergedHours = { ...existingHours };
+        // Спочатку обнуляємо План (не факт) у ВСІХ раніше збережених годинах дня —
+        // інакше години поза поточним графіком (напр. після зміни розкладу) лишають
+        // «сирітські» planTo/planGosti, і підсумок місяця виходить більшим за введений.
+        const mergedHours = Object.fromEntries(
+          Object.entries(existingHours).map(([hour, row]) => [hour, { ...row, planTo: "", planGosti: "" }])
+        );
         const weatherText = weatherLabel(day.weather);
         for (const [hour, values] of Object.entries(day.hours)) {
           mergedHours[hour] = {
